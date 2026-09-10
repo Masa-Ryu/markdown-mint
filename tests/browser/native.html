@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <!-- This is the native preview cascade: VS Code's stylesheet first, then
+       the extension's shared preview contribution. -->
+  <link rel="stylesheet" href="/__vscode__/markdown.css">
+  <link rel="stylesheet" href="/media/document.css">
+</head>
+<body>
+  <main class="markdown-body" data-testid="native-content">
+    <h1>Browser harness</h1>
+    <p>Paragraph with <strong>marks</strong> and a <a href="#">link</a>.</p>
+    <ul class="contains-task-list">
+      <li class="task-list-item"><input type="checkbox" disabled> <p>Task</p></li>
+    </ul>
+    <pre><code class="language-ts">const value = &quot;日本語&quot;;</code></pre>
+    <table>
+      <thead><tr><th>Name</th><th>値</th><th>空欄</th></tr></thead>
+      <tbody><tr><td>A</td><td>日本語</td><td></td></tr></tbody>
+    </table>
+  </main>
+  <script>
+    window.__markdownWeaverNative = {
+      metrics() {
+        const content = document.querySelector('[data-testid="native-content"]');
+        return {
+          viewport: [innerWidth, innerHeight, document.documentElement.clientWidth],
+          body: document.body.getBoundingClientRect().toJSON(),
+          content: content?.getBoundingClientRect().toJSON(),
+          heading: content?.querySelector('h1')?.getBoundingClientRect().toJSON(),
+          task: content?.querySelector('li.task-list-item')?.getBoundingClientRect().toJSON(),
+          checkbox: content?.querySelector('li.task-list-item input')?.getBoundingClientRect().toJSON(),
+          table: content?.querySelector('table')?.getBoundingClientRect().toJSON(),
+          cells: Array.from(content?.querySelectorAll('th,td') ?? []).map(cell => cell.getBoundingClientRect().toJSON()),
+          font: content ? getComputedStyle(content).fontFamily : '',
+          size: content ? getComputedStyle(content).fontSize : '',
+          line: content ? getComputedStyle(content).lineHeight : ''
+        };
+      }
+    };
+  </script>
+</body>
+</html>

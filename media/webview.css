@@ -1,0 +1,125 @@
+:root {
+  color-scheme: var(--vscode-color-scheme, dark);
+  --mw-toolbar-height: 42px;
+}
+
+* { box-sizing: border-box; }
+
+html,
+body { min-height: 100%; margin: 0; padding: 0; background: var(--vscode-editor-background, #1e1e1e); }
+
+/* document.css is shared with the native preview. The webview scrolls inside
+ * .mw-stage, so do not reserve a second viewport gutter here. */
+html { scrollbar-gutter: auto; }
+
+body {
+  color: var(--vscode-foreground, #d4d4d4);
+  font-family: var(--vscode-font-family, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif);
+  font-size: var(--vscode-font-size, 13px);
+}
+
+button,
+select,
+textarea { font: inherit; }
+
+[hidden] { display: none !important; }
+
+button,
+select {
+  color: var(--vscode-button-foreground, var(--vscode-foreground, #d4d4d4));
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+}
+
+button:hover,
+select:hover { background: var(--vscode-toolbar-hoverBackground, rgba(127, 127, 127, 0.18)); }
+button:focus-visible,
+select:focus-visible,
+textarea:focus-visible { outline: 1px solid var(--vscode-focusBorder, #007fd4); outline-offset: 1px; }
+
+.markdown-weaver-app { display: flex; height: 100vh; min-height: 100dvh; flex-direction: column; overflow: hidden; }
+
+.mw-toolbar {
+  position: sticky;
+  z-index: 2;
+  top: 0;
+  display: flex;
+  min-height: var(--mw-toolbar-height);
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 3px;
+  padding: 5px 10px;
+  border-bottom: 1px solid var(--vscode-panel-border, rgba(127, 127, 127, 0.25));
+  background: color-mix(in srgb, var(--vscode-editor-background, #1e1e1e) 92%, transparent);
+  backdrop-filter: blur(8px);
+}
+
+.mw-mode-group { display: flex; gap: 2px; margin-right: 2px; }
+.mw-mode-button { padding: 4px 8px; color: var(--vscode-descriptionForeground, #9da5b4); cursor: pointer; }
+.mw-mode-button.is-active { color: var(--vscode-tab-activeForeground, var(--vscode-foreground, #fff)); background: var(--vscode-tab-activeBackground, rgba(127, 127, 127, 0.2)); }
+.mw-tool-button { min-width: 28px; padding: 4px 6px; cursor: pointer; }
+.mw-tool-button:disabled { opacity: 0.45; cursor: default; }
+.mw-heading-select { min-width: 66px; padding: 4px 5px; background: var(--vscode-dropdown-background, transparent); cursor: pointer; }
+.mw-toolbar-separator { width: 1px; height: 20px; margin: 0 4px; background: var(--vscode-panel-border, rgba(127, 127, 127, 0.25)); }
+
+.mw-table-menu { position: relative; margin-left: auto; }
+.mw-table-menu summary { padding: 4px 8px; border-radius: 4px; cursor: pointer; list-style: none; }
+.mw-table-menu summary::-webkit-details-marker { display: none; }
+.mw-table-menu summary::after { margin-left: 5px; content: "▾"; color: var(--mw-muted, #8b949e); }
+.mw-table-menu-items { position: absolute; z-index: 4; top: calc(100% + 4px); right: 0; display: grid; min-width: 170px; padding: 4px; border: 1px solid var(--vscode-menu-border, var(--vscode-panel-border, #454545)); border-radius: 5px; background: var(--vscode-menu-background, var(--vscode-editor-background, #1e1e1e)); box-shadow: 0 6px 18px rgba(0, 0, 0, 0.28); }
+.mw-table-menu-items button { padding: 5px 8px; text-align: start; cursor: pointer; }
+.mw-table-menu-items button:disabled { opacity: 0.45; cursor: default; }
+
+.mw-stage { flex: 1 1 auto; min-height: 0; overflow: auto; scrollbar-gutter: stable; }
+.mw-panel { min-height: 100%; }
+.mw-editor-mount { min-height: 100%; }
+.mw-panel[hidden] { display: none; }
+
+.mw-rich-panel .ProseMirror { min-height: 100%; cursor: text; }
+.mw-rich-panel .ProseMirror:focus { outline: none; }
+.mw-rich-panel .ProseMirror-selectednode { outline: 2px solid var(--vscode-focusBorder, #007fd4); }
+.mw-rich-panel .ProseMirror-hideselection ::selection { background: transparent; }
+.mw-rich-panel .ProseMirror-gapcursor:after { border-top-color: var(--vscode-editorCursor-foreground, #aeafad); }
+
+.mw-rich-panel .selectedCell { background: color-mix(in srgb, var(--vscode-editor-selectionBackground, #264f78) 45%, transparent); }
+.mw-rich-panel .column-resize-handle { display: none; }
+.mw-task-item { display: list-item; }
+.mw-task-control { display: inline; margin-left: -1.5em; margin-right: 0.45em; }
+.mw-task-checkbox { margin: 0; vertical-align: middle; accent-color: var(--vscode-focusBorder, #007fd4); }
+.mw-task-content { display: inline; }
+
+.mw-input-dialog { width: min(380px, calc(100vw - 30px)); padding: 0; border: 1px solid var(--vscode-menu-border, var(--vscode-panel-border, #454545)); border-radius: 6px; color: var(--vscode-foreground, #d4d4d4); background: var(--vscode-quickInput-background, var(--vscode-editor-background, #1e1e1e)); box-shadow: 0 14px 32px rgba(0, 0, 0, 0.35); }
+.mw-input-dialog::backdrop { background: rgba(0, 0, 0, 0.35); }
+.mw-dialog-form { display: grid; gap: 12px; padding: 18px; }
+.mw-dialog-form h2 { margin: 0 0 2px; font-size: 1.05rem; font-weight: 600; }
+.mw-dialog-field { display: grid; gap: 5px; }
+.mw-dialog-field span { color: var(--vscode-descriptionForeground, #9da5b4); font-size: 0.9em; }
+.mw-dialog-field input { width: 100%; padding: 6px 8px; border: 1px solid var(--vscode-input-border, var(--vscode-panel-border, #454545)); border-radius: 3px; color: var(--vscode-input-foreground, var(--vscode-foreground, #d4d4d4)); background: var(--vscode-input-background, #313131); }
+.mw-dialog-actions { display: flex; justify-content: flex-end; gap: 6px; }
+.mw-dialog-actions button { padding: 5px 10px; cursor: pointer; }
+.mw-dialog-actions button[type="submit"] { color: var(--vscode-button-foreground, #fff); background: var(--vscode-button-background, #0e639c); }
+.mw-code-language { width: 58px; padding: 4px 5px; border: 1px solid var(--vscode-input-border, var(--vscode-panel-border, #454545)); border-radius: 3px; color: var(--vscode-input-foreground, var(--vscode-foreground, #d4d4d4)); background: var(--vscode-input-background, transparent); }
+.mw-code-language:disabled { opacity: 0.5; }
+
+.mw-preview-panel { overflow: visible; }
+.mw-preview-panel .mw-document-content { min-height: 100%; }
+.mw-source-panel { padding: 18px clamp(14px, 4vw, 44px); }
+.mw-source-textarea { display: block; width: min(100%, var(--mw-document-width)); min-height: 100%; margin: 0 auto; padding: 18px; resize: vertical; border: 1px solid var(--vscode-input-border, var(--vscode-panel-border, #454545)); border-radius: 5px; color: var(--vscode-input-foreground, var(--vscode-foreground, #d4d4d4)); background: var(--vscode-input-background, var(--vscode-editor-background, #1e1e1e)); font-family: var(--vscode-editor-font-family, ui-monospace, SFMono-Regular, Consolas, monospace); line-height: 1.5; }
+
+.mw-statusbar { display: flex; min-height: 29px; align-items: center; gap: 14px; padding: 4px 12px; border-top: 1px solid var(--vscode-panel-border, rgba(127, 127, 127, 0.25)); color: var(--vscode-statusBar-foreground, var(--vscode-descriptionForeground, #9da5b4)); background: var(--vscode-statusBar-background, rgba(127, 127, 127, 0.08)); }
+.mw-status { white-space: nowrap; }
+.mw-status[data-state="pending"] { color: var(--vscode-charts-yellow, #cca700); }
+.mw-status[data-state="conflict"],
+.mw-compatibility { color: var(--vscode-editorWarning-foreground, #cca700); }
+.mw-compatibility { display: inline-flex; min-width: 0; align-items: center; gap: 5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mw-compatibility-icon { flex: 0 0 auto; }
+.mw-recover { margin-left: auto; padding: 3px 8px; color: var(--vscode-textLink-foreground, #3794ff); cursor: pointer; }
+
+@media (max-width: 760px) {
+  .mw-toolbar { padding-inline: 6px; }
+  .mw-table-menu { margin-left: 0; }
+  .mw-toolbar-separator { margin-inline: 1px; }
+  .mw-statusbar { gap: 8px; }
+  .mw-compatibility { max-width: 46vw; }
+}

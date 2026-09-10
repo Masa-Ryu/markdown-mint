@@ -1,0 +1,155 @@
+{
+  "name": "markdown-weaver",
+  "displayName": "Markdown Weaver",
+  "description": "A structured Markdown editor for VS Code with safe, synchronized previews.",
+  "version": "0.0.1",
+  "publisher": "markdown-weaver-local",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+ssh://git@github.com/Masa-Ryu/markdown-weaver.git"
+  },
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "keywords": [
+    "markdown",
+    "editor",
+    "prosemirror",
+    "preview"
+  ],
+  "activationEvents": [
+    "onCustomEditor:markdownWeaver.editor",
+    "onCommand:markdownWeaver.openPreview",
+    "onCommand:markdownWeaver.openSource",
+    "onCommand:markdownWeaver.formatDocument"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "markdownWeaver.openPreview",
+        "title": "Markdown Weaver: Open Dedicated Preview",
+        "enablement": "resourceLangId == markdown"
+      },
+      {
+        "command": "markdownWeaver.openSource",
+        "title": "Markdown Weaver: Open Source",
+        "enablement": "resourceLangId == markdown"
+      },
+      {
+        "command": "markdownWeaver.formatDocument",
+        "title": "Markdown Weaver: Format Document",
+        "enablement": "resourceLangId == markdown"
+      }
+    ],
+    "customEditors": [
+      {
+        "viewType": "markdownWeaver.editor",
+        "displayName": "Markdown Weaver",
+        "selector": [
+          {
+            "filenamePattern": "*.md"
+          },
+          {
+            "filenamePattern": "*.markdown"
+          },
+          {
+            "filenamePattern": "*.mdown"
+          }
+        ],
+        "priority": "option"
+      }
+    ],
+    "configuration": {
+      "title": "Markdown Weaver",
+      "properties": {
+        "markdownWeaver.profile": {
+          "type": "string",
+          "enum": [
+            "commonmark",
+            "github",
+            "gitlab"
+          ],
+          "enumDescriptions": [
+            "Portable CommonMark behavior.",
+            "GitHub Flavored Markdown behavior.",
+            "GitLab Flavored Markdown behavior."
+          ],
+          "default": "github",
+          "description": "Markdown profile used by the structured editor and dedicated preview.",
+          "scope": "resource"
+        },
+        "markdownWeaver.formatOnSave": {
+          "type": "boolean",
+          "default": false,
+          "description": "Format Markdown safely before saving.",
+          "scope": "resource"
+        },
+        "markdownWeaver.prettierOptions": {
+          "type": "object",
+          "default": {
+            "printWidth": 80,
+            "proseWrap": "preserve"
+          },
+          "description": "Additional Prettier options passed to the Markdown formatter.",
+          "scope": "resource"
+        }
+      }
+    },
+    "markdown.previewStyles": [
+      "./media/document.css"
+    ],
+    "markdown.markdownItPlugins": true
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "build:extension": "node scripts/build.mjs --extension-only",
+    "build:webview": "node scripts/build.mjs --webview-only",
+    "clean": "node scripts/clean.mjs",
+    "compile": "tsc --noEmit",
+    "dev": "node scripts/build.mjs --watch",
+    "format": "prettier --write \"src/**/*.ts\" \"tests/**/*.ts\" \"scripts/**/*.mjs\" \"*.json\" \"docs/**/*.md\"",
+    "format:check": "prettier --check \"src/**/*.ts\" \"tests/**/*.ts\" \"scripts/**/*.mjs\" \"*.json\" \"docs/**/*.md\"",
+    "lint": "eslint \"src/**/*.ts\" \"tests/**/*.ts\"",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:extension": "npm run compile && npm run build && node scripts/test-extension.mjs",
+    "verify:package": "npm run build && node scripts/verify-package.mjs",
+    "package": "npm run build && vsce package --no-dependencies && node scripts/verify-package.mjs"
+  },
+  "dependencies": {
+    "markdown-it": "^14.1.0",
+    "prettier": "^3.6.2",
+    "prosemirror-commands": "^1.7.1",
+    "prosemirror-history": "^1.4.1",
+    "prosemirror-inputrules": "^1.4.0",
+    "prosemirror-keymap": "^1.2.3",
+    "prosemirror-markdown": "^1.13.2",
+    "prosemirror-model": "^1.25.3",
+    "prosemirror-schema-list": "^1.5.1",
+    "prosemirror-state": "^1.4.3",
+    "prosemirror-tables": "^1.8.1",
+    "prosemirror-transform": "^1.10.4",
+    "prosemirror-view": "^1.41.0",
+    "yaml": "^2.9.0"
+  },
+  "devDependencies": {
+    "@types/markdown-it": "^14.1.2",
+    "@types/node": "^22.15.30",
+    "@types/vscode": "^1.90.0",
+    "@typescript-eslint/eslint-plugin": "^8.35.0",
+    "@typescript-eslint/parser": "^8.35.0",
+    "@vscode/test-electron": "^2.5.2",
+    "@vscode/vsce": "^3.6.0",
+    "esbuild": "^0.25.5",
+    "eslint": "^9.29.0",
+    "eslint-config-prettier": "^10.1.5",
+    "jsdom": "^26.1.0",
+    "typescript": "^5.8.3",
+    "vitest": "^3.2.4"
+  }
+}

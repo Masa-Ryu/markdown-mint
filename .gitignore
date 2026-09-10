@@ -1,0 +1,9 @@
+node_modules/
+dist/
+*.vsix
+.vscode-test/
+coverage/
+.DS_Store
+*.log
+output/
+.playwright-cli/

@@ -1,0 +1,515 @@
+/**
+ * The only wire format used between the extension host and a Markdown Weaver
+ * webview. Keep this file dependency-free: it is bundled into both runtimes.
+ */
+
+export const PROTOCOL_VERSION = 1 as const;
+export const MAX_MARKDOWN_LENGTH = 2_000_000;
+export const MAX_OPERATION_ID_LENGTH = 160;
+export const MAX_RESOURCE_URL_LENGTH = 8_192;
+
+export const MARKDOWN_PROFILES = ["github", "gitlab", "commonmark"] as const;
+export type MarkdownProfile = (typeof MARKDOWN_PROFILES)[number];
+
+export const HOST_DOCUMENT_REASONS = [
+  "initial",
+  "ack",
+  "external",
+  "format",
+  "undo",
+  "redo",
+  "save",
+  "recovery",
+] as const;
+export type HostDocumentReason = (typeof HOST_DOCUMENT_REASONS)[number];
+
+export type PanelMode = "editor" | "preview";
+
+export interface PreviewTypography {
+  readonly fontFamily: string;
+  readonly fontSize: number;
+  readonly lineHeight: number;
+}
+
+export interface DocumentMessage {
+  readonly protocolVersion: typeof PROTOCOL_VERSION;
+  readonly type: "document";
+  /** The current text from TextDocument. Webviews must treat this as truth. */
+  readonly markdown: string;
+  /** VS Code's monotonically increasing TextDocument version. */
+  readonly version: number;
+  readonly profile: MarkdownProfile;
+  readonly operationId?: string;
+  readonly reason?: HostDocumentReason;
+  /** A webview URI for the document directory, when the document is local. */
+  readonly resourceBaseUrl?: string;
+  readonly mode?: PanelMode;
+  readonly typography?: PreviewTypography;
+  /** A rejected, unsaved draft may be displayed for recovery, never applied implicitly. */
+  readonly draftMarkdown?: string;
+}
+
+export interface PreviewMessage {
+  readonly protocolVersion: typeof PROTOCOL_VERSION;
+  readonly type: "preview";
+  readonly markdown: string;
+  readonly html: string;
+  readonly version: number;
+  readonly profile: MarkdownProfile;
+  readonly resourceBaseUrl?: string;
+  readonly typography?: PreviewTypography;
+}
+
+export interface EditRejectedMessage {
+  readonly protocolVersion: typeof PROTOCOL_VERSION;
+  readonly type: "edit-rejected";
+  readonly operationId: string;
+  readonly reason: "stale" | "invalid" | "apply-failed" | "busy" | "too-large";
+  readonly message: string;
+  readonly currentMarkdown: string;
+  readonly currentVersion: number;
+  /** The submitted draft is retained only for explicit recovery UI. */
+  readonly draftMarkdown?: string;
+  readonly diagnostics?: readonly string[];
+}
+
+export interface FormatRejectedMessage {
+  readonly protocolVersion: typeof PROTOCOL_VERSION;
+  readonly type: "format-rejected";
+  readonly operationId: string;
+  readonly reason:
+    "invalid" | "apply-failed" | "stale" | "too-large" | "ignored";
+  readonly message: string;
+  readonly currentMarkdown: string;
+  readonly currentVersion: number;
+}
+
+export interface RecoveryOpenedMessage {
+  readonly protocolVersion: typeof PROTOCOL_VERSION;
+  readonly type: "recovery-opened";
+  readonly operationId: string;
+  readonly currentMarkdown: string;
+  readonly currentVersion: number;
+  readonly profile: MarkdownProfile;
+  readonly draftUri?: string;
+}
+
+export interface ErrorMessage {
+  readonly protocolVersion: typeof PROTOCOL_VERSION;
+  readonly type: "error";
+  readonly message: string;
+  readonly operationId?: string;
+}
+
+export interface ReadyMessage {
+  readonly protocolVersion: typeof PROTOCOL_VERSION;
+  readonly type: "ready";
+  readonly requestId?: string;
+}
+
+export interface EditMessage {
+  readonly protocolVersion: typeof PROTOCOL_VERSION;
+  readonly type: "edit";
+  readonly baseVersion: number;
+  readonly operationId: string;
+  readonly markdown: string;
+}
+
+export interface UndoMessage {
+  readonly protocolVersion: typeof PROTOCOL_VERSION;
+  readonly type: "undo";
+  readonly baseVersion?: number;
+  readonly operationId: string;
+}
+
+export interface RedoMessage {
+  readonly protocolVersion: typeof PROTOCOL_VERSION;
+  readonly type: "redo";
+  readonly baseVersion?: number;
+  readonly operationId: string;
+}
+
+export interface SourceMessage {
+  readonly protocolVersion: typeof PROTOCOL_VERSION;
+  readonly type: "source";
+  readonly operationId?: string;
+}
+
+export interface FormatMessage {
+  readonly protocolVersion: typeof PROTOCOL_VERSION;
+  readonly type: "format";
+  readonly baseVersion: number;
+  readonly operationId: string;
+}
+
+export interface SaveMessage {
+  readonly protocolVersion: typeof PROTOCOL_VERSION;
+  readonly type: "save";
+  /** The TextDocument version the webview has observed after its edits. */
+  readonly baseVersion: number;
+  readonly operationId: string;
+}
+
+export interface SaveResultMessage {
+  readonly protocolVersion: typeof PROTOCOL_VERSION;
+  readonly type: "save-result";
+  readonly operationId: string;
+  readonly saved: boolean;
+  readonly version: number;
+  readonly isDirty: boolean;
+  readonly message?: string;
+}
+
+export interface PreviewRequestMessage {
+  readonly protocolVersion: typeof PROTOCOL_VERSION;
+  readonly type: "preview";
+  readonly baseVersion?: number;
+  readonly operationId?: string;
+}
+
+export interface RecoverDraftMessage {
+  readonly protocolVersion: typeof PROTOCOL_VERSION;
+  readonly type: "recoverDraft";
+  readonly baseVersion: number;
+  readonly operationId: string;
+  readonly markdown: string;
+}
+
+export type WebviewMessage =
+  | ReadyMessage
+  | EditMessage
+  | UndoMessage
+  | RedoMessage
+  | SourceMessage
+  | FormatMessage
+  | SaveMessage
+  | PreviewRequestMessage
+  | RecoverDraftMessage;
+
+export type HostMessage =
+  | DocumentMessage
+  | PreviewMessage
+  | EditRejectedMessage
+  | FormatRejectedMessage
+  | SaveResultMessage
+  | RecoveryOpenedMessage
+  | ErrorMessage;
+
+export function isMarkdownProfile(value: unknown): value is MarkdownProfile {
+  return (
+    typeof value === "string" &&
+    (MARKDOWN_PROFILES as readonly string[]).includes(value)
+  );
+}
+
+export function isSafeMarkdownSource(value: unknown): value is string {
+  return typeof value === "string" && value.length <= MAX_MARKDOWN_LENGTH;
+}
+
+export function isOperationId(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    value.length <= MAX_OPERATION_ID_LENGTH &&
+    /^[a-zA-Z0-9._:-]+$/.test(value)
+  );
+}
+
+export function isDocumentMessage(value: unknown): value is DocumentMessage {
+  if (!isRecord(value)) return false;
+  return (
+    value.protocolVersion === PROTOCOL_VERSION &&
+    value.type === "document" &&
+    isSafeMarkdownSource(value.markdown) &&
+    isVersion(value.version) &&
+    isMarkdownProfile(value.profile) &&
+    optionalString(value.operationId) &&
+    optionalReason(value.reason) &&
+    optionalResourceUrl(value.resourceBaseUrl) &&
+    optionalMode(value.mode) &&
+    optionalTypography(value.typography) &&
+    optionalSafeMarkdownSource(value.draftMarkdown)
+  );
+}
+
+export function isHostMessage(value: unknown): value is HostMessage {
+  if (
+    !isRecord(value) ||
+    value.protocolVersion !== PROTOCOL_VERSION ||
+    typeof value.type !== "string"
+  ) {
+    return false;
+  }
+  if (value.type === "document") return isDocumentMessage(value);
+  if (value.type === "preview") {
+    return (
+      isSafeMarkdownSource(value.markdown) &&
+      typeof value.html === "string" &&
+      isVersion(value.version) &&
+      isMarkdownProfile(value.profile) &&
+      optionalResourceUrl(value.resourceBaseUrl) &&
+      optionalTypography(value.typography)
+    );
+  }
+  if (value.type === "edit-rejected") {
+    return (
+      isOperationId(value.operationId) &&
+      isRejectReason(value.reason) &&
+      typeof value.message === "string" &&
+      isSafeMarkdownSource(value.currentMarkdown) &&
+      isVersion(value.currentVersion) &&
+      optionalSafeMarkdownSource(value.draftMarkdown) &&
+      optionalStringArray(value.diagnostics)
+    );
+  }
+  if (value.type === "format-rejected") {
+    return (
+      isOperationId(value.operationId) &&
+      isFormatRejectReason(value.reason) &&
+      typeof value.message === "string" &&
+      isSafeMarkdownSource(value.currentMarkdown) &&
+      isVersion(value.currentVersion)
+    );
+  }
+  if (value.type === "save-result") {
+    return (
+      isOperationId(value.operationId) &&
+      typeof value.saved === "boolean" &&
+      isVersion(value.version) &&
+      typeof value.isDirty === "boolean" &&
+      optionalString(value.message)
+    );
+  }
+  if (value.type === "recovery-opened") {
+    return (
+      isOperationId(value.operationId) &&
+      isSafeMarkdownSource(value.currentMarkdown) &&
+      isVersion(value.currentVersion) &&
+      isMarkdownProfile(value.profile) &&
+      optionalResourceUrl(value.draftUri)
+    );
+  }
+  if (value.type === "error") {
+    return (
+      typeof value.message === "string" && optionalString(value.operationId)
+    );
+  }
+  return false;
+}
+
+/** Decode and validate an untrusted postMessage payload. */
+export function parseWebviewMessage(
+  value: unknown,
+): WebviewMessage | undefined {
+  if (
+    !isRecord(value) ||
+    value.protocolVersion !== PROTOCOL_VERSION ||
+    typeof value.type !== "string"
+  ) {
+    return undefined;
+  }
+
+  switch (value.type) {
+    case "ready":
+      return value.requestId === undefined
+        ? { protocolVersion: PROTOCOL_VERSION, type: "ready" }
+        : typeof value.requestId === "string" &&
+            value.requestId.length <= MAX_OPERATION_ID_LENGTH
+          ? {
+              protocolVersion: PROTOCOL_VERSION,
+              type: "ready",
+              requestId: value.requestId,
+            }
+          : undefined;
+    case "edit":
+      return isVersion(value.baseVersion) &&
+        isOperationId(value.operationId) &&
+        isSafeMarkdownSource(value.markdown)
+        ? {
+            protocolVersion: PROTOCOL_VERSION,
+            type: "edit",
+            baseVersion: value.baseVersion,
+            operationId: value.operationId,
+            markdown: value.markdown,
+          }
+        : undefined;
+    case "undo":
+      return isOperationId(value.operationId) &&
+        optionalVersion(value.baseVersion)
+        ? {
+            protocolVersion: PROTOCOL_VERSION,
+            type: "undo",
+            operationId: value.operationId,
+            ...(value.baseVersion === undefined
+              ? {}
+              : { baseVersion: value.baseVersion }),
+          }
+        : undefined;
+    case "redo":
+      return isOperationId(value.operationId) &&
+        optionalVersion(value.baseVersion)
+        ? {
+            protocolVersion: PROTOCOL_VERSION,
+            type: "redo",
+            operationId: value.operationId,
+            ...(value.baseVersion === undefined
+              ? {}
+              : { baseVersion: value.baseVersion }),
+          }
+        : undefined;
+    case "source":
+      return optionalString(value.operationId)
+        ? {
+            protocolVersion: PROTOCOL_VERSION,
+            type: "source",
+            ...(value.operationId === undefined
+              ? {}
+              : { operationId: value.operationId }),
+          }
+        : undefined;
+    case "format":
+      return isVersion(value.baseVersion) && isOperationId(value.operationId)
+        ? {
+            protocolVersion: PROTOCOL_VERSION,
+            type: "format",
+            baseVersion: value.baseVersion,
+            operationId: value.operationId,
+          }
+        : undefined;
+    case "save":
+      return isVersion(value.baseVersion) && isOperationId(value.operationId)
+        ? {
+            protocolVersion: PROTOCOL_VERSION,
+            type: "save",
+            baseVersion: value.baseVersion,
+            operationId: value.operationId,
+          }
+        : undefined;
+    case "preview":
+      return optionalVersion(value.baseVersion) &&
+        optionalString(value.operationId)
+        ? {
+            protocolVersion: PROTOCOL_VERSION,
+            type: "preview",
+            ...(value.baseVersion === undefined
+              ? {}
+              : { baseVersion: value.baseVersion }),
+            ...(value.operationId === undefined
+              ? {}
+              : { operationId: value.operationId }),
+          }
+        : undefined;
+    case "recoverDraft":
+      return isVersion(value.baseVersion) &&
+        isOperationId(value.operationId) &&
+        isSafeMarkdownSource(value.markdown)
+        ? {
+            protocolVersion: PROTOCOL_VERSION,
+            type: "recoverDraft",
+            baseVersion: value.baseVersion,
+            operationId: value.operationId,
+            markdown: value.markdown,
+          }
+        : undefined;
+    default:
+      return undefined;
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isVersion(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 1;
+}
+
+function optionalVersion(value: unknown): value is number | undefined {
+  return value === undefined || isVersion(value);
+}
+
+function optionalString(value: unknown): value is string | undefined {
+  return (
+    value === undefined ||
+    (typeof value === "string" && value.length <= MAX_OPERATION_ID_LENGTH)
+  );
+}
+
+function optionalResourceUrl(value: unknown): value is string | undefined {
+  return (
+    value === undefined ||
+    (typeof value === "string" && value.length <= MAX_RESOURCE_URL_LENGTH)
+  );
+}
+
+function optionalTypography(
+  value: unknown,
+): value is PreviewTypography | undefined {
+  if (value === undefined) return true;
+  if (!isRecord(value)) return false;
+  return (
+    typeof value.fontFamily === "string" &&
+    value.fontFamily.length <= 1_024 &&
+    typeof value.fontSize === "number" &&
+    Number.isFinite(value.fontSize) &&
+    value.fontSize > 0 &&
+    value.fontSize <= 96 &&
+    typeof value.lineHeight === "number" &&
+    Number.isFinite(value.lineHeight) &&
+    value.lineHeight > 0 &&
+    value.lineHeight <= 8
+  );
+}
+
+function optionalSafeMarkdownSource(
+  value: unknown,
+): value is string | undefined {
+  return value === undefined || isSafeMarkdownSource(value);
+}
+
+function optionalReason(
+  value: unknown,
+): value is HostDocumentReason | undefined {
+  return (
+    value === undefined ||
+    (typeof value === "string" &&
+      (HOST_DOCUMENT_REASONS as readonly string[]).includes(value))
+  );
+}
+
+function optionalMode(value: unknown): value is PanelMode | undefined {
+  return value === undefined || value === "editor" || value === "preview";
+}
+
+function optionalStringArray(
+  value: unknown,
+): value is readonly string[] | undefined {
+  return (
+    value === undefined ||
+    (Array.isArray(value) && value.every((entry) => typeof entry === "string"))
+  );
+}
+
+function isRejectReason(
+  value: unknown,
+): value is EditRejectedMessage["reason"] {
+  return (
+    value === "stale" ||
+    value === "invalid" ||
+    value === "apply-failed" ||
+    value === "busy" ||
+    value === "too-large"
+  );
+}
+
+function isFormatRejectReason(
+  value: unknown,
+): value is FormatRejectedMessage["reason"] {
+  return (
+    value === "invalid" ||
+    value === "apply-failed" ||
+    value === "stale" ||
+    value === "too-large" ||
+    value === "ignored"
+  );
+}

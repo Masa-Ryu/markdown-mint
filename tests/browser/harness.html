@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <!-- The local browser server maps this path to VS Code 1.130's installed
+       markdown.css. Loading it first catches native-preview cascade drift. -->
+  <link rel="stylesheet" href="/__vscode__/markdown.css">
+  <link rel="stylesheet" href="/media/document.css">
+  <link rel="stylesheet" href="/media/webview.css">
+</head>
+<body data-markdown-weaver-mode="editor">
+  <main id="app" aria-label="Markdown Weaver"></main>
+  <script>
+    (() => {
+      const protocolVersion = 1;
+      const markdownFixture = [
+        '# Browser harness',
+        '',
+        'Paragraph with **marks** and a [link](#).',
+        '',
+        '- [ ] Task',
+        '',
+        '```ts',
+        'const value = "日本語";',
+        '```',
+        '',
+        '| Name | 値 | 空欄 |',
+        '| --- | --- | --- |',
+        '| A | 日本語 |  |'
+      ].join('\n');
+      let markdown = markdownFixture;
+      let version = 1;
+      const history = [];
+      const future = [];
+      const messages = [];
+      let state = {};
+      const clone = value => JSON.parse(JSON.stringify(value));
+      const isRecord = value => typeof value === 'object' && value !== null && !Array.isArray(value);
+      const safeMarkdown = value => typeof value === 'string' && value.length <= 2000000;
+      const safeOperation = value => typeof value === 'string' && value.length > 0 && value.length <= 160 && /^[a-zA-Z0-9._:-]+$/.test(value);
+      const optionalString = value => value === undefined || (typeof value === 'string' && value.length <= 160);
+      const versionValue = value => Number.isSafeInteger(value) && value >= 1;
+      const optionalVersion = value => value === undefined || versionValue(value);
+      // Keep this transport check in lockstep with parseWebviewMessage in
+      // src/shared/protocol.ts. The fixture mocks VS Code only; it never
+      // bypasses the extension wire contract.
+      const validWebviewMessage = value => {
+        if (!isRecord(value) || value.protocolVersion !== protocolVersion || typeof value.type !== 'string') return false;
+        switch (value.type) {
+          case 'ready': return value.requestId === undefined || (typeof value.requestId === 'string' && value.requestId.length <= 160);
+          case 'edit': return versionValue(value.baseVersion) && safeOperation(value.operationId) && safeMarkdown(value.markdown);
+          case 'undo':
+          case 'redo': return safeOperation(value.operationId) && optionalVersion(value.baseVersion);
+          case 'source': return optionalString(value.operationId);
+          case 'format': return versionValue(value.baseVersion) && safeOperation(value.operationId);
+          case 'preview': return optionalVersion(value.baseVersion) && optionalString(value.operationId);
+          case 'recoverDraft': return versionValue(value.baseVersion) && safeOperation(value.operationId) && safeMarkdown(value.markdown);
+          default: return false;
+        }
+      };
+      const deliver = data => window.dispatchEvent(new MessageEvent('message', { data: { protocolVersion, ...data } }));
+      const typography = { fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif', fontSize: 14, lineHeight: 1.6 };
+      const reject = (operationId, reason, message, draftMarkdown) => deliver({ type: 'edit-rejected', operationId, reason, message, currentMarkdown: markdown, currentVersion: version, ...(draftMarkdown === undefined ? {} : { draftMarkdown }) });
+      const accept = (operationId, reason = 'ack') => deliver({ type: 'document', markdown, version, profile: 'github', ...(operationId === undefined ? {} : { operationId }), reason, mode: 'editor', typography });
+      const host = {
+        postMessage(message) {
+          messages.push(clone(message));
+          if (!validWebviewMessage(message)) {
+            deliver({ type: 'error', message: 'Malformed or unsupported webview message.' });
+            return;
+          }
+          if (message.type === 'edit') {
+            if (message.baseVersion !== version) {
+              reject(message.operationId, 'stale', 'The Markdown document changed before this edit arrived.', message.markdown);
+              return;
+            }
+            history.push(markdown);
+            future.length = 0;
+            markdown = message.markdown;
+            version += 1;
+            accept(message.operationId);
+          } else if (message.type === 'recoverDraft') {
+            if (message.baseVersion !== version) {
+              reject(message.operationId, 'stale', 'The Markdown document changed before the draft could be opened.', message.markdown);
+              return;
+            }
+            state = { ...state, recoveryDraft: message.markdown };
+            deliver({ type: 'recovery-opened', operationId: message.operationId, currentMarkdown: markdown, currentVersion: version, profile: 'github', draftUri: 'untitled:markdown-weaver-recovery.md' });
+            // Recovery opens a separate untitled document. The authoritative
+            // document remains unchanged and is sent back with no operation id.
+            accept(undefined, 'recovery');
+          } else if (message.type === 'ready') {
+            accept(undefined, 'initial');
+          } else if (message.type === 'undo' || message.type === 'redo') {
+            if (message.baseVersion !== undefined && message.baseVersion !== version) {
+              reject(message.operationId, 'stale', 'The Markdown document changed before undo/redo started.');
+              return;
+            }
+            const source = message.type === 'undo' ? history : future;
+            const target = message.type === 'undo' ? future : history;
+            const previous = source.pop();
+            if (previous !== undefined) {
+              target.push(markdown);
+              markdown = previous;
+              version += 1;
+            }
+            accept(message.operationId, message.type);
+          } else if (message.type === 'format') {
+            if (message.baseVersion !== version) {
+              deliver({ type: 'format-rejected', operationId: message.operationId, reason: 'stale', message: 'The Markdown document changed before formatting started.', currentMarkdown: markdown, currentVersion: version });
+              return;
+            }
+            accept(message.operationId, 'format');
+          }
+        },
+        getState: () => clone(state),
+        setState: next => { state = clone(next); }
+      };
+      window.acquireVsCodeApi = () => host;
+      window.__markdownWeaverHarness = {
+        get messages() { return messages; },
+        get document() { return { markdown, version }; },
+        deliverExternal(nextMarkdown) { markdown = nextMarkdown; version += 1; accept(undefined, 'external'); },
+        get state() { return clone(state); },
+        metrics() {
+          const rich = document.querySelector('.mw-rich-panel .ProseMirror');
+          const preview = document.querySelector('.mw-preview-panel .mw-document-content');
+          const measure = content => content ? {
+            content: content.getBoundingClientRect().toJSON(),
+            heading: content.querySelector('h1')?.getBoundingClientRect().toJSON(),
+            paragraph: content.querySelector('p')?.getBoundingClientRect().toJSON(),
+            task: content.querySelector('li.task-list-item, .mw-task-item.mw-task-task')?.getBoundingClientRect().toJSON(),
+            table: content.querySelector('table')?.getBoundingClientRect().toJSON(),
+            cells: Array.from(content.querySelectorAll('th,td')).map(cell => cell.getBoundingClientRect().toJSON()),
+            code: content.querySelector('pre')?.getBoundingClientRect().toJSON(),
+            font: getComputedStyle(content).fontFamily,
+            size: getComputedStyle(content).fontSize,
+            line: getComputedStyle(content).lineHeight
+          } : undefined;
+          return { viewport: [innerWidth, innerHeight, document.documentElement.clientWidth], rich: measure(rich), preview: measure(preview), body: { width: document.body.clientWidth, scrollWidth: document.body.scrollWidth, scrollHeight: document.body.scrollHeight } };
+        }
+      };
+    })();
+  </script>
+  <script src="/dist/webview.js"></script>
+</body>
+</html>
