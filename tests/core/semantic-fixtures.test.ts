@@ -99,6 +99,16 @@ describe("Markdown semantic fixture coverage", () => {
     expect(countKind(snapshot.doc, "raw_inline", "emoji")).toBe(4);
     expect(html).toContain('class="markdown-alert markdown-alert-note"');
     expect(html).toContain('class="markdown-alert markdown-alert-caution"');
+    expect(html).toContain('class="markdown-alert-icon"');
+    for (const color of [
+      "#3B82F6",
+      "#6CA4F8",
+      "#FB923C",
+      "#F2A500",
+      "#B8BEC8",
+    ]) {
+      expect(html).toContain(color);
+    }
     expect(html).toContain('class="mm-math mm-math-inline"');
     expect(html).toContain('class="mm-math mm-math-block"');
     expect(html).toContain('data-mm-mermaid="true"');

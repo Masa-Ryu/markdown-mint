@@ -31,6 +31,7 @@ const extensionOptions = {
   sourcemap: true,
   minify: false,
   legalComments: "none",
+  loader: { ".svg": "text" },
 };
 
 const webviewOptions = {

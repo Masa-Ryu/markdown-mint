@@ -424,12 +424,17 @@ body {
 .markdown-body .mm-math,
 .mm-document-content .mm-math {
   color: var(--vscode-foreground, #d4d4d4);
+  line-height: 1.2;
 }
 .markdown-body .mm-math-inline,
 .mm-document-content .mm-math-inline {
-  display: inline-block;
+  display: inline;
   max-width: 100%;
-  vertical-align: -0.12em;
+  vertical-align: baseline;
+}
+.mm-math-inline .katex,
+.mm-document-content .mm-math-inline .katex {
+  line-height: 1.2;
 }
 .markdown-body .mm-math-block,
 .mm-document-content .mm-math-block {
@@ -640,26 +645,52 @@ html.vscode-high-contrast .mm-document-content .mm-mermaid svg {
   margin: 1em 0;
   padding: 0.8em 1em;
   border: 1px solid var(--mm-border);
-  border-inline-start: 4px solid var(--vscode-textLink-foreground, #3794ff);
+  --mm-alert-accent: #3B82F6;
+  border-inline-start: 4px solid var(--mm-alert-accent);
   border-radius: 5px;
   background: var(--mm-code-background);
 }
 .markdown-body .markdown-alert-title,
 .mm-document-content .markdown-alert-title {
+  display: flex;
+  align-items: center;
+  gap: 0.45em;
   margin: 0 0 0.45em;
+  color: var(--mm-alert-accent);
   font-weight: 650;
 }
-.markdown-body .markdown-alert-warning,
-.mm-document-content .markdown-alert-warning {
-  border-inline-start-color: var(--vscode-editorWarning-foreground, #cca700);
+.markdown-body .markdown-alert-icon,
+.mm-document-content .markdown-alert-icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  width: 1.15em;
+  height: 1.15em;
 }
-.markdown-body .markdown-alert-caution,
-.mm-document-content .markdown-alert-caution {
-  border-inline-start-color: var(--vscode-editorError-foreground, #f14c4c);
+.markdown-body .markdown-alert-icon svg,
+.mm-document-content .markdown-alert-icon svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.markdown-body .markdown-alert-note,
+.mm-document-content .markdown-alert-note {
+  --mm-alert-accent: #3B82F6;
 }
 .markdown-body .markdown-alert-tip,
 .mm-document-content .markdown-alert-tip {
-  border-inline-start-color: var(--vscode-testing-iconPassed, #73c991);
+  --mm-alert-accent: #6CA4F8;
+}
+.markdown-body .markdown-alert-important,
+.mm-document-content .markdown-alert-important {
+  --mm-alert-accent: #FB923C;
+}
+.markdown-body .markdown-alert-warning,
+.mm-document-content .markdown-alert-warning {
+  --mm-alert-accent: #F2A500;
+}
+.markdown-body .markdown-alert-caution,
+.mm-document-content .markdown-alert-caution {
+  --mm-alert-accent: #B8BEC8;
 }
 .markdown-body details,
 .mm-document-content details {

@@ -19,6 +19,11 @@ import {
   renderCodeBlock as renderCodeBlockHtml,
   renderMath as renderMathHtml,
 } from "./visualRendering";
+import infoIconAsset from "../../assets/info-icon.svg?raw";
+import lightbulbAsset from "../../assets/lightbulb.svg?raw";
+import warningTriangleAsset from "../../assets/warning-triangle.svg?raw";
+import alertOctagonAsset from "../../assets/alert-octagon.svg?raw";
+import alertCommentAsset from "../../assets/alert-comment.svg?raw";
 
 /** The Markdown dialect used by the editor and preview. */
 export type Profile = "github" | "gitlab" | "commonmark";
@@ -3003,6 +3008,14 @@ function stripAlertPrefix(line: string): string {
   return line.replace(/^\s*>[ \t]?/, "");
 }
 
+const ALERT_ICON_SOURCES = {
+  note: infoIconAsset,
+  tip: lightbulbAsset,
+  important: alertOctagonAsset,
+  warning: warningTriangleAsset,
+  caution: alertCommentAsset,
+} as const;
+
 function renderAlert(source: string, state: RenderState): string {
   const lines = source.replace(/\r\n|\r/g, "\n").split("\n");
   let markerIndex = lines.findIndex((line) =>
@@ -3019,7 +3032,10 @@ function renderAlert(source: string, state: RenderState): string {
     .replace(/^\n+|\n+$/g, "");
   const title = marker.charAt(0).toUpperCase() + marker.slice(1);
   const bodyHtml = body ? renderSourceFragment(body, state.profile, state) : "";
-  return `<div class="markdown-alert markdown-alert-${escapeHtml(marker)}"><p class="markdown-alert-title">${escapeHtml(title)}</p>${bodyHtml}</div>`;
+  const icon =
+    ALERT_ICON_SOURCES[marker as keyof typeof ALERT_ICON_SOURCES] ??
+    ALERT_ICON_SOURCES.note;
+  return `<div class="markdown-alert markdown-alert-${escapeHtml(marker)}"><p class="markdown-alert-title"><span class="markdown-alert-icon" aria-hidden="true">${icon}</span><span class="markdown-alert-title-text">${escapeHtml(title)}</span></p>${bodyHtml}</div>`;
 }
 
 function matchingDetailsClose(source: string, start = 0): number {
