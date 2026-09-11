@@ -430,6 +430,12 @@ export function createAlertNodeView(
   };
 
   bodyEditor.addEventListener("mousedown", (event) => event.stopPropagation());
+  // The editor's global keymap handles Enter for ProseMirror blocks. Keep the
+  // alert textarea's native newline behavior by stopping the event before it
+  // bubbles to the editor surface; do not prevent the browser default.
+  bodyEditor.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") event.stopPropagation();
+  });
   bodyEditor.addEventListener("input", () => {
     updateSource();
     resizeBodyEditor();

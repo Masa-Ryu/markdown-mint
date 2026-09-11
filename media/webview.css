@@ -774,6 +774,9 @@ textarea:focus-visible {
 .mm-alert-node-view .markdown-alert {
   margin-block: 0;
 }
+.mm-alert-node-view + .mm-alert-node-view {
+  margin-top: 0.75em;
+}
 .mm-alert-body-editor {
   display: block;
   width: 100%;

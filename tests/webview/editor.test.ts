@@ -289,6 +289,36 @@ describe("rich editor rendering", () => {
     );
     app.destroy();
   });
+  it("keeps Enter as a native newline inside alert content", () => {
+    const { app, root } = makeApp("> [!NOTE]\n> Before");
+    const bodyEditor = root.querySelector<HTMLTextAreaElement>(
+      ".mm-alert-body-editor",
+    );
+    expect(bodyEditor).not.toBeNull();
+
+    let bubbled = false;
+    const onRootKeyDown = (): void => {
+      bubbled = true;
+    };
+    root.addEventListener("keydown", onRootKeyDown);
+    const enter = new KeyboardEvent("keydown", {
+      bubbles: true,
+      cancelable: true,
+      key: "Enter",
+    });
+    bodyEditor!.dispatchEvent(enter);
+    root.removeEventListener("keydown", onRootKeyDown);
+
+    expect(enter.defaultPrevented).toBe(false);
+    expect(bubbled).toBe(false);
+
+    bodyEditor!.value = "Before\nAfter";
+    bodyEditor!.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(app.view.state.doc.firstChild?.attrs.source).toBe(
+      "> [!NOTE]\n> Before\n> After",
+    );
+    app.destroy();
+  });
   it("disables editing in a host preview and exposes the code language field in Mint", () => {
     const preview = makeApp("plain");
     const previewBold = preview.root.querySelector<HTMLButtonElement>(
