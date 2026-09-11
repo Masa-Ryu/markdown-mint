@@ -174,7 +174,8 @@ describe("rich editor rendering", () => {
       operationId: firstEdit.operationId,
       reason: "ack",
     });
-    const language = root.querySelector<HTMLInputElement>(".mm-code-language")!;
+    const language =
+      root.querySelector<HTMLInputElement>(".mm-code-block-view .mm-code-language")!;
     const down = new MouseEvent("mousedown", {
       bubbles: true,
       cancelable: true,
@@ -189,11 +190,10 @@ describe("rich editor rendering", () => {
     expect((messages.at(-1) as any).markdown).toContain("```ts");
     app.destroy();
   });
-
   it("disables editing in a host preview and exposes the code language field in Mint", () => {
     const preview = makeApp("plain");
     const previewBold = preview.root.querySelector<HTMLButtonElement>(
-      '[data-testid="toolbar-bold"]',
+      "[data-testid=\"toolbar-bold\"]",
     )!;
     preview.app.receiveDocument({
       protocolVersion: PROTOCOL_VERSION,
@@ -205,26 +205,27 @@ describe("rich editor rendering", () => {
       reason: "external",
     });
     expect(previewBold.disabled).toBe(true);
+    expect(preview.root.querySelector<HTMLInputElement>(".mm-code-language")).toBeNull();
     preview.app.destroy();
 
     const { app, root } = makeApp("plain");
     const bold = root.querySelector<HTMLButtonElement>(
-      '[data-testid="toolbar-bold"]',
+      "[data-testid=\"toolbar-bold\"]",
     )!;
-    const language = root.querySelector<HTMLInputElement>(".mm-code-language")!;
-    expect(language.hidden).toBe(true);
-    expect(bold.disabled).toBe(false);
     const code = schema.nodes.code_block!;
     app.view.dispatch(
       app.view.state.tr.setBlockType(0, app.view.state.doc.content.size, code, {
         params: "ts",
       }),
     );
-    expect(language.hidden).toBe(false);
-    expect(language.disabled).toBe(false);
+    const language =
+      root.querySelector<HTMLInputElement>(".mm-code-block-view .mm-code-language");
+    expect(language).not.toBeNull();
+    expect(language?.value).toBe("ts");
+    expect(language?.disabled).toBe(false);
+    expect(bold.disabled).toBe(false);
     app.destroy();
   });
-
   it("resolves relative image URLs for display without changing Markdown attrs", async () => {
     const root = document.createElement("div");
     document.body.append(root);

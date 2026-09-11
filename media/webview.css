@@ -704,6 +704,20 @@ textarea:focus-visible {
   cursor: not-allowed;
 }
 
+.mm-code-block-view {
+  position: relative;
+}
+.mm-code-block-view .mm-code-language-inline {
+  position: absolute;
+  inset-inline-end: 8px;
+  top: 8px;
+  width: 64px;
+  z-index: 1;
+}
+.mm-code-block-view .mm-code-block-pre {
+  margin: 0;
+}
+
 .mm-table-dialog {
   width: min(420px, calc(100vw - 24px));
   max-height: calc(100dvh - 24px);

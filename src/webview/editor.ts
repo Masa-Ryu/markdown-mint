@@ -960,6 +960,78 @@ class TaskItemNodeView {
   }
 }
 
+class CodeBlockNodeView {
+  readonly dom: HTMLDivElement;
+  readonly contentDOM: HTMLElement;
+  private readonly view: EditorView;
+  private readonly getPos: () => number | undefined;
+  private readonly languageInput: HTMLInputElement;
+
+  constructor(
+    node: PMNode,
+    view: EditorView,
+    getPos: () => number | undefined,
+  ) {
+    this.view = view;
+    this.getPos = getPos;
+    this.dom = document.createElement("div");
+    this.dom.className = "mm-code-block-view";
+    this.languageInput = document.createElement("input");
+    this.languageInput.className = "mm-code-language mm-code-language-inline";
+    this.languageInput.type = "text";
+    this.languageInput.placeholder = "lang";
+    this.languageInput.setAttribute("aria-label", "Code block language");
+    this.languageInput.addEventListener("mousedown", (event) => {
+      event.stopPropagation();
+      this.languageInput.focus();
+    });
+    this.languageInput.addEventListener("change", () => {
+      this.setCodeLanguage(this.languageInput.value.trim());
+    });
+    this.dom.append(this.languageInput);
+
+    const pre = document.createElement("pre");
+    pre.className = "mm-code-block-pre";
+    const code = document.createElement("code");
+    this.contentDOM = code;
+    pre.append(code);
+    this.dom.append(pre);
+
+    this.update(node);
+  }
+
+  private setCodeLanguage(language: string): void {
+    const position = this.getPos();
+    if (position === undefined) return;
+    const current = this.view.state.doc.nodeAt(position);
+    if (!current || current.type.name !== "code_block") return;
+    this.view.focus();
+    this.view.dispatch(
+      this.view.state.tr.setNodeMarkup(position, undefined, {
+        ...current.attrs,
+        params: language,
+      }),
+    );
+  }
+
+  update(node: PMNode): boolean {
+    if (node.type.name !== "code_block") return false;
+    this.languageInput.value = String(node.attrs.params ?? "");
+    return true;
+  }
+
+  stopEvent(event: Event): boolean {
+    return (
+      event.target instanceof Element &&
+      event.target.closest("input,select,textarea,button") !== null
+    );
+  }
+
+  ignoreMutation(): boolean {
+    return false;
+  }
+}
+
 class ImageNodeView {
   readonly dom: HTMLImageElement;
   private readonly resolveBase: () => string | undefined;
@@ -1212,7 +1284,6 @@ export class MarkdownEditorApp {
   private emojiProfile: DocumentProfile | null = null;
   private emojiInvokingButton: HTMLButtonElement | null = null;
   private emojiDialogOpen = false;
-  private codeLanguageInput!: HTMLInputElement;
   private recoveryDialog!: HTMLDialogElement;
   private recoveryText!: HTMLTextAreaElement;
   private pendingRecoveryOperationId: string | undefined;
@@ -1461,6 +1532,8 @@ export class MarkdownEditorApp {
       nodeViews: {
         list_item: (node, view, getPos) =>
           new TaskItemNodeView(node, view, getPos),
+        code_block: (node, view, getPos) =>
+          new CodeBlockNodeView(node, view, getPos),
         image: (node) => new ImageNodeView(node, () => this.resourceBaseUrl),
         raw_block: (node, view, getPos) =>
           createRenderedNodeView(node, view, getPos, () => this.profile),
@@ -2129,13 +2202,12 @@ export class MarkdownEditorApp {
       this.root.querySelectorAll<
         HTMLButtonElement | HTMLSelectElement | HTMLInputElement
       >(
-        ".mm-tool-button, .mm-emoji-button, .mm-heading-select, .mm-code-language, .mm-floating-button",
+        ".mm-tool-button, .mm-emoji-button, .mm-heading-select, .mm-floating-button",
       ),
     )) {
       element.disabled =
         editingDisabled ||
-        (element.dataset.gfmOnly === "true" && this.profile === "commonmark") ||
-        (element === this.codeLanguageInput && element.hidden);
+        (element.dataset.gfmOnly === "true" && this.profile === "commonmark");
     }
     for (const button of Array.from(
       this.root.querySelectorAll<HTMLButtonElement>(".mm-mode-button"),
@@ -2765,20 +2837,6 @@ export class MarkdownEditorApp {
     toolbar.append(image);
     this.imageDialog = image;
 
-    this.codeLanguageInput = document.createElement("input");
-    this.codeLanguageInput.className = "mm-code-language";
-    this.codeLanguageInput.type = "text";
-    this.codeLanguageInput.placeholder = "lang";
-    this.setTooltip(this.codeLanguageInput, "Code block language");
-    this.codeLanguageInput.setAttribute("aria-label", "Code block language");
-    this.codeLanguageInput.addEventListener("mousedown", () => {
-      const { from, to } = this.view.state.selection;
-      this.savedSelection = { from, to };
-    });
-    this.codeLanguageInput.addEventListener("change", () =>
-      this.setCodeLanguage(this.codeLanguageInput.value.trim()),
-    );
-    primary.append(this.codeLanguageInput);
     this.buildTableDialog(toolbar);
     this.tableToolbar = this.buildTableToolbar();
     toolbar.append(this.tableToolbar);
@@ -4830,21 +4888,6 @@ export class MarkdownEditorApp {
     this.view.focus();
   }
 
-  private setCodeLanguage(language: string): void {
-    const { $from } = this.view.state.selection;
-    for (let depth = $from.depth; depth > 0; depth -= 1) {
-      const node = $from.node(depth);
-      if (node.type.name !== "code_block") continue;
-      this.dispatchTransaction(
-        this.view.state.tr.setNodeMarkup($from.before(depth), undefined, {
-          ...node.attrs,
-          params: language,
-        }),
-      );
-      return;
-    }
-  }
-
   private runCommand(
     command: (
       state: EditorState,
@@ -5409,11 +5452,6 @@ export class MarkdownEditorApp {
     _oldSelection: Selection,
     selection: Selection,
   ): void {
-    const editingDisabled =
-      !this.initialized ||
-      this.previewOnly ||
-      this.mode !== "rich" ||
-      Boolean(this.parseError);
     const heading =
       this.root.querySelector<HTMLSelectElement>(".mm-heading-select");
     if (heading) {
@@ -5422,20 +5460,6 @@ export class MarkdownEditorApp {
       heading.value =
         node.type.name === "heading" ? String(node.attrs.level) : "p";
     }
-    let language = "";
-    let inCode = false;
-    const { $from } = selection;
-    for (let depth = $from.depth; depth > 0; depth -= 1) {
-      const node = $from.node(depth);
-      if (node.type.name === "code_block") {
-        inCode = true;
-        language = String(node.attrs.params ?? "");
-        break;
-      }
-    }
-    this.codeLanguageInput.value = language;
-    this.codeLanguageInput.hidden = !inCode;
-    this.codeLanguageInput.disabled = editingDisabled || !inCode;
     this.updateEditingControlState();
     this.updateListToolbarState(selection);
     this.updateTableToolbar(selection);
