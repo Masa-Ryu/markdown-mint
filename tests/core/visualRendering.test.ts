@@ -22,10 +22,26 @@ describe("visual rendering helpers", () => {
   it("keeps unknown languages as escaped plain code", () => {
     const source = '<tag attr="&value">';
     const html = renderCodeBlock(source, "made-up-language");
-    expect(html).not.toContain("<span");
+    expect(html).not.toContain('<span class="hljs');
     expect(html).toContain("&lt;tag");
     expect(html).toContain("made-up-language");
     expect(highlightCodeSpans(source, "made-up-language")).toEqual([]);
+  });
+
+  it("renders a themed code card header and a line-number gutter", () => {
+    const html = renderCodeBlock("const first = 1;\nreturn first;", "ts");
+    expect(html).toContain('class="mm-code-block"');
+    expect(html).toContain('class="mm-code-block-header"');
+    expect(html).toContain('data-mm-code-action="copy"');
+    expect(html).toContain('data-mm-code-action="expand"');
+    expect(html).toContain('class="mm-code-language-label">TypeScript</span>');
+    expect(html).toContain('<div class="mm-code-line-numbers"');
+    expect(html).toContain("<span>1</span><span>2</span>");
+
+    const unknown = renderCodeBlock("plain", "made-up-language");
+    expect(unknown).toContain('data-language="made-up-language"');
+    expect(unknown).toContain('data-mm-code-language="txt"');
+    expect(unknown).toContain('class="mm-code-language-label">txt</span>');
   });
 
   it("renders inline and display math without trusting commands", () => {

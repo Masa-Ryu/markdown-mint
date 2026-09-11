@@ -697,24 +697,75 @@ textarea:focus-visible {
 }
 
 .mm-code-block-view {
-  position: relative;
   min-width: 0;
   overflow: visible;
-  padding-top: 42px;
+}
+.mm-code-block-view .mm-code-block {
+  margin-bottom: 1em;
+}
+.mm-code-block-view .mm-code-language-control {
+  position: relative;
+  max-width: 72%;
+  padding: 0 6px 0 0;
 }
 .mm-code-block-view .mm-code-language-inline {
+  width: 84px;
+  min-width: 48px;
+  max-width: 180px;
+  min-height: 28px;
+  padding: 4px 20px 4px 7px;
+  border: 1px solid var(--vscode-input-border, var(--mm-control-border));
+  border-radius: 4px;
+  color: var(--vscode-input-foreground, var(--mm-control-foreground));
+  background: var(--vscode-input-background, var(--mm-control-background));
+  font-size: 0.9em;
+}
+.mm-code-block-view .mm-code-language-inline:focus {
+  outline: 1px solid var(--vscode-focusBorder, var(--mm-focus-border));
+  outline-offset: -1px;
+}
+.mm-code-block-view .mm-code-language-control > .mm-code-language-label {
+  display: inline;
+  order: 2;
+}
+.mm-code-block-view
+  .mm-code-language-control:focus-within
+  > .mm-code-language-label {
+  display: none;
+}
+.mm-code-block-view .mm-code-language-control > .mm-code-language-icon {
+  order: 1;
+}
+.mm-code-block-view .mm-code-language-control > .mm-code-language-inline {
+  order: 3;
+  width: 0;
+  min-width: 0;
+  max-width: 0;
+  padding-inline: 0;
+  border-color: transparent;
+  opacity: 0;
+}
+.mm-code-block-view .mm-code-language-control > .mm-code-language-inline:focus {
+  width: 84px;
+  min-width: 48px;
+  max-width: 180px;
+  padding: 4px 20px 4px 7px;
+  border-color: var(--vscode-input-border, var(--mm-control-border));
+  opacity: 1;
+}
+.mm-code-block-view .mm-code-language-control > .mm-code-language-chevron {
   position: absolute;
-  inset-inline-end: 8px;
-  top: 8px;
-  width: min(160px, calc(100% - 16px));
-  min-width: 64px;
-  max-width: calc(100% - 16px);
-  min-height: 26px;
-  z-index: 1;
+  inset-inline-end: 11px;
+  order: 4;
+  pointer-events: none;
 }
 .mm-code-block-view .mm-code-block-pre {
   margin: 0;
   min-width: 0;
+}
+.mm-code-block-view .mm-code-action-more {
+  min-width: 30px;
+  padding-inline: 5px;
 }
 
 .mm-alert-node-view {

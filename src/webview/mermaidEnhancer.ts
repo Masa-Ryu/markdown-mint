@@ -1,3 +1,5 @@
+import { enhanceCodeBlockControls } from "./codeBlockControls";
+
 export interface MermaidRuntime {
   initialize?: (options: Record<string, unknown>) => void;
   render: (
@@ -486,6 +488,7 @@ export function enhanceRenderedContent(root: ParentNode): RenderingEnhancer {
   const releaseFragmentDelegation = ownerDocument
     ? retainFragmentDelegation(ownerDocument)
     : undefined;
+  const codeBlockControls = enhanceCodeBlockControls(root);
   let disposed = false;
   let scanQueued = false;
   const jobs = new WeakMap<
@@ -652,6 +655,7 @@ export function enhanceRenderedContent(root: ParentNode): RenderingEnhancer {
       disposed = true;
       observer?.disconnect();
       releaseFragmentDelegation?.();
+      codeBlockControls.dispose();
       ownerDocument?.defaultView?.removeEventListener(
         "markdown-mint-mermaid-ready",
         onRuntimeReady,

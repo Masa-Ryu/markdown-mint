@@ -77,6 +77,8 @@ import {
   type ProfileFeatureId,
   type ProfileFeatureValues,
 } from "./profileFeatures";
+import { copyCodeText, toggleCodeBlockFullscreen } from "./codeBlockControls";
+import { codeLanguageIcon, codeLanguageLabel } from "../core/visualRendering";
 
 export type DocumentProfile = "github" | "gitlab" | "commonmark";
 export type EditorMode = "rich" | "preview" | "source";
@@ -966,7 +968,11 @@ class CodeBlockNodeView {
   readonly contentDOM: HTMLElement;
   private readonly view: EditorView;
   private readonly getPos: () => number | undefined;
+  private readonly card: HTMLDivElement;
   private readonly languageInput: HTMLInputElement;
+  private readonly languageIcon: HTMLSpanElement;
+  private readonly languageLabel: HTMLSpanElement;
+  private readonly lineNumbers: HTMLDivElement;
 
   constructor(
     node: PMNode,
@@ -977,28 +983,150 @@ class CodeBlockNodeView {
     this.getPos = getPos;
     this.dom = document.createElement("div");
     this.dom.className = "mm-code-block-view";
+    this.card = document.createElement("div");
+    this.card.className = "mm-code-block";
+    this.dom.append(this.card);
+
+    const header = document.createElement("div");
+    header.className = "mm-code-block-header";
+    const languageControl = document.createElement("div");
+    languageControl.className = "mm-code-language-control";
+    this.languageIcon = document.createElement("span");
+    this.languageIcon.className = "mm-code-language-icon";
+    this.languageIcon.setAttribute("aria-hidden", "true");
+    this.languageLabel = document.createElement("span");
+    this.languageLabel.className = "mm-code-language-label";
+    this.languageLabel.setAttribute("aria-hidden", "true");
     this.languageInput = document.createElement("input");
     this.languageInput.className = "mm-code-language mm-code-language-inline";
     this.languageInput.type = "text";
-    this.languageInput.placeholder = "lang";
+    this.languageInput.placeholder = "txt";
+    this.languageInput.spellcheck = false;
+    this.languageInput.autocomplete = "off";
     this.languageInput.setAttribute("aria-label", "Code block language");
+    languageControl.addEventListener("mousedown", (event) => {
+      if (event.target === this.languageInput) return;
+      event.preventDefault();
+      this.languageInput.focus();
+    });
     this.languageInput.addEventListener("mousedown", (event) => {
       event.stopPropagation();
       this.languageInput.focus();
     });
+    this.languageInput.addEventListener("input", () =>
+      this.updateLanguagePresentation(this.languageInput.value),
+    );
     this.languageInput.addEventListener("change", () => {
       this.setCodeLanguage(this.languageInput.value.trim());
     });
-    this.dom.append(this.languageInput);
+    const languageChevron = document.createElement("span");
+    languageChevron.className = "mm-code-language-chevron";
+    languageChevron.textContent = "⌄";
+    languageChevron.setAttribute("aria-hidden", "true");
+    languageControl.append(
+      this.languageIcon,
+      this.languageLabel,
+      this.languageInput,
+      languageChevron,
+    );
 
+    const actions = document.createElement("div");
+    actions.className = "mm-code-block-actions";
+    const copy = this.createActionButton("copy", "⧉", "Copy");
+    copy.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      copyCodeText(this.contentDOM.textContent ?? "", this.dom.ownerDocument);
+      copy.dataset.mmCopyState = "copied";
+      copy.setAttribute("aria-label", "Copied code");
+      copy.title = "Copied";
+      this.dom.ownerDocument.defaultView?.setTimeout(() => {
+        copy.dataset.mmCopyState = "";
+        copy.setAttribute("aria-label", "Copy code");
+        copy.title = "Copy code";
+      }, 1400);
+    });
+    const separator = document.createElement("span");
+    separator.className = "mm-code-action-separator";
+    separator.setAttribute("aria-hidden", "true");
+    const expand = this.createActionButton("expand", "⤢", "Expand");
+    expand.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      toggleCodeBlockFullscreen(this.card);
+    });
+    const more = this.createActionButton("more", "•••", "");
+    more.classList.add("mm-code-action-more");
+    actions.append(copy, separator, expand, more);
+    header.append(languageControl, actions);
+    this.card.append(header);
+
+    const body = document.createElement("div");
+    body.className = "mm-code-block-body";
+    this.lineNumbers = document.createElement("div");
+    this.lineNumbers.className = "mm-code-line-numbers";
+    this.lineNumbers.setAttribute("aria-hidden", "true");
     const pre = document.createElement("pre");
     pre.className = "mm-code-block-pre";
     const code = document.createElement("code");
     this.contentDOM = code;
     pre.append(code);
-    this.dom.append(pre);
+    body.append(this.lineNumbers, pre);
+    this.card.append(body);
 
     this.update(node);
+  }
+
+  private createActionButton(
+    action: "copy" | "expand" | "more",
+    iconText: string,
+    label: string,
+  ): HTMLButtonElement {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "mm-code-action";
+    button.dataset.mmCodeAction = action;
+    button.setAttribute(
+      "aria-label",
+      label ? `${label} code` : "More code block actions",
+    );
+    button.title = label ? label : "More code block actions";
+    const icon = document.createElement("span");
+    icon.className = "mm-code-action-icon";
+    icon.textContent = iconText;
+    icon.setAttribute("aria-hidden", "true");
+    button.append(icon);
+    if (label) {
+      const text = document.createElement("span");
+      text.className = "mm-code-action-label";
+      text.textContent = label;
+      button.append(text);
+    }
+    button.addEventListener("mousedown", (event) => event.stopPropagation());
+    return button;
+  }
+
+  private updateLanguagePresentation(language: string): void {
+    const label = codeLanguageLabel(language);
+    this.languageIcon.textContent = codeLanguageIcon(language);
+    this.languageLabel.textContent = label;
+    this.card.dataset.mmCodeLanguage = label;
+    this.languageInput.setAttribute(
+      "aria-label",
+      `Code block language: ${label}`,
+    );
+  }
+
+  private updateLineNumbers(source: string): void {
+    const count = Math.max(1, source.split(/\r\n|\r|\n/).length);
+    const boundedCount = Math.min(count, 10_000);
+    const fragment = this.dom.ownerDocument.createDocumentFragment();
+    for (let index = 0; index < boundedCount; index += 1) {
+      const line = this.dom.ownerDocument.createElement("span");
+      line.textContent = String(index + 1);
+      fragment.append(line);
+    }
+    this.lineNumbers.replaceChildren(fragment);
   }
 
   private setCodeLanguage(language: string): void {
@@ -1017,7 +1145,11 @@ class CodeBlockNodeView {
 
   update(node: PMNode): boolean {
     if (node.type.name !== "code_block") return false;
-    this.languageInput.value = String(node.attrs.params ?? "");
+    const language = String(node.attrs.params ?? "");
+    if (this.languageInput.value !== language)
+      this.languageInput.value = language;
+    this.updateLanguagePresentation(language);
+    this.updateLineNumbers(node.textContent);
     return true;
   }
 

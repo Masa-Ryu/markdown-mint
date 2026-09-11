@@ -2678,29 +2678,9 @@ function renderHtmlPair(source: string, state: RenderState): string {
 }
 
 function renderCodeFallback(source: string, language: string): string {
-  const escapedLanguage = /^[A-Za-z0-9_+.-]+$/.test(language)
-    ? ` class="language-${escapeHtml(language)}"`
-    : "";
-  const tokenPattern =
-    /\/\*[\s\S]*?\*\/|\/\/[^\r\n]*|#[^\r\n]*|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`|\b\d+(?:\.\d+)?\b|\b(?:true|false|null|undefined|const|let|var|function|return|if|else|for|while|class|interface|type|import|from|export|async|await|fn|struct|pub|def|in|match|impl|use|new|this|self)\b/g;
-  let output = "";
-  let cursor = 0;
-  let match: RegExpExecArray | null;
-  while ((match = tokenPattern.exec(source)) != null) {
-    output += escapeHtml(source.slice(cursor, match.index));
-    const token = match[0]!;
-    const className = /^(?:\/\/|\/\*|#)/.test(token)
-      ? "comment"
-      : /^(?:["'`])/.test(token)
-        ? "string"
-        : /^\d/.test(token)
-          ? "number"
-          : "keyword";
-    output += `<span class="token ${className}">${escapeHtml(token)}</span>`;
-    cursor = match.index + token.length;
-  }
-  output += escapeHtml(source.slice(cursor));
-  return `<pre><code${escapedLanguage}>${output}</code></pre>`;
+  // Keep custom renderers and the built-in renderer on the same accessible
+  // code-card contract when a host renderer declines a block.
+  return renderCodeBlockHtml(source, language);
 }
 
 function renderTextMarks(value: string, marks: readonly Mark[]): string {

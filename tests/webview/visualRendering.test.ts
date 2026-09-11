@@ -4,6 +4,8 @@ import {
   enhanceRenderedContent,
   type MermaidRuntime,
 } from "../../src/webview/mermaidEnhancer";
+import { enhanceCodeBlockControls } from "../../src/webview/codeBlockControls";
+import { renderCodeBlock } from "../../src/core/visualRendering";
 
 async function flush(): Promise<void> {
   await new Promise<void>((resolve) => setTimeout(resolve, 0));
@@ -47,6 +49,48 @@ afterEach(() => {
 });
 
 describe("local Mermaid rendering lifecycle", () => {
+  it("wires copy and expand actions for a rendered code card", () => {
+    const source = "const value = 1;\nreturn value;";
+    const root = document.createElement("div");
+    root.innerHTML = renderCodeBlock(source, "ts");
+    document.body.append(root);
+    const originalClipboard = Object.getOwnPropertyDescriptor(
+      navigator,
+      "clipboard",
+    );
+    let copied = "";
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: {
+        writeText: (value: string) => Promise.resolve((copied = value)),
+      },
+    });
+    const binding = enhanceCodeBlockControls(root);
+    try {
+      root
+        .querySelector<HTMLButtonElement>('[data-mm-code-action="copy"]')
+        ?.click();
+      expect(copied).toBe(source);
+      const expand = root.querySelector<HTMLButtonElement>(
+        '[data-mm-code-action="expand"]',
+      )!;
+      const card = root.querySelector<HTMLElement>(".mm-code-block")!;
+      expand.click();
+      expect(card.classList.contains("mm-code-block-expanded")).toBe(true);
+      expand.click();
+      expect(card.classList.contains("mm-code-block-expanded")).toBe(false);
+    } finally {
+      binding.dispose();
+      if (originalClipboard)
+        Object.defineProperty(navigator, "clipboard", originalClipboard);
+      else
+        Object.defineProperty(navigator, "clipboard", {
+          configurable: true,
+          value: undefined,
+        });
+    }
+  });
+
   it("sets the native indeterminate property from the safe task state", () => {
     const checkbox = document.createElement("input");
     checkbox.type = "checkbox";

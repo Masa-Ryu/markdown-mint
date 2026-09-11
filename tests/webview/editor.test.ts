@@ -191,6 +191,70 @@ describe("rich editor rendering", () => {
     expect((messages.at(-1) as any).markdown).toContain("```ts");
     app.destroy();
   });
+  it("provides code card actions and keeps line numbers outside editable content", () => {
+    const source = "```ts\nconst value = 1;\nreturn value;\n```";
+    const { app, root, messages } = makeApp(source);
+    const card = root.querySelector<HTMLElement>(
+      ".mm-code-block-view .mm-code-block",
+    );
+    expect(card).not.toBeNull();
+    expect(
+      root.querySelectorAll(".mm-code-block-view .mm-code-line-numbers span"),
+    ).toHaveLength(2);
+    expect(
+      root.querySelector(".mm-code-block-view .mm-code-line-numbers"),
+    ).not.toBe(app.view.dom.querySelector(".mm-code-block-view code"));
+    expect(
+      root.querySelector<HTMLButtonElement>(
+        '.mm-code-block-view [data-mm-code-action="copy"]',
+      ),
+    ).not.toBeNull();
+    expect(
+      root.querySelector<HTMLButtonElement>(
+        '.mm-code-block-view [data-mm-code-action="expand"]',
+      ),
+    ).not.toBeNull();
+
+    const originalClipboard = Object.getOwnPropertyDescriptor(
+      navigator,
+      "clipboard",
+    );
+    let copied = "";
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: {
+        writeText: (value: string) => Promise.resolve((copied = value)),
+      },
+    });
+    try {
+      root
+        .querySelector<HTMLButtonElement>(
+          '.mm-code-block-view [data-mm-code-action="copy"]',
+        )
+        ?.click();
+      expect(copied).toBe("const value = 1;\nreturn value;");
+
+      const expand = root.querySelector<HTMLButtonElement>(
+        '.mm-code-block-view [data-mm-code-action="expand"]',
+      )!;
+      expand.click();
+      expect(card?.classList.contains("mm-code-block-expanded")).toBe(true);
+      expand.click();
+      expect(card?.classList.contains("mm-code-block-expanded")).toBe(false);
+    } finally {
+      if (originalClipboard)
+        Object.defineProperty(navigator, "clipboard", originalClipboard);
+      else
+        Object.defineProperty(navigator, "clipboard", {
+          configurable: true,
+          value: undefined,
+        });
+    }
+    expect(
+      messages.filter((message: any) => message.type === "edit"),
+    ).toHaveLength(0);
+    app.destroy();
+  });
   it("edits alert content inline while preserving the raw atom and marker", () => {
     const source = "> [!WARNING]\n> Before";
     const { app, root, messages } = makeApp(source);

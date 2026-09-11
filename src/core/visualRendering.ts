@@ -88,6 +88,68 @@ function validLanguageAttribute(language: string): boolean {
   return /^[A-Za-z0-9_+.-]+$/.test(language);
 }
 
+const LANGUAGE_LABELS: Record<string, string> = {
+  bash: "Shell",
+  c: "C",
+  cpp: "C++",
+  css: "CSS",
+  csv: "CSV",
+  go: "Go",
+  http: "HTTP",
+  ini: "INI",
+  java: "Java",
+  javascript: "JavaScript",
+  json: "JSON",
+  kotlin: "Kotlin",
+  less: "Less",
+  markdown: "Markdown",
+  php: "PHP",
+  plaintext: "txt",
+  python: "Python",
+  ruby: "Ruby",
+  rust: "Rust",
+  scss: "SCSS",
+  sql: "SQL",
+  swift: "Swift",
+  typescript: "TypeScript",
+  xml: "XML",
+  yaml: "YAML",
+};
+
+export function codeLanguageLabel(language: string): string {
+  const normalized = normalizedLanguage(language);
+  return (
+    LANGUAGE_LABELS[knownLanguage(language) ?? ""] ??
+    (normalized && knownLanguage(language) ? normalized : "txt")
+  );
+}
+
+export function codeLanguageIcon(language: string): string {
+  const normalized = knownLanguage(language) ?? "plaintext";
+  if (normalized === "plaintext") return "";
+  if (normalized === "typescript") return "TS";
+  if (normalized === "javascript") return "JS";
+  if (normalized === "python") return "🐍";
+  if (normalized === "json") return "{}";
+  if (normalized === "markdown") return "M↓";
+  if (normalized === "css" || normalized === "scss" || normalized === "less")
+    return "#";
+  if (normalized === "html" || normalized === "xml") return "<>";
+  return "</>";
+}
+
+function codeLineNumbers(source: string): string {
+  const lineCount = Math.max(1, source.split(/\r\n|\r|\n/).length);
+  // A very large source file should remain cheap to render. The code remains
+  // fully visible; the gutter simply stops adding individual labels after a
+  // bounded point where a number is no longer useful to scan.
+  const boundedCount = Math.min(lineCount, 10_000);
+  return Array.from(
+    { length: boundedCount },
+    (_, index) => `<span>${index + 1}</span>`,
+  ).join("");
+}
+
 function highlightedHtml(source: string, language: string): string | undefined {
   const resolved = knownLanguage(language);
   if (!resolved) return undefined;
@@ -121,15 +183,52 @@ export function renderCodeBlock(source: string, language = ""): string {
     normalized && validLanguageAttribute(normalized)
       ? ' class="language-' + escapeHtml(normalized) + " hljs" + '"'
       : "";
+  const languageLabel = codeLanguageLabel(language);
+  const languageIcon = codeLanguageIcon(language);
   return (
-    '<pre class="mm-code-block"' +
+    '<div class="mm-code-block"' +
     languageAttribute +
     highlightAttribute +
-    "><code" +
+    ' data-mm-code-language="' +
+    escapeHtml(languageLabel) +
+    '">' +
+    '<div class="mm-code-block-header">' +
+    '<div class="mm-code-language-control" role="img" aria-label="Code language: ' +
+    escapeHtml(languageLabel) +
+    '">' +
+    '<span class="mm-code-language-icon" aria-hidden="true">' +
+    escapeHtml(languageIcon) +
+    "</span>" +
+    '<span class="mm-code-language-label">' +
+    escapeHtml(languageLabel) +
+    "</span>" +
+    '<span class="mm-code-language-chevron" aria-hidden="true">⌄</span>' +
+    "</div>" +
+    '<div class="mm-code-block-actions">' +
+    '<button type="button" class="mm-code-action" data-mm-code-action="copy" aria-label="Copy code" title="Copy code">' +
+    '<span class="mm-code-action-icon" aria-hidden="true">⧉</span>' +
+    '<span class="mm-code-action-label">Copy</span>' +
+    "</button>" +
+    '<span class="mm-code-action-separator" aria-hidden="true"></span>' +
+    '<button type="button" class="mm-code-action" data-mm-code-action="expand" aria-label="Expand code" title="Expand">' +
+    '<span class="mm-code-action-icon" aria-hidden="true">⤢</span>' +
+    '<span class="mm-code-action-label">Expand</span>' +
+    "</button>" +
+    '<button type="button" class="mm-code-action mm-code-action-more" data-mm-code-action="more" aria-label="More code block actions" title="More code block actions">' +
+    '<span class="mm-code-action-icon" aria-hidden="true">•••</span>' +
+    "</button>" +
+    "</div>" +
+    "</div>" +
+    '<div class="mm-code-block-body">' +
+    '<div class="mm-code-line-numbers" aria-hidden="true">' +
+    codeLineNumbers(source) +
+    "</div>" +
+    '<pre class="mm-code-block-pre"><code' +
     codeClass +
     ">" +
     body +
-    "</code></pre>"
+    "</code></pre>" +
+    "</div></div>"
   );
 }
 
