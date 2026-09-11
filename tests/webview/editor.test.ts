@@ -174,8 +174,9 @@ describe("rich editor rendering", () => {
       operationId: firstEdit.operationId,
       reason: "ack",
     });
-    const language =
-      root.querySelector<HTMLInputElement>(".mm-code-block-view .mm-code-language")!;
+    const language = root.querySelector<HTMLInputElement>(
+      ".mm-code-block-view .mm-code-language",
+    )!;
     const down = new MouseEvent("mousedown", {
       bubbles: true,
       cancelable: true,
@@ -190,10 +191,44 @@ describe("rich editor rendering", () => {
     expect((messages.at(-1) as any).markdown).toContain("```ts");
     app.destroy();
   });
+  it("edits alert source through its rich NodeView while preserving the raw atom", () => {
+    const source = "> [!WARNING]\n> Before";
+    const { app, root, messages } = makeApp(source);
+    const node = app.view.state.doc.firstChild;
+    expect(node?.type.name).toBe("raw_block");
+    expect(node?.attrs.kind).toBe("alert");
+
+    const editButton = root.querySelector<HTMLButtonElement>(
+      ".mm-alert-edit-button",
+    );
+    const sourceEditor = root.querySelector<HTMLTextAreaElement>(
+      ".mm-alert-source-editor",
+    );
+    expect(editButton).not.toBeNull();
+    expect(sourceEditor).not.toBeNull();
+    expect(sourceEditor?.hidden).toBe(true);
+
+    editButton?.click();
+    expect(sourceEditor?.hidden).toBe(false);
+    sourceEditor!.value = "> [!WARNING]\n> After";
+    sourceEditor!.dispatchEvent(new Event("input", { bubbles: true }));
+
+    expect(app.view.state.doc.firstChild?.type.name).toBe("raw_block");
+    expect(app.view.state.doc.firstChild?.attrs.source).toBe(
+      "> [!WARNING]\n> After",
+    );
+    expect(root.querySelector(".markdown-alert")?.textContent).toContain(
+      "After",
+    );
+    expect((messages.at(-1) as { markdown?: string })?.markdown).toContain(
+      "> After",
+    );
+    app.destroy();
+  });
   it("disables editing in a host preview and exposes the code language field in Mint", () => {
     const preview = makeApp("plain");
     const previewBold = preview.root.querySelector<HTMLButtonElement>(
-      "[data-testid=\"toolbar-bold\"]",
+      '[data-testid="toolbar-bold"]',
     )!;
     preview.app.receiveDocument({
       protocolVersion: PROTOCOL_VERSION,
@@ -205,12 +240,14 @@ describe("rich editor rendering", () => {
       reason: "external",
     });
     expect(previewBold.disabled).toBe(true);
-    expect(preview.root.querySelector<HTMLInputElement>(".mm-code-language")).toBeNull();
+    expect(
+      preview.root.querySelector<HTMLInputElement>(".mm-code-language"),
+    ).toBeNull();
     preview.app.destroy();
 
     const { app, root } = makeApp("plain");
     const bold = root.querySelector<HTMLButtonElement>(
-      "[data-testid=\"toolbar-bold\"]",
+      '[data-testid="toolbar-bold"]',
     )!;
     const code = schema.nodes.code_block!;
     app.view.dispatch(
@@ -218,8 +255,9 @@ describe("rich editor rendering", () => {
         params: "ts",
       }),
     );
-    const language =
-      root.querySelector<HTMLInputElement>(".mm-code-block-view .mm-code-language");
+    const language = root.querySelector<HTMLInputElement>(
+      ".mm-code-block-view .mm-code-language",
+    );
     expect(language).not.toBeNull();
     expect(language?.value).toBe("ts");
     expect(language?.disabled).toBe(false);

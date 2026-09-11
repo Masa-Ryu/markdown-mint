@@ -255,3 +255,176 @@ export function createRenderedNodeView(
     },
   };
 }
+
+/**
+ * Render an alert atom with an opt-in source editor. Alerts stay raw atoms so
+ * their original Markdown remains available to the serializer, while the
+ * small source editor gives rich mode a safe editing path without exposing
+ * generated HTML to ProseMirror's mutation observer.
+ */
+export function createAlertNodeView(
+  node: PMNode,
+  view: EditorView,
+  getPos: (() => number | undefined) | undefined,
+  getProfile?: () => Profile,
+): NodeView {
+  let current = node;
+  let lastDocument = view.state.doc;
+  let disposed = false;
+  let enhancer: RenderingEnhancer | undefined;
+  let editing = false;
+
+  const dom = document.createElement("div");
+  dom.className = "mm-rendered-node mm-alert-node-view";
+  dom.dataset.mmRenderedNode = current.type.name;
+  dom.contentEditable = "false";
+  dom.setAttribute("aria-live", "polite");
+
+  const preview = document.createElement("div");
+  preview.className = "mm-alert-preview";
+  preview.contentEditable = "false";
+  dom.append(preview);
+
+  const controls = document.createElement("div");
+  controls.className = "mm-alert-node-controls";
+  const editButton = document.createElement("button");
+  editButton.type = "button";
+  editButton.className = "mm-alert-edit-button";
+  editButton.textContent = "Edit alert source";
+  editButton.setAttribute("aria-expanded", "false");
+  editButton.setAttribute("aria-label", "Edit alert Markdown source");
+  controls.append(editButton);
+  dom.append(controls);
+
+  const sourceEditor = document.createElement("textarea");
+  sourceEditor.className = "mm-alert-source-editor";
+  sourceEditor.setAttribute("aria-label", "Alert Markdown source");
+  sourceEditor.setAttribute("spellcheck", "false");
+  sourceEditor.hidden = true;
+  dom.append(sourceEditor);
+
+  const sourceFor = (value: PMNode): string =>
+    String(value.attrs.source ?? value.textContent ?? "");
+
+  const setEditing = (next: boolean, focus = false): void => {
+    editing = next;
+    sourceEditor.hidden = !next;
+    editButton.setAttribute("aria-expanded", String(next));
+    editButton.textContent = next ? "Hide alert source" : "Edit alert source";
+    if (next && focus) {
+      sourceEditor.focus();
+      sourceEditor.setSelectionRange(
+        sourceEditor.value.length,
+        sourceEditor.value.length,
+      );
+    }
+  };
+
+  const positionOf = (): number | undefined => {
+    try {
+      return getPos?.();
+    } catch {
+      return undefined;
+    }
+  };
+
+  const updateSource = (): void => {
+    const position = positionOf();
+    if (position === undefined) return;
+    const currentNode = view.state.doc.nodeAt(position);
+    if (
+      !currentNode ||
+      currentNode.type.name !== "raw_block" ||
+      String(currentNode.attrs.kind ?? "") !== "alert"
+    )
+      return;
+    const source = sourceEditor.value;
+    if (String(currentNode.attrs.source ?? "") === source) return;
+    view.dispatch(
+      view.state.tr.setNodeMarkup(position, undefined, {
+        ...currentNode.attrs,
+        source,
+      }),
+    );
+  };
+
+  const render = (): void => {
+    if (disposed) return;
+    const renderer = (core as unknown as CoreWithNodeRenderer).renderNodeHtml;
+    const nodePosition = positionOf();
+    const renderInput: PMNode | CoreRenderInput =
+      nodePosition === undefined
+        ? view.state.doc
+        : { document: view.state.doc, nodePosition };
+    const html = renderer
+      ? renderer(current, getProfile?.() ?? "github", renderInput)
+      : rawNodeFallback(current);
+    enhancer?.dispose();
+    appendGeneratedHtml(preview, html);
+    enhancer = enhanceRenderedContent(preview);
+    const source = sourceFor(current);
+    if (sourceEditor.value !== source) sourceEditor.value = source;
+    setEditing(editing);
+  };
+
+  editButton.addEventListener("mousedown", (event) => event.stopPropagation());
+  editButton.addEventListener("click", () => setEditing(!editing, !editing));
+  sourceEditor.addEventListener("mousedown", (event) =>
+    event.stopPropagation(),
+  );
+  sourceEditor.addEventListener("input", updateSource);
+  sourceEditor.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape") return;
+    event.preventDefault();
+    setEditing(false);
+    view.focus();
+  });
+  preview.addEventListener("dblclick", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setEditing(true, true);
+  });
+
+  render();
+
+  return {
+    dom,
+    update: (nextNode) => {
+      if (
+        nextNode.type !== current.type ||
+        String(nextNode.attrs.kind ?? "") !== "alert"
+      )
+        return false;
+      const contextChanged =
+        view.state.doc !== lastDocument &&
+        (dependsOnDocumentContext(current) ||
+          dependsOnDocumentContext(nextNode));
+      if (nextNode.eq(current) && !contextChanged) {
+        lastDocument = view.state.doc;
+        return true;
+      }
+      current = nextNode;
+      lastDocument = view.state.doc;
+      dom.dataset.mmRenderedNode = current.type.name;
+      render();
+      return true;
+    },
+    selectNode: () => dom.classList.add("ProseMirror-selectednode"),
+    deselectNode: () => dom.classList.remove("ProseMirror-selectednode"),
+    stopEvent: (event) => {
+      const target = event.target;
+      if (!(target instanceof Element)) return false;
+      if (target.closest("a,button,input,summary,select,textarea")) return true;
+      return (
+        event.type === "dblclick" &&
+        Boolean(target.closest(".mm-alert-preview"))
+      );
+    },
+    ignoreMutation: () => true,
+    destroy: () => {
+      disposed = true;
+      enhancer?.dispose();
+      enhancer = undefined;
+    },
+  };
+}

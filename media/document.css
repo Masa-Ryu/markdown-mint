@@ -173,6 +173,8 @@ body {
   padding: 0 1em;
   border-left: 3px solid var(--mm-border);
   color: var(--mm-muted);
+  background: transparent;
+  box-shadow: none;
 }
 
 .markdown-body pre,
@@ -424,17 +426,19 @@ body {
 .markdown-body .mm-math,
 .mm-document-content .mm-math {
   color: var(--vscode-foreground, #d4d4d4);
-  line-height: 1.2;
+  line-height: normal;
 }
 .markdown-body .mm-math-inline,
 .mm-document-content .mm-math-inline {
-  display: inline;
+  display: inline-block;
   max-width: 100%;
-  vertical-align: baseline;
+  vertical-align: -0.15em;
+  line-height: normal;
+  white-space: nowrap;
 }
 .mm-math-inline .katex,
 .mm-document-content .mm-math-inline .katex {
-  line-height: 1.2;
+  line-height: normal;
 }
 .markdown-body .mm-math-block,
 .mm-document-content .mm-math-block {
@@ -442,8 +446,9 @@ body {
   max-width: 100%;
   margin: 1.2em 0;
   overflow-x: auto;
-  overflow-y: hidden;
-  padding: 0.2em 0;
+  overflow-y: visible;
+  padding: 0.45em 0;
+  line-height: normal;
 }
 .markdown-body .mm-math-fallback,
 .mm-document-content .mm-math-fallback {
@@ -501,6 +506,15 @@ body {
     --vscode-descriptionForeground,
     var(--vscode-textSeparator-foreground, #9da5b4)
   );
+  display: block;
+  background: transparent !important;
+}
+.markdown-body .mm-mermaid svg > rect.background,
+.mm-document-content .mm-mermaid svg > rect.background,
+.markdown-body .mm-mermaid svg > .background,
+.mm-document-content .mm-mermaid svg > .background {
+  fill: transparent !important;
+  stroke: none !important;
 }
 .markdown-body .mm-mermaid svg text,
 .mm-document-content .mm-mermaid svg text,
@@ -521,6 +535,12 @@ body {
 }
 .markdown-body .mm-mermaid svg .edgePaths .path,
 .mm-document-content .mm-mermaid svg .edgePaths .path,
+.markdown-body .mm-mermaid svg .edgePaths path,
+.mm-document-content .mm-mermaid svg .edgePaths path,
+.markdown-body .mm-mermaid svg .edgePath .path,
+.mm-document-content .mm-mermaid svg .edgePath .path,
+.markdown-body .mm-mermaid svg .edgePath path,
+.mm-document-content .mm-mermaid svg .edgePath path,
 .markdown-body .mm-mermaid svg .flowchart-link,
 .mm-document-content .mm-mermaid svg .flowchart-link,
 .markdown-body .mm-mermaid svg .messageLine0,
@@ -535,6 +555,7 @@ body {
 .mm-document-content .mm-mermaid svg .noteLine,
 .markdown-body .mm-mermaid svg .entityLine,
 .mm-document-content .mm-mermaid svg .entityLine {
+  fill: none !important;
   stroke: var(--mm-mermaid-line) !important;
 }
 .markdown-body .mm-mermaid svg marker path,
@@ -552,6 +573,8 @@ body {
 }
 .markdown-body .mm-mermaid svg .edgeLabel rect.background,
 .mm-document-content .mm-mermaid svg .edgeLabel rect.background,
+.markdown-body .mm-mermaid svg .edgeLabel rect,
+.mm-document-content .mm-mermaid svg .edgeLabel rect,
 .markdown-body .mm-mermaid svg .edgeLabel .labelBkg,
 .mm-document-content .mm-mermaid svg .edgeLabel .labelBkg {
   fill: var(--mm-mermaid-background) !important;

@@ -57,6 +57,7 @@ import {
 } from "./starter";
 import { createWritingInputRules } from "./input-rules";
 import {
+  createAlertNodeView,
   createRenderedNodeView,
   createRenderingPlugin,
   enhanceRenderedContent,
@@ -1536,7 +1537,9 @@ export class MarkdownEditorApp {
           new CodeBlockNodeView(node, view, getPos),
         image: (node) => new ImageNodeView(node, () => this.resourceBaseUrl),
         raw_block: (node, view, getPos) =>
-          createRenderedNodeView(node, view, getPos, () => this.profile),
+          String(node.attrs.kind ?? "") === "alert"
+            ? createAlertNodeView(node, view, getPos, () => this.profile)
+            : createRenderedNodeView(node, view, getPos, () => this.profile),
         raw_inline: (node, view, getPos) =>
           createRenderedNodeView(node, view, getPos, () => this.profile),
       },
@@ -2200,9 +2203,12 @@ export class MarkdownEditorApp {
       Boolean(this.parseError);
     for (const element of Array.from(
       this.root.querySelectorAll<
-        HTMLButtonElement | HTMLSelectElement | HTMLInputElement
+        | HTMLButtonElement
+        | HTMLSelectElement
+        | HTMLInputElement
+        | HTMLTextAreaElement
       >(
-        ".mm-tool-button, .mm-emoji-button, .mm-heading-select, .mm-floating-button",
+        ".mm-tool-button, .mm-emoji-button, .mm-heading-select, .mm-floating-button, .mm-alert-edit-button, .mm-alert-source-editor",
       ),
     )) {
       element.disabled =

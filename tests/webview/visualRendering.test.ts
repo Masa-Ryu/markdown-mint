@@ -94,6 +94,34 @@ describe("local Mermaid rendering lifecycle", () => {
       },
     });
     expect(element.dataset.mmMermaidState).toBe("rendered");
+    expect(element.querySelector<SVGPathElement>("svg path")?.style.fill).toBe(
+      "none",
+    );
+    enhancer.dispose();
+  });
+  it("removes SVG fallback fills from connectors and edge label backgrounds", async () => {
+    const runtime: MermaidRuntime = {
+      render: () =>
+        '<svg><rect class="background" width="100" height="50" />' +
+        '<g class="edgePaths"><path class="flowchart-link" /></g>' +
+        '<g class="edgeLabel"><rect class="labelBkg" /></g></svg>',
+    };
+    (globalThis as Record<string, unknown>).markdownMintMermaid = runtime;
+    const element = diagram();
+    const enhancer = enhanceRenderedContent(document.body);
+    await flush();
+
+    const svg = element.querySelector("svg");
+    expect(svg?.style.getPropertyValue("background")).toBe("transparent");
+    expect(svg?.querySelector<SVGElement>("rect.background")?.style.fill).toBe(
+      "transparent",
+    );
+    expect(svg?.querySelector<SVGElement>(".flowchart-link")?.style.fill).toBe(
+      "none",
+    );
+    expect(
+      svg?.querySelector<SVGElement>(".edgeLabel .labelBkg")?.style.fill,
+    ).toBe("var(--mm-mermaid-background)");
     enhancer.dispose();
   });
 

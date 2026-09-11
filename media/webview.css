@@ -706,16 +706,67 @@ textarea:focus-visible {
 
 .mm-code-block-view {
   position: relative;
+  min-width: 0;
+  overflow: visible;
+  padding-top: 42px;
 }
 .mm-code-block-view .mm-code-language-inline {
   position: absolute;
   inset-inline-end: 8px;
   top: 8px;
-  width: 64px;
+  width: min(160px, calc(100% - 16px));
+  min-width: 64px;
+  max-width: calc(100% - 16px);
+  min-height: 26px;
   z-index: 1;
 }
 .mm-code-block-view .mm-code-block-pre {
   margin: 0;
+  min-width: 0;
+}
+
+.mm-alert-node-view {
+  min-width: 0;
+}
+.mm-alert-node-view .markdown-alert {
+  margin-block: 0;
+}
+.mm-alert-node-controls {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 4px;
+}
+.mm-alert-edit-button {
+  min-height: 24px;
+  padding: 3px 7px;
+  color: var(--mm-control-foreground);
+  border-color: var(--mm-control-border);
+  cursor: pointer;
+  font-size: 0.86em;
+}
+.mm-alert-edit-button:hover:not(:disabled) {
+  background: var(--mm-control-hover-background);
+}
+.mm-alert-source-editor {
+  display: block;
+  width: 100%;
+  min-height: 124px;
+  margin-top: 6px;
+  padding: 8px;
+  resize: vertical;
+  border: 1px solid var(--vscode-input-border, var(--mm-control-border));
+  border-radius: 4px;
+  color: var(--vscode-input-foreground, var(--mm-control-foreground));
+  background: var(--vscode-input-background, var(--mm-control-background));
+  font-family: var(
+    --vscode-editor-font-family,
+    ui-monospace,
+    SFMono-Regular,
+    Consolas,
+    monospace
+  );
+  line-height: 1.45;
+  white-space: pre;
 }
 
 .mm-table-dialog {

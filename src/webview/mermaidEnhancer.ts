@@ -183,6 +183,7 @@ function themeVariables(palette: MermaidPalette): Record<string, unknown> {
     clusterBorder: line,
     defaultLinkColor: line,
     titleColor: foreground,
+    edgeLabelColor: foreground,
     edgeLabelBackground: background,
     actorBkg: surface,
     actorBorder: accent,
@@ -359,6 +360,42 @@ function sanitizeSvg(svg: string, ownerDocument: Document): SVGElement | null {
     }
   }
   return candidate as unknown as SVGElement;
+}
+
+/**
+ * Mermaid's generated stylesheet varies between diagram types. Normalize the
+ * presentation properties that otherwise fall back to SVG's black paint,
+ * while leaving node surfaces and marker arrowheads to the themed document
+ * stylesheet below.
+ */
+function normalizeMermaidSvg(svg: SVGElement): void {
+  svg.style.setProperty("background", "transparent", "important");
+
+  for (const background of Array.from(
+    svg.querySelectorAll<SVGElement>("rect.background"),
+  )) {
+    if (background.closest(".edgeLabel")) continue;
+    background.style.setProperty("fill", "transparent", "important");
+    background.style.setProperty("stroke", "none", "important");
+  }
+
+  const edgeElements = svg.querySelectorAll<SVGElement>(
+    ".edgePaths path, .edgePath path, .flowchart-link, .messageLine0, .messageLine1, .actor-line, .loopLine, .noteLine, .entityLine",
+  );
+  for (const edge of Array.from(edgeElements))
+    edge.style.setProperty("fill", "none", "important");
+
+  const edgeLabelBackgrounds = svg.querySelectorAll<SVGElement>(
+    ".edgeLabel rect, .edgeLabel .labelBkg, .edgeLabel .background",
+  );
+  for (const background of Array.from(edgeLabelBackgrounds)) {
+    background.style.setProperty(
+      "fill",
+      "var(--mm-mermaid-background)",
+      "important",
+    );
+    background.style.setProperty("stroke", "none", "important");
+  }
 }
 
 function asSvgMarkup(value: string | { svg?: string }): string | undefined {
@@ -554,6 +591,7 @@ export function enhanceRenderedContent(root: ParentNode): RenderingEnhancer {
           );
           return;
         }
+        normalizeMermaidSvg(svg);
         const oldSvg = element.querySelector("svg");
         oldSvg?.remove();
         element.insertBefore(svg, element.firstChild);
