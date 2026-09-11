@@ -191,35 +191,35 @@ describe("rich editor rendering", () => {
     expect((messages.at(-1) as any).markdown).toContain("```ts");
     app.destroy();
   });
-  it("edits alert source through its rich NodeView while preserving the raw atom", () => {
+  it("edits alert content inline while preserving the raw atom and marker", () => {
     const source = "> [!WARNING]\n> Before";
     const { app, root, messages } = makeApp(source);
     const node = app.view.state.doc.firstChild;
     expect(node?.type.name).toBe("raw_block");
     expect(node?.attrs.kind).toBe("alert");
 
-    const editButton = root.querySelector<HTMLButtonElement>(
-      ".mm-alert-edit-button",
+    const bodyEditor = root.querySelector<HTMLTextAreaElement>(
+      ".mm-alert-body-editor",
     );
-    const sourceEditor = root.querySelector<HTMLTextAreaElement>(
-      ".mm-alert-source-editor",
+    expect(bodyEditor).not.toBeNull();
+    expect(bodyEditor?.value).toBe("Before");
+    expect(root.querySelector(".mm-alert-edit-button")).toBeNull();
+    expect(root.querySelector(".mm-alert-source-editor")).toBeNull();
+
+    bodyEditor!.focus();
+    bodyEditor!.setSelectionRange(
+      bodyEditor!.value.length,
+      bodyEditor!.value.length,
     );
-    expect(editButton).not.toBeNull();
-    expect(sourceEditor).not.toBeNull();
-    expect(sourceEditor?.hidden).toBe(true);
+    bodyEditor!.value = "After\nSecond line";
+    bodyEditor!.dispatchEvent(new Event("input", { bubbles: true }));
 
-    editButton?.click();
-    expect(sourceEditor?.hidden).toBe(false);
-    sourceEditor!.value = "> [!WARNING]\n> After";
-    sourceEditor!.dispatchEvent(new Event("input", { bubbles: true }));
-
+    expect(document.activeElement).toBe(bodyEditor);
     expect(app.view.state.doc.firstChild?.type.name).toBe("raw_block");
     expect(app.view.state.doc.firstChild?.attrs.source).toBe(
-      "> [!WARNING]\n> After",
+      "> [!WARNING]\n> After\n> Second line",
     );
-    expect(root.querySelector(".markdown-alert")?.textContent).toContain(
-      "After",
-    );
+    expect(bodyEditor?.value).toContain("After");
     expect((messages.at(-1) as { markdown?: string })?.markdown).toContain(
       "> After",
     );

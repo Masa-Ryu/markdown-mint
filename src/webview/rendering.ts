@@ -256,11 +256,71 @@ export function createRenderedNodeView(
   };
 }
 
+function alertSourceParts(source: string): {
+  readonly body: string;
+  readonly header: string;
+  readonly bodyPrefix: string;
+  readonly lineEnding: string;
+  readonly trailingLineEnding: string;
+} {
+  const lineEnding = source.includes("\r\n")
+    ? "\r\n"
+    : source.includes("\r")
+      ? "\r"
+      : "\n";
+  const normalized = source.replace(/\r\n|\r/g, "\n");
+  const lines = normalized.split("\n");
+  const markerIndex = Math.max(
+    0,
+    lines.findIndex((line) =>
+      /^\s*>?[ \t]*\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]/i.test(line),
+    ),
+  );
+  const markerLine = lines[markerIndex] ?? "";
+  const markerPrefix = markerLine.match(/^(\s*>[ \t]?)/)?.[1] ?? "";
+  const bodyLines = lines.slice(markerIndex + 1);
+  const firstBodyPrefix = bodyLines
+    .map((line) => line.match(/^(\s*>[ \t]?)/)?.[1])
+    .find((prefix): prefix is string => prefix !== undefined);
+  const bodyPrefix = firstBodyPrefix ?? markerPrefix;
+  const body = bodyLines
+    .map((line) => line.replace(/^\s*>[ \t]?/, ""))
+    .join("\n")
+    .replace(/^\n+|\n+$/g, "");
+  const trailingMatch = normalized.match(/\n+$/);
+  const trailingLineEnding = trailingMatch
+    ? trailingMatch[0].replace(/\n/g, lineEnding)
+    : "";
+  return {
+    body,
+    header: lines.slice(0, markerIndex + 1).join("\n"),
+    bodyPrefix,
+    lineEnding,
+    trailingLineEnding,
+  };
+}
+
+function alertSourceWithBody(source: string, body: string): string {
+  const parts = alertSourceParts(source);
+  const normalizedBody = body.replace(/\r\n|\r/g, "\n");
+  const bodyLines = normalizedBody
+    ? normalizedBody
+        .split("\n")
+        .map((line) => parts.bodyPrefix + line)
+        .join(parts.lineEnding)
+    : "";
+  return (
+    parts.header.replace(/\n/g, parts.lineEnding) +
+    (bodyLines ? parts.lineEnding + bodyLines : "") +
+    parts.trailingLineEnding
+  );
+}
+
 /**
- * Render an alert atom with an opt-in source editor. Alerts stay raw atoms so
- * their original Markdown remains available to the serializer, while the
- * small source editor gives rich mode a safe editing path without exposing
- * generated HTML to ProseMirror's mutation observer.
+ * Render an alert atom with its body as an inline editor. Alerts remain raw
+ * atoms so their original Markdown marker and source shape stay available to
+ * the serializer, while the body editor gives rich mode a direct writing path
+ * without exposing quote prefixes or a separate source workflow.
  */
 export function createAlertNodeView(
   node: PMNode,
@@ -272,7 +332,6 @@ export function createAlertNodeView(
   let lastDocument = view.state.doc;
   let disposed = false;
   let enhancer: RenderingEnhancer | undefined;
-  let editing = false;
 
   const dom = document.createElement("div");
   dom.className = "mm-rendered-node mm-alert-node-view";
@@ -285,40 +344,21 @@ export function createAlertNodeView(
   preview.contentEditable = "false";
   dom.append(preview);
 
-  const controls = document.createElement("div");
-  controls.className = "mm-alert-node-controls";
-  const editButton = document.createElement("button");
-  editButton.type = "button";
-  editButton.className = "mm-alert-edit-button";
-  editButton.textContent = "Edit alert source";
-  editButton.setAttribute("aria-expanded", "false");
-  editButton.setAttribute("aria-label", "Edit alert Markdown source");
-  controls.append(editButton);
-  dom.append(controls);
+  const bodyEditor = document.createElement("textarea");
+  bodyEditor.className = "mm-alert-body-editor";
+  bodyEditor.setAttribute("aria-label", "Alert content");
+  bodyEditor.setAttribute("placeholder", "Write alert content…");
+  bodyEditor.setAttribute("spellcheck", "true");
+  bodyEditor.rows = 1;
 
-  const sourceEditor = document.createElement("textarea");
-  sourceEditor.className = "mm-alert-source-editor";
-  sourceEditor.setAttribute("aria-label", "Alert Markdown source");
-  sourceEditor.setAttribute("spellcheck", "false");
-  sourceEditor.hidden = true;
-  dom.append(sourceEditor);
+  const resizeBodyEditor = (): void => {
+    bodyEditor.style.height = "auto";
+    const height = Math.max(bodyEditor.scrollHeight, 36);
+    bodyEditor.style.height = `${height}px`;
+  };
 
   const sourceFor = (value: PMNode): string =>
     String(value.attrs.source ?? value.textContent ?? "");
-
-  const setEditing = (next: boolean, focus = false): void => {
-    editing = next;
-    sourceEditor.hidden = !next;
-    editButton.setAttribute("aria-expanded", String(next));
-    editButton.textContent = next ? "Hide alert source" : "Edit alert source";
-    if (next && focus) {
-      sourceEditor.focus();
-      sourceEditor.setSelectionRange(
-        sourceEditor.value.length,
-        sourceEditor.value.length,
-      );
-    }
-  };
 
   const positionOf = (): number | undefined => {
     try {
@@ -338,7 +378,10 @@ export function createAlertNodeView(
       String(currentNode.attrs.kind ?? "") !== "alert"
     )
       return;
-    const source = sourceEditor.value;
+    const source = alertSourceWithBody(
+      String(currentNode.attrs.source ?? ""),
+      bodyEditor.value,
+    );
     if (String(currentNode.attrs.source ?? "") === source) return;
     view.dispatch(
       view.state.tr.setNodeMarkup(position, undefined, {
@@ -350,6 +393,12 @@ export function createAlertNodeView(
 
   const render = (): void => {
     if (disposed) return;
+    const bodyEditorHadFocus =
+      bodyEditor.ownerDocument.activeElement === bodyEditor;
+    const selectionStart = bodyEditorHadFocus
+      ? bodyEditor.selectionStart
+      : null;
+    const selectionEnd = bodyEditorHadFocus ? bodyEditor.selectionEnd : null;
     const renderer = (core as unknown as CoreWithNodeRenderer).renderNodeHtml;
     const nodePosition = positionOf();
     const renderInput: PMNode | CoreRenderInput =
@@ -361,28 +410,29 @@ export function createAlertNodeView(
       : rawNodeFallback(current);
     enhancer?.dispose();
     appendGeneratedHtml(preview, html);
+    const alert = preview.querySelector<HTMLElement>(".markdown-alert");
+    const title = alert?.querySelector<HTMLElement>(".markdown-alert-title");
+    if (alert && title) {
+      const parts = alertSourceParts(sourceFor(current));
+      if (bodyEditor.value !== parts.body) bodyEditor.value = parts.body;
+      alert.replaceChildren(title, bodyEditor);
+      resizeBodyEditor();
+      if (bodyEditorHadFocus) {
+        bodyEditor.focus({ preventScroll: true });
+        const length = bodyEditor.value.length;
+        bodyEditor.setSelectionRange(
+          Math.min(selectionStart ?? length, length),
+          Math.min(selectionEnd ?? length, length),
+        );
+      }
+    }
     enhancer = enhanceRenderedContent(preview);
-    const source = sourceFor(current);
-    if (sourceEditor.value !== source) sourceEditor.value = source;
-    setEditing(editing);
   };
 
-  editButton.addEventListener("mousedown", (event) => event.stopPropagation());
-  editButton.addEventListener("click", () => setEditing(!editing, !editing));
-  sourceEditor.addEventListener("mousedown", (event) =>
-    event.stopPropagation(),
-  );
-  sourceEditor.addEventListener("input", updateSource);
-  sourceEditor.addEventListener("keydown", (event) => {
-    if (event.key !== "Escape") return;
-    event.preventDefault();
-    setEditing(false);
-    view.focus();
-  });
-  preview.addEventListener("dblclick", (event) => {
-    event.preventDefault();
-    event.stopPropagation();
-    setEditing(true, true);
+  bodyEditor.addEventListener("mousedown", (event) => event.stopPropagation());
+  bodyEditor.addEventListener("input", () => {
+    updateSource();
+    resizeBodyEditor();
   });
 
   render();
@@ -414,11 +464,7 @@ export function createAlertNodeView(
     stopEvent: (event) => {
       const target = event.target;
       if (!(target instanceof Element)) return false;
-      if (target.closest("a,button,input,summary,select,textarea")) return true;
-      return (
-        event.type === "dblclick" &&
-        Boolean(target.closest(".mm-alert-preview"))
-      );
+      return Boolean(target.closest("a,button,input,summary,select,textarea"));
     },
     ignoreMutation: () => true,
     destroy: () => {

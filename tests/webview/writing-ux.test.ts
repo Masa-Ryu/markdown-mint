@@ -110,6 +110,7 @@ describe("bounded writing controls", () => {
     expect(toolbar.querySelector(".mm-toolbar-primary")?.lastElementChild).toBe(
       sourceButton,
     );
+    expect(sourceButton?.style.marginLeft).toBe("");
     expect(
       toolbar.querySelector<HTMLSelectElement>(".mm-profile-select")?.value,
     ).toBe("github");

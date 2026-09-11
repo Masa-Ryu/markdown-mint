@@ -248,13 +248,6 @@ textarea:focus-visible {
 .mm-profile-toolbar:not([hidden]) {
   display: flex;
 }
-.mm-profile-toolbar-label {
-  flex: 0 0 auto;
-  margin-right: 3px;
-  color: var(--vscode-descriptionForeground, var(--mm-toolbar-foreground));
-  font-size: 0.82em;
-  font-weight: 600;
-}
 .mm-profile-feature-button {
   min-height: 26px;
   padding: 3px 7px;
@@ -294,7 +287,6 @@ textarea:focus-visible {
 }
 .mm-source-button {
   margin-right: 0;
-  margin-left: auto;
 }
 
 .mm-tool-button,
@@ -731,42 +723,28 @@ textarea:focus-visible {
 .mm-alert-node-view .markdown-alert {
   margin-block: 0;
 }
-.mm-alert-node-controls {
-  display: flex;
-  justify-content: flex-end;
-  margin-top: 4px;
-}
-.mm-alert-edit-button {
-  min-height: 24px;
-  padding: 3px 7px;
-  color: var(--mm-control-foreground);
-  border-color: var(--mm-control-border);
-  cursor: pointer;
-  font-size: 0.86em;
-}
-.mm-alert-edit-button:hover:not(:disabled) {
-  background: var(--mm-control-hover-background);
-}
-.mm-alert-source-editor {
+.mm-alert-body-editor {
   display: block;
   width: 100%;
-  min-height: 124px;
-  margin-top: 6px;
-  padding: 8px;
-  resize: vertical;
-  border: 1px solid var(--vscode-input-border, var(--mm-control-border));
-  border-radius: 4px;
-  color: var(--vscode-input-foreground, var(--mm-control-foreground));
-  background: var(--vscode-input-background, var(--mm-control-background));
-  font-family: var(
-    --vscode-editor-font-family,
-    ui-monospace,
-    SFMono-Regular,
-    Consolas,
-    monospace
-  );
-  line-height: 1.45;
-  white-space: pre;
+  min-height: 2.2em;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  border: 0;
+  outline: 0;
+  resize: none;
+  color: inherit;
+  background: transparent;
+  font: inherit;
+  line-height: inherit;
+  white-space: pre-wrap;
+}
+.mm-alert-body-editor::placeholder {
+  color: var(--vscode-descriptionForeground, currentColor);
+  opacity: 0.72;
+}
+.mm-alert-body-editor:disabled {
+  cursor: default;
 }
 
 .mm-table-dialog {

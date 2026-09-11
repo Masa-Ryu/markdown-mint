@@ -93,9 +93,10 @@ describe("profile feature toolbar", () => {
       ".mm-profile-toolbar",
     )!;
     expect(profile.hidden).toBe(false);
-    expect(
-      profile.querySelector("[data-profile-toolbar-label]")?.textContent,
-    ).toBe("GitHub");
+    expect(profile.querySelector("[data-profile-toolbar-label]")).toBeNull();
+    expect(profile.getAttribute("aria-label")).toBe(
+      "Profile-specific Markdown features",
+    );
     expect(
       profile.querySelectorAll("[data-profile-feature]:not([hidden])"),
     ).toHaveLength(4);
@@ -106,8 +107,8 @@ describe("profile feature toolbar", () => {
     )!;
     expect(gitlabProfile.hidden).toBe(false);
     expect(
-      gitlabProfile.querySelector("[data-profile-toolbar-label]")?.textContent,
-    ).toBe("GitLab");
+      gitlabProfile.querySelector("[data-profile-toolbar-label]"),
+    ).toBeNull();
     expect(
       gitlabProfile.querySelectorAll("[data-profile-feature]:not([hidden])"),
     ).toHaveLength(8);

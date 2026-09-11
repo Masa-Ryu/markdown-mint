@@ -2208,7 +2208,7 @@ export class MarkdownEditorApp {
         | HTMLInputElement
         | HTMLTextAreaElement
       >(
-        ".mm-tool-button, .mm-emoji-button, .mm-heading-select, .mm-floating-button, .mm-alert-edit-button, .mm-alert-source-editor",
+        ".mm-tool-button, .mm-emoji-button, .mm-heading-select, .mm-floating-button, .mm-alert-body-editor",
       ),
     )) {
       element.disabled =
@@ -2857,16 +2857,10 @@ export class MarkdownEditorApp {
     const toolbar = makeElement("div", {
       class: "mm-profile-toolbar",
       role: "toolbar",
-      "aria-label": "GitHub and GitLab features",
+      "aria-label": "Profile-specific Markdown features",
       "aria-hidden": "true",
       hidden: "true",
     });
-    const label = makeElement("span", {
-      class: "mm-profile-toolbar-label",
-      "data-profile-toolbar-label": "true",
-    });
-    label.textContent = "GitHub";
-    toolbar.append(label);
     const shortLabels: Record<ProfileFeatureId, string> = {
       alert: "Alert",
       details: "Details",
@@ -5484,13 +5478,6 @@ export class MarkdownEditorApp {
       (this.profile === "github" || this.profile === "gitlab");
     this.profileToolbar.hidden = !visible;
     this.profileToolbar.setAttribute("aria-hidden", String(!visible));
-    this.profileToolbar
-      .querySelector<HTMLElement>("[data-profile-toolbar-label]")
-      ?.replaceChildren(
-        document.createTextNode(
-          this.profile === "gitlab" ? "GitLab" : "GitHub",
-        ),
-      );
     const allowed = new Set(
       getProfileFeatures(this.profile).map((feature) => feature.id),
     );
