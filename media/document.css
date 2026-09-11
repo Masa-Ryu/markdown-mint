@@ -2,17 +2,32 @@
  * preview. Keep paragraph, list, code and table metrics in one place so
  * switching surfaces does not move the document on screen. */
 :root {
-  --mw-document-width: 860px;
-  --mw-border: var(--vscode-textSeparator-foreground, rgba(127, 127, 127, 0.3));
-  --mw-muted: var(--vscode-descriptionForeground, #7f8792);
-  --mw-code-background: var(--vscode-textCodeBlock-background, rgba(127, 127, 127, 0.12));
-  --mw-link: var(--vscode-textLink-foreground, #3794ff);
+  --mm-document-width: 800px;
+  --mm-border: var(--vscode-textSeparator-foreground, rgba(127, 127, 127, 0.3));
+  --mm-muted: var(--vscode-descriptionForeground, #7f8792);
+  --mm-code-background: var(
+    --vscode-textCodeBlock-background,
+    rgba(127, 127, 127, 0.12)
+  );
+  --mm-link: var(--vscode-textLink-foreground, #3794ff);
 }
 
-html, body {
+html,
+body {
   margin: 0;
   padding: 0;
-  font-family: var(--markdown-font-family, var(--vscode-font-family, -apple-system, BlinkMacSystemFont, "Segoe WPC", "Segoe UI", system-ui, sans-serif));
+  font-family: var(
+    --markdown-font-family,
+    var(
+      --vscode-font-family,
+      -apple-system,
+      BlinkMacSystemFont,
+      "Segoe WPC",
+      "Segoe UI",
+      system-ui,
+      sans-serif
+    )
+  );
   font-size: var(--markdown-font-size, 14px);
   line-height: var(--markdown-line-height, 1.6);
 }
@@ -21,25 +36,40 @@ html, body {
  * gutter even when the current document fits, so content width does not
  * change when a later edit creates a vertical scrollbar. The dedicated
  * webview resets this viewport gutter and reserves one on its own stage. */
-html { scrollbar-gutter: stable; }
+html {
+  scrollbar-gutter: stable;
+}
 
-body { padding-top: 1em; }
+body {
+  padding-top: 1em;
+}
 
 .markdown-body,
-.mw-document-content {
-  --mw-document-font: var(--markdown-font-family, var(--vscode-font-family, -apple-system, BlinkMacSystemFont, "Segoe WPC", "Segoe UI", system-ui, sans-serif));
-  --mw-document-size: var(--markdown-font-size, 14px);
-  --mw-document-line: var(--markdown-line-height, 1.6);
-  --mw-task-checkbox-gap: calc(var(--mw-document-size) * 0.45);
-  --mw-task-checkbox-offset: calc(var(--mw-document-size) * 0.22);
+.mm-document-content {
+  --mm-document-font: var(
+    --markdown-font-family,
+    var(
+      --vscode-font-family,
+      -apple-system,
+      BlinkMacSystemFont,
+      "Segoe WPC",
+      "Segoe UI",
+      system-ui,
+      sans-serif
+    )
+  );
+  --mm-document-size: var(--markdown-font-size, 14px);
+  --mm-document-line: var(--markdown-line-height, 1.6);
+  --mm-task-checkbox-gap: calc(var(--mm-document-size) * 0.45);
+  --mm-task-checkbox-offset: calc(var(--mm-document-size) * 0.22);
   box-sizing: border-box;
-  width: min(100%, var(--mw-document-width));
+  width: min(100%, var(--mm-document-width));
   margin: 0 auto;
-  padding: 28px 44px 56px;
+  padding: 48px 44px 80px;
   color: var(--vscode-foreground, #d4d4d4);
-  font-family: var(--mw-document-font);
-  font-size: var(--mw-document-size);
-  line-height: var(--mw-document-line);
+  font-family: var(--mm-document-font);
+  font-size: var(--mm-document-size);
+  line-height: var(--mm-document-line);
   overflow-wrap: anywhere;
 }
 
@@ -47,99 +77,153 @@ body { padding-top: 1em; }
  * every rendered document descendant so native and rich surfaces agree on
  * heading borders, rules, tables, and code padding. */
 .markdown-body *,
-.mw-document-content * { box-sizing: border-box; }
+.mm-document-content * {
+  box-sizing: border-box;
+}
 
 .markdown-body > :first-child,
-.mw-document-content > :first-child { margin-top: 0; }
+.mm-document-content > :first-child {
+  margin-top: 0;
+}
 
 .markdown-body > :last-child,
-.mw-document-content > :last-child { margin-bottom: 0; }
+.mm-document-content > :last-child {
+  margin-bottom: 0;
+}
 
 .markdown-body p,
-.mw-document-content p { margin: 0 0 1em; }
+.mm-document-content p {
+  margin: 0 0 1.15em;
+}
 
 .markdown-body h1,
-.mw-document-content h1,
+.mm-document-content h1,
 .markdown-body h2,
-.mw-document-content h2,
+.mm-document-content h2,
 .markdown-body h3,
-.mw-document-content h3,
+.mm-document-content h3,
 .markdown-body h4,
-.mw-document-content h4,
+.mm-document-content h4,
 .markdown-body h5,
-.mw-document-content h5,
+.mm-document-content h5,
 .markdown-body h6,
-.mw-document-content h6 {
-  margin: 1.45em 0 0.55em;
+.mm-document-content h6 {
+  margin: 1.8em 0 0.65em;
   line-height: 1.25;
   font-weight: 650;
+  border: 0;
+  padding: 0;
+  letter-spacing: normal;
   color: var(--vscode-foreground, #d4d4d4);
 }
 
 .markdown-body h1,
-.mw-document-content h1 { padding-bottom: 0.25em; border-bottom: 1px solid var(--mw-border); font-size: 2em; }
+.mm-document-content h1 {
+  font-size: 2.4em;
+  font-weight: 700;
+}
 .markdown-body h2,
-.mw-document-content h2 { padding-bottom: 0.2em; border-bottom: 1px solid var(--mw-border); font-size: 1.55em; }
+.mm-document-content h2 {
+  font-size: 1.6em;
+  font-weight: 650;
+}
 .markdown-body h3,
-.mw-document-content h3 { font-size: 1.25em; }
+.mm-document-content h3 {
+  font-size: 1.25em;
+}
 .markdown-body h4,
-.mw-document-content h4 { font-size: 1em; }
+.mm-document-content h4 {
+  font-size: 1em;
+}
 .markdown-body h5,
-.mw-document-content h5 { font-size: 0.875em; }
+.mm-document-content h5 {
+  font-size: 0.875em;
+}
 .markdown-body h6,
-.mw-document-content h6 { font-size: 0.85em; }
+.mm-document-content h6 {
+  font-size: 0.85em;
+}
 
 .markdown-body a,
-.mw-document-content a { color: var(--mw-link); text-decoration: none; }
+.mm-document-content a {
+  color: var(--mm-link);
+  text-decoration: none;
+}
 .markdown-body a:hover,
-.mw-document-content a:hover { text-decoration: underline; }
+.mm-document-content a:hover {
+  text-decoration: underline;
+}
 
 .markdown-body ul,
-.mw-document-content ul,
+.mm-document-content ul,
 .markdown-body ol,
-.mw-document-content ol { margin: 0 0 1em; padding-left: 2em; }
+.mm-document-content ol {
+  margin: 0 0 1em;
+  padding-left: 2em;
+}
 
 .markdown-body li,
-.mw-document-content li { margin: 0.18em 0; }
+.mm-document-content li {
+  margin: 0.18em 0;
+}
 
 .markdown-body blockquote,
-.mw-document-content blockquote {
+.mm-document-content blockquote {
   margin: 0 0 1em;
   padding: 0 1em;
-  border-left: 3px solid var(--mw-border);
-  color: var(--mw-muted);
+  border-left: 3px solid var(--mm-border);
+  color: var(--mm-muted);
 }
 
 .markdown-body pre,
-.mw-document-content pre {
+.mm-document-content pre {
   margin: 0 0 1em;
   padding: 14px 16px;
   overflow: auto;
   border-radius: 5px;
-  background: var(--mw-code-background);
-  font-family: var(--vscode-editor-font-family, ui-monospace, SFMono-Regular, Consolas, monospace);
+  background: var(--mm-code-background);
+  font-family: var(
+    --vscode-editor-font-family,
+    ui-monospace,
+    SFMono-Regular,
+    Consolas,
+    monospace
+  );
   font-size: 0.92em;
   line-height: 1.5;
   white-space: pre;
 }
 
 .markdown-body pre,
-.mw-document-content pre { border: 0; }
+.mm-document-content pre {
+  border: 0;
+}
 
 .markdown-body code,
-.mw-document-content code {
+.mm-document-content code {
   padding: 0.12em 0.32em;
   border-radius: 3px;
-  background: var(--mw-code-background);
-  font-family: var(--vscode-editor-font-family, ui-monospace, SFMono-Regular, Consolas, monospace);
+  background: var(--mm-code-background);
+  font-family: var(
+    --vscode-editor-font-family,
+    ui-monospace,
+    SFMono-Regular,
+    Consolas,
+    monospace
+  );
   font-size: 0.9em;
 }
 
 .markdown-body pre code,
-.mw-document-content pre code { display: inline; padding: 0; background: transparent; line-height: 1.357em; }
+.mm-document-content pre code {
+  display: inline;
+  padding: 0;
+  background: transparent;
+  line-height: 1.357em;
+}
 
 .markdown-body table,
-.mw-document-content table {
+.mm-document-content table {
   box-sizing: border-box;
   display: block;
   width: max-content;
@@ -152,77 +236,497 @@ body { padding-top: 1em; }
 }
 
 .markdown-body th,
-.mw-document-content th,
+.mm-document-content th,
 .markdown-body td,
-.mw-document-content td {
+.mm-document-content td {
   box-sizing: border-box;
   min-width: 5em;
   padding: 7px 10px;
-  border: 1px solid var(--mw-border);
+  border: 1px solid var(--mm-border);
   text-align: start;
   vertical-align: top;
 }
 
 .markdown-body th,
-.mw-document-content th { font-weight: 650; background: var(--mw-code-background); }
+.mm-document-content th {
+  font-weight: 650;
+  background: var(--mm-code-background);
+}
 .markdown-body td > p,
-.mw-document-content td > p,
+.mm-document-content td > p,
 .markdown-body th > p,
-.mw-document-content th > p { margin: 0; }
+.mm-document-content th > p {
+  margin: 0;
+}
 
 .markdown-body img,
-.mw-document-content img { max-width: 100%; height: auto; }
+.mm-document-content img {
+  max-width: 100%;
+  height: auto;
+}
 
 .markdown-body hr,
-.mw-document-content hr { height: 1px; margin: 2em 0; border: 0; border-top: 1px solid var(--mw-border); }
+.mm-document-content hr {
+  height: 1px;
+  margin: 2em 0;
+  border: 0;
+  border-top: 1px solid var(--mm-border);
+}
 
 /* GFM task list markup emitted by the shared renderer. */
 .markdown-body ul.contains-task-list,
-.mw-document-content ul.contains-task-list,
-.mw-document-content ul:has(> li.mw-task-task) { padding-left: 1.5em; list-style: none; }
+.mm-document-content ul.contains-task-list,
+.mm-document-content ul:has(> li.mm-task-task) {
+  padding-left: 1.5em;
+  list-style: none;
+}
 .markdown-body li.task-list-item,
-.mw-document-content li.task-list-item,
-.mw-task-item.mw-task-task {
+.mm-document-content li.task-list-item,
+.mm-task-item.mm-task-task {
   display: grid;
   grid-template-columns: max-content minmax(0, 1fr);
   align-items: start;
   column-gap: 0;
 }
 .markdown-body li.task-list-item input[type="checkbox"],
-.mw-document-content li.task-list-item input[type="checkbox"] {
+.mm-document-content li.task-list-item input[type="checkbox"] {
   grid-column: 1;
   display: block;
-  margin: var(--mw-task-checkbox-offset) var(--mw-task-checkbox-gap) 0 0;
+  margin: var(--mm-task-checkbox-offset) var(--mm-task-checkbox-gap) 0 0;
   vertical-align: top;
 }
 .markdown-body li.task-list-item > p,
-.mw-document-content li.task-list-item > p,
-.mw-task-item.mw-task-task > .mw-task-content {
+.mm-document-content li.task-list-item > p,
+.mm-task-item.mm-task-task > .mm-task-content {
   grid-column: 2;
   min-width: 0;
 }
-.mw-task-item.mw-task-task > .mw-task-control {
+.mm-task-item.mm-task-task > .mm-task-control {
   display: block;
   grid-column: 1;
   grid-row: 1;
-  margin: var(--mw-task-checkbox-offset) var(--mw-task-checkbox-gap) 0 0;
+  margin: var(--mm-task-checkbox-offset) var(--mm-task-checkbox-gap) 0 0;
 }
-.mw-task-item.mw-task-task .mw-task-checkbox {
+.mm-task-item.mm-task-task .mm-task-checkbox {
   display: block;
   margin: 0;
   vertical-align: top;
 }
-.mw-task-item.mw-task-task > .mw-task-content {
+.mm-task-item.mm-task-task > .mm-task-content {
   display: block;
   grid-row: 1;
 }
-.mw-task-item.mw-plain-list-item { display: list-item; }
+.mm-task-item.mm-plain-list-item {
+  display: list-item;
+}
 
 @media (max-width: 640px) {
   .markdown-body,
-  .mw-document-content { padding: 18px 16px 40px; }
+  .mm-document-content {
+    padding: 28px 24px 56px;
+  }
   .markdown-body h1,
-  .mw-document-content h1 { font-size: 1.7em; }
+  .mm-document-content h1 {
+    font-size: 2em;
+  }
   .markdown-body h2,
-  .mw-document-content h2 { font-size: 1.4em; }
+  .mm-document-content h2 {
+    font-size: 1.45em;
+  }
+}
+
+/* Syntax colors shared by the editable and native surfaces. Highlight.js
+ * classes are deliberately mapped to VS Code theme variables so the same
+ * source remains legible in light, dark, and high-contrast themes. */
+.markdown-body .hljs,
+.mm-document-content .hljs {
+  color: var(--vscode-editor-foreground, #d4d4d4);
+}
+.markdown-body .hljs-comment,
+.mm-document-content .hljs-comment,
+.markdown-body .token.comment,
+.mm-document-content .token.comment {
+  color: var(--vscode-editorCodeLens-foreground, #6a9955);
+}
+.markdown-body .hljs-keyword,
+.mm-document-content .hljs-keyword,
+.markdown-body .hljs-selector-tag,
+.mm-document-content .hljs-selector-tag,
+.markdown-body .hljs-built_in,
+.mm-document-content .hljs-built_in,
+.markdown-body .token.keyword,
+.mm-document-content .token.keyword {
+  color: var(--vscode-symbolIcon-keywordForeground, #569cd6);
+}
+.markdown-body .hljs-string,
+.mm-document-content .hljs-string,
+.markdown-body .hljs-regexp,
+.mm-document-content .hljs-regexp,
+.markdown-body .token.string,
+.mm-document-content .token.string {
+  color: var(--vscode-symbolIcon-stringForeground, #ce9178);
+}
+.markdown-body .hljs-number,
+.mm-document-content .hljs-number,
+.markdown-body .hljs-literal,
+.mm-document-content .hljs-literal,
+.markdown-body .token.number,
+.mm-document-content .token.number {
+  color: var(--vscode-symbolIcon-numberForeground, #b5cea8);
+}
+.markdown-body .hljs-title,
+.mm-document-content .hljs-title,
+.markdown-body .hljs-section,
+.mm-document-content .hljs-section,
+.markdown-body .hljs-function,
+.mm-document-content .hljs-function {
+  color: var(--vscode-symbolIcon-functionForeground, #dcdcaa);
+}
+.markdown-body .hljs-type,
+.mm-document-content .hljs-type,
+.markdown-body .hljs-class,
+.mm-document-content .hljs-class,
+.markdown-body .hljs-attr,
+.mm-document-content .hljs-attr {
+  color: var(--vscode-symbolIcon-classForeground, #4ec9b0);
+}
+.markdown-body .hljs-variable,
+.mm-document-content .hljs-variable,
+.markdown-body .hljs-params,
+.mm-document-content .hljs-params,
+.markdown-body .hljs-meta,
+.mm-document-content .hljs-meta {
+  color: var(--vscode-symbolIcon-variableForeground, #9cdcfe);
+}
+.markdown-body .hljs-tag,
+.mm-document-content .hljs-tag,
+.markdown-body .hljs-name,
+.mm-document-content .hljs-name,
+.markdown-body .token.tag,
+.mm-document-content .token.tag {
+  color: var(--vscode-symbolIcon-namespaceForeground, #569cd6);
+}
+.markdown-body .hljs-symbol,
+.mm-document-content .hljs-symbol,
+.markdown-body .hljs-bullet,
+.mm-document-content .hljs-bullet {
+  color: var(--vscode-symbolIcon-enumMemberForeground, #b5cea8);
+}
+
+.markdown-body .mm-code-block[data-mm-highlight="skipped-large"] code,
+.mm-document-content .mm-code-block[data-mm-highlight="skipped-large"] code {
+  border-inline-start: 2px solid var(--mm-muted);
+  padding-inline-start: 0.8em;
+}
+
+/* KaTeX is shipped locally. Keep block equations scrollable without changing
+ * paragraph width and keep inline equations aligned with surrounding text. */
+.markdown-body .mm-math,
+.mm-document-content .mm-math {
+  color: var(--vscode-foreground, #d4d4d4);
+}
+.markdown-body .mm-math-inline,
+.mm-document-content .mm-math-inline {
+  display: inline-block;
+  max-width: 100%;
+  vertical-align: -0.12em;
+}
+.markdown-body .mm-math-block,
+.mm-document-content .mm-math-block {
+  display: block;
+  max-width: 100%;
+  margin: 1.2em 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 0.2em 0;
+}
+.markdown-body .mm-math-fallback,
+.mm-document-content .mm-math-fallback {
+  padding: 0.25em 0.5em;
+  border: 1px solid var(--mm-border);
+  border-radius: 4px;
+  background: var(--mm-code-background);
+  white-space: pre-wrap;
+}
+.markdown-body .mm-math-fallback code,
+.mm-document-content .mm-math-fallback code {
+  background: transparent;
+}
+
+/* Advanced diagrams retain their source while a local runtime renders
+ * Mermaid. PlantUML/Kroki and other remote services intentionally remain
+ * source previews, so documents never leave the local preview. */
+.markdown-body .mm-diagram,
+.mm-document-content .mm-diagram,
+.markdown-body .mm-static-asset,
+.mm-document-content .mm-static-asset {
+  margin: 1.2em 0;
+  padding: 0.85em 1em;
+  border: 1px solid var(--mm-border);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--mm-code-background) 72%, transparent);
+}
+.markdown-body .mm-mermaid svg,
+.mm-document-content .mm-mermaid svg {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  height: auto;
+  min-height: 1.5em;
+}
+
+/* Mermaid emits theme colors into its scoped SVG stylesheet. Re-apply the
+ * document palette at the host level so a diagram rendered before a VS Code
+ * theme switch remains readable, including sequence labels and arrowheads. */
+.markdown-body .mm-mermaid svg,
+.mm-document-content .mm-mermaid svg {
+  --mm-mermaid-background: var(
+    --vscode-editor-background,
+    var(--vscode-background, #1e1e1e)
+  );
+  --mm-mermaid-foreground: var(
+    --vscode-editor-foreground,
+    var(--vscode-foreground, #d4d4d4)
+  );
+  --mm-mermaid-surface: var(
+    --vscode-textCodeBlock-background,
+    var(--vscode-editorWidget-background, #252526)
+  );
+  --mm-mermaid-line: var(
+    --vscode-descriptionForeground,
+    var(--vscode-textSeparator-foreground, #9da5b4)
+  );
+}
+.markdown-body .mm-mermaid svg text,
+.mm-document-content .mm-mermaid svg text,
+.markdown-body .mm-mermaid svg tspan,
+.mm-document-content .mm-mermaid svg tspan,
+.markdown-body .mm-mermaid svg .nodeLabel,
+.mm-document-content .mm-mermaid svg .nodeLabel,
+.markdown-body .mm-mermaid svg .edgeLabel,
+.mm-document-content .mm-mermaid svg .edgeLabel,
+.markdown-body .mm-mermaid svg .messageText,
+.mm-document-content .mm-mermaid svg .messageText,
+.markdown-body .mm-mermaid svg .loopText,
+.mm-document-content .mm-mermaid svg .loopText,
+.markdown-body .mm-mermaid svg .noteText,
+.mm-document-content .mm-mermaid svg .noteText {
+  fill: var(--mm-mermaid-foreground) !important;
+  color: var(--mm-mermaid-foreground) !important;
+}
+.markdown-body .mm-mermaid svg .edgePaths .path,
+.mm-document-content .mm-mermaid svg .edgePaths .path,
+.markdown-body .mm-mermaid svg .flowchart-link,
+.mm-document-content .mm-mermaid svg .flowchart-link,
+.markdown-body .mm-mermaid svg .messageLine0,
+.mm-document-content .mm-mermaid svg .messageLine0,
+.markdown-body .mm-mermaid svg .messageLine1,
+.mm-document-content .mm-mermaid svg .messageLine1,
+.markdown-body .mm-mermaid svg .actor-line,
+.mm-document-content .mm-mermaid svg .actor-line,
+.markdown-body .mm-mermaid svg .loopLine,
+.mm-document-content .mm-mermaid svg .loopLine,
+.markdown-body .mm-mermaid svg .noteLine,
+.mm-document-content .mm-mermaid svg .noteLine,
+.markdown-body .mm-mermaid svg .entityLine,
+.mm-document-content .mm-mermaid svg .entityLine {
+  stroke: var(--mm-mermaid-line) !important;
+}
+.markdown-body .mm-mermaid svg marker path,
+.mm-document-content .mm-mermaid svg marker path,
+.markdown-body .mm-mermaid svg marker polygon,
+.mm-document-content .mm-mermaid svg marker polygon,
+.markdown-body .mm-mermaid svg .marker path,
+.mm-document-content .mm-mermaid svg .marker path,
+.markdown-body .mm-mermaid svg .marker polygon,
+.mm-document-content .mm-mermaid svg .marker polygon,
+.markdown-body .mm-mermaid svg .arrowheadPath,
+.mm-document-content .mm-mermaid svg .arrowheadPath {
+  fill: var(--mm-mermaid-line) !important;
+  stroke: var(--mm-mermaid-line) !important;
+}
+.markdown-body .mm-mermaid svg .edgeLabel rect.background,
+.mm-document-content .mm-mermaid svg .edgeLabel rect.background,
+.markdown-body .mm-mermaid svg .edgeLabel .labelBkg,
+.mm-document-content .mm-mermaid svg .edgeLabel .labelBkg {
+  fill: var(--mm-mermaid-background) !important;
+  stroke: none !important;
+}
+.markdown-body .mm-mermaid svg .node rect,
+.mm-document-content .mm-mermaid svg .node rect,
+.markdown-body .mm-mermaid svg .node circle,
+.mm-document-content .mm-mermaid svg .node circle,
+.markdown-body .mm-mermaid svg .node ellipse,
+.mm-document-content .mm-mermaid svg .node ellipse,
+.markdown-body .mm-mermaid svg .node polygon,
+.mm-document-content .mm-mermaid svg .node polygon,
+.markdown-body .mm-mermaid svg .actor,
+.mm-document-content .mm-mermaid svg .actor,
+.markdown-body .mm-mermaid svg .note,
+.mm-document-content .mm-mermaid svg .note {
+  fill: var(--mm-mermaid-surface) !important;
+  stroke: var(--mm-mermaid-line) !important;
+}
+.markdown-body .mm-mermaid svg .cluster rect,
+.mm-document-content .mm-mermaid svg .cluster rect {
+  fill: var(--mm-mermaid-background) !important;
+  stroke: var(--mm-mermaid-line) !important;
+}
+body.vscode-dark .markdown-body .mm-mermaid svg,
+body.vscode-dark .mm-document-content .mm-mermaid svg,
+html.vscode-dark .markdown-body .mm-mermaid svg,
+html.vscode-dark .mm-document-content .mm-mermaid svg {
+  --mm-mermaid-background: #1e1e1e;
+  --mm-mermaid-foreground: #d4d4d4;
+  --mm-mermaid-surface: #252526;
+  --mm-mermaid-line: #9da5b4;
+}
+body.vscode-light .markdown-body .mm-mermaid svg,
+body.vscode-light .mm-document-content .mm-mermaid svg,
+html.vscode-light .markdown-body .mm-mermaid svg,
+html.vscode-light .mm-document-content .mm-mermaid svg,
+body.vscode-high-contrast-light .markdown-body .mm-mermaid svg,
+body.vscode-high-contrast-light .mm-document-content .mm-mermaid svg,
+html.vscode-high-contrast-light .markdown-body .mm-mermaid svg,
+html.vscode-high-contrast-light .mm-document-content .mm-mermaid svg {
+  --mm-mermaid-background: #ffffff;
+  --mm-mermaid-foreground: #1f2328;
+  --mm-mermaid-surface: #f6f8fa;
+  --mm-mermaid-line: #57606a;
+}
+body.vscode-high-contrast .markdown-body .mm-mermaid svg,
+body.vscode-high-contrast .mm-document-content .mm-mermaid svg,
+html.vscode-high-contrast .markdown-body .mm-mermaid svg,
+html.vscode-high-contrast .mm-document-content .mm-mermaid svg {
+  --mm-mermaid-background: #000000;
+  --mm-mermaid-foreground: #ffffff;
+  --mm-mermaid-surface: #000000;
+  --mm-mermaid-line: #ffffff;
+}
+.markdown-body .mm-diagram-status,
+.mm-document-content .mm-diagram-status,
+.markdown-body .mm-asset-status,
+.mm-document-content .mm-asset-status {
+  margin: 0 0 0.55em;
+  color: var(--mm-muted);
+  font-size: 0.9em;
+}
+.markdown-body .mm-diagram-source,
+.mm-document-content .mm-diagram-source {
+  margin: 0;
+  max-height: 28em;
+  white-space: pre-wrap;
+}
+.markdown-body .mm-diagram-source[hidden],
+.mm-document-content .mm-diagram-source[hidden] {
+  display: none;
+}
+.markdown-body .mm-diagram-unsupported,
+.mm-document-content .mm-diagram-unsupported {
+  border-style: dashed;
+}
+.markdown-body .mm-static-asset,
+.mm-document-content .mm-static-asset {
+  background: var(--mm-code-background);
+}
+.markdown-body .mm-static-asset .mm-diagram-source,
+.mm-document-content .mm-static-asset .mm-diagram-source {
+  max-height: 24em;
+}
+
+/* Profile-owned alert, details, TOC, and footnote output. */
+.markdown-body .markdown-alert,
+.mm-document-content .markdown-alert {
+  margin: 1em 0;
+  padding: 0.8em 1em;
+  border: 1px solid var(--mm-border);
+  border-inline-start: 4px solid var(--vscode-textLink-foreground, #3794ff);
+  border-radius: 5px;
+  background: var(--mm-code-background);
+}
+.markdown-body .markdown-alert-title,
+.mm-document-content .markdown-alert-title {
+  margin: 0 0 0.45em;
+  font-weight: 650;
+}
+.markdown-body .markdown-alert-warning,
+.mm-document-content .markdown-alert-warning {
+  border-inline-start-color: var(--vscode-editorWarning-foreground, #cca700);
+}
+.markdown-body .markdown-alert-caution,
+.mm-document-content .markdown-alert-caution {
+  border-inline-start-color: var(--vscode-editorError-foreground, #f14c4c);
+}
+.markdown-body .markdown-alert-tip,
+.mm-document-content .markdown-alert-tip {
+  border-inline-start-color: var(--vscode-testing-iconPassed, #73c991);
+}
+.markdown-body details,
+.mm-document-content details {
+  margin: 1em 0;
+  padding: 0.6em 0.85em;
+  border: 1px solid var(--mm-border);
+  border-radius: 5px;
+  background: var(--mm-code-background);
+}
+.markdown-body details > summary,
+.mm-document-content details > summary {
+  cursor: pointer;
+  font-weight: 650;
+}
+.markdown-body details[open] > summary,
+.mm-document-content details[open] > summary {
+  margin-bottom: 0.65em;
+}
+.markdown-body .table-of-contents ul,
+.mm-document-content .table-of-contents ul {
+  margin: 0;
+}
+.markdown-body .footnotes,
+.mm-document-content .footnotes {
+  margin-top: 2.5em;
+  padding-top: 1em;
+  border-top: 1px solid var(--mm-border);
+  font-size: 0.92em;
+}
+.markdown-body .footnote-ref,
+.mm-document-content .footnote-ref {
+  line-height: 1;
+}
+.markdown-body .footnote-backrefs,
+.mm-document-content .footnote-backrefs {
+  margin: 0.35em 0 0;
+}
+
+/* A nested task list is the second grid track of its task parent. This
+ * keeps checkbox, paragraph, and child list columns aligned in native HTML. */
+.markdown-body li.task-list-item > ul,
+.mm-document-content li.task-list-item > ul,
+.markdown-body li.task-list-item > ol,
+.mm-document-content li.task-list-item > ol {
+  grid-column: 2;
+  min-width: 0;
+  width: 100%;
+  margin-bottom: 0.35em;
+}
+.markdown-body li.task-list-item > input[type="checkbox"],
+.mm-document-content li.task-list-item > input[type="checkbox"] {
+  grid-row: 1;
+}
+
+@media (forced-colors: active) {
+  .markdown-body .hljs,
+  .mm-document-content .hljs,
+  .markdown-body .markdown-alert,
+  .mm-document-content .markdown-alert,
+  .markdown-body .mm-diagram,
+  .mm-document-content .mm-diagram {
+    color: CanvasText;
+    border-color: ButtonText;
+    background: Canvas;
+  }
+  .markdown-body .mm-mermaid svg,
+  .mm-document-content .mm-mermaid svg {
+    forced-color-adjust: auto;
+  }
 }

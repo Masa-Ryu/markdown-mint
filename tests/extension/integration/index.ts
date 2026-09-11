@@ -3,8 +3,10 @@ import { readFile } from "node:fs/promises";
 import * as path from "node:path";
 import * as vscode from "vscode";
 
-const VIEW_TYPE = "markdownWeaver.editor";
-const TEST_FILE = process.env.MARKDOWN_WEAVER_TEST_FILE;
+const VIEW_TYPE = "markdownMint.editor";
+const TEST_FILE = process.env.MARKDOWN_MINT_TEST_FILE;
+const OPEN_IN_MINT_COMMAND = "markdownMint.openInEditor";
+const OPEN_IN_MINT_TITLE = "🌿 Open in Markdown Mint";
 
 /**
  * Small Extension Development Host acceptance suite. It intentionally uses
@@ -12,22 +14,24 @@ const TEST_FILE = process.env.MARKDOWN_WEAVER_TEST_FILE;
  * Code build selected by scripts/test-extension.mjs.
  */
 export async function run(): Promise<void> {
-  assert.ok(TEST_FILE, "MARKDOWN_WEAVER_TEST_FILE must point at a fixture");
+  assert.ok(TEST_FILE, "MARKDOWN_MINT_TEST_FILE must point at a fixture");
   const filePath = path.resolve(TEST_FILE);
   const fileUri = vscode.Uri.file(filePath);
   const extension = vscode.extensions.getExtension(
-    "markdown-weaver-local.markdown-weaver",
+    "markdown-mint-local.markdown-mint",
   );
-  assert.ok(extension, "Markdown Weaver is available in the development host");
+  assert.ok(extension, "Markdown Mint is available in the development host");
+  await runCodeLensAcceptance(filePath, fileUri, extension);
   const api = await extension.activate();
   assert.equal(typeof api.extendMarkdownIt, "function");
   assert.equal(typeof api.renderWithNativeMarkdown, "function");
 
   const commands = await vscode.commands.getCommands(true);
   for (const command of [
-    "markdownWeaver.openPreview",
-    "markdownWeaver.openSource",
-    "markdownWeaver.formatDocument",
+    "markdownMint.openPreview",
+    "markdownMint.openSource",
+    "markdownMint.formatDocument",
+    OPEN_IN_MINT_COMMAND,
   ]) {
     assert.ok(commands.includes(command), `registered command: ${command}`);
   }
@@ -49,8 +53,61 @@ export async function run(): Promise<void> {
           );
         }),
       ),
-    "the Markdown Weaver custom editor to open",
+    "the Markdown Mint custom editor to open",
   );
+
+  const customGroup = vscode.window.tabGroups.all.find((group) =>
+    group.tabs.some((tab) => {
+      const input = tab.input;
+      return (
+        input instanceof vscode.TabInputCustom &&
+        input.viewType === VIEW_TYPE &&
+        input.uri.toString() === fileUri.toString()
+      );
+    }),
+  );
+  assert.ok(customGroup, "the custom editor has an editor group");
+  const customViewColumn = customGroup.viewColumn;
+
+  await vscode.commands.executeCommand("markdownMint.openSource", fileUri);
+  await waitFor(() => {
+    const activeGroup = vscode.window.tabGroups.activeTabGroup;
+    const input = activeGroup.activeTab?.input;
+    return (
+      activeGroup.viewColumn === customViewColumn &&
+      input instanceof vscode.TabInputText &&
+      input.uri.toString() === fileUri.toString()
+    );
+  }, "the standard source editor in the custom editor group");
+  const standardSourceEditor = vscode.window.activeTextEditor;
+  assert.ok(
+    standardSourceEditor,
+    "the standard Markdown source editor is active",
+  );
+  assert.equal(
+    standardSourceEditor.document.uri.toString(),
+    fileUri.toString(),
+  );
+  assert.equal(standardSourceEditor.document.languageId, "markdown");
+  assert.equal(
+    standardSourceEditor.viewColumn,
+    customViewColumn,
+    "the standard source editor stays in the custom editor group",
+  );
+
+  await vscode.commands.executeCommand("vscode.openWith", fileUri, VIEW_TYPE, {
+    viewColumn: customViewColumn,
+    preview: false,
+    preserveFocus: false,
+  });
+  await waitFor(() => {
+    const activeInput = vscode.window.tabGroups.activeTabGroup.activeTab?.input;
+    return (
+      activeInput instanceof vscode.TabInputCustom &&
+      activeInput.viewType === VIEW_TYPE &&
+      activeInput.uri.toString() === fileUri.toString()
+    );
+  }, "the Markdown Mint custom editor to become active again");
 
   const customChanged = `${original}\n<!-- custom resource edit -->\n`;
   const customWorkspaceEdit = new vscode.WorkspaceEdit();
@@ -88,7 +145,7 @@ export async function run(): Promise<void> {
   let sourceHistoryDocument =
     await vscode.workspace.openTextDocument(sourceHistoryUri);
   await vscode.commands.executeCommand(
-    "markdownWeaver.openSource",
+    "markdownMint.openSource",
     sourceHistoryUri,
   );
   const sourceEditor = await vscode.window.showTextDocument(
@@ -121,7 +178,7 @@ export async function run(): Promise<void> {
   // The extension format command applies a minimal WorkspaceEdit. The
   // fixture intentionally has no final newline so disk output proves the
   // formatter and save path ran.
-  await vscode.commands.executeCommand("markdownWeaver.openSource", fileUri);
+  await vscode.commands.executeCommand("markdownMint.openSource", fileUri);
   document = await vscode.workspace.openTextDocument(fileUri);
   const sourceDocumentEditor = await vscode.window.showTextDocument(document, {
     preview: false,
@@ -130,10 +187,7 @@ export async function run(): Promise<void> {
   await sourceDocumentEditor.edit((builder) => {
     builder.replace(fullDocumentRange(document), unformatted);
   });
-  await vscode.commands.executeCommand(
-    "markdownWeaver.formatDocument",
-    fileUri,
-  );
+  await vscode.commands.executeCommand("markdownMint.formatDocument", fileUri);
   document = await vscode.workspace.openTextDocument(fileUri);
   await waitFor(
     () => document.getText() === `${unformatted}\r\n`,
@@ -143,7 +197,7 @@ export async function run(): Promise<void> {
   assert.equal(await readFile(filePath, "utf8"), `${unformatted}\r\n`);
 
   const configuration = vscode.workspace.getConfiguration(
-    "markdownWeaver",
+    "markdownMint",
     fileUri,
   );
   await configuration.update(
@@ -179,6 +233,23 @@ export async function run(): Promise<void> {
     builder.replace(fullDocumentRange(document), tableSource);
   });
   document = await vscode.workspace.openTextDocument(fileUri);
+  const profileGroupBefore = vscode.window.tabGroups.activeTabGroup;
+  const profileTabBefore = profileGroupBefore.activeTab;
+  assert.ok(
+    profileTabBefore,
+    "the source tab remains active for profile changes",
+  );
+  assert.ok(
+    profileTabBefore.input instanceof vscode.TabInputText &&
+      profileTabBefore.input.uri.toString() === fileUri.toString(),
+    "profile changes start from the same Markdown source tab",
+  );
+  const profileTabIndexBefore =
+    profileGroupBefore.tabs.indexOf(profileTabBefore);
+  const profileTabCountBefore = profileGroupBefore.tabs.length;
+  const profileTextBefore = document.getText();
+  const profileDiskBefore = await readFile(filePath, "utf8");
+
   await configuration.update(
     "profile",
     "github",
@@ -203,6 +274,46 @@ export async function run(): Promise<void> {
     ),
   );
   assert.doesNotMatch(commonmarkHtml, /<table\b/);
+  await configuration.update(
+    "profile",
+    "github",
+    vscode.ConfigurationTarget.Workspace,
+  );
+  const githubAgainHtml = extractHtml(
+    await vscode.commands.executeCommand<unknown>(
+      "markdown.api.render",
+      document,
+    ),
+  );
+  assert.match(githubAgainHtml, /<table\b/);
+  assert.equal(document.getText(), profileTextBefore);
+  assert.equal(
+    await readFile(filePath, "utf8"),
+    profileDiskBefore,
+    "profile changes must not write the source file",
+  );
+  const profileGroupAfter = vscode.window.tabGroups.all.find(
+    (group) => group.viewColumn === profileGroupBefore.viewColumn,
+  );
+  assert.ok(
+    profileGroupAfter,
+    "the source group remains after profile changes",
+  );
+  assert.equal(profileGroupAfter.tabs.length, profileTabCountBefore);
+  const profileTabAfter = profileGroupAfter.activeTab;
+  assert.ok(
+    profileTabAfter,
+    "the source tab remains active after profile changes",
+  );
+  assert.equal(
+    profileGroupAfter.tabs.indexOf(profileTabAfter),
+    profileTabIndexBefore,
+  );
+  assert.ok(
+    profileTabAfter.input instanceof vscode.TabInputText &&
+      profileTabAfter.input.uri.toString() === fileUri.toString(),
+    "profile changes keep the existing source tab",
+  );
 
   const imageSource = "![icon](assets/icon.svg)\n";
   const imageEditor = await vscode.window.showTextDocument(document, {
@@ -230,7 +341,7 @@ export async function run(): Promise<void> {
   );
   const configDocument = await vscode.workspace.openTextDocument(configUri);
   await vscode.commands.executeCommand(
-    "markdownWeaver.formatDocument",
+    "markdownMint.formatDocument",
     configUri,
   );
   await configDocument.save();
@@ -250,7 +361,7 @@ export async function run(): Promise<void> {
   const ignoredDocument = await vscode.workspace.openTextDocument(ignoredUri);
   const ignoredBefore = ignoredDocument.getText();
   await vscode.commands.executeCommand(
-    "markdownWeaver.formatDocument",
+    "markdownMint.formatDocument",
     ignoredUri,
   );
   await new Promise<void>((resolve) => setTimeout(resolve, 100));
@@ -266,6 +377,228 @@ export async function run(): Promise<void> {
     vscode.ConfigurationTarget.Workspace,
   );
   await vscode.commands.executeCommand("workbench.action.closeAllEditors");
+}
+
+async function runCodeLensAcceptance(
+  filePath: string,
+  fileUri: vscode.Uri,
+  extension: vscode.Extension<unknown>,
+): Promise<void> {
+  const activationEvents = extension.packageJSON.activationEvents;
+  assert.ok(
+    Array.isArray(activationEvents) &&
+      activationEvents.includes("onLanguage:markdown"),
+    "Markdown Mint declares onLanguage:markdown activation",
+  );
+
+  const markdownDocument = await vscode.workspace.openTextDocument(fileUri);
+  const markdownEditor = await vscode.window.showTextDocument(
+    markdownDocument,
+    { preview: false },
+  );
+  assert.equal(markdownDocument.languageId, "markdown");
+  const sourceViewColumn = markdownEditor.viewColumn;
+  assert.ok(sourceViewColumn, "the Markdown source has a view column");
+  assert.ok(
+    vscode.window.tabGroups.activeTabGroup.activeTab?.input instanceof
+      vscode.TabInputText,
+    "the CodeLens starts in a standard text editor",
+  );
+
+  await waitFor(
+    () => extension.isActive,
+    "Markdown Mint to activate from onLanguage:markdown",
+  );
+
+  const plainDocument = await vscode.workspace.openTextDocument({
+    language: "plaintext",
+    content: "Plain text has no Markdown Mint CodeLens.\n",
+  });
+  assert.equal(
+    (await codeLensesFor(plainDocument.uri)).length,
+    0,
+    "non-Markdown documents should not receive the CodeLens",
+  );
+
+  const siblingUri = vscode.Uri.file(
+    path.join(path.dirname(filePath), "source-history.md"),
+  );
+  const siblingDocument = await vscode.workspace.openTextDocument(siblingUri);
+  const siblingEditor = await vscode.window.showTextDocument(siblingDocument, {
+    viewColumn: vscode.ViewColumn.Beside,
+    preview: false,
+  });
+  const siblingViewColumn = siblingEditor.viewColumn;
+  assert.ok(siblingViewColumn, "the sibling source has a view column");
+  assert.notEqual(
+    siblingViewColumn,
+    sourceViewColumn,
+    "the sibling source is in another editor group",
+  );
+
+  await vscode.window.showTextDocument(markdownDocument, {
+    viewColumn: sourceViewColumn,
+    preview: false,
+  });
+  await waitFor(
+    () =>
+      vscode.window.tabGroups.activeTabGroup.viewColumn === sourceViewColumn &&
+      vscode.window.tabGroups.activeTabGroup.activeTab?.input instanceof
+        vscode.TabInputText,
+    "the Markdown source editor to be active",
+  );
+
+  const sourceGroupBefore = vscode.window.tabGroups.all.find(
+    (group) => group.viewColumn === sourceViewColumn,
+  );
+  assert.ok(sourceGroupBefore, "the source editor group is available");
+  const sourceTabBefore = sourceGroupBefore.activeTab;
+  assert.ok(sourceTabBefore, "the source tab is active");
+  const sourceTabIndexBefore = sourceGroupBefore.tabs.indexOf(sourceTabBefore);
+  assert.ok(sourceTabIndexBefore >= 0, "the source tab has a stable index");
+  const sourceTabCountBefore = sourceGroupBefore.tabs.length;
+  const groupShapeBefore = vscode.window.tabGroups.all.map((group) => ({
+    viewColumn: group.viewColumn,
+    tabCount: group.tabs.length,
+  }));
+  const siblingGroupBefore = vscode.window.tabGroups.all.find(
+    (group) => group.viewColumn === siblingViewColumn,
+  );
+  assert.ok(siblingGroupBefore, "the sibling editor group is available");
+  const siblingTabCountBefore = siblingGroupBefore.tabs.length;
+  const diskBefore = await readFile(filePath, "utf8");
+  const original = markdownDocument.getText();
+  const dirtyText = original + "\n<!-- CodeLens dirty buffer -->\n";
+
+  const sourceEditor = vscode.window.activeTextEditor;
+  assert.ok(sourceEditor, "the Markdown source TextEditor is active");
+  assert.equal(
+    await sourceEditor.edit((builder) => {
+      builder.replace(fullDocumentRange(markdownDocument), dirtyText);
+    }),
+    true,
+    "the dirty Markdown edit should apply",
+  );
+  await waitFor(
+    () => markdownDocument.getText() === dirtyText && markdownDocument.isDirty,
+    "the dirty Markdown source buffer",
+  );
+
+  const lenses = await codeLensesFor(fileUri);
+  assert.equal(lenses.length, 1, "Markdown has one CodeLens");
+  const lens = lenses.at(0);
+  assert.ok(lens, "the Markdown CodeLens is returned");
+  assert.ok(lens.command, "the Markdown CodeLens has a command");
+  assert.equal(lens.command.title, OPEN_IN_MINT_TITLE);
+  assert.equal(lens.command.command, OPEN_IN_MINT_COMMAND);
+  assert.ok(
+    lens.range.isEqual(new vscode.Range(0, 0, 0, 0)),
+    "the CodeLens range is the first line above the document",
+  );
+
+  await vscode.commands.executeCommand(
+    lens.command.command,
+    ...(lens.command.arguments ?? []),
+  );
+  await waitFor(() => {
+    const group = vscode.window.tabGroups.activeTabGroup;
+    const input = group.activeTab?.input;
+    return (
+      group.viewColumn === sourceViewColumn &&
+      input instanceof vscode.TabInputCustom &&
+      input.viewType === VIEW_TYPE &&
+      input.uri.toString() === fileUri.toString()
+    );
+  }, "the existing source tab to switch to Markdown Mint");
+
+  const sourceGroupAfter = vscode.window.tabGroups.all.find(
+    (group) => group.viewColumn === sourceViewColumn,
+  );
+  assert.ok(sourceGroupAfter, "the source editor group remains available");
+  assert.equal(sourceGroupAfter.tabs.length, sourceTabCountBefore);
+  const activeTabAfter = sourceGroupAfter.activeTab;
+  assert.ok(activeTabAfter, "the switched tab is active");
+  assert.equal(
+    sourceGroupAfter.tabs.indexOf(activeTabAfter),
+    sourceTabIndexBefore,
+    "the Markdown Mint editor keeps the source tab index",
+  );
+  assert.deepEqual(
+    vscode.window.tabGroups.all.map((group) => ({
+      viewColumn: group.viewColumn,
+      tabCount: group.tabs.length,
+    })),
+    groupShapeBefore,
+    "switching editors does not add a tab or editor group",
+  );
+
+  const siblingGroupAfter = vscode.window.tabGroups.all.find(
+    (group) => group.viewColumn === siblingViewColumn,
+  );
+  assert.ok(siblingGroupAfter, "the sibling editor group remains available");
+  assert.equal(siblingGroupAfter.tabs.length, siblingTabCountBefore);
+  assert.ok(
+    siblingGroupAfter.tabs.some((tab) => {
+      const input = tab.input;
+      return (
+        input instanceof vscode.TabInputText &&
+        input.uri.toString() === siblingUri.toString()
+      );
+    }),
+    "the text sibling in the other group remains open",
+  );
+
+  assert.equal(markdownDocument.getText(), dirtyText);
+  assert.equal(markdownDocument.isDirty, true);
+  assert.equal(await readFile(filePath, "utf8"), diskBefore);
+
+  assert.equal(
+    (await codeLensesFor(fileUri)).length,
+    0,
+    "the custom editor should not receive the CodeLens",
+  );
+
+  const diffUri = vscode.Uri.file(
+    path.join(path.dirname(filePath), "ignored.md"),
+  );
+  await vscode.commands.executeCommand(
+    "vscode.diff",
+    fileUri,
+    diffUri,
+    "Markdown Mint CodeLens acceptance diff",
+  );
+  await waitFor(
+    () =>
+      vscode.window.tabGroups.activeTabGroup.activeTab?.input instanceof
+      vscode.TabInputTextDiff,
+    "the Markdown diff editor to open",
+  );
+  assert.equal(
+    (await codeLensesFor(fileUri)).length,
+    0,
+    "the diff editor should not receive the CodeLens",
+  );
+
+  await vscode.commands.executeCommand("workbench.action.closeActiveEditor");
+  await vscode.window.showTextDocument(markdownDocument, {
+    viewColumn: sourceViewColumn,
+    preview: false,
+  });
+  await vscode.commands.executeCommand("undo");
+  await waitFor(
+    () => markdownDocument.getText() === original && !markdownDocument.isDirty,
+    "the Markdown source buffer cleanup",
+  );
+  await vscode.commands.executeCommand("workbench.action.closeAllEditors");
+}
+
+async function codeLensesFor(uri: vscode.Uri): Promise<vscode.CodeLens[]> {
+  return (
+    (await vscode.commands.executeCommand<vscode.CodeLens[]>(
+      "vscode.executeCodeLensProvider",
+      uri,
+    )) ?? []
+  );
 }
 
 function fullDocumentRange(document: vscode.TextDocument): vscode.Range {

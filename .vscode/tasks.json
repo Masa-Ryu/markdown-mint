@@ -2,14 +2,14 @@
   "version": "2.0.0",
   "tasks": [
     {
-      "label": "markdown-weaver: build",
+      "label": "markdown-mint: build",
       "type": "shell",
       "command": "npm run build",
       "problemMatcher": ["$tsc"],
       "group": "build"
     },
     {
-      "label": "markdown-weaver: test",
+      "label": "markdown-mint: test",
       "type": "shell",
       "command": "npm test",
       "problemMatcher": []

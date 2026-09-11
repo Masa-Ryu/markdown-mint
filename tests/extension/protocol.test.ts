@@ -5,7 +5,7 @@ import {
   parseWebviewMessage,
 } from "../../src/shared/protocol";
 
-describe("Markdown Weaver wire protocol", () => {
+describe("Markdown Mint wire protocol", () => {
   it("accepts a versioned edit with a bounded operation id", () => {
     const message = parseWebviewMessage({
       protocolVersion: PROTOCOL_VERSION,
@@ -120,6 +120,57 @@ describe("Markdown Weaver wire protocol", () => {
         type: "save",
         baseVersion: 0,
         operationId: "save:bad",
+      }),
+    ).toBeUndefined();
+  });
+
+  it("accepts all supported profile selections", () => {
+    expect(
+      parseWebviewMessage({
+        protocolVersion: PROTOCOL_VERSION,
+        type: "set-profile",
+        profile: "gitlab",
+        baseVersion: 5,
+        operationId: "profile:5:gitlab",
+      }),
+    ).toEqual({
+      protocolVersion: PROTOCOL_VERSION,
+      type: "set-profile",
+      profile: "gitlab",
+      baseVersion: 5,
+      operationId: "profile:5:gitlab",
+    });
+    expect(
+      parseWebviewMessage({
+        protocolVersion: PROTOCOL_VERSION,
+        type: "set-profile",
+        profile: "commonmark",
+        baseVersion: 5,
+        operationId: "profile:5:commonmark",
+      }),
+    ).toEqual({
+      protocolVersion: PROTOCOL_VERSION,
+      type: "set-profile",
+      profile: "commonmark",
+      baseVersion: 5,
+      operationId: "profile:5:commonmark",
+    });
+    expect(
+      parseWebviewMessage({
+        protocolVersion: PROTOCOL_VERSION,
+        type: "set-profile",
+        profile: "github",
+        baseVersion: 0,
+        operationId: "profile:0:github",
+      }),
+    ).toBeUndefined();
+    expect(
+      parseWebviewMessage({
+        protocolVersion: PROTOCOL_VERSION,
+        type: "set-profile",
+        profile: "github",
+        baseVersion: 5,
+        operationId: "profile with spaces",
       }),
     ).toBeUndefined();
   });

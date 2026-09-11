@@ -5,8 +5,8 @@ import { fileURLToPath } from "node:url";
 
 const repository = resolve(fileURLToPath(new URL("../..", import.meta.url)));
 const vscodeMarkdownCss = process.env.VSCODE_MARKDOWN_CSS ?? "/Applications/Visual Studio Code.app/Contents/Resources/app/extensions/markdown-language-features/media/markdown.css";
-const port = Number(process.env.MW_BROWSER_PORT ?? "4173");
-const contentTypes = { ".css": "text/css; charset=utf-8", ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".map": "application/json" };
+const port = Number(process.env.MM_BROWSER_PORT ?? "4173");
+const contentTypes = { ".css": "text/css; charset=utf-8", ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".map": "application/json", ".woff": "font/woff", ".woff2": "font/woff2" };
 
 function fileFor(pathname) {
   if (pathname === "/") return resolve(repository, "tests/browser/harness.html");
@@ -36,7 +36,7 @@ const server = http.createServer(async (request, response) => {
 });
 
 server.listen(port, "127.0.0.1", () => {
-  process.stdout.write(`Markdown Weaver browser harness: http://127.0.0.1:${port}/\n`);
+  process.stdout.write(`Markdown Mint browser harness: http://127.0.0.1:${port}/\n`);
   process.stdout.write(`Native CSS: ${vscodeMarkdownCss}\n`);
 });
 

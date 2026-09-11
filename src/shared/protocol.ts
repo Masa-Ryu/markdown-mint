@@ -1,5 +1,5 @@
 /**
- * The only wire format used between the extension host and a Markdown Weaver
+ * The only wire format used between the extension host and a Markdown Mint
  * webview. Keep this file dependency-free: it is bundled into both runtimes.
  */
 
@@ -10,6 +10,8 @@ export const MAX_RESOURCE_URL_LENGTH = 8_192;
 
 export const MARKDOWN_PROFILES = ["github", "gitlab", "commonmark"] as const;
 export type MarkdownProfile = (typeof MARKDOWN_PROFILES)[number];
+export const PROFILE_SELECTIONS = MARKDOWN_PROFILES;
+export type ProfileSelection = MarkdownProfile;
 
 export const HOST_DOCUMENT_REASONS = [
   "initial",
@@ -135,6 +137,14 @@ export interface SourceMessage {
   readonly operationId?: string;
 }
 
+export interface SetProfileMessage {
+  readonly protocolVersion: typeof PROTOCOL_VERSION;
+  readonly type: "set-profile";
+  readonly profile: ProfileSelection;
+  readonly baseVersion: number;
+  readonly operationId: string;
+}
+
 export interface FormatMessage {
   readonly protocolVersion: typeof PROTOCOL_VERSION;
   readonly type: "format";
@@ -181,6 +191,7 @@ export type WebviewMessage =
   | UndoMessage
   | RedoMessage
   | SourceMessage
+  | SetProfileMessage
   | FormatMessage
   | SaveMessage
   | PreviewRequestMessage
@@ -199,6 +210,13 @@ export function isMarkdownProfile(value: unknown): value is MarkdownProfile {
   return (
     typeof value === "string" &&
     (MARKDOWN_PROFILES as readonly string[]).includes(value)
+  );
+}
+
+export function isProfileSelection(value: unknown): value is ProfileSelection {
+  return (
+    typeof value === "string" &&
+    (PROFILE_SELECTIONS as readonly string[]).includes(value)
   );
 }
 
@@ -365,6 +383,18 @@ export function parseWebviewMessage(
             ...(value.operationId === undefined
               ? {}
               : { operationId: value.operationId }),
+          }
+        : undefined;
+    case "set-profile":
+      return isProfileSelection(value.profile) &&
+        isVersion(value.baseVersion) &&
+        isOperationId(value.operationId)
+        ? {
+            protocolVersion: PROTOCOL_VERSION,
+            type: "set-profile",
+            profile: value.profile,
+            baseVersion: value.baseVersion,
+            operationId: value.operationId,
           }
         : undefined;
     case "format":

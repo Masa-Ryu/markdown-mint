@@ -11,9 +11,19 @@ import {
   tableEditing,
   TableMap,
 } from "prosemirror-tables";
-import { baseKeymap, chainCommands, exitCode } from "prosemirror-commands";
+import {
+  baseKeymap,
+  chainCommands,
+  exitCode,
+  wrapIn,
+} from "prosemirror-commands";
 import { keymap } from "prosemirror-keymap";
-import { DOMSerializer, Fragment, Node as PMNode } from "prosemirror-model";
+import {
+  DOMSerializer,
+  Fragment,
+  type ResolvedPos,
+  Node as PMNode,
+} from "prosemirror-model";
 import type { Schema } from "prosemirror-model";
 import {
   EditorState,
@@ -29,7 +39,6 @@ import {
   liftListItem,
   sinkListItem,
   splitListItem,
-  wrapInList,
 } from "prosemirror-schema-list";
 import {
   isHostMessage,
@@ -38,6 +47,35 @@ import {
   type PreviewTypography,
   type SaveResultMessage,
 } from "../shared/protocol";
+import {
+  createStarterPlugin,
+  getStarterState,
+  prepareStarterDocument,
+  serializeStarterSource,
+  setStarterMeta,
+  type StarterPluginState,
+} from "./starter";
+import { createWritingInputRules } from "./input-rules";
+import {
+  createRenderedNodeView,
+  createRenderingPlugin,
+  enhanceRenderedContent,
+  type RenderingEnhancer,
+} from "./rendering";
+import { appendToolbarIcon, type ToolbarIconName } from "./icons";
+import { createListCommand, isListActive, type ListKind } from "./listCommands";
+import {
+  createTableNumberingCommand,
+  createTableNumberingPlugin,
+  isTableNumbered,
+} from "./tableNumbering";
+import {
+  createProfileFeatureCommand,
+  getProfileFeatures,
+  type ProfileFeatureDefinition,
+  type ProfileFeatureId,
+  type ProfileFeatureValues,
+} from "./profileFeatures";
 
 export type DocumentProfile = "github" | "gitlab" | "commonmark";
 export type EditorMode = "rich" | "preview" | "source";
@@ -141,15 +179,94 @@ interface SavedSelection {
   to: number;
 }
 
-const TABLE_CLIPBOARD_MIME = "application/x-markdown-weaver-table";
-const MAX_CLIPBOARD_CELLS = 10_000;
+interface TransientBlankRange {
+  /** Positions in the current document covering only generated paragraphs. */
+  from: number;
+  to: number;
+  count: number;
+}
 
-const editorPluginKey = new PluginKey("markdown-weaver-editor");
+interface TransientBlankTransactionMeta {
+  kind: "append" | "discard";
+  from?: number;
+  to?: number;
+  count?: number;
+  /** The transaction also made a meaningful edit (for example, a table). */
+  meaningful?: boolean;
+}
+
+interface TableDialogSelection {
+  selection: Selection;
+  doc: PMNode;
+  version: number;
+  profile: DocumentProfile;
+  documentGeneration: number;
+}
+
+type TableToolbarAction =
+  | "row-above"
+  | "row-below"
+  | "row-delete"
+  | "col-left"
+  | "col-right"
+  | "col-delete"
+  | "align-left"
+  | "align-center"
+  | "align-right"
+  | "table-numbering"
+  | "table-delete";
+
+const TABLE_CLIPBOARD_MIME = "application/x-markdown-mint-table";
+const MAX_CLIPBOARD_CELLS = 10_000;
+const TRANSIENT_BLANK_META = "markdown-mint-transient-blank";
+
+const COMMON_EMOJI: ReadonlyArray<{
+  emoji: string;
+  name: string;
+  keywords: string;
+}> = [
+  { emoji: "😀", name: "grinning face", keywords: "smile happy" },
+  { emoji: "😃", name: "grinning face with big eyes", keywords: "smile happy" },
+  {
+    emoji: "😄",
+    name: "grinning face with smiling eyes",
+    keywords: "smile happy",
+  },
+  { emoji: "😁", name: "beaming face", keywords: "smile happy" },
+  { emoji: "😂", name: "face with tears of joy", keywords: "laugh funny" },
+  { emoji: "🙂", name: "slightly smiling face", keywords: "smile" },
+  { emoji: "😉", name: "winking face", keywords: "smile" },
+  { emoji: "😍", name: "smiling face with heart eyes", keywords: "love" },
+  { emoji: "🤔", name: "thinking face", keywords: "consider" },
+  { emoji: "😎", name: "smiling face with sunglasses", keywords: "cool" },
+  { emoji: "😭", name: "loudly crying face", keywords: "sad" },
+  { emoji: "😡", name: "enraged face", keywords: "angry" },
+  { emoji: "👍", name: "thumbs up", keywords: "approve yes" },
+  { emoji: "👎", name: "thumbs down", keywords: "disapprove no" },
+  { emoji: "👏", name: "clapping hands", keywords: "applause" },
+  { emoji: "🙏", name: "folded hands", keywords: "please thanks" },
+  { emoji: "💡", name: "light bulb", keywords: "idea" },
+  { emoji: "✅", name: "check mark button", keywords: "done yes" },
+  { emoji: "❌", name: "cross mark", keywords: "no delete" },
+  { emoji: "⭐", name: "star", keywords: "favorite" },
+  { emoji: "🔥", name: "fire", keywords: "hot" },
+  { emoji: "🎉", name: "party popper", keywords: "celebrate" },
+  { emoji: "🚀", name: "rocket", keywords: "launch" },
+  { emoji: "❤️", name: "red heart", keywords: "love" },
+  { emoji: "💔", name: "broken heart", keywords: "sad love" },
+  { emoji: "✨", name: "sparkles", keywords: "magic" },
+  { emoji: "🎯", name: "bullseye", keywords: "target" },
+  { emoji: "📌", name: "pushpin", keywords: "pin" },
+  { emoji: "📎", name: "paperclip", keywords: "attachment" },
+  { emoji: "💬", name: "speech balloon", keywords: "comment" },
+];
+
+const editorPluginKey = new PluginKey("markdown-mint-editor");
 
 function newOperationId(): string {
   const cryptoApi = typeof crypto !== "undefined" ? crypto : undefined;
   if (cryptoApi?.randomUUID) return cryptoApi.randomUUID();
-  return `mw-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+  return `mm-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 }
 
 function isMac(): boolean {
@@ -194,6 +311,7 @@ function selectedTableRect(selection: CellSelection): {
   table: PMNode;
   map: TableMap;
   tableStart: number;
+  cellPos: number;
   rect: { top: number; left: number; bottom: number; right: number };
 } | null {
   const $anchorCell = selection.$anchorCell;
@@ -207,6 +325,7 @@ function selectedTableRect(selection: CellSelection): {
     table,
     map,
     tableStart,
+    cellPos: selection.$anchorCell.pos,
     rect: {
       top: Math.min(anchor.top, head.top),
       left: Math.min(anchor.left, head.left),
@@ -220,9 +339,24 @@ interface TableContext {
   table: PMNode;
   map: TableMap;
   tableStart: number;
+  cellPos: number;
   rect: { top: number; left: number; bottom: number; right: number };
-  cellSelection: boolean;
+  cellSelection?: boolean;
 }
+
+type TableSelectionBookmark =
+  | {
+      kind: "cells";
+      anchor: { row: number; column: number };
+      head: { row: number; column: number };
+    }
+  | {
+      kind: "text";
+      row: number;
+      column: number;
+      anchorOffset: number;
+      headOffset: number;
+    };
 
 /** Resolve both a CellSelection and an ordinary text cursor inside a cell. */
 function tableContext(selection: Selection): TableContext | null {
@@ -230,7 +364,7 @@ function tableContext(selection: Selection): TableContext | null {
     const selected = selectedTableRect(selection);
     return selected ? { ...selected, cellSelection: true } : null;
   }
-  const $from = selection.$from;
+  const { $from, $to } = selection;
   let cellDepth = -1;
   let tableDepth = -1;
   for (let depth = $from.depth; depth > 0; depth -= 1) {
@@ -245,6 +379,16 @@ function tableContext(selection: Selection): TableContext | null {
   }
   if (cellDepth < 0 || tableDepth < 0) return null;
   const table = $from.node(tableDepth);
+  if (!selection.empty) {
+    let toTableDepth = -1;
+    for (let depth = $to.depth; depth > 0; depth -= 1) {
+      if ($to.node(depth).type.spec.tableRole === "table") {
+        toTableDepth = depth;
+        break;
+      }
+    }
+    if (toTableDepth < 0 || $to.node(toTableDepth) !== table) return null;
+  }
   const tableStart = $from.start(tableDepth);
   const map = TableMap.get(table);
   const cellPos = $from.before(cellDepth);
@@ -253,6 +397,7 @@ function tableContext(selection: Selection): TableContext | null {
     table,
     map,
     tableStart,
+    cellPos,
     rect: {
       top: cellRect.top,
       left: cellRect.left,
@@ -261,6 +406,20 @@ function tableContext(selection: Selection): TableContext | null {
     },
     cellSelection: false,
   };
+}
+
+function selectionTouchesTable(selection: Selection): boolean {
+  if (tableContext(selection)) return true;
+  for (let depth = selection.$to.depth; depth > 0; depth -= 1) {
+    if (selection.$to.node(depth).type.spec.tableRole === "table") return true;
+  }
+  if (selection.empty) return false;
+  let touches = false;
+  selection.$from.doc.nodesBetween(selection.from, selection.to, (node) => {
+    if (node.type.spec.tableRole === "table") touches = true;
+    return !touches;
+  });
+  return touches;
 }
 
 function selectionForDocument(selection: Selection, doc: PMNode): Selection {
@@ -620,6 +779,45 @@ function commandForBlock(typeName: string, attrs?: Record<string, unknown>) {
   return (state: EditorState, dispatch?: (tr: Transaction) => void) => {
     const type = state.schema.nodes[typeName];
     if (!type) return false;
+
+    if (typeName === "blockquote") {
+      const sharedBlockquoteDepth = (
+        from: ResolvedPos,
+        to: ResolvedPos,
+      ): number | null => {
+        const maxDepth = Math.min(from.depth, to.depth);
+        for (let depth = maxDepth; depth > 0; depth -= 1) {
+          if (from.node(depth).type.name !== "blockquote") continue;
+          if (from.node(depth) !== to.node(depth)) continue;
+          return depth;
+        }
+        return null;
+      };
+
+      const quoteDepth = sharedBlockquoteDepth(
+        state.selection.$from,
+        state.selection.$to,
+      );
+      if (quoteDepth !== null) {
+        if (!dispatch) return true;
+        const quoteNode = state.selection.$from.node(quoteDepth);
+        dispatch(
+          state.tr
+            .replaceWith(
+              state.selection.$from.before(quoteDepth),
+              state.selection.$from.after(quoteDepth),
+              quoteNode.content,
+            )
+            .scrollIntoView(),
+        );
+        return true;
+      }
+
+      return dispatch
+        ? wrapIn(type)(state, (tr) => dispatch(tr.scrollIntoView()))
+        : wrapIn(type)(state);
+    }
+
     if (dispatch)
       dispatch(
         state.tr.setBlockType(
@@ -643,10 +841,40 @@ function makeElement(
   return element;
 }
 
+function topLevelRangeNodes(
+  doc: PMNode,
+  range: TransientBlankRange,
+): Array<{ node: PMNode; from: number; to: number }> {
+  const result: Array<{ node: PMNode; from: number; to: number }> = [];
+  let position = 0;
+  for (let index = 0; index < doc.childCount; index += 1) {
+    const node = doc.child(index);
+    const end = position + node.nodeSize;
+    if (end > range.from && position < range.to)
+      result.push({ node, from: position, to: end });
+    position = end;
+  }
+  return result;
+}
+
+function removeTopLevelRange(doc: PMNode, range: TransientBlankRange): PMNode {
+  const children: PMNode[] = [];
+  let position = 0;
+  for (let index = 0; index < doc.childCount; index += 1) {
+    const node = doc.child(index);
+    const end = position + node.nodeSize;
+    if (!(end > range.from && position < range.to)) children.push(node);
+    position = end;
+  }
+  return doc.copy(Fragment.fromArray(children));
+}
+
 class TaskItemNodeView {
   readonly dom: HTMLLIElement;
   readonly contentDOM: HTMLElement;
   private readonly checkbox: HTMLInputElement;
+  private checkedState: unknown;
+  private taskAttrs: Record<string, unknown>;
   private readonly control: HTMLElement;
   private readonly view: EditorView;
   private readonly getPos: () => number | undefined;
@@ -659,24 +887,21 @@ class TaskItemNodeView {
     this.view = view;
     this.getPos = getPos;
     this.dom = document.createElement("li");
-    this.dom.className = "mw-task-item";
+    this.dom.className = "mm-task-item";
     const control = document.createElement("span");
     this.control = control;
-    control.className = "mw-task-control";
+    control.className = "mm-task-control";
     this.checkbox = document.createElement("input");
     this.checkbox.type = "checkbox";
-    this.checkbox.className = "mw-task-checkbox";
-    this.checkbox.checked = node.attrs.checked === true;
+    this.checkbox.className = "mm-task-checkbox";
+    this.taskAttrs = { ...node.attrs };
+    this.updateCheckboxState(node.attrs.checked);
     const isTask = node.attrs.checked != null;
-    this.dom.classList.toggle("mw-task-task", isTask);
+    this.dom.classList.toggle("mm-task-task", isTask);
     if (!isTask) {
       control.hidden = true;
-      this.dom.classList.add("mw-plain-list-item");
+      this.dom.classList.add("mm-plain-list-item");
     }
-    this.checkbox.setAttribute(
-      "aria-label",
-      this.checkbox.checked ? "Mark task incomplete" : "Mark task complete",
-    );
     this.checkbox.addEventListener("mousedown", (event) =>
       event.stopPropagation(),
     );
@@ -685,29 +910,53 @@ class TaskItemNodeView {
       if (position === undefined) return;
       this.view.dispatch(
         this.view.state.tr.setNodeMarkup(position, undefined, {
-          ...node.attrs,
-          checked: this.checkbox.checked,
+          ...this.taskAttrs,
+          checked: this.checkedState === "mixed" ? true : this.checkbox.checked,
         }),
       );
     });
     control.append(this.checkbox);
     this.contentDOM = document.createElement("div");
-    this.contentDOM.className = "mw-task-content";
+    this.contentDOM.className = "mm-task-content";
     this.dom.append(control, this.contentDOM);
+  }
+
+  private updateCheckboxState(value: unknown): void {
+    this.checkedState = value;
+    const mixed = value === "mixed";
+    const checked = value === true;
+    this.checkbox.checked = checked;
+    this.checkbox.indeterminate = mixed;
+    if (mixed) this.checkbox.dataset.taskState = "mixed";
+    else delete this.checkbox.dataset.taskState;
+    this.checkbox.setAttribute(
+      "aria-checked",
+      mixed ? "mixed" : String(checked),
+    );
+    this.checkbox.setAttribute(
+      "aria-label",
+      mixed
+        ? "Resolve mixed task state"
+        : checked
+          ? "Mark task incomplete"
+          : "Mark task complete",
+    );
   }
 
   update(node: PMNode): boolean {
     if (node.type.name !== "list_item") return false;
-    this.checkbox.checked = node.attrs.checked === true;
+    this.taskAttrs = { ...node.attrs };
+    this.updateCheckboxState(node.attrs.checked);
     const isTask = node.attrs.checked != null;
-    this.dom.classList.toggle("mw-task-task", isTask);
-    this.dom.classList.toggle("mw-plain-list-item", !isTask);
+    this.dom.classList.toggle("mm-task-task", isTask);
+    this.dom.classList.toggle("mm-plain-list-item", !isTask);
     this.control.hidden = !isTask;
-    this.checkbox.setAttribute(
-      "aria-label",
-      this.checkbox.checked ? "Mark task incomplete" : "Mark task complete",
-    );
     return true;
+  }
+
+  ignoreMutation(mutation: ViewMutationRecord): boolean {
+    if (mutation.type === "selection") return false;
+    return !this.contentDOM.contains(mutation.target);
   }
 }
 
@@ -733,12 +982,39 @@ class ImageNodeView {
     this.dom.alt = String(node.attrs.alt ?? "");
     if (node.attrs.title) this.dom.title = String(node.attrs.title);
     else this.dom.removeAttribute("title");
+    const width = safeImageDimensionValue(node.attrs.width);
+    const height = safeImageDimensionValue(node.attrs.height);
+    if (width) {
+      this.dom.setAttribute("width", width);
+      this.dom.style.width = width;
+    } else {
+      this.dom.removeAttribute("width");
+      this.dom.style.removeProperty("width");
+    }
+    if (height) {
+      this.dom.setAttribute("height", height);
+      this.dom.style.height = height;
+    } else {
+      this.dom.removeAttribute("height");
+      this.dom.style.removeProperty("height");
+    }
     return true;
   }
 
   ignoreMutation(mutation: ViewMutationRecord): boolean {
-    return mutation.type === "attributes" && mutation.attributeName === "src";
+    return (
+      mutation.type === "attributes" &&
+      (mutation.attributeName === "src" ||
+        mutation.attributeName === "width" ||
+        mutation.attributeName === "height" ||
+        mutation.attributeName === "style")
+    );
   }
+}
+
+function safeImageDimensionValue(value: unknown): string | null {
+  const candidate = String(value ?? "").trim();
+  return /^\d+(?:\.\d+)?(?:px|%)?$/i.test(candidate) ? candidate : null;
 }
 
 function safeImageSource(source: string): boolean {
@@ -902,25 +1178,178 @@ export class MarkdownEditorApp {
   private formatting = false;
   private pendingSaveOperationId: string | undefined;
   private lastValidMarkdown = "";
+  private authoritativeMarkdown: string;
+  private authoritativeProfile: DocumentProfile;
+  private authoritativeVersion: number;
   private readonly compatibilityEl: HTMLElement;
   private readonly statusEl: HTMLElement;
   private readonly previewEl: HTMLElement;
+  private previewEnhancer: RenderingEnhancer | undefined;
   private readonly sourceEl: HTMLTextAreaElement;
   private readonly recoverButton: HTMLButtonElement;
-  private readonly modes = new Map<EditorMode, HTMLButtonElement>();
+  private profileSelect!: HTMLSelectElement;
+  private pendingProfile: {
+    profile: DocumentProfile;
+    operationId?: string;
+  } | null = null;
   readonly sync: SyncController;
   private readonly messageHandler: (event: MessageEvent) => void;
   private savedSelection: SavedSelection | null = null;
+  private headingSelection: Selection | null = null;
+  private documentGeneration = 0;
+  private starterOriginalSource: string | undefined;
   private linkDialog!: HTMLDialogElement;
   private linkUrlInput!: HTMLInputElement;
   private linkTextInput!: HTMLInputElement;
   private imageDialog!: HTMLDialogElement;
   private imageUrlInput!: HTMLInputElement;
   private imageAltInput!: HTMLInputElement;
+  private emojiDialog!: HTMLDialogElement;
+  private emojiSearchInput!: HTMLInputElement;
+  private emojiGrid!: HTMLElement;
+  private emojiSelection: Selection | null = null;
+  private emojiDocumentGeneration = -1;
+  private emojiProfile: DocumentProfile | null = null;
+  private emojiInvokingButton: HTMLButtonElement | null = null;
+  private emojiDialogOpen = false;
   private codeLanguageInput!: HTMLInputElement;
   private recoveryDialog!: HTMLDialogElement;
   private recoveryText!: HTMLTextAreaElement;
   private pendingRecoveryOperationId: string | undefined;
+  private stage!: HTMLElement;
+  private tableToolbar!: HTMLElement;
+  private profileToolbar!: HTMLElement;
+  private profileFeatureDialog!: HTMLDialogElement;
+  private profileFeatureAlertType!: HTMLSelectElement;
+  private profileFeatureTitleInput!: HTMLInputElement;
+  private profileFeatureTermInput!: HTMLInputElement;
+  private profileFeatureBodyInput!: HTMLTextAreaElement;
+  private profileFeatureBodyLabel!: HTMLSpanElement;
+  private profileFeatureError!: HTMLElement;
+  private profileFeatureSelection: Selection | null = null;
+  private profileFeatureDocumentGeneration = -1;
+  private profileFeatureProfile: DocumentProfile | null = null;
+  private profileFeatureInvokingButton: HTMLButtonElement | null = null;
+  private profileFeatureId: ProfileFeatureId | null = null;
+  private profileFeatureDialogOpen = false;
+  private tableDialog!: HTMLDialogElement;
+  private tableColumnsInput!: HTMLInputElement;
+  private tableRowsInput!: HTMLInputElement;
+  private tableGrid!: HTMLElement;
+  private tableSizeLabel!: HTMLElement;
+  private tableDialogError!: HTMLElement;
+  private tableDialogInsertButton!: HTMLButtonElement;
+  private tableDialogSelection: TableDialogSelection | null = null;
+  private tableDialogInvokingButton: HTMLButtonElement | null = null;
+  private tableDialogOpen = false;
+  private tableDialogColumns = 3;
+  private tableDialogRows = 3;
+  private tableDialogPreviewColumns = 3;
+  private tableDialogPreviewRows = 3;
+  private tableDialogPreviewing = false;
+  private tableDialogSelectionLocked = false;
+  private tableGridCells: HTMLButtonElement[] = [];
+  private insertPopup!: HTMLElement;
+  private insertPopupToggle!: HTMLButtonElement;
+  private activePopup: HTMLElement | null = null;
+  private activePopupToggle: HTMLButtonElement | null = null;
+  private popupAnchor: HTMLElement | null = null;
+  private popupReturnFocus: HTMLElement | null = null;
+  private popupSelection: Selection | null = null;
+  private popupDocumentGeneration = -1;
+  private popupProfile: DocumentProfile | null = null;
+  private selectionToolbarSelection: Selection | null = null;
+  private selectionToolbarDocumentGeneration = -1;
+  private selectionToolbarProfile: DocumentProfile | null = null;
+  private selectionToolbar!: HTMLElement;
+  private emptyLineButton!: HTMLButtonElement;
+  private transientBlanks: TransientBlankRange | null = null;
+  private stageBlankClickHandled = false;
+  private destroyed = false;
+  private tooltip!: HTMLElement;
+  private tooltipTarget: HTMLElement | null = null;
+  private tooltipPreviousDescribedBy: string | null = null;
+  private readonly tooltipPointerOverHandler = (event: PointerEvent): void => {
+    const target = this.tooltipTargetFor(event.target);
+    if (target) this.showTooltip(target);
+    else this.hideTooltip();
+  };
+  private readonly tooltipPointerOutHandler = (event: PointerEvent): void => {
+    const target = this.tooltipTargetFor(event.target);
+    const next = this.tooltipTargetFor(event.relatedTarget);
+    if (next) {
+      this.showTooltip(next);
+      return;
+    }
+    if (!target || target === this.tooltipTarget) this.hideTooltip();
+  };
+  private readonly tooltipFocusInHandler = (event: FocusEvent): void => {
+    const target = this.tooltipTargetFor(event.target);
+    if (target) this.showTooltip(target);
+  };
+  private readonly tooltipFocusOutHandler = (event: FocusEvent): void => {
+    const next = this.tooltipTargetFor(event.relatedTarget);
+    if (next) this.showTooltip(next);
+    else this.hideTooltip();
+  };
+  private readonly tooltipPointerDownHandler = (): void => {
+    this.hideTooltip();
+  };
+  private readonly tooltipClickHandler = (): void => {
+    this.hideTooltip();
+  };
+  private readonly tooltipKeyDownHandler = (event: KeyboardEvent): void => {
+    if (event.key === "Escape") this.hideTooltip();
+  };
+  private readonly tooltipScrollHandler = (): void => {
+    this.hideTooltip();
+  };
+  private readonly tableSelectionChangeHandler = (): void =>
+    this.scheduleWritingToolbarUpdate();
+  private readonly writingToolbarResizeHandler = (): void =>
+    this.updateWritingToolbarState();
+  private readonly writingToolbarScrollHandler = (): void =>
+    this.updateWritingToolbarState();
+  private readonly writingPointerDownHandler = (event: PointerEvent): void => {
+    const active = this.activePopup;
+    if (!active) return;
+    const target = event.target;
+    if (
+      target instanceof Node &&
+      (active.contains(target) || this.activePopupToggle?.contains(target))
+    )
+      return;
+    this.closeWritingPopups();
+  };
+  private readonly writingFocusInHandler = (event: FocusEvent): void => {
+    const active = this.activePopup;
+    if (!active) return;
+    const target = event.target;
+    if (
+      target instanceof Node &&
+      (active.contains(target) || this.activePopupToggle?.contains(target))
+    )
+      return;
+    this.closeWritingPopups();
+  };
+  private readonly stageBlankPointerDownHandler = (event: MouseEvent): void => {
+    if (this.handleBlankDocumentPointer(event)) {
+      this.stageBlankClickHandled = true;
+    }
+  };
+  private readonly stageBlankClickHandler = (event: MouseEvent): void => {
+    if (this.stageBlankClickHandled) {
+      this.stageBlankClickHandled = false;
+      return;
+    }
+    this.handleBlankDocumentPointer(event);
+  };
+  private readonly writingKeyDownHandler = (event: KeyboardEvent): void => {
+    if (event.key !== "Escape" || !this.activePopup) return;
+    const returnFocus = this.popupReturnFocus ?? this.activePopupToggle;
+    this.closeWritingPopups();
+    returnFocus?.focus();
+  };
 
   constructor(options: EditorAppOptions) {
     this.root = options.root;
@@ -938,64 +1367,70 @@ export class MarkdownEditorApp {
       options.initialMode ?? (initial.mode === "preview" ? "preview" : "rich");
     this.profile = initial.profile;
     this.lastValidMarkdown = initial.markdown;
+    this.authoritativeMarkdown = initial.markdown;
+    this.authoritativeProfile = initial.profile;
+    this.authoritativeVersion = initial.version;
     this.version = initial.version;
     this.operationId = initial.operationId;
     this.resourceBaseUrl = initial.resourceBaseUrl;
     this.applyTypography(initial.typography);
     this.root.replaceChildren();
-    this.root.classList.add("markdown-weaver-app");
+    this.root.classList.add("markdown-mint-app");
     const toolbar = this.buildToolbar();
     this.root.append(toolbar);
-    const stage = makeElement("main", { class: "mw-stage" });
+    this.stage = makeElement("main", { class: "mm-stage" });
     const richPanel = makeElement("section", {
-      class: "mw-panel mw-rich-panel",
+      class: "mm-panel mm-rich-panel",
       "data-panel": "rich",
       "aria-label": "Rich editor",
     });
     const editorMount = makeElement("div", {
-      class: "mw-editor-mount",
+      class: "mm-editor-mount",
       "data-testid": "editor-mount",
     });
     richPanel.append(editorMount);
     const previewPanel = makeElement("section", {
-      class: "mw-panel mw-preview-panel",
+      class: "mm-panel mm-preview-panel",
       "data-panel": "preview",
       "aria-label": "Markdown preview",
       hidden: "true",
     });
     this.previewEl = makeElement("article", {
-      class: "markdown-body mw-document-content",
+      class: "markdown-body mm-document-content",
       "data-testid": "preview-content",
     });
     previewPanel.append(this.previewEl);
     const sourcePanel = makeElement("section", {
-      class: "mw-panel mw-source-panel",
+      class: "mm-panel mm-source-panel",
       "data-panel": "source",
       "aria-label": "Markdown source",
       hidden: "true",
     });
     this.sourceEl = document.createElement("textarea");
-    this.sourceEl.className = "mw-source-textarea";
+    this.sourceEl.className = "mm-source-textarea";
     this.sourceEl.setAttribute("spellcheck", "false");
     this.sourceEl.readOnly = true;
     this.sourceEl.setAttribute("aria-label", "Markdown source");
     sourcePanel.append(this.sourceEl);
-    stage.append(richPanel, previewPanel, sourcePanel);
-    this.root.append(stage);
-    const footer = makeElement("footer", { class: "mw-statusbar" });
+    this.stage.append(richPanel, previewPanel, sourcePanel);
+    this.selectionToolbar = this.buildSelectionToolbar();
+    this.emptyLineButton = this.buildEmptyLineButton();
+    this.stage.append(this.selectionToolbar, this.emptyLineButton);
+    this.root.append(this.stage);
+    const footer = makeElement("footer", { class: "mm-statusbar" });
     this.statusEl = makeElement("span", {
-      class: "mw-status",
+      class: "mm-status",
       role: "status",
       "data-testid": "status",
     });
     this.compatibilityEl = makeElement("span", {
-      class: "mw-compatibility",
+      class: "mm-compatibility",
       role: "status",
       "data-testid": "compatibility",
     });
     this.recoverButton = makeElement("button", {
       type: "button",
-      class: "mw-recover",
+      class: "mm-recover",
       hidden: "true",
     }) as HTMLButtonElement;
     this.recoverButton.textContent = "Recover draft";
@@ -1005,12 +1440,21 @@ export class MarkdownEditorApp {
     footer.append(this.statusEl, this.compatibilityEl, this.recoverButton);
     this.root.append(footer);
     this.buildRecoveryDialog();
+    this.tooltip = makeElement("div", {
+      class: "mm-tooltip",
+      role: "tooltip",
+      "aria-hidden": "true",
+      hidden: "true",
+    });
+    this.tooltip.id = "mm-tooltip";
+    this.root.append(this.tooltip);
+    this.installTooltipHandlers();
 
     this.view = new EditorView(editorMount, {
       state: this.createState(initial.markdown),
       dispatchTransaction: (tr) => this.dispatchTransaction(tr),
       attributes: {
-        class: "ProseMirror mw-document-content",
+        class: "ProseMirror mm-document-content",
         spellcheck: "true",
         "data-testid": "rich-editor",
       },
@@ -1018,16 +1462,27 @@ export class MarkdownEditorApp {
         list_item: (node, view, getPos) =>
           new TaskItemNodeView(node, view, getPos),
         image: (node) => new ImageNodeView(node, () => this.resourceBaseUrl),
+        raw_block: (node, view, getPos) =>
+          createRenderedNodeView(node, view, getPos, () => this.profile),
+        raw_inline: (node, view, getPos) =>
+          createRenderedNodeView(node, view, getPos, () => this.profile),
       },
       handleDOMEvents: {
         compositionstart: () => {
           this.composing = true;
+          this.closeWritingPopups();
+          this.closeEmojiPicker();
+          this.closeProfileFeatureDialog();
+          this.updateProfileToolbar();
+          this.updateWritingToolbarState();
           return false;
         },
         compositionend: () => {
           this.composing = false;
           this.flushExternalAfterComposition();
           this.flushDeferredHostCommand();
+          this.updateProfileToolbar();
+          this.updateWritingToolbarState();
           return false;
         },
         copy: (view, event) => this.handleCopy(view, event as ClipboardEvent),
@@ -1059,6 +1514,23 @@ export class MarkdownEditorApp {
         operationId: newOperationId(),
       });
     });
+    this.stage.addEventListener(
+      "mousedown",
+      this.stageBlankPointerDownHandler,
+      true,
+    );
+    this.stage.addEventListener("click", this.stageBlankClickHandler);
+    window.addEventListener("resize", this.writingToolbarResizeHandler);
+    this.stage.addEventListener("scroll", this.writingToolbarScrollHandler, {
+      passive: true,
+    });
+    document.addEventListener(
+      "selectionchange",
+      this.tableSelectionChangeHandler,
+    );
+    document.addEventListener("pointerdown", this.writingPointerDownHandler);
+    document.addEventListener("focusin", this.writingFocusInHandler);
+    document.addEventListener("keydown", this.writingKeyDownHandler);
     this.restoreRecoveryState();
     this.setInitialized(this.initialized);
     this.setMode(this.mode, false);
@@ -1067,15 +1539,48 @@ export class MarkdownEditorApp {
   }
 
   destroy(): void {
+    this.destroyed = true;
     window.removeEventListener("message", this.messageHandler);
+    window.removeEventListener("resize", this.writingToolbarResizeHandler);
+    this.stage.removeEventListener("scroll", this.writingToolbarScrollHandler);
+    this.stage.removeEventListener(
+      "mousedown",
+      this.stageBlankPointerDownHandler,
+      true,
+    );
+    this.stage.removeEventListener("click", this.stageBlankClickHandler);
+    document.removeEventListener(
+      "selectionchange",
+      this.tableSelectionChangeHandler,
+    );
+    document.removeEventListener("pointerdown", this.writingPointerDownHandler);
+    document.removeEventListener("focusin", this.writingFocusInHandler);
+    document.removeEventListener("keydown", this.writingKeyDownHandler);
+    this.closeWritingPopups();
+    this.closeEmojiPicker();
+    this.closeProfileFeatureDialog();
+    this.transientBlanks = null;
+    this.previewEnhancer?.dispose();
+    this.previewEnhancer = undefined;
     this.view.destroy();
   }
 
   private createState(markdown: string): EditorState {
     let doc: PMNode;
+    let starterState: StarterPluginState = {
+      active: false,
+      untouched: false,
+    };
+    this.starterOriginalSource = markdown;
     try {
       const parsed = this.core.parseMarkdown(markdown, this.profile);
-      doc = parsed.doc;
+      const prepared = prepareStarterDocument(
+        markdown,
+        parsed.doc,
+        this.schema,
+      );
+      doc = prepared.doc;
+      starterState = prepared.state;
       this.previousSnapshot = parsed.snapshot ?? parsed;
     } catch (error) {
       this.parseError =
@@ -1086,7 +1591,11 @@ export class MarkdownEditorApp {
       doc = this.schema.topNodeType.createAndFill() as PMNode;
     }
     const plugins: Plugin[] = [
+      createStarterPlugin(starterState),
+      createWritingInputRules(this.schema),
+      createRenderingPlugin(() => this.profile),
       tableEditing(),
+      createTableNumberingPlugin(),
       keymap(this.createKeymap()),
       keymap(baseKeymap),
       new Plugin({
@@ -1142,11 +1651,26 @@ export class MarkdownEditorApp {
           : listItem
             ? liftListItem(listItem)(state, dispatch)
             : false,
+      Escape: (state, dispatch) => this.exitTable(state, dispatch),
+      ArrowDown: (state, dispatch) => this.exitTableAtEnd(state, dispatch),
     };
     return map;
   }
 
   private handleAppKeyDown(event: KeyboardEvent): boolean {
+    if (
+      event.altKey &&
+      event.key === "F10" &&
+      this.selectionToolbar &&
+      !this.selectionToolbar.hidden
+    ) {
+      event.preventDefault();
+      const first = this.selectionToolbar.querySelector<HTMLButtonElement>(
+        "button:not(:disabled)",
+      );
+      first?.focus();
+      return true;
+    }
     // ProseMirror's `Mod` keymap covers the normal path. Keep an explicit
     // platform-aware fallback for hosts that stop the keymap event while a
     // webview command is pending (and for embedded test hosts).
@@ -1168,6 +1692,84 @@ export class MarkdownEditorApp {
     return false;
   }
 
+  private exitTable(
+    state: EditorState,
+    dispatch?: (tr: Transaction) => void,
+  ): boolean {
+    const context = tableContext(state.selection);
+    if (!context) return false;
+    return this.moveSelectionAfterTable(state, context, dispatch);
+  }
+
+  private exitTableAtEnd(
+    state: EditorState,
+    dispatch?: (tr: Transaction) => void,
+  ): boolean {
+    if (!(state.selection instanceof TextSelection) || !state.selection.empty)
+      return false;
+    const context = tableContext(state.selection);
+    if (!context || context.rect.bottom < context.map.height) return false;
+    if (
+      state.selection.$from.parentOffset <
+      state.selection.$from.parent.content.size
+    )
+      return false;
+    const cell = state.doc.nodeAt(context.cellPos);
+    if (!cell) return false;
+    // ArrowDown at the end of an earlier paragraph should continue through the
+    // cell. Leave only when the cursor is at the final textblock boundary.
+    const cellContentEnd = context.cellPos + cell.nodeSize - 1;
+    if (state.selection.from < cellContentEnd - 1) return false;
+    return this.moveSelectionAfterTable(state, context, dispatch);
+  }
+
+  private moveSelectionAfterTable(
+    state: EditorState,
+    context: TableContext,
+    dispatch?: (tr: Transaction) => void,
+  ): boolean {
+    const paragraph = this.schema.nodes.paragraph;
+    if (!paragraph) return false;
+    const tablePosition = context.tableStart - 1;
+    const tableEnd = tablePosition + context.table.nodeSize;
+    let transaction = state.tr;
+    let target: Selection;
+    try {
+      target = TextSelection.near(
+        state.doc.resolve(Math.min(tableEnd, state.doc.content.size)),
+        1,
+      );
+    } catch {
+      target = state.selection;
+    }
+
+    // Markdown tables may be the final block in a source document. Materialize
+    // a writable paragraph only when the table has no following block, and
+    // keep it transient until the user actually types into it.
+    if (tableContext(target)) {
+      const from = Math.min(tableEnd, transaction.doc.content.size);
+      const trailing = paragraph.create();
+      transaction = transaction
+        .insert(from, trailing)
+        .setMeta(TRANSIENT_BLANK_META, {
+          kind: "append",
+          from,
+          to: from + trailing.nodeSize,
+          count: 1,
+          meaningful: false,
+        } satisfies TransientBlankTransactionMeta);
+      target = TextSelection.near(
+        transaction.doc.resolve(
+          Math.min(from + 1, transaction.doc.content.size),
+        ),
+        1,
+      );
+    }
+    transaction = transaction.setSelection(target).scrollIntoView();
+    if (dispatch) dispatch(transaction);
+    return true;
+  }
+
   private gfmUnavailable(dispatch?: (tr: Transaction) => void): boolean {
     if (dispatch)
       this.setNotice("This GFM feature is unavailable in CommonMark.");
@@ -1176,32 +1778,196 @@ export class MarkdownEditorApp {
 
   private dispatchTransaction(tr: Transaction): void {
     const oldSelection = this.view.state.selection;
-    this.view.updateState(this.view.state.apply(tr));
-    if (tr.docChanged) {
+    const applied = this.view.state.applyTransaction(tr);
+    const transactions = applied.transactions;
+    const appendMeta = transactions
+      .map(
+        (transaction) =>
+          transaction.getMeta(TRANSIENT_BLANK_META) as
+            TransientBlankTransactionMeta | undefined,
+      )
+      .find((meta) => meta?.kind === "append");
+
+    if (this.transientBlanks && appendMeta?.kind !== "append") {
+      for (const transaction of transactions)
+        this.mapTransientBlankRange(transaction);
+    }
+
+    this.view.updateState(applied.state);
+
+    if (appendMeta?.kind === "append") {
+      let from = Number(appendMeta.from);
+      let to = Number(appendMeta.to);
+      const count = Number(appendMeta.count ?? 1);
+      const metaIndex = transactions.findIndex(
+        (transaction) =>
+          (
+            transaction.getMeta(TRANSIENT_BLANK_META) as
+              TransientBlankTransactionMeta | undefined
+          )?.kind === "append",
+      );
+      if (metaIndex >= 0) {
+        for (const transaction of transactions.slice(metaIndex + 1)) {
+          from = transaction.mapping.map(from, 1);
+          to = transaction.mapping.map(to, -1);
+          if (to < from) to = from;
+        }
+      }
+      if (
+        Number.isFinite(from) &&
+        Number.isFinite(to) &&
+        to > from &&
+        Number.isInteger(count) &&
+        count > 0
+      )
+        this.transientBlanks = { from, to, count };
+    }
+
+    let transientOnly = false;
+    let discardedTransient = false;
+    if (this.transientBlanks) {
+      const hasContent = this.transientBlankHasContent();
+      const selectionInTransient = this.selectionInsideTransient(
+        this.view.state.selection,
+      );
+      if (appendMeta?.kind === "append") {
+        // A click or table exit only creates a caret target. A meaningful
+        // transaction such as table insertion still needs to sync immediately,
+        // while its trailing paragraph remains omitted from the source.
+        transientOnly = appendMeta.meaningful !== true;
+      } else if (hasContent) {
+        // The first edit in a generated paragraph commits the paragraph and
+        // all of the generated spacing around it as user-authored content.
+        this.transientBlanks = null;
+      } else if (
+        transactions.some(
+          (transaction) => transaction.docChanged || transaction.selectionSet,
+        ) &&
+        !selectionInTransient
+      ) {
+        discardedTransient = this.discardTransientBlanksInState();
+      }
+    }
+
+    const docChanged = transactions.some(
+      (transaction) => transaction.docChanged,
+    );
+    const selectionSet = transactions.some(
+      (transaction) => transaction.selectionSet,
+    );
+    if (docChanged && !transientOnly) {
+      this.closeWritingPopups();
       this.dirty = true;
       const markdown = this.serializeCurrent();
       this.persistRecovery(markdown ?? this.lastValidMarkdown);
       if (markdown !== null) {
         this.refreshDerivedViews(markdown);
-        if (!this.syncPaused && this.initialized && !this.previewOnly)
+        if (
+          this.vscode &&
+          !this.syncPaused &&
+          this.initialized &&
+          !this.previewOnly
+        )
           this.sync.enqueue(markdown);
       }
     }
-    if (tr.selectionSet || tr.docChanged)
+    if (selectionSet || docChanged || discardedTransient)
       this.updateToolbarState(oldSelection, this.view.state.selection);
+  }
+
+  private mapTransientBlankRange(tr: Transaction): void {
+    const range = this.transientBlanks;
+    if (!range) return;
+    range.from = tr.mapping.map(range.from, 1);
+    range.to = tr.mapping.map(range.to, -1);
+    if (range.to < range.from) range.to = range.from;
+  }
+
+  private transientBlankNodes(): Array<{
+    node: PMNode;
+    from: number;
+    to: number;
+  }> {
+    return this.transientBlanks
+      ? topLevelRangeNodes(this.view.state.doc, this.transientBlanks)
+      : [];
+  }
+
+  private transientBlankHasContent(): boolean {
+    const range = this.transientBlanks;
+    if (!range) return false;
+    const nodes = this.transientBlankNodes();
+    if (nodes.length !== range.count) return true;
+    return nodes.some(
+      ({ node }) => node.type.name !== "paragraph" || node.content.size > 0,
+    );
+  }
+
+  private selectionInsideTransient(selection: Selection): boolean {
+    const range = this.transientBlanks;
+    if (!range || selection.empty === false) return false;
+    return selection.from >= range.from && selection.from < range.to;
+  }
+
+  /** Remove generated empty paragraphs without creating a host edit. */
+  private discardTransientBlanksInState(): boolean {
+    const range = this.transientBlanks;
+    if (!range) return false;
+    const nodes = this.transientBlankNodes();
+    if (
+      nodes.length !== range.count ||
+      nodes.some(
+        ({ node }) => node.type.name !== "paragraph" || node.content.size > 0,
+      )
+    ) {
+      this.transientBlanks = null;
+      return false;
+    }
+    const from = nodes[0]?.from;
+    const to = nodes.at(-1)?.to;
+    this.transientBlanks = null;
+    if (from === undefined || to === undefined || to <= from) return false;
+    let transaction = this.view.state.tr
+      .delete(from, to)
+      .setMeta(TRANSIENT_BLANK_META, {
+        kind: "discard",
+        from,
+        to,
+        count: nodes.length,
+      } satisfies TransientBlankTransactionMeta);
+    const starter = getStarterState(this.view.state);
+    if (starter?.active && starter.untouched)
+      transaction = setStarterMeta(transaction, {
+        active: true,
+        untouched: true,
+        preserveSource: true,
+      });
+    this.view.updateState(this.view.state.apply(transaction));
+    return true;
   }
 
   private currentMarkdown(): string {
     return this.serializeCurrent() ?? this.lastValidMarkdown;
   }
 
+  private documentForSerialization(): PMNode {
+    const range = this.transientBlanks;
+    if (!range || this.transientBlankHasContent()) return this.view.state.doc;
+    return removeTopLevelRange(this.view.state.doc, range);
+  }
+
   private serializeCurrent(): string | null {
     if (this.parseError && this.preservedSource !== null)
       return this.preservedSource;
     try {
-      const markdown = this.core.serializeMarkdown(
-        this.view.state.doc,
+      const serialized = this.core.serializeMarkdown(
+        this.documentForSerialization(),
         this.previousSnapshot,
+      );
+      const markdown = serializeStarterSource(
+        this.view.state,
+        this.starterOriginalSource,
+        serialized,
       );
       this.lastValidMarkdown = markdown;
       return markdown;
@@ -1224,9 +1990,14 @@ export class MarkdownEditorApp {
       if (this.parseError && this.preservedSource !== null)
         return this.preservedSource;
       try {
-        return this.core.serializeMarkdown(
-          this.view.state.doc,
+        const serialized = this.core.serializeMarkdown(
+          this.documentForSerialization(),
           this.previousSnapshot,
+        );
+        return serializeStarterSource(
+          this.view.state,
+          this.starterOriginalSource,
+          serialized,
         );
       } catch {
         return markdown;
@@ -1246,6 +2017,11 @@ export class MarkdownEditorApp {
       else this.previewEl.textContent = freshMarkdown;
     }
     this.resolveDisplayImages(this.previewEl);
+    this.previewEnhancer?.dispose();
+    this.previewEnhancer =
+      this.mode === "preview"
+        ? enhanceRenderedContent(this.previewEl)
+        : undefined;
     // ImageNodeView ignores this display-only attribute mutation so the
     // absolute webview URI never leaks into the ProseMirror document.
     this.resolveDisplayImages(this.view.dom);
@@ -1286,7 +2062,7 @@ export class MarkdownEditorApp {
       : "warning";
     this.root.setAttribute("data-compatibility-level", level);
     const icon = makeElement("span", {
-      class: "mw-compatibility-icon",
+      class: "mm-compatibility-icon",
       "aria-hidden": "true",
     });
     icon.textContent = level === "error" ? "!" : "⚠";
@@ -1352,7 +2128,9 @@ export class MarkdownEditorApp {
     for (const element of Array.from(
       this.root.querySelectorAll<
         HTMLButtonElement | HTMLSelectElement | HTMLInputElement
-      >(".mw-tool-button, .mw-heading-select, .mw-code-language"),
+      >(
+        ".mm-tool-button, .mm-emoji-button, .mm-heading-select, .mm-code-language, .mm-floating-button",
+      ),
     )) {
       element.disabled =
         editingDisabled ||
@@ -1360,11 +2138,18 @@ export class MarkdownEditorApp {
         (element === this.codeLanguageInput && element.hidden);
     }
     for (const button of Array.from(
-      this.root.querySelectorAll<HTMLButtonElement>(".mw-mode-button"),
+      this.root.querySelectorAll<HTMLButtonElement>(".mm-mode-button"),
     )) {
       button.disabled =
         !this.initialized ||
-        (this.previewOnly && button.dataset.mode !== "preview");
+        (this.previewOnly && button.dataset.mode === "rich");
+    }
+    if (this.profileSelect) {
+      this.profileSelect.disabled =
+        !this.initialized ||
+        this.syncPaused ||
+        this.composing ||
+        Boolean(this.pendingProfile?.operationId);
     }
     const inTable =
       this.initialized &&
@@ -1372,14 +2157,33 @@ export class MarkdownEditorApp {
       this.mode === "rich" &&
       isInTable(this.view.state);
     for (const button of Array.from(
-      this.root.querySelectorAll<HTMLButtonElement>(".mw-table-menu button"),
+      this.root.querySelectorAll<HTMLButtonElement>(".mm-table-toolbar-button"),
     ))
-      button.disabled =
-        !inTable ||
-        (button.dataset.gfmOnly === "true" && this.profile === "commonmark");
+      button.disabled = !inTable || this.profile === "commonmark";
+    if (editingDisabled) {
+      this.closeWritingPopups();
+      this.closeEmojiPicker();
+      this.closeProfileFeatureDialog();
+    }
+    this.updateProfileToolbar();
+    if (this.selectionToolbar) {
+      this.selectionToolbar.hidden = editingDisabled;
+      this.selectionToolbar.setAttribute(
+        "aria-hidden",
+        String(editingDisabled),
+      );
+      if (editingDisabled) this.clearSelectionToolbarSelection();
+    }
+    if (editingDisabled && this.emptyLineButton)
+      this.emptyLineButton.hidden = true;
+    this.updateTableToolbar();
   }
 
   private setConflict(message: string): void {
+    if (this.tableDialogOpen) this.closeTableDialog(message);
+    this.closeWritingPopups();
+    this.closeEmojiPicker();
+    this.closeProfileFeatureDialog();
     this.conflict = true;
     this.syncPaused = true;
     this.statusEl.title = message;
@@ -1396,11 +2200,109 @@ export class MarkdownEditorApp {
     this.statusEl.textContent = message;
   }
 
+  private installTooltipHandlers(): void {
+    this.root.addEventListener(
+      "pointerover",
+      this.tooltipPointerOverHandler,
+      true,
+    );
+    this.root.addEventListener(
+      "pointerout",
+      this.tooltipPointerOutHandler,
+      true,
+    );
+    this.root.addEventListener("focusin", this.tooltipFocusInHandler, true);
+    this.root.addEventListener("focusout", this.tooltipFocusOutHandler, true);
+    this.root.addEventListener(
+      "pointerdown",
+      this.tooltipPointerDownHandler,
+      true,
+    );
+    this.root.addEventListener("click", this.tooltipClickHandler, true);
+    this.root.addEventListener("scroll", this.tooltipScrollHandler, true);
+    window.addEventListener("scroll", this.tooltipScrollHandler, true);
+    document.addEventListener("keydown", this.tooltipKeyDownHandler, true);
+  }
+
+  private tooltipTargetFor(target: EventTarget | null): HTMLElement | null {
+    if (!(target instanceof Element)) return null;
+    if (target === this.tooltip || this.tooltip?.contains(target)) return null;
+    const candidate = target.closest<HTMLElement>("[data-tooltip]");
+    if (!candidate || !this.root.contains(candidate)) return null;
+    return candidate.dataset.tooltip?.trim() ? candidate : null;
+  }
+
+  private setTooltip(element: HTMLElement, label: string): void {
+    element.dataset.tooltip = label;
+    element.removeAttribute("title");
+  }
+
+  private showTooltip(target: HTMLElement): void {
+    const label = target.dataset.tooltip?.trim();
+    if (!label || this.destroyed) return;
+    if (this.tooltipTarget !== target) {
+      this.hideTooltip();
+      this.tooltipTarget = target;
+      this.tooltipPreviousDescribedBy = target.getAttribute("aria-describedby");
+      const describedBy = (this.tooltipPreviousDescribedBy ?? "")
+        .split(/\s+/)
+        .filter(Boolean);
+      if (!describedBy.includes(this.tooltip.id))
+        target.setAttribute(
+          "aria-describedby",
+          [...describedBy, this.tooltip.id].join(" "),
+        );
+    }
+    this.tooltip.textContent = label;
+    this.tooltip.hidden = false;
+    this.tooltip.setAttribute("aria-hidden", "false");
+    this.positionTooltip(target);
+  }
+
+  private hideTooltip(): void {
+    if (!this.tooltip) return;
+    if (this.tooltipTarget) {
+      if (this.tooltipPreviousDescribedBy === null)
+        this.tooltipTarget.removeAttribute("aria-describedby");
+      else
+        this.tooltipTarget.setAttribute(
+          "aria-describedby",
+          this.tooltipPreviousDescribedBy,
+        );
+    }
+    this.tooltipTarget = null;
+    this.tooltipPreviousDescribedBy = null;
+    this.tooltip.hidden = true;
+    this.tooltip.setAttribute("aria-hidden", "true");
+    this.tooltip.textContent = "";
+  }
+
+  private positionTooltip(target: HTMLElement): void {
+    const targetRect = target.getBoundingClientRect();
+    const tooltipRect = this.tooltip.getBoundingClientRect();
+    const viewportWidth =
+      window.innerWidth || document.documentElement.clientWidth;
+    const viewportHeight =
+      window.innerHeight || document.documentElement.clientHeight;
+    const width =
+      tooltipRect.width ||
+      Math.min(320, Math.max(72, target.dataset.tooltip?.length ?? 72));
+    const height = tooltipRect.height || 28;
+    let left = targetRect.left + targetRect.width / 2 - width / 2;
+    let top = targetRect.bottom + 6;
+    if (viewportHeight > 0 && top + height > viewportHeight - 6)
+      top = targetRect.top - height - 6;
+    left = Math.max(6, Math.min(left, Math.max(6, viewportWidth - width - 6)));
+    top = Math.max(6, Math.min(top, Math.max(6, viewportHeight - height - 6)));
+    this.tooltip.style.left = `${Math.round(left)}px`;
+    this.tooltip.style.top = `${Math.round(top)}px`;
+  }
+
   private buildRecoveryDialog(): void {
     const dialog = document.createElement("dialog");
-    dialog.className = "mw-input-dialog mw-recovery-dialog";
+    dialog.className = "mm-input-dialog mm-recovery-dialog";
     const form = document.createElement("form");
-    form.className = "mw-dialog-form";
+    form.className = "mm-dialog-form";
     const title = document.createElement("h2");
     title.textContent = "Review recovered draft";
     const help = document.createElement("p");
@@ -1408,10 +2310,10 @@ export class MarkdownEditorApp {
       "The draft is kept separately until you choose an action.";
     this.recoveryText = document.createElement("textarea");
     this.recoveryText.readOnly = true;
-    this.recoveryText.className = "mw-recovery-text";
+    this.recoveryText.className = "mm-recovery-text";
     this.recoveryText.setAttribute("aria-label", "Recovered Markdown draft");
     const actions = document.createElement("div");
-    actions.className = "mw-dialog-actions";
+    actions.className = "mm-dialog-actions";
     const close = document.createElement("button");
     close.type = "button";
     close.textContent = "Close";
@@ -1453,39 +2355,31 @@ export class MarkdownEditorApp {
 
   private buildToolbar(): HTMLElement {
     const toolbar = makeElement("div", {
-      class: "mw-toolbar",
+      class: "mm-toolbar",
       role: "toolbar",
       "aria-label": "Markdown formatting",
     });
-    const modeGroup = makeElement("div", {
-      class: "mw-mode-group",
-      role: "tablist",
-      "aria-label": "View",
+    const primary = makeElement("div", {
+      class: "mm-toolbar-primary",
+      "data-toolbar-row": "primary",
     });
-    for (const [mode, label, shortcut] of [
-      ["rich", "Rich", ""],
-      ["preview", "Preview", ""],
-      ["source", "Source", ""],
-    ] as const) {
-      const button = makeElement("button", {
-        type: "button",
-        class: "mw-mode-button",
-        role: "tab",
-        "data-mode": mode,
-        "aria-label": `${label} view`,
-      }) as HTMLButtonElement;
-      button.textContent = label;
-      if (shortcut) button.title = shortcut;
-      button.addEventListener("mousedown", (event) => event.preventDefault());
-      button.addEventListener("click", () => this.setMode(mode));
-      modeGroup.append(button);
-      this.modes.set(mode, button);
-    }
-    toolbar.append(modeGroup);
-    const separator = () =>
-      toolbar.append(
+    toolbar.append(primary);
+    const sourceButton = makeElement("button", {
+      type: "button",
+      class: "mm-mode-button mm-source-button",
+      "data-mode": "source",
+      "aria-label": "Source view",
+      "data-tooltip": "Source view",
+    }) as HTMLButtonElement;
+    sourceButton.textContent = "Source";
+    sourceButton.addEventListener("mousedown", (event) =>
+      event.preventDefault(),
+    );
+    sourceButton.addEventListener("click", () => this.requestSource());
+    const separator = (parent: HTMLElement = primary): void =>
+      parent.append(
         makeElement("span", {
-          class: "mw-toolbar-separator",
+          class: "mm-toolbar-separator",
           "aria-hidden": "true",
         }),
       );
@@ -1494,25 +2388,73 @@ export class MarkdownEditorApp {
       title: string,
       command: () => void,
       testId?: string,
-    ) => {
+      parent: HTMLElement = primary,
+      menuItem = false,
+      iconName?: ToolbarIconName,
+    ): HTMLButtonElement => {
       const button = makeElement("button", {
         type: "button",
-        class: "mw-tool-button",
-        title,
+        class: "mm-tool-button",
+        "data-tooltip": title,
         "aria-label": title,
+        ...(menuItem ? { role: "menuitem" } : {}),
         ...(testId ? { "data-testid": testId } : {}),
       }) as HTMLButtonElement;
-      button.textContent = label;
+      if (iconName) appendToolbarIcon(button, iconName);
+      else button.textContent = label;
       button.addEventListener("mousedown", (event) => {
         event.preventDefault();
-        this.view.focus();
+        // A menu item's mousedown must not focus the ProseMirror surface:
+        // doing so fires the document focusin guard and closes the menu before
+        // the browser can deliver the corresponding click. Selection restore
+        // happens synchronously in the click handler instead.
+        if (!menuItem) this.view.focus();
       });
-      button.addEventListener("click", command);
-      toolbar.append(button);
+      button.addEventListener("click", () => {
+        const guardedSelection = this.popupSelection;
+        if (
+          menuItem &&
+          guardedSelection &&
+          !this.restoreWritingPopupSelection()
+        ) {
+          this.closeWritingPopups();
+          this.setNotice(
+            "The document changed while this menu was open; nothing was applied.",
+            "error",
+          );
+          return;
+        }
+        if (!menuItem) this.restoreWritingPopupSelection();
+        command();
+        if (menuItem && !this.tableDialogOpen) this.closeWritingPopups();
+      });
+      parent.append(button);
       return button;
     };
+    this.profileSelect = document.createElement("select");
+    this.profileSelect.className = "mm-profile-select";
+    this.setTooltip(this.profileSelect, "Markdown profile");
+    this.profileSelect.setAttribute("aria-label", "Markdown profile");
+    for (const [value, label] of [
+      ["github", "GitHub"],
+      ["gitlab", "GitLab"],
+      ["commonmark", "CommonMark"],
+    ] as const) {
+      const option = document.createElement("option");
+      option.value = value;
+      option.textContent = label;
+      this.profileSelect.append(option);
+    }
+    this.updateProfileSelect();
+    this.profileSelect.addEventListener("change", () => {
+      this.requestProfileChange(this.profileSelect.value as DocumentProfile);
+    });
+    primary.append(this.profileSelect);
+    separator();
+
     const headingSelect = document.createElement("select");
-    headingSelect.className = "mw-heading-select";
+    headingSelect.className = "mm-heading-select";
+    this.setTooltip(headingSelect, "Heading level");
     headingSelect.setAttribute("aria-label", "Heading level");
     for (const [value, label] of [
       ["p", "Text"],
@@ -1529,34 +2471,59 @@ export class MarkdownEditorApp {
       headingSelect.append(option);
     }
     headingSelect.addEventListener("mousedown", (event) => {
-      event.preventDefault();
-      this.view.focus();
+      // Keep the editor selection while allowing the native select to open.
+      // Preventing this event makes the control impossible to use by mouse.
+      void event;
+      const { from, to } = this.view.state.selection;
+      this.savedSelection = { from, to };
+      this.headingSelection = this.view.state.selection;
     });
+    headingSelect.addEventListener(
+      "focus",
+      () => (this.headingSelection = this.view.state.selection),
+    );
     headingSelect.addEventListener("change", () => {
-      this.view.focus();
+      if (!this.restoreSelectionObject(this.headingSelection))
+        this.view.focus();
+      this.headingSelection = null;
       const value = headingSelect.value;
       const command =
         value === "p"
           ? commandForBlock("paragraph")
           : commandForBlock("heading", { level: Number(value) });
-      command(this.view.state, (tr) => this.dispatchTransaction(tr));
+      command(this.view.state, (tr) => {
+        const starter = getStarterState(this.view.state);
+        if (value === "p" && starter?.active)
+          setStarterMeta(tr, {
+            active: false,
+            untouched: true,
+            preserveSource: true,
+          });
+        this.dispatchTransaction(tr);
+      });
     });
-    toolbar.append(headingSelect);
+    primary.append(headingSelect);
     separator();
     addButton(
-      "B",
+      "",
       "Bold",
       () => this.runCommand(commandForMark("strong", this.schema)),
       "toolbar-bold",
+      primary,
+      false,
+      "bold",
     );
     addButton(
-      "I",
+      "",
       "Italic",
       () => this.runCommand(commandForMark("em", this.schema)),
       "toolbar-italic",
+      primary,
+      false,
+      "italic",
     );
     const strikeButton = addButton(
-      "S",
+      "",
       "Strikethrough",
       () => {
         if (this.profile === "commonmark") {
@@ -1566,81 +2533,140 @@ export class MarkdownEditorApp {
         this.runCommand(commandForMark("strike", this.schema));
       },
       "toolbar-strike",
+      primary,
+      false,
+      "strikethrough",
     );
     strikeButton.dataset.gfmOnly = "true";
     addButton(
-      "`",
+      "",
       "Inline code",
       () => this.runCommand(commandForMark("code", this.schema)),
       "toolbar-code",
+      primary,
+      false,
+      "inline-code",
     );
-    addButton("Link", "Insert link", () => this.insertLink());
-    addButton("Image", "Insert image", () => this.insertImage());
-    separator();
-    addButton("• List", "Bullet list", () =>
-      this.runListCommand("bullet_list"),
+    addButton(
+      "",
+      "Insert link",
+      () => this.insertLink(),
+      "toolbar-link",
+      primary,
+      false,
+      "link",
     );
-    addButton("1. List", "Ordered list", () =>
-      this.runListCommand("ordered_list"),
+    addButton(
+      "",
+      "Insert image",
+      () => this.insertImage(),
+      "toolbar-image",
+      primary,
+      false,
+      "image",
     );
-    const taskButton = addButton("☑ Task", "Task list", () =>
-      this.runTaskList(),
+    const emojiButton = makeElement("button", {
+      type: "button",
+      class: "mm-emoji-button",
+      "data-tooltip": "Insert emoji",
+      "aria-label": "Insert emoji",
+      "data-testid": "toolbar-emoji",
+    }) as HTMLButtonElement;
+    emojiButton.textContent = "😊";
+    emojiButton.addEventListener("mousedown", (event) => {
+      event.preventDefault();
+      this.captureEmojiSelection();
+    });
+    emojiButton.addEventListener("click", () =>
+      this.openEmojiPicker(emojiButton),
+    );
+    primary.append(emojiButton);
+    this.buildEmojiPicker(toolbar, emojiButton);
+    const bulletListButton = addButton(
+      "",
+      "Bullet list",
+      () => this.runListCommand("bullet_list"),
+      "toolbar-bullet-list",
+      primary,
+      false,
+      "bullet-list",
+    );
+    bulletListButton.dataset.listKind = "bullet";
+    const orderedListButton = addButton(
+      "",
+      "Ordered list",
+      () => this.runListCommand("ordered_list"),
+      "toolbar-ordered-list",
+      primary,
+      false,
+      "ordered-list",
+    );
+    orderedListButton.dataset.listKind = "ordered";
+    const taskButton = addButton(
+      "",
+      "Task list",
+      () => this.runTaskList(),
+      "toolbar-task-list",
+      primary,
+      false,
+      "checklist",
     );
     taskButton.dataset.gfmOnly = "true";
-    addButton("Quote", "Block quote", () =>
-      this.runCommand(commandForBlock("blockquote")),
+    taskButton.dataset.listKind = "task";
+    addButton(
+      "",
+      "Block quote",
+      () => this.runCommand(commandForBlock("blockquote")),
+      "toolbar-quote",
+      primary,
+      false,
+      "blockquote",
     );
-    addButton("Code", "Code block", () =>
-      this.runCommand(commandForBlock("code_block", { params: "" })),
+    addButton(
+      "",
+      "Code block",
+      () => this.runCommand(commandForBlock("code_block", { params: "" })),
+      "toolbar-code-block",
+      primary,
+      false,
+      "code-block",
     );
-    const insertTableButton = addButton("Table", "Insert table", () =>
-      this.insertTable(),
+    const insertTableButton = addButton(
+      "",
+      "Insert table",
+      () => this.openTableDialog(insertTableButton),
+      "toolbar-table",
+      primary,
+      false,
+      "table",
     );
     insertTableButton.dataset.gfmOnly = "true";
+    addButton(
+      "",
+      "Horizontal rule",
+      () => this.insertHorizontalRule(),
+      "toolbar-horizontal-rule",
+      primary,
+      false,
+      "divider",
+    );
+    addButton(
+      "",
+      "Format Markdown",
+      () => this.formatDocument(),
+      "toolbar-format",
+      primary,
+      false,
+      "format",
+    );
     separator();
-    addButton("↶", "Undo", () => this.sendHostCommand("undo"), "toolbar-undo");
-    addButton("↷", "Redo", () => this.sendHostCommand("redo"), "toolbar-redo");
-    addButton("Format", "Format Markdown", () => this.formatDocument());
-    const tableMenu = makeElement("details", { class: "mw-table-menu" });
-    const summary = makeElement("summary");
-    summary.textContent = "Table";
-    tableMenu.append(summary);
-    const menuItems: Array<[string, () => boolean]> = [
-      ["Add row above", () => this.runTableCommand(addRowBefore)],
-      ["Add row below", () => this.runTableCommand(addRowAfter)],
-      ["Delete row", () => this.runTableCommand(deleteRow)],
-      ["Add column left", () => this.runTableCommand(addColumnBefore)],
-      ["Add column right", () => this.runTableCommand(addColumnAfter)],
-      ["Delete column", () => this.runTableCommand(deleteColumn)],
-      ["Align left", () => this.runAlignment("left")],
-      ["Align center", () => this.runAlignment("center")],
-      ["Align right", () => this.runAlignment("right")],
-    ];
-    const menu = makeElement("div", {
-      class: "mw-table-menu-items",
-      role: "menu",
-    });
-    for (const [label, command] of menuItems) {
-      const item = makeElement("button", {
-        type: "button",
-        role: "menuitem",
-      }) as HTMLButtonElement;
-      item.textContent = label;
-      item.dataset.gfmOnly = "true";
-      item.addEventListener("mousedown", (event) => event.preventDefault());
-      item.addEventListener("click", () => command());
-      menu.append(item);
-    }
-    tableMenu.append(menu);
-    toolbar.append(tableMenu);
-
     const makeField = (
       labelText: string,
       type: string,
       placeholder: string,
     ): HTMLInputElement => {
       const label = document.createElement("label");
-      label.className = "mw-dialog-field";
+      label.className = "mm-dialog-field";
       const caption = document.createElement("span");
       caption.textContent = labelText;
       const input = document.createElement("input");
@@ -1650,17 +2676,17 @@ export class MarkdownEditorApp {
       return input;
     };
     const link = document.createElement("dialog");
-    link.className = "mw-input-dialog";
-    link.setAttribute("aria-labelledby", "mw-link-dialog-title");
+    link.className = "mm-input-dialog";
+    link.setAttribute("aria-labelledby", "mm-link-dialog-title");
     const linkForm = document.createElement("form");
-    linkForm.className = "mw-dialog-form";
+    linkForm.className = "mm-dialog-form";
     const linkTitle = document.createElement("h2");
-    linkTitle.id = "mw-link-dialog-title";
+    linkTitle.id = "mm-link-dialog-title";
     linkTitle.textContent = "Insert link";
     this.linkUrlInput = makeField("URL", "url", "https://example.com");
     this.linkTextInput = makeField("Text", "text", "Selected text");
     const linkActions = document.createElement("div");
-    linkActions.className = "mw-dialog-actions";
+    linkActions.className = "mm-dialog-actions";
     const linkCancel = document.createElement("button");
     linkCancel.type = "button";
     linkCancel.textContent = "Cancel";
@@ -1698,12 +2724,12 @@ export class MarkdownEditorApp {
     this.linkDialog = link;
 
     const image = document.createElement("dialog");
-    image.className = "mw-input-dialog";
-    image.setAttribute("aria-labelledby", "mw-image-dialog-title");
+    image.className = "mm-input-dialog";
+    image.setAttribute("aria-labelledby", "mm-image-dialog-title");
     const imageForm = document.createElement("form");
-    imageForm.className = "mw-dialog-form";
+    imageForm.className = "mm-dialog-form";
     const imageTitle = document.createElement("h2");
-    imageTitle.id = "mw-image-dialog-title";
+    imageTitle.id = "mm-image-dialog-title";
     imageTitle.textContent = "Insert image";
     this.imageUrlInput = makeField(
       "Image URL",
@@ -1712,7 +2738,7 @@ export class MarkdownEditorApp {
     );
     this.imageAltInput = makeField("Alt text", "text", "Description");
     const imageActions = document.createElement("div");
-    imageActions.className = "mw-dialog-actions";
+    imageActions.className = "mm-dialog-actions";
     const imageCancel = document.createElement("button");
     imageCancel.type = "button";
     imageCancel.textContent = "Cancel";
@@ -1740,10 +2766,10 @@ export class MarkdownEditorApp {
     this.imageDialog = image;
 
     this.codeLanguageInput = document.createElement("input");
-    this.codeLanguageInput.className = "mw-code-language";
+    this.codeLanguageInput.className = "mm-code-language";
     this.codeLanguageInput.type = "text";
     this.codeLanguageInput.placeholder = "lang";
-    this.codeLanguageInput.title = "Code block language";
+    this.setTooltip(this.codeLanguageInput, "Code block language");
     this.codeLanguageInput.setAttribute("aria-label", "Code block language");
     this.codeLanguageInput.addEventListener("mousedown", () => {
       const { from, to } = this.view.state.selection;
@@ -1752,8 +2778,1945 @@ export class MarkdownEditorApp {
     this.codeLanguageInput.addEventListener("change", () =>
       this.setCodeLanguage(this.codeLanguageInput.value.trim()),
     );
-    toolbar.append(this.codeLanguageInput);
+    primary.append(this.codeLanguageInput);
+    this.buildTableDialog(toolbar);
+    this.tableToolbar = this.buildTableToolbar();
+    toolbar.append(this.tableToolbar);
+    this.profileToolbar = this.buildProfileToolbar();
+    toolbar.append(this.profileToolbar);
+    this.buildProfileFeatureDialog(toolbar);
+    primary.append(sourceButton);
     return toolbar;
+  }
+
+  private buildProfileToolbar(): HTMLElement {
+    const toolbar = makeElement("div", {
+      class: "mm-profile-toolbar",
+      role: "toolbar",
+      "aria-label": "GitHub and GitLab features",
+      "aria-hidden": "true",
+      hidden: "true",
+    });
+    const label = makeElement("span", {
+      class: "mm-profile-toolbar-label",
+      "data-profile-toolbar-label": "true",
+    });
+    label.textContent = "GitHub";
+    toolbar.append(label);
+    const shortLabels: Record<ProfileFeatureId, string> = {
+      alert: "Alert",
+      details: "Details",
+      math: "Math",
+      mermaid: "Mermaid",
+      "gitlab-toc": "TOC",
+      "gitlab-description-list": "Definition",
+      "gitlab-diff-added": "+ Diff",
+      "gitlab-diff-removed": "− Diff",
+    };
+    for (const feature of getProfileFeatures("gitlab")) {
+      const button = makeElement("button", {
+        type: "button",
+        class: "mm-profile-feature-button",
+        "data-profile-feature": feature.id,
+        "data-tooltip": feature.description,
+        "aria-label": feature.label,
+      }) as HTMLButtonElement;
+      button.textContent = shortLabels[feature.id] ?? feature.label;
+      button.addEventListener("mousedown", (event) => {
+        if (!this.canUseProfileFeature(feature)) return;
+        event.preventDefault();
+        this.captureProfileFeatureSelection();
+      });
+      button.addEventListener("click", () => {
+        if (!this.canUseProfileFeature(feature)) return;
+        if (feature.id === "gitlab-toc") {
+          this.runProfileFeature(feature.id);
+        } else {
+          this.openProfileFeatureDialog(feature.id, button);
+        }
+      });
+      toolbar.append(button);
+    }
+    return toolbar;
+  }
+
+  private buildProfileFeatureDialog(container: HTMLElement): void {
+    const dialog = document.createElement("dialog");
+    dialog.className = "mm-input-dialog mm-profile-feature-dialog";
+    dialog.setAttribute("aria-labelledby", "mm-profile-feature-dialog-title");
+    dialog.setAttribute("data-feature-dialog", "true");
+    const form = document.createElement("form");
+    form.className = "mm-dialog-form";
+    const title = document.createElement("h2");
+    title.id = "mm-profile-feature-dialog-title";
+    title.textContent = "Insert feature";
+    const alertField = document.createElement("label");
+    alertField.className = "mm-dialog-field";
+    alertField.dataset.featureFieldContainer = "alert-type";
+    const alertCaption = document.createElement("span");
+    alertCaption.textContent = "Alert type";
+    this.profileFeatureAlertType = document.createElement("select");
+    this.profileFeatureAlertType.dataset.featureField = "alert-type";
+    this.profileFeatureAlertType.setAttribute("aria-label", "Alert type");
+    for (const kind of [
+      "NOTE",
+      "TIP",
+      "IMPORTANT",
+      "WARNING",
+      "CAUTION",
+    ] as const) {
+      const option = document.createElement("option");
+      option.value = kind;
+      option.textContent = kind;
+      this.profileFeatureAlertType.append(option);
+    }
+    alertField.append(alertCaption, this.profileFeatureAlertType);
+
+    const titleField = document.createElement("label");
+    titleField.className = "mm-dialog-field";
+    titleField.dataset.featureFieldContainer = "title";
+    const titleCaption = document.createElement("span");
+    titleCaption.textContent = "Title";
+    this.profileFeatureTitleInput = document.createElement("input");
+    this.profileFeatureTitleInput.type = "text";
+    this.profileFeatureTitleInput.dataset.featureField = "title";
+    this.profileFeatureTitleInput.setAttribute("aria-label", "Title");
+    titleField.append(titleCaption, this.profileFeatureTitleInput);
+
+    const termField = document.createElement("label");
+    termField.className = "mm-dialog-field";
+    termField.dataset.featureFieldContainer = "term";
+    const termCaption = document.createElement("span");
+    termCaption.textContent = "Term";
+    this.profileFeatureTermInput = document.createElement("input");
+    this.profileFeatureTermInput.type = "text";
+    this.profileFeatureTermInput.dataset.featureField = "term";
+    this.profileFeatureTermInput.setAttribute("aria-label", "Term");
+    termField.append(termCaption, this.profileFeatureTermInput);
+
+    const bodyField = document.createElement("label");
+    bodyField.className = "mm-dialog-field";
+    bodyField.dataset.featureFieldContainer = "body";
+    this.profileFeatureBodyLabel = document.createElement("span");
+    this.profileFeatureBodyLabel.textContent = "Body";
+    this.profileFeatureBodyInput = document.createElement("textarea");
+    this.profileFeatureBodyInput.rows = 8;
+    this.profileFeatureBodyInput.required = true;
+    this.profileFeatureBodyInput.dataset.featureField = "body";
+    this.profileFeatureBodyInput.setAttribute("aria-label", "Body");
+    bodyField.append(
+      this.profileFeatureBodyLabel,
+      this.profileFeatureBodyInput,
+    );
+    this.profileFeatureError = makeElement("p", {
+      class: "mm-profile-feature-error",
+      "data-feature-error": "true",
+      role: "alert",
+      hidden: "true",
+    });
+    this.profileFeatureError.textContent = "";
+    bodyField.append(this.profileFeatureError);
+
+    const actions = document.createElement("div");
+    actions.className = "mm-dialog-actions";
+    const cancel = document.createElement("button");
+    cancel.type = "button";
+    cancel.textContent = "Cancel";
+    cancel.addEventListener("click", () => this.closeProfileFeatureDialog());
+    const apply = document.createElement("button");
+    apply.type = "submit";
+    apply.textContent = "Insert";
+    actions.append(cancel, apply);
+    form.append(title, alertField, titleField, termField, bodyField, actions);
+    form.addEventListener("submit", (event) => {
+      event.preventDefault();
+      this.commitProfileFeatureDialog();
+    });
+    dialog.addEventListener("cancel", (event) => {
+      event.preventDefault();
+      this.closeProfileFeatureDialog();
+    });
+    dialog.addEventListener("close", () => {
+      if (this.profileFeatureDialogOpen)
+        this.closeProfileFeatureDialog(undefined, false);
+    });
+    dialog.append(form);
+    container.append(dialog);
+    this.profileFeatureDialog = dialog;
+  }
+
+  private canUseProfileFeature(
+    feature: ProfileFeatureDefinition | ProfileFeatureId,
+  ): boolean {
+    const definition =
+      typeof feature === "string"
+        ? getProfileFeatures(this.profile).find(
+            (candidate) => candidate.id === feature,
+          )
+        : feature;
+    if (
+      !definition ||
+      !definition.profiles.includes(this.profile) ||
+      !this.initialized ||
+      this.previewOnly ||
+      this.mode !== "rich" ||
+      this.parseError ||
+      this.conflict ||
+      this.syncPaused ||
+      this.composing ||
+      Boolean(this.pendingProfile)
+    )
+      return false;
+    if (definition.kind === "inline") {
+      const selection = this.view.state.selection;
+      let inCodeBlock = false;
+      for (let depth = selection.$from.depth; depth > 0; depth -= 1) {
+        if (selection.$from.node(depth).type.name === "code_block") {
+          inCodeBlock = true;
+          break;
+        }
+      }
+      if (
+        !(selection instanceof TextSelection) ||
+        selection.$from.parent !== selection.$to.parent ||
+        inCodeBlock
+      )
+        return false;
+    }
+    return true;
+  }
+
+  private captureProfileFeatureSelection(): boolean {
+    if (
+      !this.initialized ||
+      this.previewOnly ||
+      this.mode !== "rich" ||
+      this.parseError ||
+      this.conflict ||
+      this.syncPaused ||
+      this.composing ||
+      this.pendingProfile
+    )
+      return false;
+    this.profileFeatureSelection = this.view.state.selection;
+    this.profileFeatureDocumentGeneration = this.documentGeneration;
+    this.profileFeatureProfile = this.profile;
+    return true;
+  }
+
+  private selectedProfileFeatureText(): string {
+    const selection = this.profileFeatureSelection;
+    if (
+      !selection ||
+      !(selection instanceof TextSelection) ||
+      selection.empty ||
+      selection.$from.doc !== this.view.state.doc
+    )
+      return "";
+    return this.view.state.doc.textBetween(
+      selection.from,
+      selection.to,
+      "\n",
+      "\n",
+    );
+  }
+
+  private profileFeatureDefinition(
+    id: ProfileFeatureId,
+  ): ProfileFeatureDefinition | null {
+    return (
+      getProfileFeatures(this.profile).find((feature) => feature.id === id) ??
+      null
+    );
+  }
+
+  private openProfileFeatureDialog(
+    id: ProfileFeatureId,
+    invokingButton: HTMLButtonElement,
+  ): void {
+    const feature = this.profileFeatureDefinition(id);
+    if (!feature || !this.canUseProfileFeature(feature)) {
+      this.setNotice(
+        "This feature is unavailable in the current editing mode.",
+        "error",
+      );
+      return;
+    }
+    if (!this.captureProfileFeatureSelection()) return;
+    this.closeWritingPopups();
+    this.closeEmojiPicker();
+    this.profileFeatureId = id;
+    this.profileFeatureInvokingButton = invokingButton;
+    this.profileFeatureDialogOpen = true;
+    this.profileFeatureDialog.dataset.profileFeature = id;
+    this.profileFeatureDialog.querySelector("h2")!.textContent =
+      "Insert " + feature.label;
+    this.profileFeatureAlertType.parentElement!.hidden = id !== "alert";
+    this.profileFeatureTitleInput.parentElement!.hidden = id !== "details";
+    this.profileFeatureTermInput.parentElement!.hidden =
+      id !== "gitlab-description-list";
+    const selected = this.selectedProfileFeatureText();
+    this.profileFeatureBodyInput.value = selected;
+    this.profileFeatureError.hidden = true;
+    this.profileFeatureError.textContent = "";
+    this.profileFeatureTitleInput.value = "Details";
+    this.profileFeatureTermInput.value = "Term";
+    this.profileFeatureAlertType.value = "NOTE";
+    const bodyLabel =
+      id === "math"
+        ? "Expression"
+        : id === "mermaid"
+          ? "Diagram source"
+          : id === "gitlab-description-list"
+            ? "Definition"
+            : id === "gitlab-diff-added" || id === "gitlab-diff-removed"
+              ? "Text"
+              : "Body";
+    this.profileFeatureBodyLabel.textContent = bodyLabel;
+    this.profileFeatureBodyInput.setAttribute("aria-label", bodyLabel);
+    if (!selected) {
+      if (id === "alert") this.profileFeatureBodyInput.value = "Alert details";
+      else if (id === "math") this.profileFeatureBodyInput.value = "x = y";
+      else if (id === "mermaid")
+        this.profileFeatureBodyInput.value =
+          "flowchart TD\n    A[Start] --> B[End]";
+      else if (id === "gitlab-description-list")
+        this.profileFeatureBodyInput.value = "Description";
+      else if (id === "gitlab-diff-added" || id === "gitlab-diff-removed")
+        this.profileFeatureBodyInput.value = "Selected text";
+      else if (id === "details")
+        this.profileFeatureBodyInput.value = "Details content";
+    }
+    this.openDialog(this.profileFeatureDialog);
+    if (id === "details") this.profileFeatureTitleInput.focus();
+    else if (id === "gitlab-description-list")
+      this.profileFeatureTermInput.focus();
+    else this.profileFeatureBodyInput.focus();
+  }
+
+  private profileFeatureValues(): ProfileFeatureValues {
+    const id = this.profileFeatureId;
+    const body = this.profileFeatureBodyInput.value;
+    if (id === "alert")
+      return {
+        alertType: this.profileFeatureAlertType.value as
+          "NOTE" | "TIP" | "IMPORTANT" | "WARNING" | "CAUTION",
+        body,
+      };
+    if (id === "details")
+      return { summary: this.profileFeatureTitleInput.value, body };
+    if (id === "math") return { expression: body };
+    if (id === "mermaid") return { source: body };
+    if (id === "gitlab-description-list")
+      return { term: this.profileFeatureTermInput.value, definition: body };
+    if (id === "gitlab-diff-added" || id === "gitlab-diff-removed")
+      return { text: body };
+    return {};
+  }
+
+  private closeProfileFeatureDialog(
+    message?: string,
+    restoreFocus = true,
+  ): void {
+    if (!this.profileFeatureDialogOpen && !this.profileFeatureSelection) return;
+    this.profileFeatureDialogOpen = false;
+    const button = this.profileFeatureInvokingButton;
+    this.profileFeatureInvokingButton = null;
+    this.profileFeatureSelection = null;
+    this.profileFeatureDocumentGeneration = -1;
+    this.profileFeatureProfile = null;
+    this.profileFeatureId = null;
+    this.profileFeatureDialog.removeAttribute("data-profile-feature");
+    this.closeDialog(this.profileFeatureDialog);
+    if (message) this.setNotice(message, "error");
+    if (restoreFocus && button?.isConnected) button.focus();
+  }
+
+  private runProfileFeature(id: ProfileFeatureId): boolean {
+    const feature = this.profileFeatureDefinition(id);
+    if (!feature || !this.canUseProfileFeature(feature)) return false;
+    if (!this.captureProfileFeatureSelection()) return false;
+    const selection = this.profileFeatureSelection;
+    if (!selection || !this.restoreSelectionObject(selection)) {
+      this.closeProfileFeatureDialog();
+      this.setNotice(
+        "The document changed while the feature menu was open; nothing was inserted.",
+        "error",
+      );
+      return false;
+    }
+    const command = createProfileFeatureCommand(
+      this.core,
+      this.profile,
+      id,
+      {},
+    );
+    const applied = command(this.view.state, (tr) =>
+      this.dispatchTransaction(tr),
+    );
+    if (!applied) {
+      this.setNotice("The feature could not be inserted.", "error");
+      return false;
+    }
+    this.profileFeatureSelection = null;
+    this.profileFeatureDocumentGeneration = -1;
+    this.profileFeatureProfile = null;
+    this.view.focus();
+    return true;
+  }
+
+  private commitProfileFeatureDialog(): void {
+    const saved = this.profileFeatureSelection;
+    const id = this.profileFeatureId;
+    if (!saved || !id) return;
+    const stale =
+      !this.profileFeatureDialogOpen ||
+      !this.initialized ||
+      this.previewOnly ||
+      this.mode !== "rich" ||
+      this.parseError ||
+      this.conflict ||
+      this.syncPaused ||
+      this.composing ||
+      Boolean(this.pendingProfile) ||
+      this.profile !== this.profileFeatureProfile ||
+      this.documentGeneration !== this.profileFeatureDocumentGeneration ||
+      saved.$from.doc !== this.view.state.doc;
+    if (stale || !this.restoreSelectionObject(saved)) {
+      this.closeProfileFeatureDialog(
+        "The document changed while this feature dialog was open; nothing was inserted.",
+      );
+      return;
+    }
+    const command = createProfileFeatureCommand(
+      this.core,
+      this.profile,
+      id,
+      this.profileFeatureValues(),
+    );
+    const applied = command(this.view.state, (tr) =>
+      this.dispatchTransaction(tr),
+    );
+    if (!applied) {
+      this.profileFeatureError.hidden = false;
+      this.profileFeatureError.textContent =
+        "Enter valid feature content before inserting.";
+      this.profileFeatureBodyInput.focus();
+      return;
+    }
+    this.closeProfileFeatureDialog(undefined, false);
+    this.view.focus();
+  }
+
+  private buildEmojiPicker(
+    container: HTMLElement,
+    invokingButton: HTMLButtonElement,
+  ): void {
+    const dialog = document.createElement("dialog");
+    dialog.className = "mm-input-dialog mm-emoji-dialog";
+    dialog.setAttribute("aria-labelledby", "mm-emoji-dialog-title");
+    const form = document.createElement("form");
+    form.className = "mm-dialog-form";
+    const title = document.createElement("h2");
+    title.id = "mm-emoji-dialog-title";
+    title.textContent = "Insert emoji";
+    const help = document.createElement("p");
+    help.className = "mm-emoji-help";
+    help.textContent = "Search common emoji, then choose one to insert.";
+    const searchLabel = document.createElement("label");
+    searchLabel.className = "mm-dialog-field";
+    const searchCaption = document.createElement("span");
+    searchCaption.textContent = "Search";
+    this.emojiSearchInput = document.createElement("input");
+    this.emojiSearchInput.type = "search";
+    this.emojiSearchInput.className = "mm-emoji-search";
+    this.emojiSearchInput.placeholder = "Search by name or keyword";
+    this.emojiSearchInput.setAttribute("aria-label", "Search emoji");
+    searchLabel.append(searchCaption, this.emojiSearchInput);
+    this.emojiGrid = document.createElement("div");
+    this.emojiGrid.className = "mm-emoji-grid";
+    this.emojiGrid.setAttribute("role", "listbox");
+    this.emojiGrid.setAttribute("aria-label", "Common emoji");
+    this.emojiSearchInput.addEventListener("input", () =>
+      this.renderEmojiGrid(),
+    );
+    const actions = document.createElement("div");
+    actions.className = "mm-dialog-actions";
+    const cancel = document.createElement("button");
+    cancel.type = "button";
+    cancel.textContent = "Cancel";
+    cancel.addEventListener("click", () => this.closeEmojiPicker());
+    actions.append(cancel);
+    form.addEventListener("submit", (event) => event.preventDefault());
+    dialog.addEventListener("cancel", (event) => {
+      event.preventDefault();
+      this.closeEmojiPicker();
+    });
+    dialog.addEventListener("close", () => {
+      if (this.emojiDialogOpen) this.closeEmojiPicker(false);
+    });
+    form.append(title, help, searchLabel, this.emojiGrid, actions);
+    dialog.append(form);
+    container.append(dialog);
+    this.emojiDialog = dialog;
+    this.emojiInvokingButton = invokingButton;
+    this.renderEmojiGrid();
+  }
+
+  private captureEmojiSelection(): void {
+    if (
+      !this.initialized ||
+      this.mode !== "rich" ||
+      this.previewOnly ||
+      this.parseError ||
+      this.conflict ||
+      this.syncPaused ||
+      this.composing
+    )
+      return;
+    this.emojiSelection = this.view.state.selection;
+    this.emojiDocumentGeneration = this.documentGeneration;
+    this.emojiProfile = this.profile;
+  }
+
+  private openEmojiPicker(invokingButton: HTMLButtonElement): void {
+    if (
+      !this.initialized ||
+      this.previewOnly ||
+      this.parseError ||
+      this.conflict ||
+      this.syncPaused ||
+      this.mode !== "rich" ||
+      this.composing
+    ) {
+      this.setNotice("Emoji are unavailable in the current editing mode.");
+      return;
+    }
+    this.closeWritingPopups();
+    this.captureEmojiSelection();
+    this.emojiInvokingButton = invokingButton;
+    this.emojiDialogOpen = true;
+    this.emojiSearchInput.value = "";
+    this.renderEmojiGrid();
+    this.openDialog(this.emojiDialog);
+    this.emojiSearchInput.focus();
+  }
+
+  private closeEmojiPicker(restoreFocus = true): void {
+    if (!this.emojiDialogOpen && !this.emojiSelection) return;
+    const button = this.emojiInvokingButton;
+    this.emojiDialogOpen = false;
+    this.emojiSelection = null;
+    this.emojiDocumentGeneration = -1;
+    this.emojiProfile = null;
+    this.closeDialog(this.emojiDialog);
+    if (restoreFocus && button?.isConnected) button.focus();
+  }
+
+  private renderEmojiGrid(): void {
+    if (!this.emojiGrid || !this.emojiSearchInput) return;
+    const query = this.emojiSearchInput.value.trim().toLocaleLowerCase();
+    const matches = COMMON_EMOJI.filter((entry) =>
+      query
+        ? (entry.name + " " + entry.keywords + " " + entry.emoji)
+            .toLocaleLowerCase()
+            .includes(query)
+        : true,
+    );
+    this.emojiGrid.replaceChildren();
+    for (const entry of matches) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "mm-emoji-choice";
+      button.dataset.emoji = entry.emoji;
+      button.setAttribute("role", "option");
+      button.setAttribute("aria-label", entry.name);
+      this.setTooltip(button, entry.name);
+      button.textContent = entry.emoji;
+      button.addEventListener("click", () => this.applyEmoji(entry.emoji));
+      this.emojiGrid.append(button);
+    }
+    if (!matches.length) {
+      const empty = document.createElement("p");
+      empty.className = "mm-emoji-empty";
+      empty.textContent = "No matching emoji.";
+      this.emojiGrid.append(empty);
+    }
+    this.emojiGrid.setAttribute(
+      "aria-label",
+      matches.length + " emoji results",
+    );
+  }
+
+  private applyEmoji(emoji: string): void {
+    const selection = this.emojiSelection;
+    const stale =
+      !this.emojiDialogOpen ||
+      !selection ||
+      this.emojiDocumentGeneration !== this.documentGeneration ||
+      this.emojiProfile !== this.profile ||
+      selection.$from.doc !== this.view.state.doc ||
+      !(selection instanceof TextSelection);
+    if (stale || !this.restoreSelectionObject(selection)) {
+      this.closeEmojiPicker();
+      this.setNotice(
+        "The document changed while the emoji picker was open; nothing was inserted.",
+        "error",
+      );
+      return;
+    }
+    this.dispatchTransaction(this.view.state.tr.insertText(emoji));
+    this.closeEmojiPicker(false);
+  }
+
+  private buildSelectionToolbar(): HTMLElement {
+    const toolbar = makeElement("div", {
+      class: "mm-floating-toolbar mm-selection-toolbar",
+      role: "toolbar",
+      "aria-label": "Selection formatting",
+      "aria-hidden": "true",
+      hidden: "true",
+    });
+    toolbar.addEventListener("keydown", (event) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      this.clearSelectionToolbarSelection();
+      this.view.focus();
+    });
+    const addMarkButton = (
+      label: string,
+      markName: string,
+      testId: string,
+      command: () => void,
+    ): void => {
+      const button = makeElement("button", {
+        type: "button",
+        class: "mm-floating-button",
+        "data-tooltip": `${label} selection`,
+        "aria-label": `${label} selection`,
+        "aria-pressed": "false",
+        "data-mark": markName,
+        "data-testid": testId,
+      }) as HTMLButtonElement;
+      const iconName: ToolbarIconName =
+        markName === "strong"
+          ? "bold"
+          : markName === "em"
+            ? "italic"
+            : markName === "strike"
+              ? "strikethrough"
+              : markName === "code"
+                ? "inline-code"
+                : "link";
+      appendToolbarIcon(button, iconName, undefined, { size: 18 });
+      if (markName === "strike") button.dataset.gfmOnly = "true";
+      button.addEventListener("mousedown", (event) => {
+        event.preventDefault();
+        this.captureSelectionToolbarSelection();
+      });
+      button.addEventListener("click", () => {
+        if (!this.restoreSelectionToolbarSelection()) return;
+        command();
+        this.clearSelectionToolbarSelection();
+      });
+      toolbar.append(button);
+    };
+    addMarkButton("Bold", "strong", "selection-bold", () =>
+      this.runCommand(commandForMark("strong", this.schema)),
+    );
+    addMarkButton("Italic", "em", "selection-italic", () =>
+      this.runCommand(commandForMark("em", this.schema)),
+    );
+    addMarkButton("Strike", "strike", "selection-strike", () => {
+      if (this.profile === "commonmark") {
+        this.setNotice("Strikethrough is unavailable in CommonMark.");
+        return;
+      }
+      this.runCommand(commandForMark("strike", this.schema));
+    });
+    addMarkButton("Inline code", "code", "selection-code", () =>
+      this.runCommand(commandForMark("code", this.schema)),
+    );
+    const link = makeElement("button", {
+      type: "button",
+      class: "mm-floating-button",
+      "data-tooltip": "Link selection",
+      "aria-label": "Link selection",
+      "aria-pressed": "false",
+      "data-mark": "link",
+      "data-testid": "selection-link",
+    }) as HTMLButtonElement;
+    appendToolbarIcon(link, "link", undefined, { size: 18 });
+    link.addEventListener("mousedown", (event) => {
+      event.preventDefault();
+      this.captureSelectionToolbarSelection();
+    });
+    link.addEventListener("click", () => {
+      if (!this.restoreSelectionToolbarSelection()) return;
+      this.clearSelectionToolbarSelection();
+      this.insertLink();
+    });
+    toolbar.append(link);
+    return toolbar;
+  }
+
+  private buildEmptyLineButton(): HTMLButtonElement {
+    const button = makeElement("button", {
+      type: "button",
+      class: "mm-empty-line-insert",
+      "data-tooltip": "Insert block",
+      "aria-label": "Insert block at current line",
+      "aria-haspopup": "menu",
+      "aria-expanded": "false",
+      hidden: "true",
+    }) as HTMLButtonElement;
+    button.textContent = "+";
+
+    const panel = makeElement("div", {
+      class: "mm-popup-panel mm-empty-line-popup",
+      role: "menu",
+      "aria-label": "Insert block",
+      hidden: "true",
+    });
+    panel.id = "mm-empty-line-insert-popup";
+    button.setAttribute("aria-controls", panel.id);
+    this.insertPopup = panel;
+    this.insertPopupToggle = button;
+
+    const addMenuButton = (
+      label: string,
+      title: string,
+      command: () => void,
+      testId?: string,
+      iconName?: ToolbarIconName,
+    ): HTMLButtonElement => {
+      const item = makeElement("button", {
+        type: "button",
+        class: "mm-tool-button",
+        role: "menuitem",
+        "data-tooltip": title,
+        "aria-label": title,
+        ...(testId ? { "data-testid": testId } : {}),
+      }) as HTMLButtonElement;
+      if (iconName) appendToolbarIcon(item, iconName, label, { size: 18 });
+      else item.textContent = label;
+      item.addEventListener("mousedown", (event) => {
+        event.preventDefault();
+      });
+      item.addEventListener("click", () => {
+        if (!this.restoreWritingPopupSelection()) {
+          this.closeWritingPopups();
+          this.setNotice(
+            "The document changed while this menu was open; nothing was applied.",
+            "error",
+          );
+          return;
+        }
+        command();
+        if (!this.tableDialogOpen) this.closeWritingPopups();
+      });
+      panel.append(item);
+      return item;
+    };
+
+    const bulletMenuButton = addMenuButton(
+      "List",
+      "Bullet list",
+      () => this.runListCommand("bullet_list"),
+      undefined,
+      "bullet-list",
+    );
+    bulletMenuButton.dataset.listKind = "bullet";
+    const orderedMenuButton = addMenuButton(
+      "List",
+      "Ordered list",
+      () => this.runListCommand("ordered_list"),
+      undefined,
+      "ordered-list",
+    );
+    orderedMenuButton.dataset.listKind = "ordered";
+    const taskButton = addMenuButton(
+      "Task",
+      "Task list",
+      () => this.runTaskList(),
+      undefined,
+      "checklist",
+    );
+    taskButton.dataset.gfmOnly = "true";
+    taskButton.dataset.listKind = "task";
+    addMenuButton(
+      "Quote",
+      "Block quote",
+      () => this.runCommand(commandForBlock("blockquote")),
+      undefined,
+      "blockquote",
+    );
+    addMenuButton(
+      "Code",
+      "Code block",
+      () => this.runCommand(commandForBlock("code_block", { params: "" })),
+      undefined,
+      "code-block",
+    );
+    const tableButton = addMenuButton(
+      "Table",
+      "Insert table",
+      () => this.openTableDialog(tableButton),
+      "toolbar-table-context",
+      "table",
+    );
+    tableButton.dataset.gfmOnly = "true";
+    addMenuButton(
+      "Horizontal rule",
+      "Horizontal rule",
+      () => this.insertHorizontalRule(),
+      undefined,
+      "divider",
+    );
+    panel.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        const returnFocus = this.popupReturnFocus ?? button;
+        this.closeWritingPopups();
+        returnFocus.focus();
+        return;
+      }
+      if (event.key === "Tab") {
+        this.closeWritingPopups();
+        return;
+      }
+      if (
+        event.key !== "ArrowDown" &&
+        event.key !== "ArrowUp" &&
+        event.key !== "Home" &&
+        event.key !== "End"
+      )
+        return;
+      event.preventDefault();
+      const items = Array.from(
+        panel.querySelectorAll<HTMLButtonElement>(
+          'button[role="menuitem"]:not(:disabled)',
+        ),
+      );
+      if (!items.length) return;
+      const current = items.indexOf(
+        document.activeElement as HTMLButtonElement,
+      );
+      let next = current < 0 ? 0 : current;
+      if (event.key === "ArrowDown") next = (next + 1) % items.length;
+      else if (event.key === "ArrowUp")
+        next = (next - 1 + items.length) % items.length;
+      else if (event.key === "Home") next = 0;
+      else next = items.length - 1;
+      items[next]?.focus();
+    });
+
+    button.addEventListener("mousedown", (event) => {
+      event.preventDefault();
+      this.captureWritingPopupSelection();
+    });
+    button.addEventListener("keydown", (event) => {
+      if (event.key !== "ArrowDown") return;
+      event.preventDefault();
+      if (this.activePopup !== panel) this.toggleWritingPopup(panel, button);
+      this.focusPopupItem(panel, 0);
+    });
+    button.addEventListener("click", () =>
+      this.toggleWritingPopup(panel, button),
+    );
+
+    this.stage.append(panel);
+    return button;
+  }
+
+  private captureWritingPopupSelection(): void {
+    if (
+      !this.view ||
+      !this.initialized ||
+      this.mode !== "rich" ||
+      this.previewOnly ||
+      this.parseError ||
+      this.conflict ||
+      this.syncPaused ||
+      this.composing
+    )
+      return;
+    this.popupSelection = this.view.state.selection;
+    this.popupDocumentGeneration = this.documentGeneration;
+    this.popupProfile = this.profile;
+  }
+
+  private captureSelectionToolbarSelection(): void {
+    if (!this.selectionToolbar || this.selectionToolbar.hidden) return;
+    this.selectionToolbarSelection = this.view.state.selection;
+    this.selectionToolbarDocumentGeneration = this.documentGeneration;
+    this.selectionToolbarProfile = this.profile;
+  }
+
+  private restoreSelectionToolbarSelection(): boolean {
+    if (
+      !this.selectionToolbarSelection ||
+      this.selectionToolbarDocumentGeneration !== this.documentGeneration ||
+      this.selectionToolbarProfile !== this.profile
+    )
+      return false;
+    return this.restoreSelectionObject(this.selectionToolbarSelection);
+  }
+
+  private clearSelectionToolbarSelection(): void {
+    this.selectionToolbarSelection = null;
+    this.selectionToolbarDocumentGeneration = -1;
+    this.selectionToolbarProfile = null;
+  }
+
+  private restoreWritingPopupSelection(): boolean {
+    const selection = this.popupSelection;
+    if (
+      !selection ||
+      this.popupDocumentGeneration !== this.documentGeneration ||
+      this.popupProfile !== this.profile ||
+      selection.$from.doc !== this.view.state.doc
+    )
+      return false;
+    return this.restoreSelectionObject(selection);
+  }
+
+  private toggleWritingPopup(
+    popup: HTMLElement,
+    toggle: HTMLButtonElement,
+  ): void {
+    if (this.activePopup === popup) {
+      this.closeWritingPopups();
+      return;
+    }
+    this.captureWritingPopupSelection();
+    this.openWritingPopup(popup, toggle, toggle);
+  }
+
+  private openWritingPopup(
+    popup: HTMLElement,
+    toggle: HTMLButtonElement,
+    anchor: HTMLElement,
+  ): void {
+    if (
+      !this.initialized ||
+      this.previewOnly ||
+      this.mode !== "rich" ||
+      this.parseError ||
+      this.conflict ||
+      this.syncPaused ||
+      this.composing
+    )
+      return;
+    const retainedSelection = this.popupSelection;
+    const retainedGeneration = this.popupDocumentGeneration;
+    const retainedProfile = this.popupProfile;
+    if (this.activePopup && this.activePopup !== popup)
+      this.closeWritingPopups();
+    if (
+      retainedSelection &&
+      retainedSelection.$from.doc === this.view.state.doc
+    ) {
+      this.popupSelection = retainedSelection;
+      this.popupDocumentGeneration = retainedGeneration;
+      this.popupProfile = retainedProfile;
+    }
+    this.activePopup = popup;
+    this.activePopupToggle = toggle;
+    this.popupAnchor = anchor;
+    this.popupReturnFocus = anchor;
+    popup.hidden = false;
+    popup.setAttribute("aria-hidden", "false");
+    toggle.setAttribute("aria-expanded", "true");
+    // Keep every popup in the viewport. Fixed positioning also lets a menu
+    // opened from the empty-line affordance stay beside its anchor while the
+    // document scrolls.
+    popup.dataset.floating = "true";
+    if (anchor === this.emptyLineButton)
+      anchor.setAttribute("aria-expanded", "true");
+    this.positionWritingPopup();
+    if (anchor === this.emptyLineButton) this.focusPopupItem(popup, 0);
+  }
+
+  private closeWritingPopups(): void {
+    const active = this.activePopup;
+    const anchor = this.popupAnchor;
+    if (active) {
+      active.hidden = true;
+      active.setAttribute("aria-hidden", "true");
+      active.removeAttribute("data-floating");
+      active.style.removeProperty("position");
+      active.style.removeProperty("left");
+      active.style.removeProperty("top");
+      this.activePopupToggle?.setAttribute("aria-expanded", "false");
+    }
+    if (anchor === this.emptyLineButton)
+      anchor.setAttribute("aria-expanded", "false");
+    this.activePopup = null;
+    this.activePopupToggle = null;
+    this.popupAnchor = null;
+    this.popupReturnFocus = null;
+    this.popupSelection = null;
+    this.popupProfile = null;
+    this.popupDocumentGeneration = -1;
+  }
+
+  private positionWritingPopup(): void {
+    const popup = this.activePopup;
+    const anchor = this.popupAnchor;
+    if (
+      !popup ||
+      !anchor ||
+      popup.hidden ||
+      popup.dataset.floating !== "true" ||
+      !anchor.isConnected
+    )
+      return;
+    const anchorRect = anchor.getBoundingClientRect();
+    const popupRect = popup.getBoundingClientRect();
+    const viewportWidth =
+      window.innerWidth || document.documentElement.clientWidth;
+    const viewportHeight =
+      window.innerHeight || document.documentElement.clientHeight;
+    const width = popupRect.width || 230;
+    const height = popupRect.height || 120;
+    let left = anchorRect.left;
+    let top = anchorRect.bottom + 6;
+    if (viewportHeight > 0 && top + height > viewportHeight - 6)
+      top = anchorRect.top - height - 6;
+    left = Math.max(6, Math.min(left, Math.max(6, viewportWidth - width - 6)));
+    top = Math.max(6, Math.min(top, Math.max(6, viewportHeight - height - 6)));
+    popup.style.position = "fixed";
+    popup.style.left = `${Math.round(left)}px`;
+    popup.style.top = `${Math.round(top)}px`;
+  }
+
+  private focusPopupItem(popup: HTMLElement, index: number): void {
+    const items = popup.querySelectorAll<HTMLButtonElement>(
+      'button[role="menuitem"]:not(:disabled)',
+    );
+    items.item(Math.max(0, Math.min(index, items.length - 1)))?.focus();
+  }
+
+  private updateSelectionToolbar(selection = this.view.state.selection): void {
+    if (!this.selectionToolbar || !this.stage || !this.view) return;
+    const canShow =
+      this.initialized &&
+      !this.previewOnly &&
+      !this.parseError &&
+      !this.conflict &&
+      !this.syncPaused &&
+      !this.composing &&
+      this.mode === "rich" &&
+      selection instanceof TextSelection &&
+      !selection.empty &&
+      selection.from < selection.to &&
+      !selectionTouchesTable(selection);
+    const parent = selection.$from.parent;
+    const inCode =
+      parent.type.name === "code_block" ||
+      (() => {
+        for (let depth = selection.$from.depth; depth > 0; depth -= 1)
+          if (selection.$from.node(depth).type.name === "code_block")
+            return true;
+        return false;
+      })();
+    if (!canShow || inCode) {
+      this.selectionToolbar.hidden = true;
+      this.selectionToolbar.setAttribute("aria-hidden", "true");
+      this.clearSelectionToolbarSelection();
+      return;
+    }
+    this.selectionToolbar.hidden = false;
+    this.selectionToolbar.setAttribute("aria-hidden", "false");
+    this.selectionToolbarSelection = selection;
+    this.selectionToolbarDocumentGeneration = this.documentGeneration;
+    this.selectionToolbarProfile = this.profile;
+    const stageRect = this.stage.getBoundingClientRect();
+    let from: ReturnType<EditorView["coordsAtPos"]>;
+    let to: ReturnType<EditorView["coordsAtPos"]>;
+    try {
+      from = this.view.coordsAtPos(selection.from);
+      to = this.view.coordsAtPos(selection.to);
+    } catch {
+      this.selectionToolbar.hidden = true;
+      this.selectionToolbar.setAttribute("aria-hidden", "true");
+      this.clearSelectionToolbarSelection();
+      return;
+    }
+    if (
+      stageRect.height > 0 &&
+      (to.bottom < stageRect.top || from.top > stageRect.bottom)
+    ) {
+      this.selectionToolbar.hidden = true;
+      this.selectionToolbar.setAttribute("aria-hidden", "true");
+      this.selectionToolbarSelection = null;
+      return;
+    }
+    const toolbarRect = this.selectionToolbar.getBoundingClientRect();
+    const width = toolbarRect.width || 240;
+    const height = toolbarRect.height || 32;
+    const viewportWidth = this.stage.clientWidth || stageRect.width;
+    const viewportHeight = this.stage.clientHeight || stageRect.height;
+    let left = (from.left + to.right) / 2 - stageRect.left - width / 2;
+    let top = from.top - stageRect.top + this.stage.scrollTop - height - 7;
+    if (top < this.stage.scrollTop + 6)
+      top = to.bottom - stageRect.top + this.stage.scrollTop + 7;
+    const minLeft = this.stage.scrollLeft + 6;
+    const maxLeft =
+      viewportWidth > 0
+        ? this.stage.scrollLeft + Math.max(6, viewportWidth - width - 6)
+        : left;
+    const minTop = this.stage.scrollTop + 6;
+    const maxTop =
+      viewportHeight > 0
+        ? this.stage.scrollTop + Math.max(6, viewportHeight - height - 6)
+        : top;
+    left = Math.max(minLeft, Math.min(maxLeft, left));
+    top = Math.max(minTop, Math.min(maxTop, top));
+    this.selectionToolbar.style.left = `${Math.round(left)}px`;
+    this.selectionToolbar.style.top = `${Math.round(top)}px`;
+    for (const button of Array.from(
+      this.selectionToolbar.querySelectorAll<HTMLButtonElement>("[data-mark]"),
+    )) {
+      const markName = button.dataset.mark;
+      const mark = markName ? this.schema.marks[markName] : undefined;
+      const active = Boolean(
+        mark &&
+        (selection.empty
+          ? mark.isInSet(this.view.state.storedMarks || selection.$from.marks())
+          : this.view.state.doc.rangeHasMark(
+              selection.from,
+              selection.to,
+              mark,
+            )),
+      );
+      button.setAttribute("aria-pressed", String(active));
+    }
+  }
+
+  private handleBlankDocumentPointer(event: MouseEvent): boolean {
+    if (event.defaultPrevented) return false;
+    if (event.button !== undefined && event.button !== 0) return false;
+    if (
+      !this.initialized ||
+      this.previewOnly ||
+      this.parseError ||
+      this.conflict ||
+      this.syncPaused ||
+      this.composing ||
+      this.mode !== "rich"
+    )
+      return false;
+    const target = event.target;
+    if (!(target instanceof Node)) return false;
+    const richPanel = this.root.querySelector<HTMLElement>(
+      '[data-panel="rich"]',
+    );
+    if (!richPanel || !(target === this.stage || richPanel.contains(target)))
+      return false;
+    if (
+      target instanceof Element &&
+      target.closest(
+        ".mm-table-toolbar, .mm-selection-toolbar, .mm-empty-line-insert, .mm-popup-panel, .mm-rich-footnotes, a, dialog, button, select, input, textarea",
+      )
+    )
+      return false;
+
+    const editorDom = this.view.dom;
+
+    // A second blank-space click starts from the authored document again. This
+    // keeps repeated exploratory clicks from accumulating invisible paragraphs.
+    if (this.transientBlanks) this.discardTransientBlanksInState();
+    const lastBlockInfo = this.lastVisibleDocumentBlock(editorDom);
+    if (!lastBlockInfo) return false;
+    const { element: lastBlock, rect: lastRect } = lastBlockInfo;
+    const y = Number.isFinite(event.clientY)
+      ? event.clientY
+      : Number.isFinite(event.pageY)
+        ? event.pageY
+        : lastRect.bottom;
+    if (!Number.isFinite(y) || y <= lastRect.bottom + 2) return false;
+
+    const paragraph = this.schema.nodes.paragraph;
+    if (!paragraph) return false;
+    const pitch = this.blankLinePitch(lastBlock, lastRect);
+    const count = Math.max(
+      1,
+      Math.min(200, Math.ceil((y - lastRect.bottom) / pitch)),
+    );
+    const appended = this.appendTransientBlankParagraphs(count);
+    if (!appended) return false;
+    event.preventDefault();
+    event.stopPropagation();
+    return true;
+  }
+
+  private lastVisibleDocumentBlock(
+    editorDom: HTMLElement,
+  ): { element: Element; rect: DOMRect } | null {
+    const elements = Array.from(editorDom.children);
+    let fallback: { element: Element; rect: DOMRect } | null = null;
+    for (let index = elements.length - 1; index >= 0; index -= 1) {
+      const element = elements[index];
+      if (!(element instanceof Element)) continue;
+      if (
+        element.matches(
+          ".mm-rich-footnotes, .ProseMirror-widget, [data-pm-widget]",
+        )
+      )
+        continue;
+      const rect = element.getBoundingClientRect();
+      const hasArea =
+        rect.width > 0 || rect.height > 0 || rect.bottom > rect.top;
+      if (hasArea && !element.matches('[aria-hidden="true"]'))
+        return { element, rect };
+      const isContentBlock =
+        /^(P|H[1-6]|UL|OL|BLOCKQUOTE|PRE|TABLE|HR|IMG|DIV)$/.test(
+          element.tagName,
+        );
+      const hasContent =
+        Boolean(element.textContent?.trim()) ||
+        Boolean(element.querySelector("br, img, table, code, pre"));
+      if (!fallback && isContentBlock && hasContent)
+        fallback = { element, rect };
+    }
+    return fallback;
+  }
+
+  private measureBlankParagraphPitch(lastRect: DOMRect): number {
+    let lineHeight = 0;
+    let marginTop = 0;
+    let marginBottom = 0;
+    try {
+      const computed = getComputedStyle(this.view.dom);
+      const fontSize = Number.parseFloat(computed.fontSize);
+      lineHeight = Number.parseFloat(computed.lineHeight);
+      if (!Number.isFinite(lineHeight) || lineHeight <= 0)
+        lineHeight =
+          Number.isFinite(fontSize) && fontSize > 0
+            ? fontSize * 1.6
+            : lastRect.height > 0
+              ? lastRect.height
+              : 24;
+    } catch {
+      lineHeight = lastRect.height > 0 ? lastRect.height : 24;
+    }
+
+    const probeRoot = document.createElement("div");
+    const probeParagraph = document.createElement("p");
+    const probeSibling = document.createElement("span");
+    probeRoot.className = "mm-document-content";
+    probeRoot.style.cssText =
+      "position:absolute;left:-100000px;top:0;width:800px;height:0;overflow:hidden;visibility:hidden;pointer-events:none;";
+    probeSibling.style.display = "none";
+    probeRoot.append(probeParagraph, probeSibling);
+    this.root.append(probeRoot);
+    try {
+      const computed = getComputedStyle(probeParagraph);
+      const measuredLineHeight = Number.parseFloat(computed.lineHeight);
+      const measuredMarginTop = Number.parseFloat(computed.marginTop);
+      const measuredMarginBottom = Number.parseFloat(computed.marginBottom);
+      if (Number.isFinite(measuredLineHeight) && measuredLineHeight > 0)
+        lineHeight = measuredLineHeight;
+      if (Number.isFinite(measuredMarginTop) && measuredMarginTop >= 0)
+        marginTop = measuredMarginTop;
+      if (Number.isFinite(measuredMarginBottom) && measuredMarginBottom >= 0)
+        marginBottom = measuredMarginBottom;
+    } catch {
+      // Keep the editor metrics fallback.
+    } finally {
+      probeRoot.remove();
+    }
+    return Math.max(1, lineHeight + Math.max(marginTop, marginBottom));
+  }
+
+  private blankLinePitch(lastBlock: Element, lastRect: DOMRect): number {
+    void lastBlock;
+    return this.measureBlankParagraphPitch(lastRect);
+  }
+
+  private appendTransientBlankParagraphs(count: number): boolean {
+    const paragraph = this.schema.nodes.paragraph;
+    if (!paragraph || count < 1) return false;
+    const nodes = Array.from({ length: count }, () => paragraph.create());
+    const from = this.view.state.doc.content.size;
+    const size = nodes.reduce((total, node) => total + node.nodeSize, 0);
+    const to = from + size;
+    let transaction: Transaction;
+    try {
+      transaction = this.view.state.tr.insert(from, Fragment.fromArray(nodes));
+      transaction = transaction
+        .setSelection(TextSelection.create(transaction.doc, to - 1))
+        .setMeta(TRANSIENT_BLANK_META, {
+          kind: "append",
+          from,
+          to,
+          count: nodes.length,
+          meaningful: false,
+        } satisfies TransientBlankTransactionMeta);
+      const starter = getStarterState(this.view.state);
+      if (starter?.active && starter.untouched)
+        transaction = setStarterMeta(transaction, {
+          active: true,
+          untouched: true,
+          preserveSource: true,
+        });
+    } catch {
+      return false;
+    }
+    this.view.focus();
+    this.dispatchTransaction(transaction);
+    return true;
+  }
+
+  private updateEmptyLineInsert(selection = this.view.state.selection): void {
+    if (!this.emptyLineButton || !this.stage || !this.view) return;
+    const parent = selection.$from.parent;
+    const starter = getStarterState(this.view.state);
+    const canShow =
+      this.initialized &&
+      !this.previewOnly &&
+      !this.parseError &&
+      !this.conflict &&
+      !this.syncPaused &&
+      !this.composing &&
+      this.mode === "rich" &&
+      selection.empty &&
+      selection.$from.depth === 1 &&
+      parent.type.name === "paragraph" &&
+      parent.content.size === 0 &&
+      !starter?.active;
+    if (!canShow) {
+      this.emptyLineButton.hidden = true;
+      return;
+    }
+    const dom = this.view.nodeDOM(selection.$from.before(1));
+    if (!(dom instanceof Element) || !dom.isConnected) {
+      this.emptyLineButton.hidden = true;
+      return;
+    }
+    const stageRect = this.stage.getBoundingClientRect();
+    const rect = dom.getBoundingClientRect();
+    const width = this.emptyLineButton.getBoundingClientRect().width || 20;
+    const height = this.emptyLineButton.getBoundingClientRect().height || 20;
+    const left = Math.max(
+      this.stage.scrollLeft + 2,
+      rect.left - stageRect.left + this.stage.scrollLeft - width - 6,
+    );
+    const top = Math.max(
+      this.stage.scrollTop + 4,
+      rect.top -
+        stageRect.top +
+        this.stage.scrollTop +
+        Math.max(0, (rect.height || height) / 2 - height / 2),
+    );
+    this.emptyLineButton.hidden = false;
+    this.emptyLineButton.style.left = `${Math.round(left)}px`;
+    this.emptyLineButton.style.top = `${Math.round(top)}px`;
+  }
+
+  private updateWritingToolbarState(): void {
+    if (this.destroyed || !this.view) return;
+    this.updateSelectionToolbar(this.view.state.selection);
+    this.updateEmptyLineInsert(this.view.state.selection);
+    this.positionWritingPopup();
+  }
+
+  private scheduleWritingToolbarUpdate(): void {
+    if (this.destroyed) return;
+    const update = (): void => {
+      if (!this.destroyed) {
+        this.updateTableToolbar();
+        this.updateWritingToolbarState();
+      }
+    };
+    if (typeof requestAnimationFrame === "function")
+      requestAnimationFrame(update);
+    else setTimeout(update, 0);
+  }
+
+  private buildTableToolbar(): HTMLElement {
+    const toolbar = makeElement("div", {
+      class: "mm-table-toolbar",
+      role: "toolbar",
+      "aria-label": "Table actions",
+      "aria-hidden": "true",
+      hidden: "true",
+    });
+
+    type TableToolbarIcon =
+      | "row-above"
+      | "row-below"
+      | "row-delete"
+      | "col-left"
+      | "col-right"
+      | "col-delete"
+      | "align-left"
+      | "align-center"
+      | "align-right"
+      | "numbering"
+      | "table-delete";
+    const icon = (kind: TableToolbarIcon): SVGSVGElement => {
+      const svg = document.createElementNS(
+        "http://www.w3.org/2000/svg",
+        "svg",
+      ) as SVGSVGElement;
+      svg.setAttribute("class", "mm-table-toolbar-icon");
+      svg.setAttribute("viewBox", "0 0 16 16");
+      svg.setAttribute("width", "14");
+      svg.setAttribute("height", "14");
+      svg.setAttribute("aria-hidden", "true");
+      svg.setAttribute("focusable", "false");
+      const paths: Record<TableToolbarIcon, string[]> = {
+        "row-above": ["M2 6h8M2 9h8M2 12h8", "M13 6V2", "M11 4l2-2 2 2"],
+        "row-below": ["M2 4h8M2 7h8M2 10h8", "M13 10v4", "M11 12l2 2 2-2"],
+        "row-delete": ["M2 4h12M2 8h12M2 12h12", "M3 8h10"],
+        "col-left": ["M5 2v12M8 2v12M11 2v12", "M6 8H2", "M4 6 2 8l2 2"],
+        "col-right": ["M5 2v12M8 2v12M11 2v12", "M10 8h4", "M12 6l2 2-2 2"],
+        "col-delete": ["M4 2v12M8 2v12M12 2v12", "M8 3v10"],
+        "align-left": ["M2 4h12", "M2 8h9", "M2 12h12"],
+        "align-center": ["M2 4h12", "M4 8h8", "M2 12h12"],
+        "align-right": ["M2 4h12", "M5 8h9", "M2 12h12"],
+        numbering: ["M5 1 3 15", "M11 1 9 15", "M2 6h12", "M1 11h12"],
+        "table-delete": [
+          "M4 5h8l-.5 9h-7z",
+          "M3 5h10",
+          "M6 3h4",
+          "M6 7.5v4M8 7.5v4M10 7.5v4",
+        ],
+      };
+      for (const pathData of paths[kind]) {
+        const pathElement = document.createElementNS(
+          "http://www.w3.org/2000/svg",
+          "path",
+        );
+        pathElement.setAttribute("d", pathData);
+        pathElement.setAttribute("fill", "none");
+        pathElement.setAttribute("stroke", "currentColor");
+        pathElement.setAttribute("stroke-linecap", "round");
+        pathElement.setAttribute("stroke-linejoin", "round");
+        pathElement.setAttribute("stroke-width", "1.35");
+        svg.append(pathElement);
+      }
+      return svg;
+    };
+
+    const addGroup = (
+      label: string,
+      actions: Array<[TableToolbarAction, string, string, TableToolbarIcon]>,
+    ): void => {
+      const group = makeElement("div", {
+        class: "mm-table-toolbar-group",
+        role: "group",
+        "aria-label": label,
+      });
+      const heading = makeElement("span", {
+        class: "mm-table-toolbar-group-label",
+        "aria-hidden": "true",
+      });
+      heading.textContent = label;
+      const controls = makeElement("div", {
+        class: "mm-table-toolbar-actions",
+      });
+      group.append(heading, controls);
+      for (const [action, text, title, iconKind] of actions) {
+        const button = makeElement("button", {
+          type: "button",
+          class: "mm-table-toolbar-button",
+          "data-action": action,
+          "data-tooltip": title,
+          "aria-label": title,
+        }) as HTMLButtonElement;
+        if (action.startsWith("align-") || action === "table-numbering")
+          button.setAttribute("aria-pressed", "false");
+        const labelElement = makeElement("span", {
+          class: "mm-table-toolbar-button-label",
+        });
+        labelElement.textContent = text;
+        button.append(icon(iconKind), labelElement);
+        button.addEventListener("mousedown", (event) => {
+          // Keep the ProseMirror selection in place while the contextual
+          // toolbar receives focus. The command runs from that stable state.
+          event.preventDefault();
+        });
+        button.addEventListener("click", () =>
+          this.runContextualTableAction(action),
+        );
+        controls.append(button);
+      }
+      toolbar.append(group);
+    };
+
+    addGroup("Row", [
+      ["row-above", "Above", "Add row above", "row-above"],
+      ["row-below", "Below", "Add row below", "row-below"],
+      ["row-delete", "Delete", "Delete selected row", "row-delete"],
+    ]);
+    addGroup("Column", [
+      ["col-left", "Left", "Add column left", "col-left"],
+      ["col-right", "Right", "Add column right", "col-right"],
+      ["col-delete", "Delete", "Delete selected column", "col-delete"],
+    ]);
+    addGroup("Align", [
+      ["align-left", "Left", "Align selected column left", "align-left"],
+      [
+        "align-center",
+        "Center",
+        "Align selected column center",
+        "align-center",
+      ],
+      ["align-right", "Right", "Align selected column right", "align-right"],
+    ]);
+    addGroup("Rows", [
+      ["table-numbering", "#", "Number table rows", "numbering"],
+    ]);
+    addGroup("Table", [
+      ["table-delete", "Delete table", "Delete table", "table-delete"],
+    ]);
+    return toolbar;
+  }
+
+  private buildTableDialog(container: HTMLElement): void {
+    const dialog = document.createElement("dialog");
+    dialog.className = "mm-input-dialog mm-table-dialog";
+    dialog.setAttribute("aria-labelledby", "mm-table-dialog-title");
+    const form = document.createElement("form");
+    form.className = "mm-dialog-form";
+    const title = document.createElement("h2");
+    title.id = "mm-table-dialog-title";
+    title.textContent = "Insert table";
+    const help = document.createElement("p");
+    help.className = "mm-table-dialog-help";
+    help.textContent =
+      "Rows includes the header row. Choose 1–20 columns and 1–50 rows.";
+
+    const makeNumberField = (
+      labelText: string,
+      min: number,
+      max: number,
+      value: number,
+    ): HTMLInputElement => {
+      const label = document.createElement("label");
+      label.className = "mm-dialog-field";
+      const caption = document.createElement("span");
+      caption.textContent = labelText;
+      const input = document.createElement("input");
+      input.type = "number";
+      input.min = String(min);
+      input.max = String(max);
+      input.step = "1";
+      input.value = String(value);
+      input.inputMode = "numeric";
+      label.append(caption, input);
+      return input;
+    };
+    this.tableColumnsInput = makeNumberField("Columns", 1, 20, 3);
+    this.tableRowsInput = makeNumberField("Rows (including header)", 1, 50, 3);
+    const fields = document.createElement("div");
+    fields.className = "mm-table-dialog-fields";
+    fields.append(
+      this.tableColumnsInput.parentElement as HTMLElement,
+      this.tableRowsInput.parentElement as HTMLElement,
+    );
+
+    const gridLabel = document.createElement("span");
+    gridLabel.className = "mm-table-grid-label";
+    gridLabel.textContent = "Click to select; double-click to insert";
+    this.tableGrid = document.createElement("div");
+    this.tableGrid.className = "mm-table-grid";
+    this.tableGrid.setAttribute("role", "grid");
+    this.tableGrid.setAttribute("aria-label", "Table size preview");
+    this.tableGrid.setAttribute("aria-rowcount", "6");
+    this.tableGrid.setAttribute("aria-colcount", "8");
+    this.tableGrid.tabIndex = 0;
+    this.tableGridCells = [];
+    for (let row = 0; row < 6; row += 1) {
+      const gridRow = document.createElement("div");
+      gridRow.className = "mm-table-grid-row";
+      gridRow.setAttribute("role", "row");
+      for (let column = 0; column < 8; column += 1) {
+        const cell = document.createElement("button");
+        cell.type = "button";
+        cell.className = "mm-table-grid-cell";
+        cell.setAttribute("role", "gridcell");
+        cell.tabIndex = -1;
+        cell.id = `mm-table-grid-cell-${row + 1}-${column + 1}`;
+        cell.dataset.gridRow = String(row + 1);
+        cell.dataset.gridColumn = String(column + 1);
+        cell.setAttribute(
+          "aria-label",
+          `${column + 1} columns by ${row + 1} rows`,
+        );
+        gridRow.append(cell);
+        this.tableGridCells.push(cell);
+      }
+      this.tableGrid.append(gridRow);
+    }
+    const getCell = (event: Event): HTMLButtonElement | null => {
+      const target = event.target;
+      if (!(target instanceof Element)) return null;
+      const cell = target.closest<HTMLButtonElement>(".mm-table-grid-cell");
+      return cell && this.tableGrid.contains(cell) ? cell : null;
+    };
+    const restorePreview = (): void => {
+      if (!this.tableDialogOpen) return;
+      if (this.tableDialogSelectionLocked) return;
+      this.previewTableDialogDimensions(
+        this.tableDialogColumns,
+        this.tableDialogRows,
+        false,
+      );
+    };
+    const previewCell = (event: Event): void => {
+      if (!this.tableDialogOpen) return;
+      if (this.tableDialogSelectionLocked) return;
+      const cell = getCell(event);
+      if (!cell) return;
+      this.previewTableDialogDimensions(
+        Number(cell.dataset.gridColumn),
+        Number(cell.dataset.gridRow),
+      );
+    };
+    this.tableGrid.addEventListener("pointermove", previewCell);
+    this.tableGrid.addEventListener("mouseover", previewCell);
+    this.tableGrid.addEventListener("mouseenter", previewCell);
+    this.tableGrid.addEventListener("pointerleave", restorePreview);
+    this.tableGrid.addEventListener("mouseleave", restorePreview);
+    this.tableGrid.addEventListener("focusin", previewCell);
+    this.tableGrid.addEventListener("click", (event) => {
+      if (!this.tableDialogOpen) return;
+      const cell = getCell(event);
+      if (!cell) return;
+      event.preventDefault();
+      this.tableDialogSelectionLocked = true;
+      this.selectTableDialogDimensions(
+        Number(cell.dataset.gridColumn),
+        Number(cell.dataset.gridRow),
+      );
+    });
+    this.tableGrid.addEventListener("dblclick", (event) => {
+      if (!this.tableDialogOpen) return;
+      const cell = getCell(event);
+      if (!cell) return;
+      event.preventDefault();
+      this.selectTableDialogDimensions(
+        Number(cell.dataset.gridColumn),
+        Number(cell.dataset.gridRow),
+      );
+      this.commitTableDialog();
+    });
+    this.tableGrid.addEventListener("keydown", (event) => {
+      if (!this.tableDialogOpen) return;
+      this.tableDialogSelectionLocked = false;
+      const currentRow = Number(this.tableGrid.dataset.focusRow ?? 3);
+      const currentColumn = Number(this.tableGrid.dataset.focusColumn ?? 3);
+      let row = currentRow;
+      let column = currentColumn;
+      if (event.key === "ArrowUp") row = Math.max(1, row - 1);
+      else if (event.key === "ArrowDown") row = Math.min(6, row + 1);
+      else if (event.key === "ArrowLeft") column = Math.max(1, column - 1);
+      else if (event.key === "ArrowRight") column = Math.min(8, column + 1);
+      else if (event.key === "Home") column = 1;
+      else if (event.key === "End") column = 8;
+      else if (event.key === " " || event.key === "Enter") {
+        event.preventDefault();
+        this.selectTableDialogDimensions(currentColumn, currentRow);
+        return;
+      } else return;
+      event.preventDefault();
+      this.tableGrid.dataset.focusRow = String(row);
+      this.tableGrid.dataset.focusColumn = String(column);
+      this.previewTableDialogDimensions(column, row);
+    });
+    this.tableSizeLabel = document.createElement("span");
+    this.tableSizeLabel.className = "mm-table-size";
+    this.tableSizeLabel.setAttribute("aria-live", "polite");
+
+    this.tableDialogError = document.createElement("p");
+    this.tableDialogError.className = "mm-table-dialog-error";
+    this.tableDialogError.setAttribute("role", "alert");
+    this.tableDialogError.hidden = true;
+
+    const gridWrap = document.createElement("div");
+    gridWrap.className = "mm-table-grid-wrap";
+    gridWrap.append(gridLabel, this.tableGrid, this.tableSizeLabel);
+
+    const actions = document.createElement("div");
+    actions.className = "mm-dialog-actions";
+    const cancel = document.createElement("button");
+    cancel.type = "button";
+    cancel.textContent = "Cancel";
+    cancel.addEventListener("click", () => this.closeTableDialog());
+    const insert = document.createElement("button");
+    insert.type = "submit";
+    insert.className = "mm-dialog-primary";
+    insert.textContent = "Insert table";
+    this.tableDialogInsertButton = insert;
+    actions.append(cancel, insert);
+
+    form.addEventListener("submit", (event) => {
+      event.preventDefault();
+      this.commitTableDialog();
+    });
+    const updateFromInput = (): void => {
+      this.validateTableDialogInputs();
+    };
+    this.tableColumnsInput.addEventListener("input", updateFromInput);
+    this.tableRowsInput.addEventListener("input", updateFromInput);
+    this.tableColumnsInput.addEventListener("change", updateFromInput);
+    this.tableRowsInput.addEventListener("change", updateFromInput);
+    dialog.addEventListener("cancel", (event) => {
+      event.preventDefault();
+      this.closeTableDialog();
+    });
+    form.append(title, help, gridWrap, fields, this.tableDialogError, actions);
+    dialog.append(form);
+    container.append(dialog);
+    this.tableDialog = dialog;
+    this.renderTableGrid();
+  }
+
+  private validateTableDialogInputs(): boolean {
+    const values: Array<{
+      input: HTMLInputElement;
+      label: string;
+      min: number;
+      max: number;
+    }> = [
+      {
+        input: this.tableColumnsInput,
+        label: "Columns",
+        min: 1,
+        max: 20,
+      },
+      {
+        input: this.tableRowsInput,
+        label: "Rows",
+        min: 1,
+        max: 50,
+      },
+    ];
+    const invalid = values.find(({ input, min, max }) => {
+      const value = Number(input.value);
+      return !Number.isInteger(value) || value < min || value > max;
+    });
+    if (invalid) {
+      const reason = invalid.input.value.trim()
+        ? `${invalid.label} must be a whole number from ${invalid.min} to ${invalid.max}.`
+        : `${invalid.label} is required.`;
+      invalid.input.setCustomValidity(reason);
+      this.tableDialogError.textContent = reason;
+      this.tableDialogError.hidden = false;
+      this.tableDialogInsertButton.disabled = true;
+      return false;
+    }
+    for (const { input } of values) input.setCustomValidity("");
+    this.tableDialogError.hidden = true;
+    this.tableDialogError.textContent = "";
+    this.tableDialogInsertButton.disabled = false;
+    const columns = Number(this.tableColumnsInput.value);
+    const rows = Number(this.tableRowsInput.value);
+    this.selectTableDialogDimensions(columns, rows);
+    return true;
+  }
+
+  private renderTableGrid(): void {
+    if (!this.tableGrid || !this.tableSizeLabel) return;
+    const displayRows = this.tableDialogPreviewing
+      ? this.tableDialogPreviewRows
+      : this.tableDialogRows;
+    const displayColumns = this.tableDialogPreviewing
+      ? this.tableDialogPreviewColumns
+      : this.tableDialogColumns;
+    const focusRow = Math.min(6, Math.max(1, Math.round(displayRows)));
+    const focusColumn = Math.min(8, Math.max(1, Math.round(displayColumns)));
+    this.tableGrid.dataset.focusRow = String(focusRow);
+    this.tableGrid.dataset.focusColumn = String(focusColumn);
+    this.tableGrid.setAttribute(
+      "aria-activedescendant",
+      `mm-table-grid-cell-${focusRow}-${focusColumn}`,
+    );
+    for (const cell of this.tableGridCells) {
+      const row = Number(cell.dataset.gridRow);
+      const column = Number(cell.dataset.gridColumn);
+      const preview = row <= focusRow && column <= focusColumn;
+      cell.classList.toggle("is-preview", preview);
+      cell.classList.remove("is-selected");
+      cell.removeAttribute("data-selected");
+      cell.setAttribute(
+        "aria-selected",
+        String(row === focusRow && column === focusColumn),
+      );
+    }
+    this.tableSizeLabel.textContent = `${displayColumns} × ${displayRows}`;
+    this.tableSizeLabel.setAttribute(
+      "aria-label",
+      `${displayColumns} columns by ${displayRows} rows`,
+    );
+  }
+
+  private previewTableDialogDimensions(
+    columns: number,
+    rows: number,
+    active = true,
+  ): void {
+    const normalizedColumns = Math.max(
+      1,
+      Math.min(
+        20,
+        Math.round(
+          Number.isFinite(columns) ? columns : this.tableDialogColumns,
+        ),
+      ),
+    );
+    const normalizedRows = Math.max(
+      1,
+      Math.min(
+        50,
+        Math.round(Number.isFinite(rows) ? rows : this.tableDialogRows),
+      ),
+    );
+    const previewColumns = active
+      ? normalizedColumns
+      : Math.min(8, this.tableDialogColumns);
+    const previewRows = active
+      ? normalizedRows
+      : Math.min(6, this.tableDialogRows);
+    if (
+      this.tableDialogPreviewing === active &&
+      this.tableDialogPreviewColumns === previewColumns &&
+      this.tableDialogPreviewRows === previewRows
+    )
+      return;
+    this.tableDialogPreviewing = active;
+    this.tableDialogPreviewColumns = previewColumns;
+    this.tableDialogPreviewRows = previewRows;
+    this.renderTableGrid();
+  }
+
+  private selectTableDialogDimensions(columns: number, rows: number): void {
+    const nextColumns = Math.max(
+      1,
+      Math.min(
+        20,
+        Math.round(
+          Number.isFinite(columns) ? columns : this.tableDialogColumns,
+        ),
+      ),
+    );
+    const nextRows = Math.max(
+      1,
+      Math.min(
+        50,
+        Math.round(Number.isFinite(rows) ? rows : this.tableDialogRows),
+      ),
+    );
+    const dimensionsChanged =
+      this.tableDialogColumns !== nextColumns ||
+      this.tableDialogRows !== nextRows;
+    const previewChanged =
+      this.tableDialogPreviewing ||
+      this.tableDialogPreviewColumns !== Math.min(8, nextColumns) ||
+      this.tableDialogPreviewRows !== Math.min(6, nextRows);
+    this.tableDialogColumns = nextColumns;
+    this.tableDialogRows = nextRows;
+    this.tableDialogPreviewing = false;
+    this.tableDialogPreviewColumns = Math.min(8, nextColumns);
+    this.tableDialogPreviewRows = Math.min(6, nextRows);
+    if (this.tableColumnsInput) {
+      this.tableColumnsInput.value = String(this.tableDialogColumns);
+      this.tableRowsInput.value = String(this.tableDialogRows);
+      this.tableColumnsInput.setCustomValidity("");
+      this.tableRowsInput.setCustomValidity("");
+    }
+    if (this.tableDialogError) {
+      this.tableDialogError.hidden = true;
+      this.tableDialogError.textContent = "";
+    }
+    this.tableDialogSelectionLocked = false;
+    if (this.tableDialogInsertButton)
+      this.tableDialogInsertButton.disabled = false;
+    if (dimensionsChanged || previewChanged) this.renderTableGrid();
+  }
+
+  private openTableDialog(invokingButton: HTMLButtonElement): void {
+    if (
+      this.profile === "commonmark" ||
+      !this.initialized ||
+      this.previewOnly ||
+      this.mode !== "rich" ||
+      this.parseError ||
+      this.conflict ||
+      this.syncPaused
+    ) {
+      this.setNotice("Tables are unavailable in the current editing mode.");
+      return;
+    }
+    const popupSelection = this.popupSelection;
+    this.closeWritingPopups();
+    this.closeEmojiPicker();
+    this.tableDialogSelection = {
+      selection:
+        popupSelection && popupSelection.$from.doc === this.view.state.doc
+          ? popupSelection
+          : this.view.state.selection,
+      doc: this.view.state.doc,
+      version: this.version,
+      profile: this.profile,
+      documentGeneration: this.documentGeneration,
+    };
+    this.tableDialogInvokingButton = invokingButton;
+    this.tableDialogOpen = true;
+    this.tableDialogSelectionLocked = false;
+    this.selectTableDialogDimensions(3, 3);
+    this.openDialog(this.tableDialog);
+    this.tableGrid.focus({ preventScroll: true });
+  }
+
+  private closeTableDialog(message?: string, restoreFocus = true): void {
+    if (!this.tableDialogOpen && !this.tableDialogSelection) return;
+    this.tableDialogOpen = false;
+    const button = this.tableDialogInvokingButton;
+    this.tableDialogInvokingButton = null;
+    this.tableDialogSelection = null;
+    this.tableDialogSelectionLocked = false;
+    this.closeDialog(this.tableDialog);
+    if (message) this.setNotice(message, "error");
+    if (restoreFocus && button?.isConnected) button.focus();
+  }
+
+  private commitTableDialog(): void {
+    const saved = this.tableDialogSelection;
+    if (!saved) return;
+    if (
+      !this.initialized ||
+      this.previewOnly ||
+      this.mode !== "rich" ||
+      this.parseError ||
+      this.conflict ||
+      this.syncPaused ||
+      this.profile !== saved.profile ||
+      this.documentGeneration !== saved.documentGeneration ||
+      this.view.state.doc !== saved.doc
+    ) {
+      this.closeTableDialog(
+        "The document changed while the table dialog was open; nothing was inserted.",
+      );
+      return;
+    }
+    if (tableContext(saved.selection)) {
+      this.closeTableDialog(
+        "Place the cursor outside an existing table before inserting a table.",
+      );
+      return;
+    }
+    const inserted = this.insertTable(
+      this.tableDialogColumns,
+      this.tableDialogRows,
+      saved.selection,
+    );
+    if (inserted) this.closeTableDialog(undefined, false);
   }
 
   private openDialog(dialog: HTMLDialogElement): void {
@@ -1768,6 +4731,15 @@ export class MarkdownEditorApp {
   private closeDialog(dialog: HTMLDialogElement): void {
     if (typeof dialog.close === "function") dialog.close();
     else dialog.removeAttribute("open");
+  }
+
+  private restoreSelectionObject(selection: Selection | null): boolean {
+    if (!selection || selection.$from.doc !== this.view.state.doc) return false;
+    this.view.focus();
+    this.view.updateState(
+      this.view.state.apply(this.view.state.tr.setSelection(selection)),
+    );
+    return true;
   }
 
   private restoreSavedSelection(): SavedSelection | null {
@@ -1847,6 +4819,17 @@ export class MarkdownEditorApp {
     this.dispatchTransaction(this.view.state.tr.replaceSelectionWith(image));
   }
 
+  private insertHorizontalRule(): void {
+    const horizontalRule = this.schema.nodes.horizontal_rule;
+    if (!horizontalRule) return;
+    this.dispatchTransaction(
+      this.view.state.tr
+        .replaceSelectionWith(horizontalRule.create())
+        .scrollIntoView(),
+    );
+    this.view.focus();
+  }
+
   private setCodeLanguage(language: string): void {
     const { $from } = this.view.state.selection;
     for (let depth = $from.depth; depth > 0; depth -= 1) {
@@ -1873,9 +4856,14 @@ export class MarkdownEditorApp {
   }
 
   private runListCommand(typeName: string): void {
-    const listType = this.schema.nodes[typeName];
-    if (!listType) return;
-    this.runCommand(wrapInList(listType));
+    const kind: ListKind | null =
+      typeName === "ordered_list"
+        ? "ordered"
+        : typeName === "bullet_list"
+          ? "bullet"
+          : null;
+    if (!kind) return;
+    this.runCommand(createListCommand(kind, this.schema));
   }
 
   private runTaskList(): void {
@@ -1883,18 +4871,92 @@ export class MarkdownEditorApp {
       this.setNotice("Task lists are unavailable in CommonMark.");
       return;
     }
-    const taskList =
-      this.schema.nodes.task_list || this.schema.nodes.bullet_list;
-    if (!taskList) return;
+    this.runCommand(createListCommand("task", this.schema));
+  }
+
+  private updateTableNumberingState(context: TableContext | null): void {
+    const button = this.tableToolbar?.querySelector<HTMLButtonElement>(
+      '[data-action="table-numbering"]',
+    );
+    if (!button) return;
+    const active =
+      Boolean(context) &&
+      this.profile !== "commonmark" &&
+      isTableNumbered(this.view.state);
+    button.setAttribute("aria-pressed", String(active));
+    button.classList.toggle("is-active", active);
+  }
+
+  private runTableNumbering(): void {
+    this.runTableCommand(createTableNumberingCommand(this.schema));
+  }
+
+  private runContextualTableAction(action: TableToolbarAction): void {
+    if (action === "align-left") {
+      this.runAlignment("left");
+      return;
+    }
+    if (action === "align-center") {
+      this.runAlignment("center");
+      return;
+    }
+    if (action === "align-right") {
+      this.runAlignment("right");
+      return;
+    }
+    if (action === "table-numbering") {
+      this.runTableNumbering();
+      return;
+    }
+    if (action === "table-delete") {
+      this.deleteTable();
+      return;
+    }
+    const commands: Partial<
+      Record<
+        Exclude<TableToolbarAction, "table-delete" | `align-${string}`>,
+        (state: EditorState, dispatch?: (tr: Transaction) => void) => boolean
+      >
+    > = {
+      "row-above": addRowBefore,
+      "row-below": addRowAfter,
+      "row-delete": deleteRow,
+      "col-left": addColumnBefore,
+      "col-right": addColumnAfter,
+      "col-delete": deleteColumn,
+    };
+    const command = commands[action as keyof typeof commands];
+    if (command) this.runTableCommand(command);
+  }
+
+  private deleteTable(): boolean {
+    if (this.profile === "commonmark") {
+      this.setNotice("Tables are unavailable in CommonMark.");
+      return false;
+    }
+    const context = tableContext(this.view.state.selection);
+    const paragraph = this.schema.nodes.paragraph;
+    if (!context || !paragraph) {
+      this.setNotice("Place the cursor inside a table to delete it.");
+      return false;
+    }
     this.view.focus();
-    wrapInList(taskList)(this.view.state, (tr) => {
-      const { from, to } = tr.selection;
-      tr.doc.nodesBetween(from, to, (node, pos) => {
-        if (node.type.name === "list_item" && node.attrs.checked == null)
-          tr.setNodeMarkup(pos, undefined, { ...node.attrs, checked: false });
-      });
-      this.dispatchTransaction(tr);
-    });
+    const transaction = this.view.state.tr.replaceWith(
+      context.tableStart - 1,
+      context.tableStart - 1 + context.table.nodeSize,
+      paragraph.create(),
+    );
+    transaction.setSelection(
+      TextSelection.near(
+        transaction.doc.resolve(
+          Math.min(context.tableStart - 1, transaction.doc.content.size),
+        ),
+        1,
+      ),
+    );
+    transaction.scrollIntoView();
+    this.dispatchTransaction(transaction);
+    return true;
   }
 
   private runTableCommand(
@@ -1917,6 +4979,95 @@ export class MarkdownEditorApp {
     );
   }
 
+  private captureTableSelection(
+    context: TableContext,
+    selection: Selection,
+  ): TableSelectionBookmark {
+    if (selection instanceof CellSelection) {
+      const anchor = context.map.findCell(
+        selection.$anchorCell.pos - context.tableStart,
+      );
+      const head = context.map.findCell(
+        selection.$headCell.pos - context.tableStart,
+      );
+      return {
+        kind: "cells",
+        anchor: { row: anchor.top, column: anchor.left },
+        head: { row: head.top, column: head.left },
+      };
+    }
+    const cell = context.map.findCell(context.cellPos - context.tableStart);
+    return {
+      kind: "text",
+      row: cell.top,
+      column: cell.left,
+      anchorOffset: Math.max(1, selection.anchor - context.cellPos),
+      headOffset: Math.max(1, selection.head - context.cellPos),
+    };
+  }
+
+  /** Replace a whole table while restoring the selected logical cell. */
+  private replaceTablePreservingSelection(
+    transaction: Transaction,
+    context: TableContext,
+    replacement: PMNode,
+  ): Transaction {
+    const start = context.tableStart - 1;
+    const currentTable = transaction.doc.nodeAt(start) ?? context.table;
+    const bookmark = this.captureTableSelection(context, transaction.selection);
+    transaction.replaceWith(start, start + currentTable.nodeSize, replacement);
+    const insertedTable = transaction.doc.nodeAt(start);
+    if (!insertedTable || insertedTable.type.spec.tableRole !== "table")
+      return transaction;
+    const tableStart = start + 1;
+    const map = TableMap.get(insertedTable);
+    const cellPosition = (row: number, column: number): number => {
+      const safeRow = Math.max(0, Math.min(map.height - 1, row));
+      const safeColumn = Math.max(0, Math.min(map.width - 1, column));
+      return tableStart + map.positionAt(safeRow, safeColumn, insertedTable);
+    };
+    try {
+      if (bookmark.kind === "cells") {
+        transaction.setSelection(
+          CellSelection.create(
+            transaction.doc,
+            cellPosition(bookmark.anchor.row, bookmark.anchor.column),
+            cellPosition(bookmark.head.row, bookmark.head.column),
+          ),
+        );
+      } else {
+        const cellPos = cellPosition(bookmark.row, bookmark.column);
+        const cell = insertedTable.nodeAt(
+          map.positionAt(
+            Math.max(0, Math.min(map.height - 1, bookmark.row)),
+            Math.max(0, Math.min(map.width - 1, bookmark.column)),
+            insertedTable,
+          ),
+        );
+        const contentSize = cell?.content.size ?? 0;
+        const anchor = Math.min(
+          Math.max(1, bookmark.anchorOffset),
+          Math.max(1, contentSize),
+        );
+        const head = Math.min(
+          Math.max(1, bookmark.headOffset),
+          Math.max(1, contentSize),
+        );
+        transaction.setSelection(
+          TextSelection.create(
+            transaction.doc,
+            cellPos + anchor,
+            cellPos + head,
+          ),
+        );
+      }
+    } catch {
+      // A malformed table from an extension should still be left in the doc;
+      // ProseMirror will place a valid nearby selection when it dispatches.
+    }
+    return transaction.scrollIntoView();
+  }
+
   private normalizeTableTransaction(tr: Transaction): Transaction {
     const context = tableContext(tr.selection);
     if (!context) return tr;
@@ -1937,11 +5088,7 @@ export class MarkdownEditorApp {
     }
     const normalized = context.table.copy(Fragment.fromArray(rows));
     if (normalized.eq(context.table)) return tr;
-    return tr.replaceWith(
-      context.tableStart - 1,
-      context.tableStart - 1 + context.table.nodeSize,
-      normalized,
-    );
+    return this.replaceTablePreservingSelection(tr, context, normalized);
   }
 
   private runAlignment(alignment: "left" | "center" | "right"): boolean {
@@ -1970,38 +5117,129 @@ export class MarkdownEditorApp {
     }
     const aligned = context.table.copy(Fragment.fromArray(rows));
     this.dispatchTransaction(
-      this.view.state.tr.replaceWith(
-        context.tableStart - 1,
-        context.tableStart - 1 + context.table.nodeSize,
+      this.replaceTablePreservingSelection(
+        this.view.state.tr,
+        context,
         aligned,
       ),
     );
     return true;
   }
 
-  private insertTable(): void {
+  private insertTable(
+    columns = 3,
+    rows = 3,
+    savedSelection: Selection = this.view.state.selection,
+  ): boolean {
     if (this.profile === "commonmark") {
       this.setNotice("Tables are unavailable in CommonMark.");
-      return;
+      return false;
     }
     const table = this.schema.nodes.table;
     const row = this.schema.nodes.table_row;
     const cell = this.schema.nodes.table_cell;
     const header = this.schema.nodes.table_header ?? cell;
     const paragraph = this.schema.nodes.paragraph;
-    if (!table || !row || !cell || !header || !paragraph) return;
-    const cells = Array.from({ length: 3 }, () =>
-      cell.create(null, paragraph.create()),
+    if (!table || !row || !cell || !header || !paragraph) return false;
+    const normalizedColumns = Math.max(1, Math.min(20, Math.round(columns)));
+    const normalizedRows = Math.max(1, Math.min(50, Math.round(rows)));
+    const makeCells = (type: typeof cell): PMNode[] =>
+      Array.from({ length: normalizedColumns }, () =>
+        type.create(null, paragraph.create()),
+      );
+    const headerCells = makeCells(header);
+    const bodyRows = Array.from({ length: normalizedRows - 1 }, () =>
+      row.create(null, makeCells(cell)),
     );
-    const headerCells = Array.from({ length: 3 }, () =>
-      header.create(null, paragraph.create()),
+    const node = table.create(null, [
+      row.create(null, headerCells),
+      ...bodyRows,
+    ]);
+    const state = this.view.state;
+    let transaction: Transaction;
+    try {
+      transaction = state.tr.setSelection(savedSelection);
+      const selection = transaction.selection;
+      const $from = selection.$from;
+      const $to = selection.$to;
+      if (selection instanceof TextSelection && $from.sameParent($to)) {
+        const parent = $from.parent;
+        const blockStart = $from.before($from.depth);
+        const fromOffset = selection.from - $from.start($from.depth);
+        const toOffset = selection.to - $from.start($from.depth);
+        const parts: PMNode[] = [];
+        if (fromOffset > 0) parts.push(parent.cut(0, fromOffset));
+        parts.push(node);
+        if (toOffset < parent.content.size)
+          parts.push(parent.cut(toOffset, parent.content.size));
+        transaction.replaceWith(
+          blockStart,
+          blockStart + parent.nodeSize,
+          Fragment.fromArray(parts),
+        );
+      } else {
+        transaction.replaceRangeWith(selection.from, selection.to, node);
+      }
+    } catch {
+      this.setNotice(
+        "The table could not be inserted at this selection.",
+        "error",
+      );
+      return false;
+    }
+    let tablePos = -1;
+    const mappedInsertion = transaction.mapping.map(savedSelection.from);
+    let nearestDistance = Number.POSITIVE_INFINITY;
+    transaction.doc.nodesBetween(
+      0,
+      transaction.doc.content.size,
+      (candidate, position) => {
+        if (candidate.type !== table) return;
+        if (candidate === node) {
+          tablePos = position;
+          nearestDistance = 0;
+          return;
+        }
+        if (candidate.eq(node) && tablePos < 0) {
+          const distance = Math.abs(position - mappedInsertion);
+          if (distance < nearestDistance) {
+            tablePos = position;
+            nearestDistance = distance;
+          }
+        }
+      },
     );
-    const rows = [row.create(null, headerCells), row.create(null, cells)];
-    const node = table.create(null, rows);
-    const { from, to } = this.view.state.selection;
-    this.dispatchTransaction(
-      this.view.state.tr.replaceRangeWith(from, to, node),
-    );
+    if (tablePos >= 0) {
+      const insertedTable = transaction.doc.nodeAt(tablePos);
+      if (insertedTable) {
+        const tableEnd = tablePos + insertedTable.nodeSize;
+        if (!transaction.doc.nodeAt(tableEnd)) {
+          const trailing = paragraph.create();
+          transaction = transaction
+            .insert(tableEnd, trailing)
+            .setMeta(TRANSIENT_BLANK_META, {
+              kind: "append",
+              from: tableEnd,
+              to: tableEnd + trailing.nodeSize,
+              count: 1,
+              meaningful: true,
+            } satisfies TransientBlankTransactionMeta);
+        }
+        const map = TableMap.get(insertedTable);
+        const firstCellPos = tablePos + 1 + (map.map[0] ?? 1);
+        try {
+          transaction.setSelection(
+            TextSelection.near(transaction.doc.resolve(firstCellPos + 1), 1),
+          );
+        } catch {
+          // A malformed schema should still leave the inserted table usable.
+        }
+      }
+    }
+    transaction.scrollIntoView();
+    this.dispatchTransaction(transaction);
+    this.view.focus();
+    return true;
   }
 
   private async formatDocument(): Promise<void> {
@@ -2015,7 +5253,7 @@ export class MarkdownEditorApp {
     }
     const current = this.currentMarkdown();
     if (this.vscode) {
-      if (this.composing || this.sync.hasPending) {
+      if (this.composing || this.hasPendingHostSync()) {
         this.deferredHostCommand = "format";
         this.setNotice("Waiting to format until the latest edit is synced.");
         return;
@@ -2097,11 +5335,16 @@ export class MarkdownEditorApp {
   }
 
   private setMode(mode: EditorMode, requestHost = true): void {
-    if (this.previewOnly && mode !== "preview") return;
+    if (this.previewOnly && mode !== "preview" && mode !== "source") return;
+    if (mode !== this.mode) {
+      this.closeWritingPopups();
+      this.closeEmojiPicker();
+    }
+    if (this.tableDialogOpen && mode !== "rich") this.closeTableDialog();
     this.mode = mode;
-    for (const [candidate, button] of this.modes) {
-      button.setAttribute("aria-selected", String(candidate === mode));
-      button.classList.toggle("is-active", candidate === mode);
+    if (mode !== "preview") {
+      this.previewEnhancer?.dispose();
+      this.previewEnhancer = undefined;
     }
     for (const panel of Array.from(
       this.root.querySelectorAll<HTMLElement>("[data-panel]"),
@@ -2114,7 +5357,7 @@ export class MarkdownEditorApp {
     );
     if (mode === "preview") {
       this.refreshDerivedViews(this.currentMarkdown());
-      if (requestHost && this.sync.hasPending)
+      if (requestHost && this.hasPendingHostSync())
         this.deferredHostCommand = "preview";
       else if (requestHost)
         this.vscode?.postMessage({
@@ -2126,7 +5369,7 @@ export class MarkdownEditorApp {
     }
     if (mode === "source") {
       this.sourceEl.value = this.currentMarkdown();
-      if (requestHost && this.sync.hasPending)
+      if (requestHost && this.hasPendingHostSync())
         this.deferredHostCommand = "source";
       else if (requestHost)
         this.vscode?.postMessage({
@@ -2138,22 +5381,41 @@ export class MarkdownEditorApp {
     if (mode === "rich") this.view.focus();
   }
 
-  private updateToolbarState(
-    _oldSelection: Selection,
-    selection: Selection,
-  ): void {
-    const inTable = isInTable(this.view.state);
+  private updateListToolbarState(selection = this.view.state.selection): void {
     const editingDisabled =
       !this.initialized ||
       this.previewOnly ||
       this.mode !== "rich" ||
       Boolean(this.parseError);
     for (const button of Array.from(
-      this.root.querySelectorAll<HTMLButtonElement>(".mw-table-menu button"),
-    ))
-      button.disabled = editingDisabled || !inTable;
+      this.root.querySelectorAll<HTMLButtonElement>("[data-list-kind]"),
+    )) {
+      const kind = button.dataset.listKind as ListKind | undefined;
+      let active = false;
+      if (!editingDisabled && kind) {
+        try {
+          active = isListActive(this.view.state, kind);
+        } catch {
+          active = false;
+        }
+      }
+      button.setAttribute("aria-pressed", String(active));
+      button.classList.toggle("is-active", active);
+    }
+    void selection;
+  }
+
+  private updateToolbarState(
+    _oldSelection: Selection,
+    selection: Selection,
+  ): void {
+    const editingDisabled =
+      !this.initialized ||
+      this.previewOnly ||
+      this.mode !== "rich" ||
+      Boolean(this.parseError);
     const heading =
-      this.root.querySelector<HTMLSelectElement>(".mw-heading-select");
+      this.root.querySelector<HTMLSelectElement>(".mm-heading-select");
     if (heading) {
       const { $from } = selection;
       const node = $from.parent;
@@ -2175,6 +5437,104 @@ export class MarkdownEditorApp {
     this.codeLanguageInput.hidden = !inCode;
     this.codeLanguageInput.disabled = editingDisabled || !inCode;
     this.updateEditingControlState();
+    this.updateListToolbarState(selection);
+    this.updateTableToolbar(selection);
+    this.updateSelectionToolbar(selection);
+    this.updateEmptyLineInsert(selection);
+    this.positionWritingPopup();
+  }
+
+  private updateProfileToolbar(): void {
+    if (!this.profileToolbar) return;
+    const visible =
+      this.initialized &&
+      !this.previewOnly &&
+      !this.parseError &&
+      this.mode === "rich" &&
+      (this.profile === "github" || this.profile === "gitlab");
+    this.profileToolbar.hidden = !visible;
+    this.profileToolbar.setAttribute("aria-hidden", String(!visible));
+    this.profileToolbar
+      .querySelector<HTMLElement>("[data-profile-toolbar-label]")
+      ?.replaceChildren(
+        document.createTextNode(
+          this.profile === "gitlab" ? "GitLab" : "GitHub",
+        ),
+      );
+    const allowed = new Set(
+      getProfileFeatures(this.profile).map((feature) => feature.id),
+    );
+    for (const button of Array.from(
+      this.profileToolbar.querySelectorAll<HTMLButtonElement>(
+        "[data-profile-feature]",
+      ),
+    )) {
+      const id = button.dataset.profileFeature as ProfileFeatureId | undefined;
+      const available = Boolean(id && allowed.has(id));
+      button.hidden = !available;
+      button.disabled =
+        !visible || !available || !this.canUseProfileFeature(id!);
+    }
+  }
+
+  private updateTableToolbar(selection = this.view.state.selection): void {
+    if (this.destroyed || !this.tableToolbar || !this.view) return;
+    const updateAlignmentState = (
+      active: "left" | "center" | "right" | null,
+    ): void => {
+      for (const button of Array.from(
+        this.tableToolbar.querySelectorAll<HTMLButtonElement>(
+          '[data-action^="align-"]',
+        ),
+      )) {
+        const action = button.dataset.action?.slice("align-".length);
+        button.setAttribute("aria-pressed", String(active === action));
+      }
+    };
+    const canShow =
+      this.initialized &&
+      !this.previewOnly &&
+      !this.parseError &&
+      !this.conflict &&
+      !this.syncPaused &&
+      this.mode === "rich" &&
+      this.profile !== "commonmark";
+    const context = canShow ? tableContext(selection) : null;
+    if (!context) {
+      updateAlignmentState(null);
+      this.tableToolbar.hidden = true;
+      this.tableToolbar.setAttribute("aria-hidden", "true");
+      this.tableToolbar.removeAttribute("data-table-pos");
+      this.updateTableNumberingState(null);
+      return;
+    }
+
+    // A null alignment is Markdown's default left alignment. Show a pressed
+    // state only when every cell in the selected column(s) agrees.
+    const alignments = new Set<"left" | "center" | "right">();
+    for (let row = 0; row < context.map.height; row += 1) {
+      for (
+        let column = context.rect.left;
+        column < context.rect.right;
+        column += 1
+      ) {
+        const cell = context.table.nodeAt(
+          context.map.positionAt(row, column, context.table),
+        );
+        const alignment = cell?.attrs.alignment;
+        alignments.add(
+          alignment === "center" || alignment === "right" ? alignment : "left",
+        );
+      }
+    }
+    updateAlignmentState(
+      alignments.size === 1 ? ([...alignments][0] ?? null) : null,
+    );
+
+    this.tableToolbar.hidden = false;
+    this.tableToolbar.setAttribute("aria-hidden", "false");
+    this.tableToolbar.dataset.tablePos = String(context.tableStart - 1);
+    this.updateTableNumberingState(context);
   }
 
   private postReady(): void {
@@ -2182,6 +5542,112 @@ export class MarkdownEditorApp {
       protocolVersion: PROTOCOL_VERSION,
       type: "ready",
       requestId: newOperationId(),
+    });
+  }
+
+  private hasPendingHostSync(): boolean {
+    return Boolean(this.vscode && (this.sync.hasPending || this.dirty));
+  }
+
+  private updateProfileSelect(): void {
+    if (!this.profileSelect) return;
+    this.profileSelect.value = this.profile;
+  }
+
+  private requestSource(): void {
+    if (!this.initialized) return;
+    if (this.composing || this.hasPendingHostSync()) {
+      this.deferredHostCommand = "source";
+      this.setNotice("Waiting to open source until the latest edit is synced.");
+      return;
+    }
+    if (!this.vscode) {
+      // Small embedders have no native editor to reveal. Preserve the old
+      // source panel as a useful local fallback while hosted VS Code opens the
+      // real TextDocument through the source protocol request.
+      this.setMode("source", false);
+      return;
+    }
+    this.vscode.postMessage({
+      protocolVersion: PROTOCOL_VERSION,
+      type: "source",
+      operationId: newOperationId(),
+    });
+    this.setNotice("Opening source…");
+  }
+
+  private requestProfileChange(profile: DocumentProfile): void {
+    if (
+      profile !== "github" &&
+      profile !== "gitlab" &&
+      profile !== "commonmark"
+    ) {
+      this.updateProfileSelect();
+      return;
+    }
+    if (this.pendingProfile?.operationId) {
+      this.updateProfileSelect();
+      this.setNotice("Waiting for the current profile change to finish.");
+      return;
+    }
+    if (profile === this.profile && !this.pendingProfile) {
+      this.updateProfileSelect();
+      return;
+    }
+    if (profile === this.profile && this.pendingProfile) {
+      this.pendingProfile = null;
+      this.updateProfileSelect();
+      this.updateEditingControlState();
+      return;
+    }
+
+    this.closeWritingPopups();
+    this.closeEmojiPicker();
+    this.closeProfileFeatureDialog();
+    this.pendingProfile = { profile };
+    this.profileSelect.value = profile;
+    if (this.composing || this.hasPendingHostSync()) {
+      this.setNotice(
+        "Waiting to switch profile until the latest edit is synced.",
+      );
+      this.updateEditingControlState();
+      return;
+    }
+    this.sendProfileChange();
+  }
+
+  private sendProfileChange(): void {
+    const pending = this.pendingProfile;
+    if (
+      !pending ||
+      pending.operationId ||
+      this.composing ||
+      this.hasPendingHostSync() ||
+      this.syncPaused
+    )
+      return;
+    if (!this.vscode) {
+      this.pendingProfile = null;
+      const markdown = this.currentMarkdown();
+      this.applyDocument({
+        protocolVersion: PROTOCOL_VERSION,
+        type: "document",
+        markdown,
+        version: this.version,
+        profile: pending.profile,
+      });
+      return;
+    }
+    const operationId = newOperationId();
+    pending.operationId = operationId;
+    this.setNotice("Switching to " + pending.profile + " profile…");
+    this.updateEditingControlState();
+    this.vscode.postMessage({
+      protocolVersion: PROTOCOL_VERSION,
+      type: "set-profile",
+      profile: pending.profile,
+      baseVersion: this.version,
+      operationId,
     });
   }
 
@@ -2194,7 +5660,7 @@ export class MarkdownEditorApp {
       );
       return false;
     }
-    if (this.composing || this.sync.hasPending) {
+    if (this.composing || this.hasPendingHostSync()) {
       this.deferredHostCommand = type;
       this.setNotice(`Waiting to ${type} until the latest edit is synced…`);
       return true;
@@ -2214,7 +5680,7 @@ export class MarkdownEditorApp {
       this.setNotice("Resolve the document conflict before saving.", "error");
       return false;
     }
-    if (this.composing || this.sync.hasPending) {
+    if (this.composing || this.hasPendingHostSync()) {
       this.deferredHostCommand = "save";
       this.setNotice("Waiting to save until the latest edit is synced.");
       return true;
@@ -2232,13 +5698,12 @@ export class MarkdownEditorApp {
   }
 
   private flushDeferredHostCommand(): void {
-    if (
-      !this.deferredHostCommand ||
-      this.composing ||
-      this.sync.hasPending ||
-      this.syncPaused
-    )
+    if (this.composing || this.hasPendingHostSync() || this.syncPaused) return;
+    if (this.pendingProfile) {
+      this.sendProfileChange();
       return;
+    }
+    if (!this.deferredHostCommand) return;
     const command = this.deferredHostCommand;
     this.deferredHostCommand = null;
     if (command === "save") {
@@ -2250,13 +5715,18 @@ export class MarkdownEditorApp {
       return;
     }
     const operationId = newOperationId();
-    if (command === "source")
-      this.vscode?.postMessage({
-        protocolVersion: PROTOCOL_VERSION,
-        type: "source",
-        operationId,
-      });
-    else if (command === "preview")
+    if (command === "source") {
+      if (this.vscode) {
+        this.vscode.postMessage({
+          protocolVersion: PROTOCOL_VERSION,
+          type: "source",
+          operationId,
+        });
+        this.setNotice("Opening source…");
+      } else {
+        this.setMode("source", false);
+      }
+    } else if (command === "preview")
       this.vscode?.postMessage({
         protocolVersion: PROTOCOL_VERSION,
         type: "preview",
@@ -2302,6 +5772,14 @@ export class MarkdownEditorApp {
           "Draft opened separately; reloading the authoritative document…";
       }
     } else if (message.type === "error") {
+      if (
+        this.pendingProfile?.operationId &&
+        this.pendingProfile.operationId === message.operationId
+      ) {
+        this.pendingProfile = null;
+        this.updateProfileSelect();
+        this.updateEditingControlState();
+      }
       this.setNotice(message.message, "error");
     }
   }
@@ -2313,7 +5791,19 @@ export class MarkdownEditorApp {
       return;
     }
     this.profile = message.profile;
+    this.updateProfileSelect();
+    this.closeEmojiPicker();
+    this.closeProfileFeatureDialog();
+    if (this.pendingProfile && message.profile === this.pendingProfile.profile)
+      this.pendingProfile = null;
+    this.updateEditingControlState();
     this.version = Math.max(this.version, message.version);
+    this.authoritativeMarkdown = message.markdown;
+    this.authoritativeProfile = message.profile;
+    this.authoritativeVersion = Math.max(
+      this.authoritativeVersion,
+      message.version,
+    );
     this.resourceBaseUrl = message.resourceBaseUrl;
     this.applyTypography(message.typography);
     this.lastValidMarkdown = message.markdown;
@@ -2352,7 +5842,7 @@ export class MarkdownEditorApp {
     ) {
       this.pendingRecoveryOperationId = undefined;
       this.reloadRequested = true;
-      this.applyDocument(message);
+      this.applyDocument(message, { force: true });
       return;
     }
     if (
@@ -2361,6 +5851,17 @@ export class MarkdownEditorApp {
       !this.reloadRequested
     )
       return;
+    const profileAck = Boolean(
+      this.pendingProfile?.operationId &&
+      this.pendingProfile.operationId === message.operationId,
+    );
+    if (profileAck) this.pendingProfile = null;
+    else if (
+      this.pendingProfile &&
+      !message.operationId &&
+      message.profile === this.pendingProfile.profile
+    )
+      this.pendingProfile = null;
     const hadPendingExternal = this.pendingExternal !== null;
     const isAck = Boolean(
       message.operationId &&
@@ -2375,6 +5876,12 @@ export class MarkdownEditorApp {
       // A delayed acknowledgement can arrive after a newer external
       // snapshot. Never move the base version backwards.
       this.version = Math.max(this.version, message.version);
+      this.authoritativeMarkdown = message.markdown;
+      this.authoritativeProfile = message.profile;
+      this.authoritativeVersion = Math.max(
+        this.authoritativeVersion,
+        message.version,
+      );
       this.operationId = message.operationId;
       if (hadPendingExternal) {
         this.conflict = true;
@@ -2386,9 +5893,15 @@ export class MarkdownEditorApp {
       }
       this.conflict = false;
       this.dirty = Boolean(this.sync.inflight || this.sync.queuedEdit);
+      this.updateProfileSelect();
+      this.updateEditingControlState();
       if (!this.sync.hasPending && message.markdown === this.currentMarkdown())
         this.clearRecoveryIfSaved();
       this.flushDeferredHostCommand();
+      return;
+    }
+    if (this.isDuplicateAuthoritativeSnapshot(message)) {
+      this.acceptDuplicateAuthoritativeSnapshot(message);
       return;
     }
     if (this.composing) {
@@ -2398,10 +5911,12 @@ export class MarkdownEditorApp {
     }
     if (this.reloadRequested) {
       this.reloadRequested = false;
-      this.applyDocument(message);
+      this.applyDocument(message, { force: true });
       return;
     }
     if (this.sync.inflight || this.sync.queuedEdit || this.dirty) {
+      this.closeWritingPopups();
+      this.closeProfileFeatureDialog();
       this.pendingExternal = message;
       // A profile/configuration broadcast can arrive with the same text while
       // a local edit is in flight. Keep the local document, but retain the
@@ -2420,16 +5935,152 @@ export class MarkdownEditorApp {
     this.applyDocument(message);
   }
 
-  private applyDocument(message: DocumentMessage): void {
+  private isDuplicateAuthoritativeSnapshot(message: DocumentMessage): boolean {
+    if (
+      message.operationId ||
+      (!this.sync.hasPending && !this.dirty && !this.composing) ||
+      this.pendingExternal ||
+      this.conflict ||
+      this.syncPaused
+    )
+      return false;
+    // History and explicit reload/recovery messages carry meaningful state
+    // even when their Markdown text happens to be unchanged.
+    if (message.reason !== undefined && message.reason !== "external")
+      return false;
+    const sameAuthoritativeSource =
+      message.profile === this.authoritativeProfile &&
+      message.markdown === this.authoritativeMarkdown;
+    // A dirty-only TextDocument event can arrive before the edit ack and carry
+    // the exact source submitted by the inflight edit. It is an authoritative
+    // echo, not a competing draft: the queued edit was based on this source.
+    const sameInflightSource =
+      this.sync.inflight !== null &&
+      message.profile === this.authoritativeProfile &&
+      message.markdown === this.sync.inflight.markdown;
+    if (!sameAuthoritativeSource && !sameInflightSource) return false;
+    if (
+      message.mode !== undefined &&
+      message.mode !== (this.previewOnly ? "preview" : "editor")
+    )
+      return false;
+    return message.version >= this.authoritativeVersion;
+  }
+
+  private acceptDuplicateAuthoritativeSnapshot(message: DocumentMessage): void {
+    this.version = Math.max(this.version, message.version);
+    this.authoritativeMarkdown = message.markdown;
+    this.authoritativeProfile = message.profile;
+    this.authoritativeVersion = Math.max(
+      this.authoritativeVersion,
+      message.version,
+    );
+    this.resourceBaseUrl = message.resourceBaseUrl;
+    this.applyTypography(message.typography);
+    this.profile = message.profile;
+    this.sync.setVersion(Math.max(this.sync.version, message.version));
+    this.updateProfileSelect();
+    this.updateEditingControlState();
+    // The PM state remains untouched, but profile/resource changes still need
+    // to update the rendered preview and compatibility diagnostics.
+    this.refreshDerivedViews(this.currentMarkdown());
+  }
+
+  private applyDocument(
+    message: DocumentMessage,
+    options: { force?: boolean } = {},
+  ): void {
     if (this.composing) {
       this.pendingExternal = message;
       return;
     }
+
     const previousState = this.view.state;
     const previousDoc = previousState.doc;
-    const stage = this.root.querySelector<HTMLElement>(".mw-stage");
+    const forceReparse =
+      options.force === true ||
+      message.reason === "initial" ||
+      message.reason === "recovery" ||
+      message.reason === "undo" ||
+      message.reason === "redo";
+    const previousProfile = this.profile;
+    const stage = this.root.querySelector<HTMLElement>(".mm-stage");
     const scrollTop = stage?.scrollTop ?? 0;
+
+    // A TextDocument event can repeat the authoritative source after an edit
+    // acknowledgement. Parsing that source again is unsafe because the PM
+    // document may contain transient empty paragraphs that Markdown does not
+    // encode. Keep the exact EditorState when the source and profile are the
+    // same. A terminal-whitespace-only normalization is also safe when both
+    // sources parse to the same semantic document (for example VS Code's
+    // trimFinalNewlines participant).
+    let currentMarkdown: string | null = null;
+    if (!this.parseError) {
+      try {
+        currentMarkdown = this.currentMarkdown();
+      } catch {
+        currentMarkdown = null;
+      }
+    }
+    let preserveState =
+      !forceReparse &&
+      currentMarkdown !== null &&
+      previousProfile === message.profile &&
+      currentMarkdown === message.markdown;
+    let normalizedSnapshot: ParseResult | undefined;
+    if (
+      !forceReparse &&
+      !preserveState &&
+      currentMarkdown !== null &&
+      previousProfile === message.profile
+    ) {
+      const trimTerminalWhitespace = (value: string): string =>
+        value.replace(/[ \t]*(?:\r\n|\r|\n)*$/g, "");
+      const localTrimmed = trimTerminalWhitespace(currentMarkdown);
+      const incomingTrimmed = trimTerminalWhitespace(message.markdown);
+      const differsOnlyAtTerminalWhitespace =
+        localTrimmed === incomingTrimmed &&
+        currentMarkdown !== message.markdown;
+      if (differsOnlyAtTerminalWhitespace) {
+        try {
+          const incoming = this.core.parseMarkdown(
+            message.markdown,
+            message.profile,
+          );
+          const local = this.core.parseMarkdown(
+            currentMarkdown,
+            message.profile,
+          );
+          if (incoming.doc.eq(local.doc)) {
+            preserveState = true;
+            normalizedSnapshot = incoming;
+          }
+        } catch {
+          // A source normalization error must fall through to the regular
+          // authoritative reparse below.
+        }
+      }
+    }
+
+    if (!preserveState) {
+      if (this.tableDialogOpen)
+        this.closeTableDialog(
+          "The document changed while the table dialog was open; nothing was inserted.",
+        );
+      this.closeWritingPopups();
+      this.closeEmojiPicker();
+      this.transientBlanks = null;
+      this.documentGeneration += 1;
+    }
+
     this.profile = message.profile;
+    this.updateProfileSelect();
+    this.authoritativeMarkdown = message.markdown;
+    this.authoritativeProfile = message.profile;
+    this.authoritativeVersion = Math.max(
+      this.authoritativeVersion,
+      message.version,
+    );
     this.previewOnly = message.mode === "preview";
     this.setInitialized(true);
     this.applyTypography(message.typography);
@@ -2437,6 +6088,36 @@ export class MarkdownEditorApp {
     this.operationId = message.operationId;
     this.resourceBaseUrl = message.resourceBaseUrl;
     if (message.mode === "preview") this.mode = "preview";
+
+    if (preserveState) {
+      if (normalizedSnapshot)
+        this.previousSnapshot =
+          normalizedSnapshot.snapshot ?? normalizedSnapshot;
+      this.view.setProps({ editable: () => !this.previewOnly });
+      this.parseError = null;
+      this.preservedSource = null;
+      this.dirty = false;
+      this.conflict = false;
+      this.syncPaused = false;
+      this.reloadRequested = false;
+      this.lastValidMarkdown = message.markdown;
+      this.pendingExternal = null;
+      this.sync.setVersion(this.version);
+      this.sync.clear();
+      this.refreshDerivedViews(message.markdown);
+      if (message.mode === "preview") this.setMode("preview", false);
+      else
+        this.updateToolbarState(
+          this.view.state.selection,
+          this.view.state.selection,
+        );
+      if (stage) stage.scrollTop = scrollTop;
+      this.clearRecoveryIfSaved();
+      this.restoreRecoveryState();
+      this.flushDeferredHostCommand();
+      return;
+    }
+
     let parsed: ParseResult;
     try {
       parsed = this.core.parseMarkdown(message.markdown, this.profile);
@@ -2452,24 +6133,39 @@ export class MarkdownEditorApp {
       this.syncPaused = true;
       this.sourceEl.value = message.markdown;
       this.previewEl.textContent = message.markdown;
-      this.setNotice(`Read-only: ${this.parseError}`, "error");
+      this.setNotice("Read-only: " + this.parseError, "error");
       this.persistRecovery(this.lastValidMarkdown);
       return;
     }
     this.view.setProps({ editable: () => !this.previewOnly });
     this.previousSnapshot = parsed.snapshot ?? parsed;
-    if (!parsed.doc.eq(previousDoc)) {
+    const prepared = prepareStarterDocument(
+      message.markdown,
+      parsed.doc,
+      this.schema,
+    );
+    const editorDoc = prepared.doc;
+    this.starterOriginalSource = message.markdown;
+    if (!editorDoc.eq(previousDoc)) {
       let nextState = EditorState.create({
         schema: this.schema,
-        doc: parsed.doc,
+        doc: editorDoc,
         plugins: previousState.plugins,
       });
+      nextState = nextState.apply(setStarterMeta(nextState.tr, prepared.state));
       nextState = nextState.apply(
         nextState.tr.setSelection(
-          selectionForDocument(previousState.selection, parsed.doc),
+          selectionForDocument(previousState.selection, editorDoc),
         ),
       );
       this.view.updateState(nextState);
+    } else if (
+      JSON.stringify(getStarterState(previousState)) !==
+      JSON.stringify(prepared.state)
+    ) {
+      this.view.updateState(
+        previousState.apply(setStarterMeta(previousState.tr, prepared.state)),
+      );
     }
     this.dirty = false;
     this.conflict = false;
@@ -2489,6 +6185,7 @@ export class MarkdownEditorApp {
     if (stage) stage.scrollTop = scrollTop;
     this.clearRecoveryIfSaved();
     this.restoreRecoveryState();
+    this.flushDeferredHostCommand();
   }
 
   private flushExternalAfterComposition(): void {
@@ -2519,7 +6216,10 @@ export class MarkdownEditorApp {
     if (!saved?.recoveryDraft || saved.recoveryDraft === this.currentMarkdown())
       return;
     this.recoverButton.hidden = false;
-    this.recoverButton.title = `Draft from ${saved.recoveryTimestamp ? new Date(saved.recoveryTimestamp).toLocaleString() : "an earlier session"}`;
+    this.setTooltip(
+      this.recoverButton,
+      `Draft from ${saved.recoveryTimestamp ? new Date(saved.recoveryTimestamp).toLocaleString() : "an earlier session"}`,
+    );
     this.statusEl.textContent = "A recoverable local draft is available";
   }
 
@@ -2540,13 +6240,21 @@ export class MarkdownEditorApp {
     }
     this.profile = profile;
     this.previousSnapshot = parsed.snapshot ?? parsed;
-    this.view.updateState(
-      EditorState.create({
-        schema: this.schema,
-        doc: parsed.doc,
-        plugins: this.view.state.plugins,
-      }),
+    const prepared = prepareStarterDocument(
+      saved.recoveryDraft,
+      parsed.doc,
+      this.schema,
     );
+    this.starterOriginalSource = saved.recoveryDraft;
+    let recoveryState = EditorState.create({
+      schema: this.schema,
+      doc: prepared.doc,
+      plugins: this.view.state.plugins,
+    });
+    recoveryState = recoveryState.apply(
+      setStarterMeta(recoveryState.tr, prepared.state),
+    );
+    this.view.updateState(recoveryState);
     this.parseError = null;
     this.preservedSource = null;
     this.lastValidMarkdown = saved.recoveryDraft;
@@ -2614,11 +6322,7 @@ export class MarkdownEditorApp {
       rows,
     );
     this.dispatchTransaction(
-      view.state.tr.replaceWith(
-        selected.tableStart - 1,
-        selected.tableStart - 1 + selected.table.nodeSize,
-        tableNode,
-      ),
+      this.replaceTablePreservingSelection(view.state.tr, selected, tableNode),
     );
     return true;
   }
@@ -2664,11 +6368,7 @@ export class MarkdownEditorApp {
       matrix.cellJson,
     );
     this.dispatchTransaction(
-      view.state.tr.replaceWith(
-        context.tableStart - 1,
-        context.tableStart - 1 + context.table.nodeSize,
-        tableNode,
-      ),
+      this.replaceTablePreservingSelection(view.state.tr, context, tableNode),
     );
     event.preventDefault();
     return true;

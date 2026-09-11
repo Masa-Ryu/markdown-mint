@@ -11,12 +11,12 @@ node tests/browser/server.mjs
 The fixture provides a guarded mock VS Code transport. It accepts only
 protocol version `1`, validates operation ids and base versions, acknowledges
 accepted edits with a `document` message, and returns `edit-rejected` with the
-submitted draft for stale edits. `window.__markdownWeaverHarness` exposes
+submitted draft for stale edits. `window.__markdownMintHarness` exposes
 captured messages and a controlled external update for browser checks.
 
 Open `http://127.0.0.1:4173/native.html` in another tab to inspect the native
 VS Code CSS baseline for the same representative blocks. Its
-`window.__markdownWeaverNative.metrics()` helper reports content, heading,
+`window.__markdownMintNative.metrics()` helper reports content, heading,
 task, checkbox, and typography metrics for parity checks.
 
 The server maps `/__vscode__/markdown.css` to the installed VS Code Markdown

@@ -12,7 +12,7 @@ import {
 declare global {
   interface Window {
     acquireVsCodeApi?: () => VSCodeApiLike;
-    markdownWeaver?: MarkdownEditorApp;
+    markdownMint?: MarkdownEditorApp;
   }
 }
 
@@ -47,14 +47,14 @@ function getVsCodeApi(): VSCodeApiLike | undefined {
 
 function getRoot(): HTMLElement {
   const existing =
-    document.querySelector<HTMLElement>("[data-markdown-weaver-root]") ??
-    document.getElementById("markdown-weaver") ??
+    document.querySelector<HTMLElement>("[data-markdown-mint-root]") ??
+    document.getElementById("markdown-mint") ??
     document.getElementById("app");
   if (existing) return existing;
   const root = document.createElement("div");
-  root.id = "markdown-weaver";
-  root.dataset.markdownWeaverRoot = "true";
-  root.dataset.mode = document.body.dataset.markdownWeaverMode ?? "editor";
+  root.id = "markdown-mint";
+  root.dataset.markdownMintRoot = "true";
+  root.dataset.mode = document.body.dataset.markdownMintMode ?? "editor";
   document.body.replaceChildren(root);
   return root;
 }
@@ -94,12 +94,12 @@ export function startWebview(
   const initialMode =
     options.initialMode ??
     (root.dataset.mode === "preview" ||
-    document.body.dataset.markdownWeaverMode === "preview"
+    document.body.dataset.markdownMintMode === "preview"
       ? "preview"
       : undefined);
   if (initialMode) appOptions.initialMode = initialMode;
   const app = createEditorApp(appOptions);
-  window.markdownWeaver = app;
+  window.markdownMint = app;
   return app;
 }
 

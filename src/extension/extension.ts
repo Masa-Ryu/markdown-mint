@@ -7,6 +7,12 @@ import {
   type FormatterConfigResult,
 } from "./formatterConfig";
 import {
+  MARKDOWN_MINT_VIEW_TYPE,
+  MarkdownMintCodeLensProvider,
+  OPEN_IN_MARKDOWN_MINT_COMMAND,
+  openInMarkdownMint,
+} from "./codeLens";
+import {
   MAX_MARKDOWN_LENGTH,
   MAX_OPERATION_ID_LENGTH,
   PROTOCOL_VERSION,
@@ -18,18 +24,20 @@ import {
   type HostMessage,
   type MarkdownProfile,
   type PanelMode,
+  type SetProfileMessage,
   type PreviewTypography,
   type WebviewMessage,
   type RecoverDraftMessage,
   type SaveMessage,
   type SaveResultMessage,
+  isMarkdownProfile,
   parseWebviewMessage,
 } from "../shared/protocol";
 
-export const VIEW_TYPE = "markdownWeaver.editor";
-export const PREVIEW_VIEW_TYPE = "markdownWeaver.preview";
+export const VIEW_TYPE = MARKDOWN_MINT_VIEW_TYPE;
+export const PREVIEW_VIEW_TYPE = "markdownMint.preview";
 const nativePatchInstalled = new WeakSet<object>();
-const nativeSourceKey = Symbol("markdown-weaver-source");
+const nativeSourceKey = Symbol("markdown-mint-source");
 
 type EditAction = "edit" | "format" | "undo" | "redo";
 
@@ -53,6 +61,7 @@ interface DocumentState {
   readonly uri: vscode.Uri;
   document: vscode.TextDocument;
   version: number;
+  eol: vscode.EndOfLine;
   profile: MarkdownProfile;
   queue: Promise<void>;
   readonly panels: Set<PanelSession>;
@@ -89,7 +98,7 @@ interface CoreFormatResult {
   readonly markdown?: unknown;
 }
 
-export interface MarkdownWeaverApi {
+export interface MarkdownMintApi {
   readonly renderWithNativeMarkdown: (
     source: string,
     uri?: vscode.Uri,
@@ -112,25 +121,35 @@ export async function formatMarkdownDocument(
 }
 
 /** VS Code extension entry point. */
-export function activate(context: vscode.ExtensionContext): MarkdownWeaverApi {
-  const provider = new MarkdownWeaverEditorProvider(context);
+export function activate(context: vscode.ExtensionContext): MarkdownMintApi {
+  const provider = new MarkdownMintEditorProvider(context);
+  const codeLensProvider = new MarkdownMintCodeLensProvider();
   context.subscriptions.push(
     vscode.window.registerCustomEditorProvider(VIEW_TYPE, provider, {
       supportsMultipleEditorsPerDocument: true,
       webviewOptions: { retainContextWhenHidden: true },
     }),
     provider,
+    codeLensProvider,
     vscode.commands.registerCommand(
-      "markdownWeaver.openPreview",
+      "markdownMint.openPreview",
       (uri?: vscode.Uri) => provider.openPreview(uri),
     ),
     vscode.commands.registerCommand(
-      "markdownWeaver.openSource",
+      "markdownMint.openSource",
       (uri?: vscode.Uri) => provider.openSource(uri),
     ),
     vscode.commands.registerCommand(
-      "markdownWeaver.formatDocument",
+      "markdownMint.formatDocument",
       (uri?: vscode.Uri) => provider.formatActiveDocument(uri),
+    ),
+    vscode.commands.registerCommand(
+      OPEN_IN_MARKDOWN_MINT_COMMAND,
+      (uri?: vscode.Uri) => openInMarkdownMint(uri, VIEW_TYPE),
+    ),
+    vscode.languages.registerCodeLensProvider(
+      { language: "markdown" },
+      codeLensProvider,
     ),
     vscode.languages.registerDocumentFormattingEditProvider(
       { language: "markdown" },
@@ -184,7 +203,7 @@ export function extendMarkdownIt(markdownIt: MarkdownIt): MarkdownIt {
           token.meta && typeof token.meta === "object"
             ? { ...(token.meta as Record<string, unknown>) }
             : {};
-        meta.markdownWeaverSource = source;
+        meta.markdownMintSource = source;
         token.meta = meta;
       }
     }
@@ -217,7 +236,7 @@ export function extendMarkdownIt(markdownIt: MarkdownIt): MarkdownIt {
  * candidate from the webview is validated, converted to a minimal WorkspaceEdit,
  * and then acknowledged only from the resulting TextDocument change.
  */
-export class MarkdownWeaverEditorProvider
+export class MarkdownMintEditorProvider
   implements vscode.CustomTextEditorProvider, vscode.Disposable
 {
   private readonly states = new Map<string, DocumentState>();
@@ -228,7 +247,7 @@ export class MarkdownWeaverEditorProvider
   private lastDocumentUri: vscode.Uri | undefined;
 
   public constructor(private readonly context: vscode.ExtensionContext) {
-    this.output = vscode.window.createOutputChannel("Markdown Weaver");
+    this.output = vscode.window.createOutputChannel("Markdown Mint");
     this.subscriptions.push(
       this.output,
       vscode.workspace.onDidChangeTextDocument((event) =>
@@ -303,7 +322,10 @@ export class MarkdownWeaverEditorProvider
     void this.renderIntoPanel(session);
   }
 
-  public async openSource(uri?: vscode.Uri): Promise<void> {
+  public async openSource(
+    uri?: vscode.Uri,
+    viewColumn?: vscode.ViewColumn,
+  ): Promise<void> {
     const document = await this.resolveTargetDocument(uri);
     if (!document) {
       void vscode.window.showInformationMessage(
@@ -312,7 +334,19 @@ export class MarkdownWeaverEditorProvider
       return;
     }
     this.lastDocumentUri = document.uri;
-    await vscode.window.showTextDocument(document, { preview: false });
+    const targetColumn =
+      viewColumn ?? vscode.window.tabGroups.activeTabGroup.viewColumn;
+    const options: vscode.TextDocumentShowOptions = {
+      preview: false,
+      preserveFocus: false,
+      ...(targetColumn === undefined ? {} : { viewColumn: targetColumn }),
+    };
+    await vscode.commands.executeCommand(
+      "vscode.openWith",
+      document.uri,
+      "default",
+      options,
+    );
   }
 
   public async formatActiveDocument(uri?: vscode.Uri): Promise<void> {
@@ -408,6 +442,7 @@ export class MarkdownWeaverEditorProvider
         uri: document.uri,
         document,
         version: document.version,
+        eol: document.eol,
         profile: this.profileFor(document.uri),
         queue: Promise.resolve(),
         panels: new Set(),
@@ -417,16 +452,30 @@ export class MarkdownWeaverEditorProvider
     } else {
       state.document = document;
       state.version = document.version;
+      state.eol = document.eol;
     }
     return state;
   }
 
   private onDocumentChanged(event: vscode.TextDocumentChangeEvent): void {
     if (!isMarkdownDocument(event.document)) return;
-    const state = this.getOrCreateState(event.document);
+    const existingState = this.states.get(documentKey(event.document.uri));
+    const state = existingState ?? this.getOrCreateState(event.document);
+    const previousVersion = state.version;
+    const previousText = state.document.getText();
+    const previousEol = state.eol;
     state.document = event.document;
     state.version = event.document.version;
+    state.eol = event.document.eol;
     const text = event.document.getText();
+    if (
+      event.contentChanges.length === 0 &&
+      previousVersion === event.document.version &&
+      previousText === text &&
+      previousEol === event.document.eol
+    ) {
+      return;
+    }
     const pending = [...state.pending.values()].find(
       (candidate) =>
         candidate.baseVersion < event.document.version &&
@@ -472,13 +521,19 @@ export class MarkdownWeaverEditorProvider
     // parallel snapshot stack to reconcile; the native VS Code undo service is
     // authoritative for source edits and this panel receives the new snapshot.
     state.pending.clear();
-    this.broadcastDocument(state, { reason: "external" });
+    const reason: HostDocumentReason =
+      event.reason === vscode.TextDocumentChangeReason.Undo
+        ? "undo"
+        : event.reason === vscode.TextDocumentChangeReason.Redo
+          ? "redo"
+          : "external";
+    this.broadcastDocument(state, { reason });
   }
 
   private onConfigurationChanged(event: vscode.ConfigurationChangeEvent): void {
     for (const state of this.states.values()) {
       const profileChanged = event.affectsConfiguration(
-        "markdownWeaver.profile",
+        "markdownMint.profile",
         state.uri,
       );
       const typographyChanged = [
@@ -500,7 +555,7 @@ export class MarkdownWeaverEditorProvider
   private onWillSave(event: vscode.TextDocumentWillSaveEvent): void {
     if (!isMarkdownDocument(event.document)) return;
     const enabled = vscode.workspace
-      .getConfiguration("markdownWeaver", event.document.uri)
+      .getConfiguration("markdownMint", event.document.uri)
       .get<boolean>("formatOnSave", false);
     if (!enabled) return;
     event.waitUntil(this.formatForSave(event.document));
@@ -630,8 +685,26 @@ export class MarkdownWeaverEditorProvider
           this.handleSave(session, message),
         );
         return;
+      case "set-profile":
+        await this.enqueue(session.state, () =>
+          this.handleSetProfile(session, message),
+        );
+        return;
       case "source":
-        await this.openSource(session.state.uri);
+        try {
+          await this.openSource(session.state.uri, session.panel.viewColumn);
+        } catch (error) {
+          this.post(
+            session,
+            this.errorMessage(
+              errorMessage(
+                error,
+                "The standard source editor could not be opened.",
+              ),
+              message.operationId,
+            ),
+          );
+        }
         return;
       case "preview":
         await this.openPreview(session.state.uri);
@@ -709,6 +782,73 @@ export class MarkdownWeaverEditorProvider
         "invalid",
         errorMessage(error, "The recovery draft could not be opened."),
         message.markdown,
+      );
+    }
+  }
+
+  private async handleSetProfile(
+    session: PanelSession,
+    message: SetProfileMessage,
+  ): Promise<void> {
+    const state = session.state;
+    const document = await this.currentDocument(state);
+    if (document.version !== message.baseVersion) {
+      this.post(
+        session,
+        this.errorMessage(
+          "The Markdown document changed before the profile selection arrived.",
+          message.operationId,
+        ),
+      );
+      this.sendDocument(session, "external");
+      return;
+    }
+
+    try {
+      const configuration = vscode.workspace.getConfiguration(
+        "markdownMint",
+        document.uri,
+      );
+      const target = vscode.workspace.getWorkspaceFolder(document.uri)
+        ? vscode.ConfigurationTarget.WorkspaceFolder
+        : vscode.ConfigurationTarget.Global;
+      await configuration.update("profile", message.profile, target);
+
+      const latest = await this.currentDocument(state);
+      if (latest.version !== message.baseVersion) {
+        this.post(
+          session,
+          this.errorMessage(
+            "The Markdown document changed while the profile was being saved.",
+            message.operationId,
+          ),
+        );
+        this.sendDocument(session, "external");
+        return;
+      }
+      state.profile = this.profileFor(latest.uri);
+      if (state.profile !== message.profile) {
+        throw new Error(
+          "VS Code did not persist the selected Markdown profile.",
+        );
+      }
+      for (const panelSession of state.panels) {
+        const isRequester = panelSession === session;
+        this.sendDocument(
+          panelSession,
+          isRequester ? "ack" : "external",
+          isRequester ? message.operationId : undefined,
+        );
+        if (panelSession.mode === "preview")
+          void this.renderIntoPanel(panelSession);
+      }
+    } catch (error) {
+      this.post(
+        session,
+        this.errorMessage(
+          errorMessage(error, "The Markdown profile could not be saved."),
+          message.operationId,
+        ),
       );
     }
   }
@@ -1218,6 +1358,7 @@ export class MarkdownWeaverEditorProvider
     const document = await vscode.workspace.openTextDocument(state.uri);
     state.document = document;
     state.version = document.version;
+    state.eol = document.eol;
     return document;
   }
 
@@ -1239,11 +1380,9 @@ export class MarkdownWeaverEditorProvider
 
   private profileFor(uri: vscode.Uri): MarkdownProfile {
     const configured = vscode.workspace
-      .getConfiguration("markdownWeaver", uri)
+      .getConfiguration("markdownMint", uri)
       .get<string>("profile", "github");
-    return configured === "gitlab" || configured === "commonmark"
-      ? configured
-      : "github";
+    return isMarkdownProfile(configured) ? configured : "github";
   }
 
   private async formatterOptions(
@@ -1314,7 +1453,7 @@ export class MarkdownWeaverEditorProvider
 
   private explicitPrettierOptions(uri: vscode.Uri): Record<string, unknown> {
     const configuration = vscode.workspace.getConfiguration(
-      "markdownWeaver",
+      "markdownMint",
       uri,
     );
     const inspect = (
@@ -1355,7 +1494,7 @@ export class MarkdownWeaverEditorProvider
     reason: string,
   ): void {
     const location = document.uri.toString(true);
-    const message = `Markdown Weaver: ${reason}`;
+    const message = `Markdown Mint: ${reason}`;
     this.output.appendLine(`[format] ${location}: ${reason}`);
     const setStatusBarMessage = (
       vscode.window as unknown as {
@@ -1370,7 +1509,7 @@ export class MarkdownWeaverEditorProvider
     reason: string,
   ): void {
     const location = document.uri.toString(true);
-    const message = `Markdown Weaver: ${reason}`;
+    const message = `Markdown Mint: ${reason}`;
     this.output.appendLine(`[save] ${location}: ${reason}`);
     const setStatusBarMessage = (
       vscode.window as unknown as {
@@ -1479,6 +1618,17 @@ export class MarkdownWeaverEditorProvider
     const stylesheetUri = webview.asWebviewUri(
       vscode.Uri.joinPath(this.context.extensionUri, "media", "document.css"),
     );
+    const katexStylesheetUri = webview.asWebviewUri(
+      vscode.Uri.joinPath(
+        this.context.extensionUri,
+        "dist",
+        "katex",
+        "katex.css",
+      ),
+    );
+    const mermaidScriptUri = webview.asWebviewUri(
+      vscode.Uri.joinPath(this.context.extensionUri, "dist", "mermaid.js"),
+    );
     const uiStylesheetUri = webview.asWebviewUri(
       vscode.Uri.joinPath(this.context.extensionUri, "media", "webview.css"),
     );
@@ -1487,13 +1637,15 @@ export class MarkdownWeaverEditorProvider
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${webview.cspSource} https: data:; style-src ${webview.cspSource}; script-src 'nonce-${nonce}'; connect-src 'none';">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${webview.cspSource} https: data:; style-src ${webview.cspSource}; font-src ${webview.cspSource}; script-src 'nonce-${nonce}'; connect-src 'none';">
   <link rel="stylesheet" href="${escapeAttribute(stylesheetUri.toString())}">
+  <link rel="stylesheet" href="${escapeAttribute(katexStylesheetUri.toString())}">
   <link rel="stylesheet" href="${escapeAttribute(uiStylesheetUri.toString())}">
-  <title>Markdown Weaver</title>
+  <title>Markdown Mint</title>
 </head>
-<body data-markdown-weaver-mode="${mode}">
-  <main id="app" aria-label="Markdown Weaver"></main>
+<body data-markdown-mint-mode="${mode}">
+  <main id="app" aria-label="Markdown Mint"></main>
+  <script nonce="${nonce}" src="${escapeAttribute(mermaidScriptUri.toString())}"></script>
   <script nonce="${nonce}" src="${escapeAttribute(scriptUri.toString())}"></script>
 </body>
 </html>`;
@@ -1593,8 +1745,8 @@ function nativeSourceFrom(tokens: unknown[]): string | undefined {
   if (first && typeof first === "object") {
     const meta = (first as { meta?: unknown }).meta;
     if (meta && typeof meta === "object") {
-      const source = (meta as { markdownWeaverSource?: unknown })
-        .markdownWeaverSource;
+      const source = (meta as { markdownMintSource?: unknown })
+        .markdownMintSource;
       if (typeof source === "string") return source;
     }
   }
@@ -1617,11 +1769,9 @@ function nativeDocumentUri(env: unknown): vscode.Uri | undefined {
 
 function profileForNativeUri(uri: vscode.Uri | undefined): MarkdownProfile {
   const configured = vscode.workspace
-    .getConfiguration("markdownWeaver", uri)
+    .getConfiguration("markdownMint", uri)
     .get<string>("profile", "github");
-  return configured === "gitlab" || configured === "commonmark"
-    ? configured
-    : "github";
+  return isMarkdownProfile(configured) ? configured : "github";
 }
 
 function decorateNativeHtml(html: string, tokens: unknown[]): string {

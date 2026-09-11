@@ -2,13 +2,13 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "Run Markdown Weaver Extension",
+      "name": "Run Markdown Mint Extension",
       "type": "extensionHost",
       "request": "launch",
       "runtimeExecutable": "${execPath}",
       "args": ["--extensionDevelopmentPath=${workspaceFolder}"],
       "outFiles": ["${workspaceFolder}/dist/**/*.js"],
-      "preLaunchTask": "markdown-weaver: build"
+      "preLaunchTask": "markdown-mint: build"
     }
   ]
 }

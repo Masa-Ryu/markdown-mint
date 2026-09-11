@@ -1,9 +1,20 @@
 import { cp, mkdtemp, rm } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import Module from "node:module";
 
-const packageDir = await mkdtemp(join(tmpdir(), "markdown-weaver-package-"));
+const requiredAssets = [
+  "dist/mermaid.js",
+  "dist/katex/katex.css",
+  "dist/katex/fonts/KaTeX_Main-Regular.woff2",
+];
+for (const asset of requiredAssets) {
+  if (!existsSync(asset))
+    throw new Error("Missing packaged rendering asset: " + asset);
+}
+
+const packageDir = await mkdtemp(join(tmpdir(), "markdown-mint-package-"));
 const bundlePath = join(packageDir, "extension.js");
 await cp("dist/extension.js", bundlePath);
 

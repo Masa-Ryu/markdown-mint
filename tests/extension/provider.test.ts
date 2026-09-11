@@ -110,6 +110,11 @@ const vscode = vi.hoisted(() => {
       this.isDirty = false;
     }
   }
+  type TextDocumentChangeEvent = {
+    document: TextDocument;
+    reason?: number;
+    contentChanges: readonly unknown[];
+  };
   class Webview {
     public cspSource = "https://webview.test";
     public options: unknown;
@@ -154,9 +159,8 @@ const vscode = vi.hoisted(() => {
 
   const documentUri = Uri.file("/workspace/doc.md");
   const document = new TextDocument(documentUri, "# Original");
-  const textDocumentListeners: Array<
-    (event: { document: TextDocument; reason?: number }) => void
-  > = [];
+  const textDocumentListeners: Array<(event: TextDocumentChangeEvent) => void> =
+    [];
   const saveListeners: Array<
     (event: {
       document: TextDocument;
@@ -180,13 +184,22 @@ const vscode = vi.hoisted(() => {
   const redoTexts: string[] = [];
   const panel = new WebviewPanel();
   const outputLines: string[] = [];
+  const configurationUpdates: Array<{
+    section: string;
+    key: string;
+    value: unknown;
+    target: number;
+  }> = [];
   const window = {
     activeTextEditor: { document },
     onDidChangeActiveTextEditor(
       listener: (editor: { document: TextDocument } | undefined) => void,
     ): Disposable {
       activeEditorListeners.push(listener);
-      return new Disposable();
+      return new Disposable(() => {
+        const index = activeEditorListeners.indexOf(listener);
+        if (index >= 0) activeEditorListeners.splice(index, 1);
+      });
     },
     async showTextDocument(
       value: TextDocument,
@@ -221,6 +234,11 @@ const vscode = vi.hoisted(() => {
     registerCustomEditorProvider(): Disposable {
       return new Disposable();
     },
+    tabGroups: {
+      activeTabGroup: {
+        viewColumn: 2,
+      },
+    },
   };
   const workspace = {
     isTrusted: true,
@@ -231,10 +249,13 @@ const vscode = vi.hoisted(() => {
     },
     textDocuments: [document],
     onDidChangeTextDocument(
-      listener: (event: { document: TextDocument; reason?: number }) => void,
+      listener: (event: TextDocumentChangeEvent) => void,
     ): Disposable {
       textDocumentListeners.push(listener);
-      return new Disposable();
+      return new Disposable(() => {
+        const index = textDocumentListeners.indexOf(listener);
+        if (index >= 0) textDocumentListeners.splice(index, 1);
+      });
     },
     onWillSaveTextDocument(
       listener: (event: {
@@ -243,7 +264,10 @@ const vscode = vi.hoisted(() => {
       }) => void,
     ): Disposable {
       saveListeners.push(listener);
-      return new Disposable();
+      return new Disposable(() => {
+        const index = saveListeners.indexOf(listener);
+        if (index >= 0) saveListeners.splice(index, 1);
+      });
     },
     onDidChangeConfiguration(
       listener: (event: {
@@ -251,7 +275,10 @@ const vscode = vi.hoisted(() => {
       }) => void,
     ): Disposable {
       configurationListeners.push(listener);
-      return new Disposable();
+      return new Disposable(() => {
+        const index = configurationListeners.indexOf(listener);
+        if (index >= 0) configurationListeners.splice(index, 1);
+      });
     },
     async openTextDocument(
       value: Uri | { content: string; language: string },
@@ -285,7 +312,8 @@ const vscode = vi.hoisted(() => {
         );
       }
       redoTexts.length = 0;
-      for (const listener of textDocumentListeners) listener({ document });
+      for (const listener of textDocumentListeners)
+        listener({ document, contentChanges: [{}] });
       return true;
     },
     getConfiguration(section: string): {
@@ -295,19 +323,26 @@ const vscode = vi.hoisted(() => {
             workspaceFolderValue?: T;
           }
         | undefined;
+      update<T>(key: string, value: T, target: number): Promise<void>;
     } {
       return {
         get<T>(key: string, fallback?: T): T {
           const value =
-            section === "markdownWeaver"
+            section === "markdownMint"
               ? workspaceState[key as keyof typeof workspaceState]
               : undefined;
           return (value === undefined ? fallback : value) as T;
         },
         inspect<T>(key: string): { workspaceFolderValue?: T } | undefined {
-          if (section !== "markdownWeaver" || key !== "prettierOptions")
+          if (section !== "markdownMint" || key !== "prettierOptions")
             return undefined;
           return { workspaceFolderValue: workspaceState.prettierOptions as T };
+        },
+        async update<T>(key: string, value: T, target: number): Promise<void> {
+          configurationUpdates.push({ section, key, value, target });
+          if (section === "markdownMint" && key === "profile") {
+            workspaceState.profile = String(value);
+          }
         },
       };
     },
@@ -316,19 +351,40 @@ const vscode = vi.hoisted(() => {
     },
   };
   const TextDocumentChangeReason = { Undo: 1, Redo: 2 } as const;
+  const commandCalls: Array<{
+    command: string;
+    args: readonly unknown[];
+  }> = [];
+  let openWithError: Error | undefined;
   const commands = {
-    async executeCommand(command: string): Promise<void> {
+    async executeCommand(
+      command: string,
+      ...args: unknown[]
+    ): Promise<unknown> {
+      commandCalls.push({ command, args });
+      if (command === "vscode.openWith" && openWithError) {
+        throw openWithError;
+      }
       if (command === "undo" && previousTexts.length) {
         redoTexts.push(document.getText());
         document.replaceText(previousTexts.pop() ?? document.getText());
         for (const listener of textDocumentListeners)
-          listener({ document, reason: TextDocumentChangeReason.Undo });
+          listener({
+            document,
+            reason: TextDocumentChangeReason.Undo,
+            contentChanges: [{}],
+          });
       } else if (command === "redo" && redoTexts.length) {
         previousTexts.push(document.getText());
         document.replaceText(redoTexts.pop() ?? document.getText());
         for (const listener of textDocumentListeners)
-          listener({ document, reason: TextDocumentChangeReason.Redo });
+          listener({
+            document,
+            reason: TextDocumentChangeReason.Redo,
+            contentChanges: [{}],
+          });
       }
+      return undefined;
     },
     registerCommand(): Disposable {
       return new Disposable();
@@ -341,7 +397,28 @@ const vscode = vi.hoisted(() => {
   };
   const emitExternal = (value: string): void => {
     document.replaceText(value);
-    for (const listener of textDocumentListeners) listener({ document });
+    for (const listener of textDocumentListeners)
+      listener({ document, contentChanges: [{}] });
+  };
+  const emitDirtyState = (): void => {
+    document.isDirty = !document.isDirty;
+    for (const listener of textDocumentListeners)
+      listener({ document, contentChanges: [] });
+  };
+  const emitEolChange = (): void => {
+    document.eol = document.eol === 1 ? 2 : 1;
+    for (const listener of textDocumentListeners)
+      listener({ document, contentChanges: [] });
+  };
+  const emitTextChangeWithoutChanges = (value: string): void => {
+    document.replaceText(value);
+    for (const listener of textDocumentListeners)
+      listener({ document, contentChanges: [] });
+  };
+  const emitNativeHistory = (reason: number, value: string): void => {
+    document.replaceText(value);
+    for (const listener of textDocumentListeners)
+      listener({ document, reason, contentChanges: [{}] });
   };
   const emitConfiguration = (section: string): void => {
     for (const listener of configurationListeners)
@@ -364,13 +441,18 @@ const vscode = vi.hoisted(() => {
   };
   const reset = (): void => {
     document.reset("# Original");
+    document.eol = 1;
     previousTexts.length = 0;
     redoTexts.length = 0;
     panel.webview.messages.length = 0;
     window.activeTextEditor = { document };
     workspaceState.formatOnSave = false;
+    workspaceState.profile = "github";
     workspaceState.prettierOptions = {};
     outputLines.length = 0;
+    configurationUpdates.length = 0;
+    commandCalls.length = 0;
+    openWithError = undefined;
   };
   return {
     Disposable,
@@ -381,6 +463,7 @@ const vscode = vi.hoisted(() => {
     WorkspaceEdit,
     TextDocument,
     EndOfLine: { LF: 1, CRLF: 2 },
+    ConfigurationTarget: { Global: 1, Workspace: 2, WorkspaceFolder: 3 },
     WebviewPanel,
     ViewColumn: { Beside: 2 },
     window,
@@ -392,18 +475,30 @@ const vscode = vi.hoisted(() => {
       document,
       panel,
       emitExternal,
+      emitDirtyState,
+      emitEolChange,
+      emitTextChangeWithoutChanges,
+      emitNativeHistory,
       emitConfiguration,
       runSave,
       reset,
       workspaceState,
       outputLines,
+      configurationUpdates,
+      commandCalls,
+      get openWithError(): Error | undefined {
+        return openWithError;
+      },
+      set openWithError(value: Error | undefined) {
+        openWithError = value;
+      },
     },
   };
 });
 
 vi.mock("vscode", () => vscode);
 
-const { MarkdownWeaverEditorProvider, extendMarkdownIt } =
+const { MarkdownMintEditorProvider, extendMarkdownIt } =
   await import("../../src/extension/extension");
 
 function context(): {
@@ -417,10 +512,10 @@ async function flush(): Promise<void> {
   await new Promise<void>((resolve) => setTimeout(resolve, 0));
 }
 
-describe("MarkdownWeaverEditorProvider", () => {
+describe("MarkdownMintEditorProvider", () => {
   it("applies a validated edit and acknowledges the resulting TextDocument version", async () => {
     vscode.__state.reset();
-    const provider = new MarkdownWeaverEditorProvider(context() as never);
+    const provider = new MarkdownMintEditorProvider(context() as never);
     const document = vscode.__state.document;
     await provider.resolveCustomTextEditor(
       document as never,
@@ -449,9 +544,247 @@ describe("MarkdownWeaverEditorProvider", () => {
     provider.dispose();
   });
 
+  it("opens the standard source editor in the custom editor's group", async () => {
+    vscode.__state.reset();
+    const provider = new MarkdownMintEditorProvider(context() as never);
+    const document = vscode.__state.document;
+    await provider.resolveCustomTextEditor(
+      document as never,
+      vscode.__state.panel as never,
+      {} as never,
+    );
+    vscode.__state.panel.webview.receive({ protocolVersion: 1, type: "ready" });
+    await flush();
+
+    vscode.__state.panel.webview.receive({
+      protocolVersion: 1,
+      type: "source",
+    });
+    await flush();
+
+    const openWithCall = [...vscode.__state.commandCalls]
+      .reverse()
+      .find((call) => call.command === "vscode.openWith");
+    expect(openWithCall).toEqual({
+      command: "vscode.openWith",
+      args: [
+        expect.objectContaining({ fsPath: "/workspace/doc.md" }),
+        "default",
+        expect.objectContaining({
+          viewColumn: 2,
+          preview: false,
+          preserveFocus: false,
+        }),
+      ],
+    });
+    provider.dispose();
+  });
+
+  it("reports a standard source editor failure with its operation id", async () => {
+    vscode.__state.reset();
+    const provider = new MarkdownMintEditorProvider(context() as never);
+    const document = vscode.__state.document;
+    await provider.resolveCustomTextEditor(
+      document as never,
+      vscode.__state.panel as never,
+      {} as never,
+    );
+    vscode.__state.panel.webview.receive({ protocolVersion: 1, type: "ready" });
+    await flush();
+
+    vscode.__state.openWithError = new Error("openWith failed");
+    vscode.__state.panel.webview.receive({
+      protocolVersion: 1,
+      type: "source",
+      operationId: "source:failed",
+    });
+    await flush();
+
+    expect(vscode.__state.panel.webview.messages).toContainEqual(
+      expect.objectContaining({
+        type: "error",
+        operationId: "source:failed",
+        message: "openWith failed",
+      }),
+    );
+    provider.dispose();
+  });
+
+  it.each(["gitlab", "commonmark"] as const)(
+    "persists a %s profile and acknowledges its authoritative snapshot",
+    async (profile) => {
+      vscode.__state.reset();
+      const provider = new MarkdownMintEditorProvider(context() as never);
+      const document = vscode.__state.document;
+      await provider.resolveCustomTextEditor(
+        document as never,
+        vscode.__state.panel as never,
+        {} as never,
+      );
+      vscode.__state.panel.webview.receive({
+        protocolVersion: 1,
+        type: "ready",
+      });
+      await flush();
+      const baseVersion = document.version;
+      const operationId = `profile:${profile}`;
+      vscode.__state.panel.webview.receive({
+        protocolVersion: 1,
+        type: "set-profile",
+        profile,
+        baseVersion,
+        operationId,
+      });
+      await flush();
+
+      expect(vscode.__state.workspaceState.profile).toBe(profile);
+      expect(vscode.__state.configurationUpdates).toContainEqual({
+        section: "markdownMint",
+        key: "profile",
+        value: profile,
+        target: vscode.ConfigurationTarget.Global,
+      });
+      expect(vscode.__state.panel.webview.messages).toContainEqual(
+        expect.objectContaining({
+          type: "document",
+          reason: "ack",
+          operationId,
+          profile,
+          version: document.version,
+        }),
+      );
+      provider.dispose();
+    },
+  );
+
+  it("rejects a stale profile request without changing configuration", async () => {
+    vscode.__state.reset();
+    const provider = new MarkdownMintEditorProvider(context() as never);
+    const document = vscode.__state.document;
+    await provider.resolveCustomTextEditor(
+      document as never,
+      vscode.__state.panel as never,
+      {} as never,
+    );
+    vscode.__state.panel.webview.receive({ protocolVersion: 1, type: "ready" });
+    await flush();
+    const staleVersion = document.version;
+    vscode.__state.emitExternal("# External");
+    vscode.__state.panel.webview.receive({
+      protocolVersion: 1,
+      type: "set-profile",
+      profile: "gitlab",
+      baseVersion: staleVersion,
+      operationId: "profile:stale",
+    });
+    await flush();
+
+    expect(vscode.__state.workspaceState.profile).toBe("github");
+    expect(vscode.__state.configurationUpdates).toHaveLength(0);
+    expect(vscode.__state.panel.webview.messages).toContainEqual(
+      expect.objectContaining({
+        type: "error",
+        operationId: "profile:stale",
+      }),
+    );
+    provider.dispose();
+  });
+
+  it("suppresses unchanged dirty-only events but broadcasts real text and EOL changes", async () => {
+    vscode.__state.reset();
+    const provider = new MarkdownMintEditorProvider(context() as never);
+    const document = vscode.__state.document;
+    await provider.resolveCustomTextEditor(
+      document as never,
+      vscode.__state.panel as never,
+      {} as never,
+    );
+    vscode.__state.panel.webview.receive({ protocolVersion: 1, type: "ready" });
+    await flush();
+
+    const beforeDirtyOnly = vscode.__state.panel.webview.messages.length;
+    vscode.__state.emitDirtyState();
+    expect(vscode.__state.panel.webview.messages.length).toBe(beforeDirtyOnly);
+
+    vscode.__state.emitExternal("# Changed");
+    const afterTextChange = vscode.__state.panel.webview.messages.length;
+    expect(vscode.__state.panel.webview.messages.at(-1)).toEqual(
+      expect.objectContaining({
+        type: "document",
+        reason: "external",
+        markdown: "# Changed",
+      }),
+    );
+    vscode.__state.emitDirtyState();
+    expect(vscode.__state.panel.webview.messages.length).toBe(afterTextChange);
+
+    vscode.__state.emitEolChange();
+    expect(vscode.__state.panel.webview.messages.length).toBeGreaterThan(
+      afterTextChange,
+    );
+    expect(vscode.__state.panel.webview.messages.at(-1)).toEqual(
+      expect.objectContaining({
+        type: "document",
+        reason: "external",
+      }),
+    );
+    const afterEolChange = vscode.__state.panel.webview.messages.length;
+    vscode.__state.emitTextChangeWithoutChanges(
+      "# Text changed without payload",
+    );
+    expect(vscode.__state.panel.webview.messages.length).toBeGreaterThan(
+      afterEolChange,
+    );
+    expect(vscode.__state.panel.webview.messages.at(-1)).toEqual(
+      expect.objectContaining({
+        type: "document",
+        reason: "external",
+        markdown: "# Text changed without payload",
+      }),
+    );
+    provider.dispose();
+  });
+
+  it("preserves untagged native Undo and Redo reasons in document snapshots", async () => {
+    vscode.__state.reset();
+    const provider = new MarkdownMintEditorProvider(context() as never);
+    const document = vscode.__state.document;
+    await provider.resolveCustomTextEditor(
+      document as never,
+      vscode.__state.panel as never,
+      {} as never,
+    );
+    vscode.__state.panel.webview.receive({ protocolVersion: 1, type: "ready" });
+    await flush();
+
+    vscode.__state.emitNativeHistory(
+      vscode.TextDocumentChangeReason.Undo,
+      "# Native undo",
+    );
+    expect(vscode.__state.panel.webview.messages.at(-1)).toEqual(
+      expect.objectContaining({
+        type: "document",
+        reason: "undo",
+        markdown: "# Native undo",
+      }),
+    );
+    vscode.__state.emitNativeHistory(
+      vscode.TextDocumentChangeReason.Redo,
+      "# Native redo",
+    );
+    expect(vscode.__state.panel.webview.messages.at(-1)).toEqual(
+      expect.objectContaining({
+        type: "document",
+        reason: "redo",
+        markdown: "# Native redo",
+      }),
+    );
+    provider.dispose();
+  });
+
   it("rejects a stale edit without overwriting the external source", async () => {
     vscode.__state.reset();
-    const provider = new MarkdownWeaverEditorProvider(context() as never);
+    const provider = new MarkdownMintEditorProvider(context() as never);
     const document = vscode.__state.document;
     await provider.resolveCustomTextEditor(
       document as never,
@@ -489,7 +822,7 @@ describe("MarkdownWeaverEditorProvider", () => {
 
   it("opens recovery drafts as separate untitled documents", async () => {
     vscode.__state.reset();
-    const provider = new MarkdownWeaverEditorProvider(context() as never);
+    const provider = new MarkdownMintEditorProvider(context() as never);
     const document = vscode.__state.document;
     await provider.resolveCustomTextEditor(
       document as never,
@@ -521,7 +854,7 @@ describe("MarkdownWeaverEditorProvider", () => {
 
   it("uses the VS Code undo service for host undo and redo requests", async () => {
     vscode.__state.reset();
-    const provider = new MarkdownWeaverEditorProvider(context() as never);
+    const provider = new MarkdownMintEditorProvider(context() as never);
     const document = vscode.__state.document;
     await provider.resolveCustomTextEditor(
       document as never,
@@ -575,7 +908,7 @@ describe("MarkdownWeaverEditorProvider", () => {
 
   it("serializes a save request and reports the authoritative dirty state", async () => {
     vscode.__state.reset();
-    const provider = new MarkdownWeaverEditorProvider(context() as never);
+    const provider = new MarkdownMintEditorProvider(context() as never);
     const document = vscode.__state.document;
     await provider.resolveCustomTextEditor(
       document as never,
@@ -623,7 +956,7 @@ describe("MarkdownWeaverEditorProvider", () => {
 
   it("returns safe save formatting edits only when format-on-save is enabled", async () => {
     vscode.__state.reset();
-    const provider = new MarkdownWeaverEditorProvider(context() as never);
+    const provider = new MarkdownMintEditorProvider(context() as never);
     const document = vscode.__state.document;
     vscode.__state.workspaceState.formatOnSave = true;
     document.replaceText("# Unfinished");
@@ -634,7 +967,7 @@ describe("MarkdownWeaverEditorProvider", () => {
 
   it("rebroadcasts typography changes without changing the Markdown profile", async () => {
     vscode.__state.reset();
-    const provider = new MarkdownWeaverEditorProvider(context() as never);
+    const provider = new MarkdownMintEditorProvider(context() as never);
     const document = vscode.__state.document;
     await provider.resolveCustomTextEditor(
       document as never,

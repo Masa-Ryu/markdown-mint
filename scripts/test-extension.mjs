@@ -13,16 +13,18 @@ const extensionTestsPath = resolve(
   "dist",
   "test-extension.js",
 );
-const installedCode =
-  "/Applications/Visual Studio Code.app/Contents/MacOS/Electron";
+const installedCodeCandidates = [
+  "/Applications/Visual Studio Code.app/Contents/MacOS/Code",
+  "/Applications/Visual Studio Code.app/Contents/MacOS/Electron",
+];
 const vscodeExecutablePath =
-  process.env.MARKDOWN_WEAVER_CODE ??
-  (pathExists(installedCode) ? installedCode : undefined);
+  process.env.MARKDOWN_MINT_CODE ??
+  installedCodeCandidates.find((candidate) => pathExists(candidate));
 
 // Keep the profile path short: Electron uses a Unix-domain IPC socket below
 // user-data and macOS rejects paths longer than roughly 103 characters.
 const temporaryRoot = await mkdtemp(
-  join(process.env.MARKDOWN_WEAVER_TEST_TMP ?? "/private/tmp", "mw-ext-"),
+  join(process.env.MARKDOWN_MINT_TEST_TMP ?? "/private/tmp", "mm-ext-"),
 );
 const userDataDirectory = join(temporaryRoot, "user-data");
 const extensionsDirectory = join(temporaryRoot, "extensions");
@@ -43,7 +45,7 @@ try {
     extensionTestsPath,
     ...(vscodeExecutablePath ? { vscodeExecutablePath } : {}),
     extensionTestsEnv: {
-      MARKDOWN_WEAVER_TEST_FILE: testFile,
+      MARKDOWN_MINT_TEST_FILE: testFile,
     },
     launchArgs: [
       `--user-data-dir=${userDataDirectory}`,
@@ -54,7 +56,7 @@ try {
   });
   if (exitCode !== 0) process.exitCode = exitCode;
 } finally {
-  if (process.env.MARKDOWN_WEAVER_TEST_KEEP === "1")
+  if (process.env.MARKDOWN_MINT_TEST_KEEP === "1")
     console.log(`Kept native test workspace at ${temporaryRoot}`);
   else await rm(temporaryRoot, { recursive: true, force: true });
 }

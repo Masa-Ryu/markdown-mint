@@ -7,6 +7,7 @@
        the extension's shared preview contribution. -->
   <link rel="stylesheet" href="/__vscode__/markdown.css">
   <link rel="stylesheet" href="/media/document.css">
+  <link rel="stylesheet" href="/dist/katex/katex.css">
 </head>
 <body>
   <main class="markdown-body" data-testid="native-content">
@@ -22,7 +23,7 @@
     </table>
   </main>
   <script>
-    window.__markdownWeaverNative = {
+    window.__markdownMintNative = {
       metrics() {
         const content = document.querySelector('[data-testid="native-content"]');
         return {
@@ -41,5 +42,6 @@
       }
     };
   </script>
+  <script src="/dist/mermaid.js"></script>
 </body>
 </html>

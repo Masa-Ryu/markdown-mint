@@ -17,3 +17,5 @@ AGENTS.md
 node_modules/**
 dist/test-extension.js*
 dist/*.map
+sample.md
+md/**

@@ -1,13 +1,14 @@
 {
-  "name": "markdown-weaver",
-  "displayName": "Markdown Weaver",
+  "name": "markdown-mint",
+  "displayName": "Markdown Mint",
   "description": "A structured Markdown editor for VS Code with safe, synchronized previews.",
-  "version": "0.0.1",
-  "publisher": "markdown-weaver-local",
+  "version": "0.0.14",
+  "publisher": "markdown-mint-local",
+  "icon": "images/icon.png",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+ssh://git@github.com/Masa-Ryu/markdown-weaver.git"
+    "url": "git+ssh://git@github.com/Masa-Ryu/markdown-mint.git"
   },
   "engines": {
     "vscode": "^1.90.0"
@@ -22,34 +23,41 @@
     "preview"
   ],
   "activationEvents": [
-    "onCustomEditor:markdownWeaver.editor",
-    "onCommand:markdownWeaver.openPreview",
-    "onCommand:markdownWeaver.openSource",
-    "onCommand:markdownWeaver.formatDocument"
+    "onLanguage:markdown",
+    "onCustomEditor:markdownMint.editor",
+    "onCommand:markdownMint.openPreview",
+    "onCommand:markdownMint.openSource",
+    "onCommand:markdownMint.formatDocument",
+    "onCommand:markdownMint.openInEditor"
   ],
   "main": "./dist/extension.js",
   "contributes": {
     "commands": [
       {
-        "command": "markdownWeaver.openPreview",
-        "title": "Markdown Weaver: Open Dedicated Preview",
+        "command": "markdownMint.openPreview",
+        "title": "Markdown Mint: Open Dedicated Preview",
         "enablement": "resourceLangId == markdown"
       },
       {
-        "command": "markdownWeaver.openSource",
-        "title": "Markdown Weaver: Open Source",
+        "command": "markdownMint.openSource",
+        "title": "Markdown Mint: Open Source",
         "enablement": "resourceLangId == markdown"
       },
       {
-        "command": "markdownWeaver.formatDocument",
-        "title": "Markdown Weaver: Format Document",
+        "command": "markdownMint.formatDocument",
+        "title": "Markdown Mint: Format Document",
+        "enablement": "resourceLangId == markdown"
+      },
+      {
+        "command": "markdownMint.openInEditor",
+        "title": "Markdown Mint: Open in Markdown Mint",
         "enablement": "resourceLangId == markdown"
       }
     ],
     "customEditors": [
       {
-        "viewType": "markdownWeaver.editor",
-        "displayName": "Markdown Weaver",
+        "viewType": "markdownMint.editor",
+        "displayName": "Markdown Mint",
         "selector": [
           {
             "filenamePattern": "*.md"
@@ -65,9 +73,9 @@
       }
     ],
     "configuration": {
-      "title": "Markdown Weaver",
+      "title": "Markdown Mint",
       "properties": {
-        "markdownWeaver.profile": {
+        "markdownMint.profile": {
           "type": "string",
           "enum": [
             "commonmark",
@@ -83,13 +91,13 @@
           "description": "Markdown profile used by the structured editor and dedicated preview.",
           "scope": "resource"
         },
-        "markdownWeaver.formatOnSave": {
+        "markdownMint.formatOnSave": {
           "type": "boolean",
           "default": false,
           "description": "Format Markdown safely before saving.",
           "scope": "resource"
         },
-        "markdownWeaver.prettierOptions": {
+        "markdownMint.prettierOptions": {
           "type": "object",
           "default": {
             "printWidth": 80,
@@ -101,7 +109,11 @@
       }
     },
     "markdown.previewStyles": [
-      "./media/document.css"
+      "./media/document.css",
+      "./dist/katex/katex.css"
+    ],
+    "markdown.previewScripts": [
+      "./dist/mermaid.js"
     ],
     "markdown.markdownItPlugins": true
   },
@@ -122,7 +134,10 @@
     "package": "npm run build && vsce package --no-dependencies && node scripts/verify-package.mjs"
   },
   "dependencies": {
+    "highlight.js": "^11.12.0",
+    "katex": "^0.16.47",
     "markdown-it": "^14.1.0",
+    "mermaid": "^11.17.2",
     "prettier": "^3.6.2",
     "prosemirror-commands": "^1.7.1",
     "prosemirror-history": "^1.4.1",

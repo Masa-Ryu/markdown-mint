@@ -170,7 +170,7 @@ describe("reviewed webview synchronization races", () => {
     expect(app.sync.queuedEdit?.markdown).toContain("two");
 
     app.receiveDocument(hostDocument("external", 3, { reason: "external" }));
-    expect(root.querySelector(".mw-recover")?.hasAttribute("hidden")).toBe(
+    expect(root.querySelector(".mm-recover")?.hasAttribute("hidden")).toBe(
       false,
     );
 
@@ -182,7 +182,7 @@ describe("reviewed webview synchronization races", () => {
     );
 
     expect(edits(messages)).toHaveLength(1);
-    expect(root.querySelector<HTMLElement>(".mw-status")?.dataset.state).toBe(
+    expect(root.querySelector<HTMLElement>(".mm-status")?.dataset.state).toBe(
       "conflict",
     );
     expect(app.view.state.doc.textContent).toContain("one");
@@ -226,11 +226,11 @@ describe("reviewed webview synchronization races", () => {
     expect(edits(messages)).toHaveLength(1);
 
     app.view.dispatch(app.view.state.tr.insertText(" again"));
-    const status = root.querySelector<HTMLElement>(".mw-status");
+    const status = root.querySelector<HTMLElement>(".mm-status");
     const continuedSync = edits(messages).length > 1;
     const explicitConflict =
       status?.dataset.state === "conflict" &&
-      root.querySelector(".mw-recover")?.hasAttribute("hidden") === false;
+      root.querySelector(".mm-recover")?.hasAttribute("hidden") === false;
     expect(continuedSync || explicitConflict).toBe(true);
   });
 
@@ -300,9 +300,14 @@ describe("reviewed webview synchronization races", () => {
 
   it("keeps Preview selected while a host format result preserves the CellSelection", () => {
     const source = "| A | B |\n| --- | --- |\n| C | D |";
-    const { app, root } = makeApp({ markdown: source });
+    const { app } = makeApp({ markdown: source });
     const originalSelection = selectWholeTable(app);
-    root.querySelector<HTMLButtonElement>('[data-mode="preview"]')!.click();
+    app.receiveDocument(
+      hostDocument(source, 2, {
+        mode: "preview",
+        reason: "external",
+      }),
+    );
     expect(app.mode).toBe("preview");
 
     app.receiveDocument(
@@ -318,7 +323,11 @@ describe("reviewed webview synchronization races", () => {
     expect(selection.$anchorCell.pos).toBe(originalSelection.$anchorCell.pos);
     expect(selection.$headCell.pos).toBe(originalSelection.$headCell.pos);
 
-    root.querySelector<HTMLButtonElement>('[data-mode="rich"]')!.click();
+    (
+      app as unknown as {
+        setMode: (mode: "rich", requestHost?: boolean) => void;
+      }
+    ).setMode("rich", false);
     expect(app.mode).toBe("rich");
     expect(app.view.state.selection).toBeInstanceOf(CellSelection);
     const richSelection = app.view.state.selection as CellSelection;

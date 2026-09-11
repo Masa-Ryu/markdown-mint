@@ -4,7 +4,7 @@
 
 ## Repository Overview
 
-This repository contains the TypeScript Markdown Weaver VS Code extension.
+This repository contains the TypeScript Markdown Mint VS Code extension.
 `src/core` owns the Markdown/ProseMirror model, `src/extension` owns the VS
 Code host, `src/webview` owns the dedicated editor UI, and `src/shared` owns
 the validated host/webview protocol. `media/document.css` is also contributed
@@ -27,13 +27,18 @@ native acceptance suite. `npm run package` builds and verifies the local VSIX.
 If a behavior requires visual or IME inspection, record the manual check in
 the requirements documentation.
 
+テスト時には以下のファイルで正しく表示されていることを確認すること。
+- ./md/common-test.md
+- ./md/github-test.md
+- ./md/github-test-class-B.md
+- ./md/gitlab-test.md
+- ./md/gitlab-test-class-B.md
+
 ## Commits and Pull Requests
 
-The current history contains one commit, `Initial commit`; it does not yet
-establish a detailed subject-line convention. Use short, imperative commit
-subjects and adopt a more specific convention here once the project has enough
-history to support one. Keep pull requests focused, describe the motivation
-and behavioral impact, list validation performed (or note that no tooling
-exists yet), and update documentation when user-facing behavior or setup
-changes. Reviewers should be able to understand the change from the PR
+Use short, imperative commit subjects focused on one change. Keep pull
+requests focused, describe the motivation and behavioral impact, list
+validation performed, and update documentation when user-facing behavior or
+setup changes. Reviewers should be able to understand the change from the PR
 description without reconstructing intent from the diff alone.
+

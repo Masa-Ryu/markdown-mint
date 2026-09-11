@@ -7,10 +7,11 @@
        markdown.css. Loading it first catches native-preview cascade drift. -->
   <link rel="stylesheet" href="/__vscode__/markdown.css">
   <link rel="stylesheet" href="/media/document.css">
+  <link rel="stylesheet" href="/dist/katex/katex.css">
   <link rel="stylesheet" href="/media/webview.css">
 </head>
-<body data-markdown-weaver-mode="editor">
-  <main id="app" aria-label="Markdown Weaver"></main>
+<body data-markdown-mint-mode="editor">
+  <main id="app" aria-label="Markdown Mint"></main>
   <script>
     (() => {
       const protocolVersion = 1;
@@ -31,6 +32,7 @@
       ].join('\n');
       let markdown = markdownFixture;
       let version = 1;
+      let profile = 'github';
       const history = [];
       const future = [];
       const messages = [];
@@ -53,6 +55,7 @@
           case 'undo':
           case 'redo': return safeOperation(value.operationId) && optionalVersion(value.baseVersion);
           case 'source': return optionalString(value.operationId);
+          case 'set-profile': return (value.profile === 'github' || value.profile === 'gitlab' || value.profile === 'commonmark') && versionValue(value.baseVersion) && safeOperation(value.operationId);
           case 'format': return versionValue(value.baseVersion) && safeOperation(value.operationId);
           case 'preview': return optionalVersion(value.baseVersion) && optionalString(value.operationId);
           case 'recoverDraft': return versionValue(value.baseVersion) && safeOperation(value.operationId) && safeMarkdown(value.markdown);
@@ -62,7 +65,7 @@
       const deliver = data => window.dispatchEvent(new MessageEvent('message', { data: { protocolVersion, ...data } }));
       const typography = { fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif', fontSize: 14, lineHeight: 1.6 };
       const reject = (operationId, reason, message, draftMarkdown) => deliver({ type: 'edit-rejected', operationId, reason, message, currentMarkdown: markdown, currentVersion: version, ...(draftMarkdown === undefined ? {} : { draftMarkdown }) });
-      const accept = (operationId, reason = 'ack') => deliver({ type: 'document', markdown, version, profile: 'github', ...(operationId === undefined ? {} : { operationId }), reason, mode: 'editor', typography });
+      const accept = (operationId, reason = 'ack') => deliver({ type: 'document', markdown, version, profile, ...(operationId === undefined ? {} : { operationId }), reason, mode: 'editor', typography });
       const host = {
         postMessage(message) {
           messages.push(clone(message));
@@ -80,13 +83,22 @@
             markdown = message.markdown;
             version += 1;
             accept(message.operationId);
+          } else if (message.type === 'set-profile') {
+            if (message.baseVersion !== version) {
+              deliver({ type: 'error', operationId: message.operationId, message: 'The Markdown document changed before the profile selection arrived.' });
+              accept(undefined, 'external');
+              return;
+            }
+            profile = message.profile;
+            state = { ...state, profile };
+            accept(message.operationId, 'ack');
           } else if (message.type === 'recoverDraft') {
             if (message.baseVersion !== version) {
               reject(message.operationId, 'stale', 'The Markdown document changed before the draft could be opened.', message.markdown);
               return;
             }
             state = { ...state, recoveryDraft: message.markdown };
-            deliver({ type: 'recovery-opened', operationId: message.operationId, currentMarkdown: markdown, currentVersion: version, profile: 'github', draftUri: 'untitled:markdown-weaver-recovery.md' });
+            deliver({ type: 'recovery-opened', operationId: message.operationId, currentMarkdown: markdown, currentVersion: version, profile, draftUri: 'untitled:markdown-mint-recovery.md' });
             // Recovery opens a separate untitled document. The authoritative
             // document remains unchanged and is sent back with no operation id.
             accept(undefined, 'recovery');
@@ -118,19 +130,19 @@
         setState: next => { state = clone(next); }
       };
       window.acquireVsCodeApi = () => host;
-      window.__markdownWeaverHarness = {
+      window.__markdownMintHarness = {
         get messages() { return messages; },
-        get document() { return { markdown, version }; },
+        get document() { return { markdown, version, profile }; },
         deliverExternal(nextMarkdown) { markdown = nextMarkdown; version += 1; accept(undefined, 'external'); },
         get state() { return clone(state); },
         metrics() {
-          const rich = document.querySelector('.mw-rich-panel .ProseMirror');
-          const preview = document.querySelector('.mw-preview-panel .mw-document-content');
+          const rich = document.querySelector('.mm-rich-panel .ProseMirror');
+          const preview = document.querySelector('.mm-preview-panel .mm-document-content');
           const measure = content => content ? {
             content: content.getBoundingClientRect().toJSON(),
             heading: content.querySelector('h1')?.getBoundingClientRect().toJSON(),
             paragraph: content.querySelector('p')?.getBoundingClientRect().toJSON(),
-            task: content.querySelector('li.task-list-item, .mw-task-item.mw-task-task')?.getBoundingClientRect().toJSON(),
+            task: content.querySelector('li.task-list-item, .mm-task-item.mm-task-task')?.getBoundingClientRect().toJSON(),
             table: content.querySelector('table')?.getBoundingClientRect().toJSON(),
             cells: Array.from(content.querySelectorAll('th,td')).map(cell => cell.getBoundingClientRect().toJSON()),
             code: content.querySelector('pre')?.getBoundingClientRect().toJSON(),
@@ -143,6 +155,7 @@
       };
     })();
   </script>
+  <script src="/dist/mermaid.js"></script>
   <script src="/dist/webview.js"></script>
 </body>
 </html>

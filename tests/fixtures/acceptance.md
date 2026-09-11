@@ -1,4 +1,4 @@
-# Markdown Weaver acceptance fixture
+# Markdown Mint acceptance fixture
 
 This file is copied to a temporary workspace by `npm run test:extension`.
 

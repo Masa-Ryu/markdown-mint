@@ -14,6 +14,11 @@ import {
 } from "prosemirror-model";
 import { addListNodes } from "prosemirror-schema-list";
 import { tableNodes } from "prosemirror-tables";
+import {
+  renderAdvancedBlock as renderAdvancedBlockHtml,
+  renderCodeBlock as renderCodeBlockHtml,
+  renderMath as renderMathHtml,
+} from "./visualRendering";
 
 /** The Markdown dialect used by the editor and preview. */
 export type Profile = "github" | "gitlab" | "commonmark";
@@ -51,10 +56,54 @@ export interface MarkdownSnapshot {
   source: string;
   profile?: Profile;
   blocks?: MarkdownBlockSnapshot[];
+  /** Footnote definitions collected from the source in document order. */
+  footnotes?: FootnoteDefinition[];
   leading?: string;
   trailing?: string;
   lineEnding: "lf" | "crlf" | "mixed" | "none";
   [mapping: string]: unknown;
+}
+
+/** A source-preserving GitHub/GitLab footnote definition. */
+export interface FootnoteDefinition {
+  /** A normalized label used for matching. */
+  label: string;
+  /** The label as it appeared in the source. */
+  sourceLabel: string;
+  /** Definition body, with Markdown indentation removed. */
+  content: string;
+  /** Complete definition source, excluding the trailing separator. */
+  source: string;
+  /** Zero-based source offsets, when the definition came from a document. */
+  start?: number;
+  end?: number;
+}
+
+/** Optional context used when rendering an individual PM node. */
+export interface RenderContext {
+  /** The source snapshot that produced the node. */
+  snapshot?: MarkdownSnapshot;
+  /** A document to use for heading/footnote context. */
+  document?: PMNode;
+  /** Footnotes can be supplied when rendering a raw atom independently. */
+  footnotes?: FootnoteDefinition[];
+  /** The active profile, useful to injected advanced renderers. */
+  profile?: Profile;
+  /** Internal state is public so NodeViews can render a sequence consistently. */
+  headingSlugs?: Map<string, number>;
+  footnoteRefs?: Map<string, number>;
+  footnoteNumbers?: Map<string, number>;
+  headingIds?: WeakMap<PMNode, string>;
+  /** Optional document position for detached NodeView render calls. */
+  nodePosition?: number;
+  /** Hosts may provide richer renderers without coupling core to a webview. */
+  renderCodeBlock?: (source: string, language?: string) => string | null;
+  renderMath?: (source: string, display: boolean) => string | null;
+  renderAdvancedBlock?: (
+    kind: string,
+    source: string,
+    options?: Record<string, unknown>,
+  ) => string | null;
 }
 
 type MarkdownToken = {
@@ -215,6 +264,8 @@ const baseNodes: Record<string, NodeSpec> = {
       src: { default: "" },
       alt: { default: null },
       title: { default: null },
+      width: { default: null },
+      height: { default: null },
     },
     parseDOM: [
       {
@@ -225,6 +276,8 @@ const baseNodes: Record<string, NodeSpec> = {
             src: safeUrl(element.getAttribute("src") ?? "", true) ?? "",
             alt: element.getAttribute("alt"),
             title: element.getAttribute("title"),
+            width: element.getAttribute("width"),
+            height: element.getAttribute("height"),
           };
         },
       },
@@ -237,6 +290,12 @@ const baseNodes: Record<string, NodeSpec> = {
           ...(src ? { src } : { "data-markdown-unsafe-src": "true" }),
           alt: node.attrs.alt ?? "",
           ...(node.attrs.title ? { title: node.attrs.title } : {}),
+          ...(safeImageDimension(node.attrs.width)
+            ? { width: safeImageDimension(node.attrs.width) }
+            : {}),
+          ...(safeImageDimension(node.attrs.height)
+            ? { height: safeImageDimension(node.attrs.height) }
+            : {}),
         },
       ];
     },
@@ -321,9 +380,11 @@ if (listItemSpec) {
         tag: "li",
         getAttrs: (dom) => ({
           checked:
-            (dom as HTMLElement).getAttribute("data-checked") === "true"
-              ? true
-              : null,
+            (dom as HTMLElement).getAttribute("data-checked") === "mixed"
+              ? "mixed"
+              : (dom as HTMLElement).getAttribute("data-checked") === "true"
+                ? true
+                : null,
         }),
       },
     ],
@@ -437,16 +498,32 @@ export function createMarkdownIt(profile: Profile = "github"): MarkdownIt {
   );
 }
 
+const escapedDollarMarker = "\uE000\uE001";
+
+function maskEscapedDollars(source: string): string {
+  // Keep source offsets stable while preventing escaped currency from being
+  // mistaken for a TeX delimiter by the lightweight inline math scanner.
+  return source.replace(/(?<!\\)\\\$/g, escapedDollarMarker);
+}
+
+function restoreEscapedDollars(value: string, literal = false): string {
+  return value.split(escapedDollarMarker).join(literal ? "\\$" : "$");
+}
+
 function attrsOf(token: MarkdownToken): Record<string, string> {
   const result: Record<string, string> = {};
   for (const pair of token.attrs ?? []) {
-    result[pair[0]] = pair[1];
+    result[pair[0]] = restoreEscapedDollars(String(pair[1] ?? ""));
   }
   return result;
 }
 
 function tokenText(token: MarkdownToken): string {
-  return token.content ?? "";
+  return restoreEscapedDollars(token.content ?? "");
+}
+
+function literalTokenText(token: MarkdownToken): string {
+  return restoreEscapedDollars(token.content ?? "", true);
 }
 
 function lineOffsets(source: string): number[] {
@@ -537,19 +614,208 @@ function markFor(type: string, attrs: Record<string, string>): Mark | null {
   }
 }
 
-function rawInline(source: string, kind: string): PMNode {
-  return nodeTypes.raw_inline.create({ source, kind });
+const emojiShortcodes: Record<string, string> = {
+  tada: "🎉",
+  party: "🎉",
+  rocket: "🚀",
+  warning: "⚠️",
+  white_check_mark: "✅",
+  heavy_check_mark: "✔️",
+  checkered_flag: "🏁",
+  construction: "🚧",
+  x: "❌",
+  cross_mark: "❌",
+  bulb: "💡",
+  memo: "📝",
+  smile: "😄",
+  smiley: "😃",
+  grin: "😁",
+  blush: "😊",
+  wink: "😉",
+  heart: "❤️",
+  sparkles: "✨",
+  fire: "🔥",
+  eyes: "👀",
+  tada_dance: "💃",
+};
+
+interface ImageDimensions {
+  width: string | null;
+  height: string | null;
 }
 
-function parseInline(children: MarkdownToken[] | null | undefined): PMNode[] {
+function safeImageDimension(value: unknown): string | null {
+  const candidate = String(value ?? "").trim();
+  if (!candidate) return null;
+  if (!/^\d+(?:\.\d+)?(?:px|%)?$/i.test(candidate)) return null;
+  return candidate;
+}
+
+function parseImageDimensions(value: string): ImageDimensions | null {
+  const match = value.trim().match(/^\{([^{}]+)\}$/);
+  if (!match) return null;
+  let width: string | null = null;
+  let height: string | null = null;
+  for (const pair of match[1]!.matchAll(
+    /(?:^|\s)(width|height)\s*=\s*([^\s}]+)/gi,
+  )) {
+    const dimension = safeImageDimension(pair[2]);
+    if (!dimension) continue;
+    if (pair[1]!.toLowerCase() === "width") width = dimension;
+    else height = dimension;
+  }
+  return width || height ? { width, height } : null;
+}
+
+const safeInlineTagNames = new Set([
+  "strong",
+  "em",
+  "b",
+  "i",
+  "kbd",
+  "sup",
+  "sub",
+  "del",
+  "s",
+  "br",
+]);
+
+interface InlineHtmlTag {
+  name: string;
+  closing: boolean;
+  void: boolean;
+}
+
+function inlineHtmlTag(source: string): InlineHtmlTag | null {
+  const match = source
+    .trim()
+    .match(/^<\s*(\/?)([a-z][a-z0-9-]*)(?:\s[^>]*)?>$/i);
+  if (!match || !safeInlineTagNames.has(match[2]!.toLowerCase())) return null;
+  const name = match[2]!.toLowerCase();
+  return { name, closing: Boolean(match[1]), void: name === "br" };
+}
+
+function rawInline(source: string, kind: string, marks: Mark[] = []): PMNode {
+  return nodeTypes.raw_inline.create({ source, kind }, null, marks);
+}
+
+const footnoteNodeMetadata = new WeakMap<PMNode, FootnoteDefinition[]>();
+
+function footnoteRawInline(
+  source: string,
+  kind: string,
+  marks: Mark[],
+  footnotes: Map<string, FootnoteDefinition> | undefined,
+): PMNode {
+  const node = rawInline(source, kind, marks);
+  if (footnotes && footnotes.size > 0)
+    footnoteNodeMetadata.set(node, Array.from(footnotes.values()));
+  return node;
+}
+
+function inlineTokenSource(token: MarkdownToken): string | null {
+  if (token.type === "text" || token.type === "html_inline")
+    return literalTokenText(token);
+  if (token.type === "softbreak") return "\n";
+  if (token.type === "em_open" || token.type === "em_close")
+    return token.markup ?? "*";
+  if (
+    token.type === "strong_open" ||
+    token.type === "strong_close" ||
+    token.type === "s_open" ||
+    token.type === "s_close" ||
+    token.type === "del_open" ||
+    token.type === "del_close"
+  )
+    return token.markup ?? "";
+  if (token.type === "code_inline") {
+    const marker = token.markup ?? String.fromCharCode(96);
+    return marker + literalTokenText(token) + marker;
+  }
+  return null;
+}
+
+function findInlineHtmlPair(
+  children: MarkdownToken[],
+  openingIndex: number,
+  opening: InlineHtmlTag,
+): number {
+  const stack = [opening.name];
+  for (let index = openingIndex + 1; index < children.length; index += 1) {
+    const token = children[index]!;
+    if (token.type === "html_inline") {
+      const tag = inlineHtmlTag(tokenText(token));
+      if (tag && !tag.void) {
+        if (tag.closing) {
+          if (stack[stack.length - 1] !== tag.name) return -1;
+          stack.pop();
+          if (stack.length === 0) return index;
+        } else stack.push(tag.name);
+      }
+      continue;
+    }
+    if (inlineTokenSource(token) === null) return -1;
+  }
+  return -1;
+}
+
+function parseInline(
+  children: MarkdownToken[] | null | undefined,
+  profile: Profile = "github",
+  footnotes?: Map<string, FootnoteDefinition>,
+): PMNode[] {
   if (!children || children.length === 0) return [];
   const output: PMNode[] = [];
   const markStack: Mark[] = [];
+  const emitText = (value: string): void => {
+    const restored = restoreEscapedDollars(value);
+    if (restored) output.push(schema.text(restored, markStack));
+  };
   const pushText = (value: string): void => {
     if (!value) return;
-    output.push(schema.text(value, markStack));
+    const footnotePattern =
+      footnotes && footnotes.size > 0 ? "\\[\\^[^\\]\\r\\n]+\\]" : "(?!)";
+    const mathPattern =
+      "(?<!\\\\)(?<!\\$)\\$(?!\\$)(?=\\S)(?:\\\\.|[^\\$\\r\\n])*?(?<!\\s)\\$(?![\\w$])";
+    const pattern = new RegExp(
+      "(" +
+        footnotePattern +
+        "|" +
+        mathPattern +
+        (profile === "gitlab"
+          ? "|\\{-[\\s\\S]*?-\\}|\\{\\+[\\s\\S]*?\\+\\}|:[a-zA-Z0-9_+\\-]+:"
+          : "|:[a-zA-Z0-9_+\\-]+:") +
+        ")",
+      "g",
+    );
+    let cursor = 0;
+    let match: RegExpExecArray | null;
+    while ((match = pattern.exec(value)) != null) {
+      if (match.index > cursor) emitText(value.slice(cursor, match.index));
+      const source = restoreEscapedDollars(match[0]!, true);
+      if (source.startsWith("[^")) {
+        const label = referenceLabel(source.slice(2, -1));
+        if (footnotes?.has(label))
+          output.push(
+            footnoteRawInline(source, "footnote_ref", markStack, footnotes),
+          );
+        else emitText(source);
+      } else if (source.startsWith("$")) {
+        output.push(rawInline(source, "math_inline", markStack));
+      } else if (source.startsWith("{-") || source.startsWith("{+")) {
+        output.push(rawInline(source, "gitlab-inline-diff", markStack));
+      } else {
+        const name = source.slice(1, -1).toLowerCase();
+        if (emojiShortcodes[name])
+          output.push(rawInline(source, "emoji", markStack));
+        else emitText(source);
+      }
+      cursor = match.index + source.length;
+    }
+    if (cursor < value.length) emitText(value.slice(cursor));
   };
-  for (const child of children) {
+  for (let index = 0; index < children.length; index += 1) {
+    const child = children[index]!;
     const attrs = attrsOf(child);
     switch (child.type) {
       case "em_open": {
@@ -579,6 +845,28 @@ function parseInline(children: MarkdownToken[] | null | undefined): PMNode[] {
         if (markStack.length > 0) markStack.pop();
         break;
       case "link_open": {
+        const next = children[index + 1];
+        const reference = tokenText(next ?? ({} as MarkdownToken));
+        const label = reference.startsWith("^") ? reference.slice(1) : "";
+        const isFootnote =
+          Boolean(label) && Boolean(footnotes?.has(referenceLabel(label)));
+        if (isFootnote) {
+          output.push(
+            footnoteRawInline(
+              `[^${label}]`,
+              "footnote_ref",
+              markStack,
+              footnotes,
+            ),
+          );
+          while (
+            index + 1 < children.length &&
+            children[index + 1]!.type !== "link_close"
+          )
+            index += 1;
+          if (index + 1 < children.length) index += 1;
+          break;
+        }
         const mark = markFor("link", attrs);
         if (mark) markStack.push(mark);
         break;
@@ -594,7 +882,7 @@ function parseInline(children: MarkdownToken[] | null | undefined): PMNode[] {
         break;
       case "code_inline":
         output.push(
-          schema.text(tokenText(child), [
+          schema.text(literalTokenText(child), [
             ...markStack,
             markTypes.code.create(),
           ]),
@@ -604,15 +892,28 @@ function parseInline(children: MarkdownToken[] | null | undefined): PMNode[] {
       case "entity":
       case "escape":
       case "html_entity":
-        pushText(tokenText(child));
+        // Keep the same-length escape marker until the math scan has run.
+        // Restoring it before scanning would turn \$ into a false delimiter.
+        pushText(child.content ?? "");
         break;
       case "softbreak":
-        pushText("\n");
+        emitText("\n");
         break;
       case "hardbreak":
         output.push(nodeTypes.hard_break.create());
         break;
-      case "image":
+      case "image": {
+        const nextText = tokenText(
+          children[index + 1] ?? ({} as MarkdownToken),
+        );
+        const dimensionMatch =
+          profile === "gitlab"
+            ? nextText.match(/^(\{[^{}]+\})([\s\S]*)$/)
+            : null;
+        const dimensions = dimensionMatch
+          ? parseImageDimensions(dimensionMatch[1]!)
+          : null;
+        if (dimensions) index += 1;
         output.push(
           nodeTypes.image.create(
             {
@@ -623,34 +924,92 @@ function parseInline(children: MarkdownToken[] | null | undefined): PMNode[] {
                 child.children?.map((entry) => tokenText(entry)).join("") ||
                 null,
               title: attrs.title ?? null,
+              width: dimensions?.width ?? null,
+              height: dimensions?.height ?? null,
             },
             null,
             markStack,
           ),
         );
+        if (dimensions && dimensionMatch?.[2]) emitText(dimensionMatch[2]);
         break;
-      case "html_inline":
-        if (/^<br\s*\/?>$/i.test(tokenText(child).trim()))
+      }
+      case "html_inline": {
+        const source = literalTokenText(child);
+        const tag = inlineHtmlTag(source);
+        if (/^<br\s*\/?>(?:\s*)$/i.test(source.trim())) {
           output.push(nodeTypes.hard_break.create());
-        else output.push(rawInline(tokenText(child), "html"));
+        } else if (/^<!--[\s\S]*-->$/.test(source.trim())) {
+          output.push(rawInline(source, "html-comment", markStack));
+        } else if (tag && !tag.closing && !tag.void) {
+          // Keep a safe paired element together. Rendering an opener and a
+          // closer as separate DOM fragments lets the browser repair the
+          // first fragment before its text arrives in a NodeView. Track nested
+          // safe tags so a nested <strong> cannot close the outer pair early.
+          const closingIndex = findInlineHtmlPair(children, index, tag);
+          if (closingIndex > index) {
+            const parts = [source];
+            for (
+              let candidate = index + 1;
+              candidate <= closingIndex;
+              candidate += 1
+            ) {
+              const part = inlineTokenSource(children[candidate]!);
+              if (part === null) {
+                parts.length = 0;
+                break;
+              }
+              parts.push(part);
+            }
+            if (parts.length > 0) {
+              output.push(rawInline(parts.join(""), "html-pair", markStack));
+              index = closingIndex;
+            } else {
+              output.push(rawInline(source, "html-allowed", markStack));
+            }
+          }
+        } else if (tag) {
+          output.push(rawInline(source, "html-allowed", markStack));
+        } else {
+          output.push(rawInline(source, "html", markStack));
+        }
         break;
+      }
       case "math_inline":
       case "footnote_ref":
-      case "footnote_anchor":
-        output.push(rawInline(tokenText(child), child.type));
+      case "footnote_anchor": {
+        const value = tokenText(child);
+        const source = value.startsWith("[^")
+          ? value
+          : `[^${value.replace(/^\^/, "")}]`;
+        output.push(
+          rawInline(
+            child.type === "math_inline" ? value : source,
+            child.type,
+            markStack,
+          ),
+        );
         break;
-      default:
-        // Keeping an unrecognised inline token visible is safer than dropping
-        // source that an extension may understand.
-        pushText(tokenText(child) || child.markup || child.type);
+      }
+      default: {
+        // Unknown extension tokens remain source atoms. Treating their token
+        // name as prose can manufacture Markdown punctuation on save.
+        const source = tokenText(child) || child.markup || "";
+        if (source)
+          output.push(rawInline(source, child.type || "unknown", markStack));
         break;
+      }
     }
   }
   return output;
 }
 
-function paragraphFromInline(token: MarkdownToken | undefined): PMNode {
-  const content = parseInline(token?.children);
+function paragraphFromInline(
+  token: MarkdownToken | undefined,
+  profile: Profile = "github",
+  footnotes?: Map<string, FootnoteDefinition>,
+): PMNode {
+  const content = parseInline(token?.children, profile, footnotes);
   return nodeTypes.paragraph.create(
     null,
     content.length > 0 ? content : Fragment.empty,
@@ -666,19 +1025,26 @@ function firstTextNode(node: PMNode): PMNode | undefined {
   return undefined;
 }
 
+type TaskState = boolean | "mixed" | null;
+
 function taskInfo(
   children: PMNode[],
   profile: Profile,
-): { checked: boolean | null; children: PMNode[] } {
+): { checked: TaskState; children: PMNode[] } {
   if (profile === "commonmark") return { checked: null, children };
   const firstParagraph = children.find(
     (child) => child.type.name === "paragraph",
   );
   const firstText = firstParagraph ? firstTextNode(firstParagraph) : undefined;
   if (!firstText || !firstText.text) return { checked: null, children };
-  const match = firstText.text.match(/^\[([ xX])\][ \t]+/);
+  const markerPattern = profile === "gitlab" ? " xX~" : " xX";
+  const match = firstText.text.match(
+    new RegExp("^\\[([" + markerPattern + "])\\][ \t]+"),
+  );
   if (!match) return { checked: null, children };
-  const checked = match[1]!.toLowerCase() === "x";
+  const marker = match[1]!.toLowerCase();
+  const checked: TaskState =
+    marker === "x" ? true : marker === "~" ? "mixed" : false;
   const replacement = firstText.text.slice(match[0].length);
   const paragraphIndex = children.indexOf(firstParagraph!);
   const firstParagraphChildren = childrenOf(firstParagraph!);
@@ -705,6 +1071,7 @@ function parseList(
   source?: string,
   offsets?: number[],
   profile: Profile = "github",
+  footnotes?: Map<string, FootnoteDefinition>,
 ): PMNode {
   const items: PMNode[] = [];
   let index = openIndex + 1;
@@ -722,6 +1089,7 @@ function parseList(
       source,
       offsets,
       profile,
+      footnotes,
     );
     const content = children.length > 0 ? children : [emptyParagraph()];
     const task = taskInfo(content, profile);
@@ -759,6 +1127,8 @@ function parseTable(
   tokens: MarkdownToken[],
   openIndex: number,
   closeIndex: number,
+  profile: Profile = "github",
+  footnotes?: Map<string, FootnoteDefinition>,
 ): PMNode {
   const rows: Array<{ header: boolean; cells: PMNode[] }> = [];
   let section: "head" | "body" = "body";
@@ -787,7 +1157,7 @@ function parseTable(
           const inline = tokens
             .slice(cellIndex + 1, cellClose)
             .find((entry) => entry.type === "inline");
-          const paragraph = paragraphFromInline(inline);
+          const paragraph = paragraphFromInline(inline, profile, footnotes);
           const attrs = {
             colspan: 1,
             rowspan: 1,
@@ -847,7 +1217,7 @@ function protectedFence(
 ): boolean {
   const info = token.info?.trim().split(/\s+/, 1)[0]?.toLowerCase() ?? "";
   if (
-    /^(?:mermaid|math|latex|tex|asciimath|mdx|jsx|tsx|html|frontmatter|yaml)$/.test(
+    /^(?:mermaid|math|latex|tex|asciimath|mdx|jsx|tsx|html|frontmatter|yaml|geojson|topojson|stl|plantuml|kroki|blockdiag|graphviz)$/.test(
       info,
     )
   )
@@ -868,6 +1238,14 @@ function protectedBlockText(raw: string): boolean {
   );
 }
 
+function isMathBlockSource(raw: string): boolean {
+  const trimmed = raw.trim();
+  // A backslash escaped bracket is ordinary Markdown text in the common
+  // profile. Display math is recognized here through the portable $$ form;
+  // language-tagged math fences are handled by protectedFence separately.
+  return /^\$\$[\s\S]*\$\$$/.test(trimmed);
+}
+
 function parseBlocks(
   tokens: MarkdownToken[],
   begin: number,
@@ -875,6 +1253,7 @@ function parseBlocks(
   source = "",
   offsets: number[] = [],
   profile: Profile = "github",
+  footnotes?: Map<string, FootnoteDefinition>,
 ): PMNode[] {
   const result: PMNode[] = [];
   let index = begin;
@@ -886,7 +1265,7 @@ function parseBlocks(
         const inline = tokens
           .slice(index + 1, close)
           .find((entry) => entry.type === "inline");
-        result.push(paragraphFromInline(inline));
+        result.push(paragraphFromInline(inline, profile, footnotes));
         index = close + 1;
         break;
       }
@@ -899,7 +1278,7 @@ function parseBlocks(
           1,
           Math.min(6, Number.parseInt((token.tag ?? "h1").slice(1), 10) || 1),
         );
-        const content = parseInline(inline?.children);
+        const content = parseInline(inline?.children, profile, footnotes);
         result.push(nodeTypes.heading.create({ level }, content));
         index = close + 1;
         break;
@@ -909,7 +1288,15 @@ function parseBlocks(
         result.push(
           nodeTypes.blockquote.create(
             null,
-            parseBlocks(tokens, index + 1, close, source, offsets, profile),
+            parseBlocks(
+              tokens,
+              index + 1,
+              close,
+              source,
+              offsets,
+              profile,
+              footnotes,
+            ),
           ),
         );
         index = close + 1;
@@ -918,7 +1305,16 @@ function parseBlocks(
       case "bullet_list_open": {
         const close = findClosing(tokens, index, "bullet_list_open", end);
         result.push(
-          parseList(tokens, index, close, false, source, offsets, profile),
+          parseList(
+            tokens,
+            index,
+            close,
+            false,
+            source,
+            offsets,
+            profile,
+            footnotes,
+          ),
         );
         index = close + 1;
         break;
@@ -926,14 +1322,23 @@ function parseBlocks(
       case "ordered_list_open": {
         const close = findClosing(tokens, index, "ordered_list_open", end);
         result.push(
-          parseList(tokens, index, close, true, source, offsets, profile),
+          parseList(
+            tokens,
+            index,
+            close,
+            true,
+            source,
+            offsets,
+            profile,
+            footnotes,
+          ),
         );
         index = close + 1;
         break;
       }
       case "table_open": {
         const close = findClosing(tokens, index, "table_open", end);
-        result.push(parseTable(tokens, index, close));
+        result.push(parseTable(tokens, index, close, profile, footnotes));
         index = close + 1;
         break;
       }
@@ -946,7 +1351,7 @@ function parseBlocks(
         // line in token.content. The editor stores code without that
         // structural terminator, matching fenced blocks below; the
         // serializer adds it back before the closing fence.
-        const content = tokenText(token)
+        const content = literalTokenText(token)
           .replace(/\r\n|\r/g, "\n")
           .replace(/\n$/, "");
         result.push(
@@ -961,15 +1366,19 @@ function parseBlocks(
       case "fence": {
         const rawSource = sourceForToken(token, source, offsets);
         if (protectedFence(token, source, offsets)) {
+          const info = token.info?.trim().split(/\s+/, 1)[0] ?? "";
+          const kind = /^(?:math|latex|tex|asciimath)$/i.test(info)
+            ? "math-block"
+            : "protected-fence";
           result.push(
             nodeTypes.raw_block.create({
               source: rawSource || tokenText(token),
-              kind: "protected-fence",
+              kind,
             }),
           );
         } else {
           const params = token.info?.trim() ?? "";
-          const content = tokenText(token)
+          const content = literalTokenText(token)
             .replace(/\r\n|\r/g, "\n")
             .replace(/\n$/, "");
           result.push(
@@ -1026,78 +1435,375 @@ function detectFrontmatter(
   return { start: 0, end: match[0].length };
 }
 
+interface SourceLine {
+  start: number;
+  end: number;
+  breakEnd: number;
+  text: string;
+}
+
+function sourceLines(source: string): SourceLine[] {
+  const result: SourceLine[] = [];
+  let start = 0;
+  for (let index = 0; index <= source.length; index += 1) {
+    if (
+      index === source.length ||
+      source[index] === "\n" ||
+      source[index] === "\r"
+    ) {
+      const breakEnd =
+        index < source.length &&
+        source[index] === "\r" &&
+        source[index + 1] === "\n"
+          ? index + 2
+          : index < source.length
+            ? index + 1
+            : index;
+      result.push({
+        start,
+        end: index,
+        breakEnd,
+        text: source.slice(start, index),
+      });
+      start = breakEnd;
+      if (index === source.length) break;
+      if (breakEnd === source.length) break;
+      if (breakEnd > index + 1) index += 1;
+    }
+  }
+  return result;
+}
+
+function maskRanges(
+  source: string,
+  ranges: Array<{ start: number; end: number }>,
+): string {
+  if (ranges.length === 0) return source;
+  const chars = source.split("");
+  for (const range of ranges) {
+    const start = Math.max(0, Math.min(source.length, range.start));
+    const end = Math.max(start, Math.min(source.length, range.end));
+    for (let index = start; index < end; index += 1) {
+      if (chars[index] !== "\n" && chars[index] !== "\r") chars[index] = " ";
+    }
+  }
+  return chars.join("");
+}
+
+interface FootnoteScan {
+  definitions: FootnoteDefinition[];
+  ranges: Array<{ start: number; end: number }>;
+  byLabel: Map<string, FootnoteDefinition>;
+}
+
+function scanFootnotes(source: string): FootnoteScan {
+  const lines = sourceLines(source);
+  const definitions: FootnoteDefinition[] = [];
+  const ranges: Array<{ start: number; end: number }> = [];
+  const byLabel = new Map<string, FootnoteDefinition>();
+  let fence: string | null = null;
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index]!;
+    const fenceMatch = line.text.match(/^ {0,3}(`{3,}|~{3,})/);
+    if (fenceMatch) {
+      const marker = fenceMatch[1]!;
+      if (!fence) fence = marker;
+      else if (marker[0] === fence[0] && marker.length >= fence.length)
+        fence = null;
+      continue;
+    }
+    if (fence) continue;
+    const match = line.text.match(/^ {0,3}\[\^([^\]\r\n]+)\]:[ \t]*(.*)$/);
+    if (!match) continue;
+    const firstBody = match[2] ?? "";
+    const bodyLines = [firstBody];
+    let last = index;
+    for (
+      let continuation = index + 1;
+      continuation < lines.length;
+      continuation += 1
+    ) {
+      const next = lines[continuation]!;
+      if (/^[ \t]{2,}/.test(next.text)) {
+        bodyLines.push(next.text.replace(/^[ \t]{1,4}/, ""));
+        last = continuation;
+        continue;
+      }
+      break;
+    }
+    const sourceEnd = lines[last]!.end;
+    const sourceValue = source.slice(line.start, sourceEnd);
+    const sourceLabel = match[1]!;
+    const definition: FootnoteDefinition = {
+      label: referenceLabel(sourceLabel),
+      sourceLabel,
+      content: bodyLines.join("\n"),
+      source: sourceValue,
+      start: line.start,
+      end: sourceEnd,
+    };
+    definitions.push(definition);
+    if (!byLabel.has(definition.label))
+      byLabel.set(definition.label, definition);
+    ranges.push({ start: line.start, end: sourceEnd });
+    index = last;
+  }
+  return { definitions, ranges, byLabel };
+}
+
+const documentMetadata = new WeakMap<
+  PMNode,
+  { footnotes: FootnoteDefinition[]; source?: string }
+>();
+
+interface DetailsRange {
+  start: number;
+  end: number;
+}
+
+function detailsFenceRanges(source: string): DetailsRange[] {
+  const lines = sourceLines(source);
+  const ranges: DetailsRange[] = [];
+  let fence: string | null = null;
+  let fenceStart = 0;
+  for (const line of lines) {
+    const fenceMatch = line.text.match(/^ {0,3}(`{3,}|~{3,})/);
+    if (!fenceMatch) continue;
+    const marker = fenceMatch[1]!;
+    if (!fence) {
+      fence = marker;
+      fenceStart = line.start;
+    } else if (marker[0] === fence[0] && marker.length >= fence.length) {
+      ranges.push({ start: fenceStart, end: line.breakEnd });
+      fence = null;
+    }
+  }
+  if (fence) ranges.push({ start: fenceStart, end: source.length });
+  return ranges;
+}
+
+function detectDetails(source: string): DetailsRange[] {
+  const fenceRanges = detailsFenceRanges(source);
+  const insideFence = (offset: number): boolean =>
+    fenceRanges.some((range) => offset >= range.start && offset < range.end);
+  const ranges: DetailsRange[] = [];
+  const stack: number[] = [];
+  const tags = /<\/?details\b[^>]*>/gi;
+  let match: RegExpExecArray | null;
+  while ((match = tags.exec(source)) != null) {
+    const offset = match.index;
+    if (insideFence(offset)) continue;
+    const lineStart =
+      Math.max(
+        source.lastIndexOf("\n", offset),
+        source.lastIndexOf("\r", offset),
+      ) + 1;
+    const prefix = source.slice(lineStart, offset);
+    if (!match[0]!.startsWith("</") && prefix.trim() !== "") continue;
+    if (match[0]!.startsWith("</")) {
+      if (stack.length === 0) continue;
+      const start = stack.pop()!;
+      if (stack.length === 0) {
+        let end = offset + match[0]!.length;
+        end += source.slice(end).match(/^(?:\r\n|\n|\r)/)?.[0].length ?? 0;
+        ranges.push({ start, end });
+      }
+    } else {
+      stack.push(offset);
+    }
+  }
+  return ranges.sort((left, right) => left.start - right.start);
+}
+
+function lineIndexAt(source: string, offset: number): number {
+  let line = 0;
+  for (let index = 0; index < offset && index < source.length; index += 1) {
+    if (source[index] === "\n") line += 1;
+    else if (source[index] === "\r") {
+      if (source[index + 1] === "\n") index += 1;
+      line += 1;
+    }
+  }
+  return line;
+}
+
+function isGitlabDescriptionList(value: string): boolean {
+  const lines = value
+    .replace(/(?:\r\n|\r)/g, "\n")
+    .trim()
+    .split("\n");
+  if (lines.length < 2) return false;
+  let hasDefinition = false;
+  for (let index = 1; index < lines.length; index += 1) {
+    if (/^\s*:\s+/.test(lines[index]!)) hasDefinition = true;
+    else if (lines[index]!.trim() !== "") return false;
+  }
+  return hasDefinition;
+}
+
+function isFootnoteDefinitionBlock(value: string): boolean {
+  const lines = value.replace(/(?:\r\n|\r)/g, "\n").split("\n");
+  const meaningful = lines.filter((line) => line.trim() !== "");
+  if (meaningful.length === 0) return false;
+  let hasDefinition = false;
+  for (const line of meaningful) {
+    if (/^ {0,3}\[\^([^\]\r\n]+)\]:/.test(line)) {
+      hasDefinition = true;
+      continue;
+    }
+    if (/^[ \t]{2,}/.test(line)) continue;
+    return false;
+  }
+  return hasDefinition;
+}
+
 function parseInternal(source: string, profile: Profile): MarkdownSnapshot {
+  const footnoteScan = scanFootnotes(source);
+  const details = detectDetails(source);
+  // Keep footnote definition lines visible to markdown-it so its reference
+  // tokens can be converted to source-preserving footnote atoms. The parser
+  // already treats ordinary definition lines as non-rendering; only details
+  // need masking to prevent their interior from becoming separate blocks.
+  const maskedSource = maskRanges(source, details);
+  const parserSource = maskEscapedDollars(maskedSource);
   const md = createMarkdownIt(profile);
-  const tokens = md.parse(source, {}) as unknown as MarkdownToken[];
-  const offsets = lineOffsets(source);
+  const tokens = md.parse(parserSource, {}) as unknown as MarkdownToken[];
+  const offsets = lineOffsets(parserSource);
   const roots = tokens
     .map((token, index) => (isRootStart(token) ? index : -1))
     .filter((index) => index >= 0);
+  const events: Array<{
+    tokenIndex?: number;
+    token?: MarkdownToken;
+    start: number;
+    detail?: DetailsRange;
+  }> = roots.map((tokenIndex) => {
+    const token = tokens[tokenIndex]!;
+    return {
+      tokenIndex,
+      token,
+      start: tokenLocation(token, maskedSource, offsets).start,
+    };
+  });
+  for (const detail of details) events.push({ start: detail.start, detail });
+  events.sort((left, right) => left.start - right.start);
+
   const nodes: PMNode[] = [];
   const blocks: MarkdownBlockSnapshot[] = [];
-  let leading = "";
-  if (roots.length > 0) {
-    const firstLocation = tokenLocation(tokens[roots[0]!]!, source, offsets);
-    leading = source.slice(0, firstLocation.start);
-    for (let root = 0; root < roots.length; root += 1) {
-      const token = tokens[roots[root]!]!;
-      const nextToken =
-        roots[root + 1] == null ? undefined : tokens[roots[root + 1]!]!;
-      const location = tokenLocation(token, source, offsets);
-      const nextLocation = nextToken
-        ? tokenLocation(nextToken, source, offsets)
-        : null;
-      const nextStart = nextLocation?.start ?? source.length;
-      const bodyEnd = Math.max(
-        location.start,
-        Math.min(location.end, nextStart),
-      );
-      const body = source.slice(location.start, bodyEnd);
-      const separator = source.slice(bodyEnd, nextStart);
-      const parsed = parseBlocks(
-        tokens,
-        roots[root]!,
-        roots[root + 1] ?? tokens.length,
-        source,
-        offsets,
-        profile,
-      );
-      const node =
-        parsed[0] ??
-        nodeTypes.raw_block.create({ source: body, kind: "unknown" });
+  const footnoteMap = footnoteScan.byLabel;
+  const leading =
+    events.length > 0 ? source.slice(0, events[0]!.start) : source;
+  for (let eventIndex = 0; eventIndex < events.length; eventIndex += 1) {
+    const event = events[eventIndex]!;
+    const nextEvent = events[eventIndex + 1];
+    const nextStart = nextEvent?.start ?? source.length;
+    if (event.detail) {
+      const detail = event.detail;
+      const body = source.slice(detail.start, detail.end);
+      const separator = source.slice(detail.end, nextStart);
+      const node = nodeTypes.raw_block.create({
+        source: body,
+        kind: "details",
+      });
       nodes.push(node);
       blocks.push({
         node,
         source: body + separator,
         body,
         separator,
-        startLine: location.startLine,
-        endLine: location.endLine,
-        kind: node.type.name,
+        startLine: lineIndexAt(source, detail.start),
+        endLine:
+          lineIndexAt(source, Math.max(detail.start, detail.end - 1)) + 1,
+        kind: "details",
       });
-      // A blockquote alert/directive is a valid Markdown-it tree, but its
-      // semantics are extension-owned. Keep its source opaque.
-      const fullRaw = source.slice(location.start, nextStart);
-      if (node.type.name === "blockquote" && protectedBlockText(fullRaw)) {
-        const raw = nodeTypes.raw_block.create({
-          source: fullRaw,
-          kind: "alert",
-        });
-        nodes[nodes.length - 1] = raw;
-        blocks[blocks.length - 1]!.node = raw;
-        blocks[blocks.length - 1]!.kind = "alert";
-      }
-      if (node.type.name === "paragraph" && protectedBlockText(fullRaw)) {
-        const raw = nodeTypes.raw_block.create({
-          source: fullRaw,
-          kind: "directive",
-        });
-        nodes[nodes.length - 1] = raw;
-        blocks[blocks.length - 1]!.node = raw;
-        blocks[blocks.length - 1]!.kind = "directive";
+      continue;
+    }
+    const token = event.token!;
+    const tokenIndex = event.tokenIndex!;
+    const location = tokenLocation(token, maskedSource, offsets);
+    const bodyEnd = Math.max(location.start, Math.min(location.end, nextStart));
+    const body = source.slice(location.start, bodyEnd);
+    const separator = source.slice(bodyEnd, nextStart);
+    let nextTokenIndex: number | undefined;
+    for (
+      let candidate = eventIndex + 1;
+      candidate < events.length;
+      candidate += 1
+    ) {
+      if (events[candidate]!.tokenIndex != null) {
+        nextTokenIndex = events[candidate]!.tokenIndex;
+        break;
       }
     }
-  } else if (source.length > 0) {
+    const parsed = parseBlocks(
+      tokens,
+      tokenIndex,
+      nextTokenIndex ?? tokens.length,
+      source,
+      offsets,
+      profile,
+      footnoteMap,
+    );
+    let node =
+      parsed[0] ??
+      nodeTypes.raw_block.create({ source: body, kind: "unknown" });
+    const fullRaw = source.slice(location.start, nextStart);
+    const bodyForDetection = fullRaw.replace(/(?:\r\n|\r|\n)+$/, "");
+    if (
+      profile !== "commonmark" &&
+      node.type.name === "blockquote" &&
+      protectedBlockText(fullRaw)
+    ) {
+      node = nodeTypes.raw_block.create({ source: fullRaw, kind: "alert" });
+    } else if (
+      profile === "gitlab" &&
+      node.type.name === "paragraph" &&
+      bodyForDetection.trim() === "[[_TOC_]]"
+    ) {
+      node = nodeTypes.raw_block.create({
+        source: fullRaw,
+        kind: "gitlab-toc",
+      });
+    } else if (
+      profile === "gitlab" &&
+      node.type.name === "paragraph" &&
+      isGitlabDescriptionList(bodyForDetection)
+    ) {
+      node = nodeTypes.raw_block.create({
+        source: fullRaw,
+        kind: "gitlab-description-list",
+      });
+    } else if (node.type.name === "paragraph" && isMathBlockSource(fullRaw)) {
+      node = nodeTypes.raw_block.create({
+        source: fullRaw,
+        kind: "math-block",
+      });
+    } else if (node.type.name === "paragraph" && protectedBlockText(fullRaw)) {
+      node = nodeTypes.raw_block.create({
+        source: fullRaw,
+        kind: "directive",
+      });
+    }
+    // A contiguous footnote-definition paragraph is source metadata, not
+    // editable prose. Its exact slice remains in the neighbouring separator
+    // and the structured definition list on the snapshot.
+    if (isFootnoteDefinitionBlock(bodyForDetection)) continue;
+    nodes.push(node);
+    blocks.push({
+      node,
+      source: body + separator,
+      body,
+      separator,
+      startLine: location.startLine,
+      endLine: location.endLine,
+      kind: node.type.name,
+    });
+  }
+  if (
+    nodes.length === 0 &&
+    source.trim().length > 0 &&
+    footnoteScan.definitions.length === 0
+  ) {
     const raw = nodeTypes.raw_block.create({ source, kind: "unparsed" });
     nodes.push(raw);
     blocks.push({
@@ -1114,6 +1820,7 @@ function parseInternal(source: string, profile: Profile): MarkdownSnapshot {
     null,
     nodes.length > 0 ? nodes : [emptyParagraph()],
   );
+  documentMetadata.set(doc, { footnotes: footnoteScan.definitions, source });
   const last = blocks[blocks.length - 1];
   const trailing = last
     ? source.slice(
@@ -1122,7 +1829,7 @@ function parseInternal(source: string, profile: Profile): MarkdownSnapshot {
           : offsetForLine(offsets, last.endLine, source.length),
       )
     : source;
-  const snapshot: MarkdownSnapshot = {
+  return {
     doc,
     source,
     profile,
@@ -1130,8 +1837,8 @@ function parseInternal(source: string, profile: Profile): MarkdownSnapshot {
     leading,
     trailing,
     lineEnding: markdownLineEnding(source),
+    footnotes: footnoteScan.definitions,
   };
-  return snapshot;
 }
 
 /** Parse Markdown into the shared ProseMirror document model. */
@@ -1172,8 +1879,10 @@ export function parseMarkdown(
     leading: "",
     trailing: rest.trailing ?? "",
     lineEnding: markdownLineEnding(source),
+    footnotes: rest.footnotes ?? [],
     profile,
   };
+  documentMetadata.set(doc, { footnotes: snapshot.footnotes ?? [], source });
   return snapshot;
 }
 
@@ -1320,15 +2029,54 @@ function serializeInlineMarked(node: PMNode, table: boolean): string {
       closeTo([]);
       if (child.type.name === "hard_break") output += "<br>";
       else if (child.type.name === "image") {
-        const alt = String(child.attrs.alt ?? "")
-          .replace("[", "\\[")
-          .replace("]", "\\]");
+        const alt = String(child.attrs.alt ?? "").replace(/[[\]]/g, "\\$&");
         const title = child.attrs.title
           ? ` "${String(child.attrs.title).replace(/"/g, '\\"')}"`
           : "";
-        output += `![${alt}](${escapeLinkDestination(child.attrs.src, table)}${title})`;
-      } else if (child.type.name === "raw_inline") output += child.attrs.source;
-      else output += serializeInlineMarked(child, table);
+        const width = safeImageDimension(child.attrs.width);
+        const height = safeImageDimension(child.attrs.height);
+        const dimensions =
+          width || height
+            ? `{${width ? `width=${width}` : ""}${width && height ? " " : ""}${height ? `height=${height}` : ""}}`
+            : "";
+        const image = `![${alt}](${escapeLinkDestination(child.attrs.src, table)}${title})${dimensions}`;
+        const link = child.marks.find((mark) => mark.type.name === "link");
+        output += link
+          ? `[${image}](${escapeLinkDestination(link.attrs.href, table)}${link.attrs.title ? ` "${String(link.attrs.title).replace(/"/g, '\\"')}"` : ""})`
+          : image;
+      } else if (child.type.name === "raw_inline") {
+        let raw = String(child.attrs.source ?? "");
+        const code = child.marks.some((mark) => mark.type.name === "code");
+        if (code) raw = serializeCodeSpan(raw, table);
+        const regular = child.marks.filter(
+          (mark) =>
+            mark.type.name === "strong" ||
+            mark.type.name === "em" ||
+            mark.type.name === "strike",
+        );
+        for (
+          let markIndex = regular.length - 1;
+          markIndex >= 0;
+          markIndex -= 1
+        ) {
+          const mark = regular[markIndex]!;
+          const delimiter =
+            mark.type.name === "strong"
+              ? "**"
+              : mark.type.name === "em"
+                ? "*"
+                : "~~";
+          raw = delimiter + raw + delimiter;
+        }
+        const link = child.marks.find((mark) => mark.type.name === "link");
+        if (link) {
+          const title = link.attrs.title
+            ? ` "${String(link.attrs.title).replace(/"/g, '\\"')}"`
+            : "";
+          raw = `[${raw}](${escapeLinkDestination(link.attrs.href, table)}${title})`;
+        }
+        output += raw;
+      } else output += serializeInlineMarked(child, table);
     }
   }
   closeTo([]);
@@ -1434,7 +2182,8 @@ function serializeListItem(item: PMNode, marker: string): string {
   const content = childrenOf(item)
     .map((child) => serializeBlock(child))
     .join("\n\n");
-  const taskPrefix = task == null ? "" : task ? "[x] " : "[ ] ";
+  const taskPrefix =
+    task == null ? "" : task === "mixed" ? "[~] " : task ? "[x] " : "[ ] ";
   const lines = content.split("\n");
   if (lines.length > 0) lines[0] = `${marker}${taskPrefix}${lines[0]}`;
   const continuationIndent = " ".repeat(Math.max(2, marker.length));
@@ -1466,7 +2215,11 @@ function referenceDefinitions(value: string): ReferenceDefinitionSnapshot[] {
   while ((match = pattern.exec(value)) != null) {
     const source = match[0].replace(/(?:\r\n|\n|\r)$/, "");
     const label = referenceLabel(match[1] ?? "");
-    if (label && !result.some((entry) => entry.label === label))
+    if (
+      label &&
+      !label.startsWith("^") &&
+      !result.some((entry) => entry.label === label)
+    )
       result.push({ label, source });
   }
   return result;
@@ -1524,6 +2277,165 @@ function toLineEnding(value: string, ending: "\n" | "\r\n"): string {
   return value.replace(/\r\n|\r|\n/g, ending);
 }
 
+function previousFootnoteDefinitions(
+  previous: MarkdownSnapshot,
+): FootnoteDefinition[] {
+  if (previous.footnotes && previous.footnotes.length > 0)
+    return previous.footnotes;
+  return scanFootnotes(previous.source).definitions;
+}
+
+function appendFootnoteDefinitions(
+  output: string,
+  definitions: FootnoteDefinition[],
+  ending: "\n" | "\r\n",
+): string {
+  if (definitions.length === 0) return output;
+  const existing = new Set(
+    scanFootnotes(output).definitions.map((definition) => definition.label),
+  );
+  const missing = definitions.filter(
+    (definition) => !existing.has(definition.label),
+  );
+  if (missing.length === 0) return output;
+  const rendered = missing
+    .map((definition) => toLineEnding(definition.source, ending))
+    .join(ending);
+  if (!output) return rendered;
+  const separator = output.endsWith(ending + ending)
+    ? ""
+    : output.endsWith(ending)
+      ? ending
+      : ending + ending;
+  return output + separator + rendered;
+}
+
+interface FootnoteInsertionGroup {
+  definitions: FootnoteDefinition[];
+  /** The previous block immediately before this definition group. */
+  afterBlock: number;
+  /** The exact source gap following the group, including its line endings. */
+  trailing: string;
+}
+
+function footnoteInsertionGroups(
+  previous: MarkdownSnapshot,
+  definitions: FootnoteDefinition[],
+): FootnoteInsertionGroup[] {
+  const blocks = previous.blocks ?? [];
+  if (definitions.length === 0) return [];
+  const offsets = lineOffsets(previous.source);
+  const starts = blocks.map((block) =>
+    offsetForLine(offsets, block.startLine, previous.source.length),
+  );
+  const groups = new Map<number, FootnoteDefinition[]>();
+  for (const definition of definitions) {
+    const start = definition.start ?? previous.source.length;
+    let afterBlock = -1;
+    for (let index = 0; index < starts.length; index += 1) {
+      if (starts[index]! >= start) break;
+      afterBlock = index;
+    }
+    const group = groups.get(afterBlock);
+    if (group) group.push(definition);
+    else groups.set(afterBlock, [definition]);
+  }
+  return Array.from(groups.entries())
+    .map(([afterBlock, group]) => {
+      const lastEnd = Math.max(
+        ...group.map((definition) => definition.end ?? definition.start ?? 0),
+      );
+      const nextStart =
+        starts.find((start) => start > lastEnd) ?? previous.source.length;
+      return {
+        afterBlock,
+        definitions: group.sort(
+          (left, right) => (left.start ?? 0) - (right.start ?? 0),
+        ),
+        trailing: previous.source.slice(lastEnd, nextStart),
+      };
+    })
+    .sort(
+      (left, right) =>
+        (left.definitions[0]!.start ?? 0) - (right.definitions[0]!.start ?? 0),
+    );
+}
+
+function preserveFootnoteDefinitions(
+  output: string,
+  previous: MarkdownSnapshot,
+  ending: "\n" | "\r\n",
+): string {
+  const definitions = previousFootnoteDefinitions(previous);
+  if (definitions.length === 0) return output;
+  const existing = new Set(
+    scanFootnotes(output).definitions.map((definition) => definition.label),
+  );
+  const missing = definitions.filter(
+    (definition) => !existing.has(definition.label),
+  );
+  if (missing.length === 0) return output;
+
+  const blocks = previous.blocks ?? [];
+  if (blocks.length === 0)
+    return appendFootnoteDefinitions(output, missing, ending);
+
+  // Locate preserved source slices in their document order. Changed blocks
+  // are absent, so an insertion can fall back to the closest preserved block.
+  const preservedOffsets: Array<number | undefined> = [];
+  let searchFrom = 0;
+  for (const block of blocks) {
+    const position = block.source
+      ? output.indexOf(block.source, searchFrom)
+      : -1;
+    preservedOffsets.push(position >= 0 ? position : undefined);
+    if (position >= 0) searchFrom = position + block.source.length;
+  }
+
+  const groups = footnoteInsertionGroups(previous, missing);
+  const insertions = groups.map((group) => {
+    let position: number | undefined;
+    for (let index = group.afterBlock; index >= 0; index -= 1) {
+      const preserved = preservedOffsets[index];
+      if (preserved === undefined) continue;
+      position = preserved + blocks[index]!.source.length;
+      break;
+    }
+    if (position === undefined) {
+      for (
+        let index = group.afterBlock + 1;
+        index < blocks.length;
+        index += 1
+      ) {
+        const preserved = preservedOffsets[index];
+        if (preserved !== undefined) {
+          position = preserved;
+          break;
+        }
+      }
+    }
+    return {
+      position: position ?? (group.afterBlock < 0 ? 0 : output.length),
+      source:
+        group.definitions
+          .map((definition) => toLineEnding(definition.source, ending))
+          .join(ending) + toLineEnding(group.trailing || ending, ending),
+    };
+  });
+
+  // Insert from the end so earlier offsets remain valid. The final append is
+  // a defensive fallback for metadata whose source location is unavailable.
+  insertions
+    .sort((left, right) => right.position - left.position)
+    .forEach((insertion) => {
+      output =
+        output.slice(0, insertion.position) +
+        insertion.source +
+        output.slice(insertion.position);
+    });
+  return appendFootnoteDefinitions(output, missing, ending);
+}
+
 function nodeFingerprint(node: PMNode): string {
   return JSON.stringify(node.toJSON());
 }
@@ -1574,11 +2486,30 @@ function normalisedRaw(node: PMNode): string {
  * slices are reused for unchanged top-level nodes, including their line
  * endings and surrounding blank lines.
  */
+function sourceNeedsExactCanonicalPreservation(source: string): boolean {
+  return (
+    /<!--[\s\S]*-->|<\/?(?:strong|em|kbd|sup|sub|details)\b/i.test(source) ||
+    /(?:^|\n)\s*\[\^([^\]\r\n]+)\]:/m.test(source) ||
+    /(?:^|\n)\s*\[\[_TOC_\]\]/m.test(source) ||
+    /\{[-+][\s\S]*?[-+]\}/.test(source) ||
+    /!\[[^\]]*\]\([^)]*\)\{(?:width|height)=/i.test(source) ||
+    /:[a-zA-Z0-9_+-]+:/.test(source)
+  );
+}
+
 export function serializeMarkdown(
   doc: PMNode,
   previous?: MarkdownSnapshot,
 ): string {
   if (previous?.doc && doc.eq(previous.doc)) return previous.source;
+  if (!previous) {
+    const metadata = documentMetadata.get(doc);
+    if (
+      metadata?.source &&
+      sourceNeedsExactCanonicalPreservation(metadata.source)
+    )
+      return metadata.source;
+  }
   const children = childrenOf(doc);
   const blocks = previous?.blocks ?? [];
   if (blocks.length === 0) {
@@ -1597,7 +2528,13 @@ export function serializeMarkdown(
         return serialized + ending;
       }
     }
-    return serialized;
+    const metadata = documentMetadata.get(doc);
+    const ending = previous?.lineEnding === "crlf" ? "\r\n" : "\n";
+    return appendFootnoteDefinitions(
+      serialized,
+      metadata?.footnotes ?? [],
+      ending,
+    );
   }
 
   const matches = sourceMatches(children, blocks);
@@ -1646,9 +2583,15 @@ export function serializeMarkdown(
     }
   }
   if (children.length === 0 && previous?.trailing) output += previous.trailing;
-  return previous
-    ? preserveReferenceDefinitions(output, previous, ending)
-    : output;
+  if (!previous) {
+    const metadata = documentMetadata.get(doc);
+    return appendFootnoteDefinitions(output, metadata?.footnotes ?? [], ending);
+  }
+  return preserveFootnoteDefinitions(
+    preserveReferenceDefinitions(output, previous, ending),
+    previous,
+    ending,
+  );
 }
 
 function escapeHtml(value: string): string {
@@ -1685,59 +2628,574 @@ function safeUrl(value: unknown, image = false): string | null {
   return null;
 }
 
-function renderInline(node: PMNode): string {
+function renderSafeInlineHtml(source: string): string {
+  const tokenPattern = /<!--[\s\S]*-->|<\/?[a-z][a-z0-9-]*(?:\s[^>]*)?>/gi;
+  let output = "";
+  let cursor = 0;
+  let match: RegExpExecArray | null;
+  while ((match = tokenPattern.exec(source)) != null) {
+    output += escapeHtml(source.slice(cursor, match.index));
+    const token = match[0]!;
+    if (/^<!--[\s\S]*-->$/.test(token)) {
+      // Comments are source-preserving but intentionally absent from preview.
+    } else {
+      const tag = inlineHtmlTag(token);
+      if (!tag) output += escapeHtml(token);
+      else if (tag.void) output += "<br>";
+      else output += `<${tag.closing ? "/" : ""}${tag.name}>`;
+    }
+    cursor = match.index + token.length;
+  }
+  output += escapeHtml(source.slice(cursor));
+  return output;
+}
+
+function renderHtmlPair(source: string, state: RenderState): string {
+  const openingMatch = source.match(/^\s*<([a-z][a-z0-9-]*)(?:\s[^>]*)?>/i);
+  if (!openingMatch) return renderSafeInlineHtml(source);
+  const opening = openingMatch[0]!;
+  const openingTag = inlineHtmlTag(opening);
+  if (!openingTag || openingTag.closing || openingTag.void)
+    return renderSafeInlineHtml(source);
+  const closingPattern = new RegExp(
+    "</" + openingTag.name + "(?:\\s[^>]*)?>\\s*$",
+    "i",
+  );
+  const closingMatch = closingPattern.exec(source);
+  if (!closingMatch || closingMatch.index <= opening.length)
+    return renderSafeInlineHtml(source);
+  const closing = closingMatch[0]!;
+  const body = source.slice(opening.length, closingMatch.index);
+  const bodyHtml = body ? renderInlineSource(body, state.profile, state) : "";
+  return (
+    renderSafeInlineHtml(opening) + bodyHtml + renderSafeInlineHtml(closing)
+  );
+}
+
+function renderCodeFallback(source: string, language: string): string {
+  const escapedLanguage = /^[A-Za-z0-9_+.-]+$/.test(language)
+    ? ` class="language-${escapeHtml(language)}"`
+    : "";
+  const tokenPattern =
+    /\/\*[\s\S]*?\*\/|\/\/[^\r\n]*|#[^\r\n]*|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`|\b\d+(?:\.\d+)?\b|\b(?:true|false|null|undefined|const|let|var|function|return|if|else|for|while|class|interface|type|import|from|export|async|await|fn|struct|pub|def|in|match|impl|use|new|this|self)\b/g;
+  let output = "";
+  let cursor = 0;
+  let match: RegExpExecArray | null;
+  while ((match = tokenPattern.exec(source)) != null) {
+    output += escapeHtml(source.slice(cursor, match.index));
+    const token = match[0]!;
+    const className = /^(?:\/\/|\/\*|#)/.test(token)
+      ? "comment"
+      : /^(?:["'`])/.test(token)
+        ? "string"
+        : /^\d/.test(token)
+          ? "number"
+          : "keyword";
+    output += `<span class="token ${className}">${escapeHtml(token)}</span>`;
+    cursor = match.index + token.length;
+  }
+  output += escapeHtml(source.slice(cursor));
+  return `<pre><code${escapedLanguage}>${output}</code></pre>`;
+}
+
+function renderTextMarks(value: string, marks: readonly Mark[]): string {
+  let output = escapeHtml(value);
+  for (let index = marks.length - 1; index >= 0; index -= 1) {
+    const mark = marks[index]!;
+    if (mark.type.name === "code") output = `<code>${output}</code>`;
+    else if (mark.type.name === "strong") output = `<strong>${output}</strong>`;
+    else if (mark.type.name === "em") output = `<em>${output}</em>`;
+    else if (mark.type.name === "strike") output = `<del>${output}</del>`;
+    else if (mark.type.name === "link") {
+      const href = safeUrl(mark.attrs.href);
+      if (href) {
+        const title = mark.attrs.title
+          ? ` title="${escapeHtml(mark.attrs.title)}"`
+          : "";
+        output = `<a href="${escapeHtml(href)}"${title}>${output}</a>`;
+      }
+    }
+  }
+  return output;
+}
+
+interface RenderState extends RenderContext {
+  profile: Profile;
+  footnotes: FootnoteDefinition[];
+  headingSlugs: Map<string, number>;
+  footnoteRefs: Map<string, number>;
+  footnoteNumbers: Map<string, number>;
+  headingIds: WeakMap<PMNode, string>;
+}
+
+type RenderInput = RenderContext | MarkdownSnapshot | PMNode | undefined;
+
+function isSnapshot(value: RenderInput): value is MarkdownSnapshot {
+  return Boolean(
+    value && typeof value === "object" && "doc" in value && "source" in value,
+  );
+}
+
+function isPMDocument(value: RenderInput): value is PMNode {
+  return Boolean(
+    value &&
+    typeof value === "object" &&
+    "type" in value &&
+    "childCount" in value,
+  );
+}
+
+function createRenderState(profile: Profile, input?: RenderInput): RenderState {
+  let context: RenderContext = {};
+  let document: PMNode | undefined;
+  let snapshot: MarkdownSnapshot | undefined;
+  if (isSnapshot(input)) {
+    snapshot = input;
+    document = input.doc;
+    context = input;
+  } else if (isPMDocument(input)) {
+    document = input;
+    context = { document: input };
+  } else if (input) {
+    context = input;
+    document = input.document ?? input.snapshot?.doc;
+    snapshot = input.snapshot;
+  }
+  const metadata = document ? documentMetadata.get(document) : undefined;
+  let inheritedFootnotes = metadata?.footnotes ?? [];
+  if (document && inheritedFootnotes.length === 0) {
+    document.descendants((node) => {
+      const nodeFootnotes = footnoteNodeMetadata.get(node);
+      if (nodeFootnotes && nodeFootnotes.length > 0) {
+        inheritedFootnotes = nodeFootnotes;
+        return false;
+      }
+      return true;
+    });
+  }
+  const footnotes =
+    context.footnotes ?? snapshot?.footnotes ?? inheritedFootnotes;
+  const state: RenderState = {
+    // The visual helpers are pure and can be overridden by a host renderer.
+    // Put the defaults before the caller context so an injected renderer wins.
+    renderCodeBlock: renderCodeBlockHtml,
+    renderMath: renderMathHtml,
+    renderAdvancedBlock: (kind, source, options) => {
+      const renderOptions: { language?: string; maxSourceLength?: number } = {};
+      if (typeof options?.language === "string")
+        renderOptions.language = options.language;
+      if (typeof options?.maxSourceLength === "number")
+        renderOptions.maxSourceLength = options.maxSourceLength;
+      return renderAdvancedBlockHtml(kind, source, renderOptions);
+    },
+    ...context,
+    profile,
+    footnotes,
+    headingSlugs: context.headingSlugs ?? new Map<string, number>(),
+    footnoteRefs: context.footnoteRefs ?? new Map<string, number>(),
+    footnoteNumbers: context.footnoteNumbers ?? new Map<string, number>(),
+    headingIds: context.headingIds ?? new WeakMap<PMNode, string>(),
+  };
+  if (document) state.document = document;
+  if (snapshot) state.snapshot = snapshot;
+  return state;
+}
+
+function headingText(node: PMNode): string {
   let output = "";
   node.forEach((child) => {
-    if (child.isText) {
-      let value = escapeHtml(child.text ?? "");
-      for (const mark of child.marks) {
-        if (mark.type.name === "code") value = `<code>${value}</code>`;
-        else if (mark.type.name === "strong")
-          value = `<strong>${value}</strong>`;
-        else if (mark.type.name === "em") value = `<em>${value}</em>`;
-        else if (mark.type.name === "strike") value = `<del>${value}</del>`;
-        else if (mark.type.name === "link") {
-          const href = safeUrl(mark.attrs.href);
-          if (href)
-            value = `<a href="${escapeHtml(href)}"${mark.attrs.title ? ` title="${escapeHtml(mark.attrs.title)}"` : ""}>${value}</a>`;
-        }
-      }
-      output += value;
-    } else if (child.type.name === "hard_break") output += "<br>\n";
-    else if (child.type.name === "image") {
-      const src = safeUrl(child.attrs.src, true);
-      if (src) {
-        output += `<img src="${escapeHtml(src)}" alt="${escapeHtml(child.attrs.alt ?? "")}"${child.attrs.title ? ` title="${escapeHtml(child.attrs.title)}"` : ""}>`;
-      } else output += escapeHtml(child.attrs.alt ?? "");
-    } else if (child.type.name === "raw_inline") {
-      output += `<span data-markdown-raw="true" data-kind="${escapeHtml(child.attrs.kind)}">${escapeHtml(child.attrs.source)}</span>`;
-    } else output += renderInline(child);
+    if (child.isText) output += child.text ?? "";
+    else if (child.type.name === "image")
+      output += String(child.attrs.alt ?? "");
+    else if (child.type.name === "raw_inline") {
+      const kind = String(child.attrs.kind ?? "");
+      const source = String(child.attrs.source ?? "");
+      if (kind === "emoji")
+        output += emojiShortcodes[source.slice(1, -1).toLowerCase()] ?? source;
+      else if (kind !== "html-comment")
+        output += source.replace(/<[^>]*>/g, "");
+    } else output += headingText(child);
   });
   return output;
 }
 
-function renderNode(node: PMNode): string {
+function slugBase(value: string): string {
+  const normalized = value
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .trim()
+    .replace(/\s+/g, "-")
+    .replace(/[^\p{L}\p{N}_-]+/gu, "")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "");
+  return normalized || "section";
+}
+
+function headingId(node: PMNode, state: RenderState): string {
+  const existing = state.headingIds.get(node);
+  if (existing) return existing;
+  const base = slugBase(headingText(node));
+  const count = state.headingSlugs.get(base) ?? 0;
+  state.headingSlugs.set(base, count + 1);
+  const id = count === 0 ? base : `${base}-${count}`;
+  state.headingIds.set(node, id);
+  return id;
+}
+
+function prepareHeadingIds(node: PMNode, state: RenderState): void {
+  if (node.type.name === "heading") headingId(node, state);
+  node.forEach((child) => prepareHeadingIds(child, state));
+}
+
+function footnoteLabelFromSource(source: string): string {
+  const match = source.match(/^\[\^([^\]]+)\]/);
+  return referenceLabel(match?.[1] ?? source);
+}
+
+function footnoteNumber(label: string, state: RenderState): number {
+  if (!state.footnotes.some((definition) => definition.label === label))
+    return 0;
+  const existing = state.footnoteNumbers.get(label);
+  if (existing !== undefined) return existing;
+  const number = state.footnoteNumbers.size + 1;
+  state.footnoteNumbers.set(label, number);
+  return number;
+}
+
+function registerFootnoteRef(source: string, state: RenderState): void {
+  const label = footnoteLabelFromSource(source);
+  const number = footnoteNumber(label, state);
+  if (!number) return;
+  const count = state.footnoteRefs.get(label) ?? 0;
+  state.footnoteRefs.set(label, count + 1);
+}
+
+function renderFootnoteRef(source: string, state: RenderState): string {
+  const label = footnoteLabelFromSource(source);
+  const number = footnoteNumber(label, state);
+  if (!number) return escapeHtml(source);
+  const count = state.footnoteRefs.get(label) ?? 0;
+  state.footnoteRefs.set(label, count + 1);
+  const suffix = count === 0 ? "" : `-${count + 1}`;
+  return `<sup id="fnref-${escapeHtml(label)}${suffix}" class="footnote-ref"><a href="#fn-${escapeHtml(label)}">${number}</a></sup>`;
+}
+
+function registerFootnoteReferencesBeforeNode(
+  document: PMNode | undefined,
+  target: PMNode,
+  state: RenderState,
+): void {
+  if (!document || document === target) return;
+  if (state.nodePosition !== undefined && Number.isFinite(state.nodePosition)) {
+    document.descendants((node, position) => {
+      // Positions are ordered in document traversal. Once a node starts at or
+      // after the target, its descendants and following siblings cannot be
+      // references that precede the target.
+      if (position >= state.nodePosition!) return false;
+      if (node.type.name !== "raw_inline") return true;
+      const kind = String(node.attrs.kind ?? "");
+      if (kind === "footnote_ref" || kind === "footnote_anchor")
+        registerFootnoteRef(String(node.attrs.source ?? ""), state);
+      return true;
+    });
+    return;
+  }
+  const ordered: PMNode[] = [];
+  walk(document, (node) => ordered.push(node));
+  const targetIndex = ordered.indexOf(target);
+  if (targetIndex < 0) return;
+  for (let index = 0; index < targetIndex; index += 1) {
+    const node = ordered[index]!;
+    if (node.type.name !== "raw_inline") continue;
+    const kind = String(node.attrs.kind ?? "");
+    if (kind === "footnote_ref" || kind === "footnote_anchor")
+      registerFootnoteRef(String(node.attrs.source ?? ""), state);
+  }
+}
+
+function renderInlineDiff(source: string): string {
+  const removed = source.match(/^\{-([\s\S]*?)-\}$/);
+  if (removed)
+    return `<del class="gitlab-inline-diff">${escapeHtml(removed[1]!)}</del>`;
+  const added = source.match(/^\{\+([\s\S]*?)\+\}$/);
+  if (added)
+    return `<ins class="gitlab-inline-diff">${escapeHtml(added[1]!)}</ins>`;
+  return escapeHtml(source);
+}
+
+function renderRawInline(node: PMNode, state: RenderState): string {
+  const source = String(node.attrs.source ?? "");
+  const kind = String(node.attrs.kind ?? "unknown");
+  let output: string;
+  if (kind === "html-comment") output = "";
+  else if (kind === "html" || kind === "html-allowed")
+    output = renderSafeInlineHtml(source);
+  else if (kind === "html-pair") output = renderHtmlPair(source, state);
+  else if (kind === "emoji")
+    output = escapeHtml(
+      emojiShortcodes[source.slice(1, -1).toLowerCase()] ?? source,
+    );
+  else if (kind === "gitlab-inline-diff") output = renderInlineDiff(source);
+  else if (kind === "footnote_ref" || kind === "footnote_anchor")
+    output = renderFootnoteRef(source, state);
+  else if (kind === "math_inline") {
+    const rendered = state.renderMath?.(source, false) ?? null;
+    output =
+      rendered ?? `<span class="math-inline">${escapeHtml(source)}</span>`;
+  } else
+    output = `<span data-markdown-raw="true" data-kind="${escapeHtml(kind)}">${escapeHtml(source)}</span>`;
+  if (!output) return output;
+  return applyInlineMarks(output, node.marks);
+}
+
+function applyInlineMarks(value: string, marks: readonly Mark[]): string {
+  let output = value;
+  for (let index = marks.length - 1; index >= 0; index -= 1) {
+    const mark = marks[index]!;
+    if (mark.type.name === "strong") output = `<strong>${output}</strong>`;
+    else if (mark.type.name === "em") output = `<em>${output}</em>`;
+    else if (mark.type.name === "strike") output = `<del>${output}</del>`;
+    else if (mark.type.name === "code") output = `<code>${output}</code>`;
+    else if (mark.type.name === "link") {
+      const href = safeUrl(mark.attrs.href);
+      if (href) {
+        const title = mark.attrs.title
+          ? ` title="${escapeHtml(mark.attrs.title)}"`
+          : "";
+        output = `<a href="${escapeHtml(href)}"${title}>${output}</a>`;
+      }
+    }
+  }
+  return output;
+}
+
+function renderInline(node: PMNode, state: RenderState): string {
+  let output = "";
+  node.forEach((child) => {
+    if (child.isText) output += renderTextMarks(child.text ?? "", child.marks);
+    else if (child.type.name === "hard_break") output += "<br>\n";
+    else if (child.type.name === "raw_inline")
+      output += renderRawInline(child, state);
+    else if (child.type.name === "image") {
+      const src = safeUrl(child.attrs.src, true);
+      let image = src
+        ? `<img src="${escapeHtml(src)}" alt="${escapeHtml(child.attrs.alt ?? "")}"${child.attrs.title ? ` title="${escapeHtml(child.attrs.title)}"` : ""}${safeImageDimension(child.attrs.width) ? ` width="${escapeHtml(safeImageDimension(child.attrs.width)!)}"` : ""}${safeImageDimension(child.attrs.height) ? ` height="${escapeHtml(safeImageDimension(child.attrs.height)!)}"` : ""}>`
+        : escapeHtml(child.attrs.alt ?? "");
+      image = applyInlineMarks(image, child.marks);
+      output += image;
+    } else output += renderInline(child, state);
+  });
+  return output;
+}
+
+function renderCodeBlock(node: PMNode, state: RenderState): string {
+  const language =
+    String(node.attrs.params ?? "")
+      .trim()
+      .split(/\s+/, 1)[0] ?? "";
+  const source = node.textContent;
+  const rendered = state.renderCodeBlock?.(source, language) ?? null;
+  return rendered ?? renderCodeFallback(source, language);
+}
+
+function stripAlertPrefix(line: string): string {
+  return line.replace(/^\s*>[ \t]?/, "");
+}
+
+function renderAlert(source: string, state: RenderState): string {
+  const lines = source.replace(/\r\n|\r/g, "\n").split("\n");
+  let markerIndex = lines.findIndex((line) =>
+    /^\s*>?[ \t]*\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]/i.test(line),
+  );
+  if (markerIndex < 0) markerIndex = 0;
+  const markerLine = stripAlertPrefix(lines[markerIndex] ?? "");
+  const marker =
+    markerLine.match(/^\s*\[!([^\]]+)\]/i)?.[1]?.toLowerCase() ?? "note";
+  const body = lines
+    .slice(markerIndex + 1)
+    .map(stripAlertPrefix)
+    .join("\n")
+    .replace(/^\n+|\n+$/g, "");
+  const title = marker.charAt(0).toUpperCase() + marker.slice(1);
+  const bodyHtml = body ? renderSourceFragment(body, state.profile, state) : "";
+  return `<div class="markdown-alert markdown-alert-${escapeHtml(marker)}"><p class="markdown-alert-title">${escapeHtml(title)}</p>${bodyHtml}</div>`;
+}
+
+function matchingDetailsClose(source: string, start = 0): number {
+  const tags = /<\/?details\b[^>]*>/gi;
+  const fenceRanges = detailsFenceRanges(source);
+  const insideFence = (offset: number): boolean =>
+    fenceRanges.some((range) => offset >= range.start && offset < range.end);
+  tags.lastIndex = start;
+  let depth = 0;
+  let match: RegExpExecArray | null;
+  while ((match = tags.exec(source)) != null) {
+    if (insideFence(match.index)) continue;
+    if (match[0]!.startsWith("</")) {
+      depth -= 1;
+      if (depth === 0) return match.index;
+    } else depth += 1;
+  }
+  return -1;
+}
+
+function renderDetails(source: string, state: RenderState): string {
+  const opening = source.match(/^\s*<details\b([^>]*)>/i);
+  const open = Boolean(
+    opening?.[1] && /(?:^|\s)open(?:\s|$)/i.test(opening[1]!),
+  );
+  const summaryMatch = source.match(
+    /<summary\b[^>]*>([\s\S]*?)<\/summary\s*>/i,
+  );
+  const closingIndex = matchingDetailsClose(source, opening?.index ?? 0);
+  const bodyStart = summaryMatch
+    ? (summaryMatch.index ?? 0) + summaryMatch[0].length
+    : (opening?.[0].length ?? 0);
+  const bodyEnd = closingIndex >= bodyStart ? closingIndex : source.length;
+  const summary = summaryMatch?.[1] ?? "Details";
+  const body = source.slice(bodyStart, bodyEnd).replace(/^\s+|\s+$/g, "");
+  const summaryHtml = renderInlineSource(summary, state.profile, state);
+  const bodyHtml = body ? renderSourceFragment(body, state.profile, state) : "";
+  return `<details${open ? " open" : ""}><summary>${summaryHtml}</summary>${bodyHtml}</details>`;
+}
+
+function renderDescriptionList(source: string, state: RenderState): string {
+  const lines = source
+    .replace(/\r\n|\r/g, "\n")
+    .trim()
+    .split("\n");
+  const parts: string[] = ["<dl>"];
+  let term: string | null = null;
+  for (const line of lines) {
+    if (/^\s*:\s+/.test(line)) {
+      if (term != null)
+        parts.push(
+          `<dt>${renderInlineSource(term, state.profile, state)}</dt>`,
+        );
+      const value = line.replace(/^\s*:\s+/, "");
+      parts.push(`<dd>${renderInlineSource(value, state.profile, state)}</dd>`);
+      term = null;
+    } else {
+      if (term != null)
+        parts.push(
+          `<dt>${renderInlineSource(term, state.profile, state)}</dt>`,
+        );
+      term = line.trim();
+    }
+  }
+  if (term != null)
+    parts.push(`<dt>${renderInlineSource(term, state.profile, state)}</dt>`);
+  parts.push("</dl>");
+  return parts.join("");
+}
+
+function collectHeadings(node: PMNode, result: PMNode[] = []): PMNode[] {
+  if (node.type.name === "heading") result.push(node);
+  node.forEach((child) => collectHeadings(child, result));
+  return result;
+}
+
+function renderToc(state: RenderState): string {
+  const headings = state.document ? collectHeadings(state.document) : [];
+  if (headings.length === 0) return "";
+  const items = headings
+    .map(
+      (heading) =>
+        `<li class="toc-level-${Number(heading.attrs.level) || 1}"><a href="#${escapeHtml(headingId(heading, state))}">${renderInline(heading, state)}</a></li>`,
+    )
+    .join("");
+  return `<nav class="table-of-contents" aria-label="Table of contents"><ul>${items}</ul></nav>`;
+}
+
+function collectFootnoteReferences(node: PMNode, state: RenderState): void {
+  if (node.type.name === "raw_inline") {
+    const kind = String(node.attrs.kind ?? "");
+    if (kind === "footnote_ref" || kind === "footnote_anchor")
+      registerFootnoteRef(String(node.attrs.source ?? ""), state);
+  }
+  node.forEach((child) => collectFootnoteReferences(child, state));
+}
+
+function renderFootnotes(state: RenderState): string {
+  const definitions = new Map(
+    state.footnotes.map((definition) => [definition.label, definition]),
+  );
+  const used = Array.from(state.footnoteNumbers.entries())
+    .sort((left, right) => left[1] - right[1])
+    .map(([label]) => definitions.get(label))
+    .filter((definition): definition is FootnoteDefinition =>
+      Boolean(definition),
+    );
+  if (used.length === 0) return "";
+  const items = used
+    .map((definition) => {
+      const body = renderSourceFragment(
+        definition.content,
+        state.profile,
+        state,
+      );
+      const count = state.footnoteRefs.get(definition.label) ?? 1;
+      const backlinks = Array.from({ length: count }, (_, index) => {
+        const suffix = index === 0 ? "" : `-${index + 1}`;
+        return `<a href="#fnref-${escapeHtml(definition.label)}${suffix}" class="footnote-backref">↩</a>`;
+      }).join(" ");
+      return `<li id="fn-${escapeHtml(definition.label)}">${body}<p class="footnote-backrefs">${backlinks}</p></li>`;
+    })
+    .join("");
+  return `<section class="footnotes" aria-label="Footnotes"><ol>${items}</ol></section>`;
+}
+
+function renderNode(node: PMNode, state: RenderState): string {
   switch (node.type.name) {
     case "paragraph":
-      return `<p>${renderInline(node)}</p>`;
-    case "heading":
-      return `<h${node.attrs.level}>${renderInline(node)}</h${node.attrs.level}>`;
+      return `<p>${renderInline(node, state)}</p>`;
+    case "heading": {
+      const level = Math.max(1, Math.min(6, Number(node.attrs.level) || 1));
+      return `<h${level} id="${escapeHtml(headingId(node, state))}">${renderInline(node, state)}</h${level}>`;
+    }
     case "blockquote":
-      return `<blockquote>${childrenOf(node).map(renderNode).join("\n")}</blockquote>`;
+      return `<blockquote>${childrenOf(node)
+        .map((child) => renderNode(child, state))
+        .join("\n")}</blockquote>`;
     case "horizontal_rule":
       return "<hr>";
-    case "code_block": {
-      const params =
-        String(node.attrs.params ?? "")
-          .trim()
-          .split(/\s+/, 1)[0] ?? "";
-      const className = /^[A-Za-z0-9_+.-]+$/.test(params)
-        ? ` class="language-${escapeHtml(params)}"`
-        : "";
-      return `<pre><code${className}>${escapeHtml(node.textContent)}</code></pre>`;
+    case "code_block":
+      return renderCodeBlock(node, state);
+    case "raw_inline":
+      return renderRawInline(node, state);
+    case "raw_block": {
+      const source = String(node.attrs.source ?? "");
+      const kind = String(node.attrs.kind ?? "unknown");
+      if (kind === "html-comment" || /^\s*<!--[\s\S]*-->\s*$/.test(source))
+        return "";
+      if (kind === "alert") return renderAlert(source, state);
+      if (kind === "details") return renderDetails(source, state);
+      if (kind === "gitlab-toc") return renderToc(state);
+      if (kind === "gitlab-description-list")
+        return renderDescriptionList(source, state);
+      if (kind === "math-block") {
+        const math = state.renderMath?.(source, true) ?? null;
+        if (math) return math;
+      }
+      if (
+        kind === "protected-fence" ||
+        kind === "directive" ||
+        kind === "math-block"
+      ) {
+        const options: Record<string, unknown> = { profile: state.profile };
+        if (kind === "math-block") options.language = "math";
+        const advanced =
+          state.renderAdvancedBlock?.(kind, source, options) ?? null;
+        if (advanced) return advanced;
+      }
+      if (kind === "html") return renderSafeInlineHtml(source);
+      const advanced =
+        state.renderAdvancedBlock?.(kind, source, { profile: state.profile }) ??
+        null;
+      if (advanced) return advanced;
+      return `<pre data-markdown-raw="true" data-kind="${escapeHtml(kind)}">${escapeHtml(source)}</pre>`;
     }
-    case "raw_block":
-      return `<pre data-markdown-raw="true" data-kind="${escapeHtml(node.attrs.kind)}">${escapeHtml(node.attrs.source)}</pre>`;
     case "bullet_list":
     case "ordered_list": {
       const ordered = node.type.name === "ordered_list";
@@ -1749,21 +3207,24 @@ function renderNode(node: PMNode): string {
         (item) => item.attrs.checked != null,
       );
       const className = taskList ? ` class="contains-task-list"` : "";
-      return `<${ordered ? "ol" : "ul"}${start}${className}>${childrenOf(node).map(renderNode).join("")}</${ordered ? "ol" : "ul"}>`;
+      return `<${ordered ? "ol" : "ul"}${start}${className}>${childrenOf(node)
+        .map((child) => renderNode(child, state))
+        .join("")}</${ordered ? "ol" : "ul"}>`;
     }
     case "list_item": {
-      const task = node.attrs.checked;
+      const task = node.attrs.checked as TaskState;
       const checkbox =
         task == null
           ? ""
-          : `<input type="checkbox" disabled${task ? " checked" : ""}> `;
+          : `<input type="checkbox" disabled${task === true ? " checked" : ""}${task === "mixed" ? ' data-task-state="mixed" aria-checked="mixed"' : ""}> `;
       const className = task == null ? "" : ` class="task-list-item"`;
-      return `<li${className}>${checkbox}${childrenOf(node).map(renderNode).join("")}</li>`;
+      return `<li${className}>${checkbox}${childrenOf(node)
+        .map((child) => renderNode(child, state))
+        .join("")}</li>`;
     }
     case "table": {
       const rows = childrenOf(node);
-      const head = rows[0]!;
-      const body = rows.slice(1);
+      if (rows.length === 0) return "<table></table>";
       const renderRow = (row: PMNode): string =>
         `<tr>${childrenOf(row)
           .map((cell) => {
@@ -1772,25 +3233,148 @@ function renderNode(node: PMNode): string {
             const style = alignment
               ? ` style="text-align:${escapeHtml(alignment)}"`
               : "";
-            return `<${tag}${style}>${childrenOf(cell).map(renderNode).join("")}</${tag}>`;
+            return `<${tag}${style}>${childrenOf(cell)
+              .map((child) => renderNode(child, state))
+              .join("")}</${tag}>`;
           })
           .join("")}</tr>`;
-      return `<table><thead>${renderRow(head)}</thead>${body.length ? `<tbody>${body.map(renderRow).join("")}</tbody>` : ""}</table>`;
+      const head = rows.filter(
+        (row) => row.child(0)?.type.name === "table_header",
+      );
+      const body = rows.filter(
+        (row) => row.child(0)?.type.name !== "table_header",
+      );
+      return `<table>${head.length ? `<thead>${head.map(renderRow).join("")}</thead>` : ""}${body.length ? `<tbody>${body.map(renderRow).join("")}</tbody>` : ""}</table>`;
     }
     case "table_row":
-      return `<tr>${childrenOf(node).map(renderNode).join("")}</tr>`;
+      return `<tr>${childrenOf(node)
+        .map((child) => renderNode(child, state))
+        .join("")}</tr>`;
     case "table_cell":
-      return `<td>${childrenOf(node).map(renderNode).join("")}</td>`;
+      return `<td>${childrenOf(node)
+        .map((child) => renderNode(child, state))
+        .join("")}</td>`;
     case "table_header":
-      return `<th>${childrenOf(node).map(renderNode).join("")}</th>`;
+      return `<th>${childrenOf(node)
+        .map((child) => renderNode(child, state))
+        .join("")}</th>`;
     default:
       return escapeHtml(node.textContent);
   }
 }
 
-/** Render a ProseMirror document using the same safe renderer as renderMarkdown. */
-export function renderMarkdownDocument(doc: PMNode): string {
-  return childrenOf(doc).map(renderNode).join("\n");
+function renderInlineSource(
+  source: string,
+  profile: Profile,
+  state?: RenderState,
+): string {
+  const snapshot = parseMarkdown(source, profile);
+  const local = state ?? createRenderState(profile, snapshot);
+  if (state && state.footnotes.length === 0 && snapshot.footnotes)
+    state.footnotes = snapshot.footnotes;
+  const first = snapshot.doc.childCount > 0 ? snapshot.doc.child(0) : null;
+  return first?.type.name === "paragraph"
+    ? renderInline(first, local)
+    : renderSourceFragment(source, profile, local);
+}
+
+/** Render the generated footnote section for an editor document. */
+export function renderFootnotesHtml(
+  doc: PMNode,
+  profile: Profile = "github",
+  input?: RenderInput,
+): string {
+  const state = createRenderState(profile, input ?? doc);
+  state.document = doc;
+  collectFootnoteReferences(doc, state);
+  return renderFootnotes(state);
+}
+
+export interface HeadingAnchor {
+  /** ProseMirror document position at which the heading starts. */
+  position: number;
+  /** Stable profile-specific slug used by heading links and TOC entries. */
+  id: string;
+}
+
+/** Return heading positions and the exact ids used by the HTML renderer. */
+export function headingAnchorIds(
+  doc: PMNode,
+  profile: Profile = "github",
+): HeadingAnchor[] {
+  const state = createRenderState(profile, doc);
+  prepareHeadingIds(doc, state);
+  const anchors: HeadingAnchor[] = [];
+  doc.descendants((node, position) => {
+    if (node.type.name === "heading")
+      anchors.push({ position, id: headingId(node, state) });
+    return true;
+  });
+  return anchors;
+}
+
+/** Render an individual PM node, including rich source-preserving atoms. */
+export function renderNodeHtml(
+  node: PMNode,
+  profile: Profile = "github",
+  input?: RenderInput,
+): string {
+  const state = createRenderState(profile, input);
+  if (node.type.name === "doc") {
+    state.document = node;
+    prepareHeadingIds(node, state);
+    return (
+      childrenOf(node)
+        .map((child) => renderNode(child, state))
+        .join("\n") + renderFootnotes(state)
+    );
+  }
+  registerFootnoteReferencesBeforeNode(state.document, node, state);
+  return renderNode(node, state);
+}
+
+/** Render a PM document with profile-aware anchors, atoms, and footnotes. */
+export function renderMarkdownDocument(
+  doc: PMNode,
+  profile: Profile = "github",
+  input?: RenderInput,
+): string {
+  const state = createRenderState(profile, input ?? doc);
+  state.document = doc;
+  prepareHeadingIds(doc, state);
+  return (
+    childrenOf(doc)
+      .map((child) => renderNode(child, state))
+      .join("\n") + renderFootnotes(state)
+  );
+}
+
+/** Render an arbitrary Markdown source fragment using the shared renderer. */
+export function renderSourceFragment(
+  source: string,
+  profile: Profile = "github",
+  input?: RenderInput,
+): string {
+  const snapshot = parseMarkdown(source, profile);
+  const state = createRenderState(profile, input ?? snapshot);
+  if (state.footnotes.length === 0 && snapshot.footnotes)
+    state.footnotes = snapshot.footnotes;
+  const document = snapshot.doc;
+  prepareHeadingIds(document, state);
+  return (
+    childrenOf(document)
+      .map((child) => renderNode(child, state))
+      .join("\n") + (input ? "" : renderFootnotes(state))
+  );
+}
+
+/** Render a parsed Markdown document with the same safe HTML policy. */
+export function renderMarkdownDocumentWithProfile(
+  doc: PMNode,
+  profile: Profile = "github",
+  input?: RenderInput,
+): string {
+  return renderMarkdownDocument(doc, profile, input);
 }
 
 /** Parse and render Markdown without allowing raw HTML or unsafe URLs to execute. */
@@ -1798,7 +3382,8 @@ export function renderMarkdown(
   source: string,
   profile: Profile = "github",
 ): string {
-  return renderMarkdownDocument(parseMarkdown(source, profile).doc);
+  const snapshot = parseMarkdown(source, profile);
+  return renderMarkdownDocument(snapshot.doc, profile, snapshot);
 }
 
 function walk(node: PMNode, visitor: (node: PMNode) => void): void {
@@ -1813,32 +3398,45 @@ export function inspectCompatibility(
 ): CompatibilityDiagnostic[] {
   const snapshot = parseMarkdown(source, profile);
   const diagnostics: CompatibilityDiagnostic[] = [];
+  const renderedBlockKinds = new Set([
+    "alert",
+    "details",
+    "gitlab-toc",
+    "gitlab-description-list",
+    "math-block",
+    "protected-fence",
+  ]);
   for (const block of snapshot.blocks ?? []) {
-    if (
-      block.kind === "html" ||
-      (block.node.type.name === "raw_block" && block.node.attrs.kind === "html")
-    ) {
+    if (block.node.type.name !== "raw_block") continue;
+    const kind = String(block.node.attrs.kind ?? "unknown");
+    const raw = String(block.node.attrs.source ?? block.body ?? "");
+    const commentOnly = /^\s*<!--[\s\S]*-->\s*$/.test(raw);
+    if (kind === "html" && !commentOnly) {
       diagnostics.push({
-        message: "Raw HTML is preserved as source and escaped in preview.",
+        message: "Raw HTML is preserved and shown safely in preview.",
         severity: "warning",
         code: "raw-html",
         kind: "html",
         line: (block.startLine ?? 0) + 1,
       });
-    } else if (block.node.type.name === "raw_block") {
+    } else if (!renderedBlockKinds.has(kind) && kind !== "html") {
       diagnostics.push({
-        message: "This block is preserved as an opaque source atom.",
-        severity: "warning",
+        message: "This Markdown feature is preserved as source for editing.",
+        severity: "info",
         code: "raw-block",
-        kind: String(block.node.attrs.kind),
+        kind,
         line: (block.startLine ?? 0) + 1,
       });
     }
   }
   walk(snapshot.doc, (node) => {
-    if (node.type.name === "raw_inline" && node.attrs.kind === "html") {
+    if (
+      node.type.name === "raw_inline" &&
+      node.attrs.kind === "html" &&
+      !/^\s*<!--[\s\S]*-->\s*$/.test(String(node.attrs.source ?? ""))
+    ) {
       diagnostics.push({
-        message: "Inline HTML is preserved as source and escaped in preview.",
+        message: "Inline HTML is preserved and shown safely in preview.",
         severity: "warning",
         code: "raw-html-inline",
         kind: "html",

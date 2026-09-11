@@ -67,19 +67,49 @@ beforeEach(() => {
 });
 
 describe("rich editor rendering", () => {
-  it("serializes a fresh document into a dedicated preview", () => {
+  it("renders a dedicated preview snapshot without requiring a Preview toolbar button", () => {
     const { app, root } = makeApp("# 見出し\n\n本文");
     expect(root.querySelector(".ProseMirror h1")?.textContent).toBe("見出し");
-    const previewButton = root.querySelector<HTMLButtonElement>(
-      '[data-mode="preview"]',
-    );
-    previewButton?.click();
+    app.receiveDocument({
+      protocolVersion: PROTOCOL_VERSION,
+      type: "document",
+      markdown: "# 見出し\n\n本文",
+      version: 2,
+      profile: "github",
+      mode: "preview",
+      reason: "external",
+    });
     expect(
       root.querySelector<HTMLElement>("[data-panel=preview]")?.hidden,
     ).toBe(false);
     expect(
       root.querySelector("[data-testid=preview-content] h1")?.textContent,
     ).toBe("見出し");
+    app.destroy();
+  });
+
+  it("refreshes rich footnote bodies after reload and keeps them through edits", () => {
+    const { app, root } = makeApp("A[^one]\n\n[^one]: first body");
+    expect(root.querySelector(".mm-rich-footnotes")?.textContent).toContain(
+      "first body",
+    );
+
+    app.receiveDocument({
+      protocolVersion: PROTOCOL_VERSION,
+      type: "document",
+      markdown: "B[^two]\n\n[^two]: second body",
+      version: 2,
+      profile: "github",
+      reason: "external",
+    });
+    const reloadedFootnotes = root.querySelector(".mm-rich-footnotes");
+    expect(reloadedFootnotes?.textContent).toContain("second body");
+    expect(reloadedFootnotes?.textContent).not.toContain("first body");
+
+    app.view.dispatch(app.view.state.tr.insertText("!"));
+    expect(root.querySelector(".mm-rich-footnotes")?.textContent).toContain(
+      "second body",
+    );
     app.destroy();
   });
 
@@ -104,7 +134,7 @@ describe("rich editor rendering", () => {
   it("renders task list controls and serializes a checkbox toggle", () => {
     const { app, root, messages } = makeApp("- [ ] one\n- [x] two");
     const checkboxes =
-      root.querySelectorAll<HTMLInputElement>(".mw-task-checkbox");
+      root.querySelectorAll<HTMLInputElement>(".mm-task-checkbox");
     expect(checkboxes).toHaveLength(2);
     checkboxes[0]!.click();
     expect(
@@ -116,9 +146,9 @@ describe("rich editor rendering", () => {
 
   it("creates a task list in one transaction", () => {
     const { app, root, messages } = makeApp("one");
-    const taskButton = Array.from(
-      root.querySelectorAll<HTMLButtonElement>(".mw-tool-button"),
-    ).find((button) => button.textContent === "☑ Task");
+    const taskButton = root.querySelector<HTMLButtonElement>(
+      '[data-testid="toolbar-task-list"]',
+    );
     taskButton?.click();
     const edits = messages.filter((message: any) => message.type === "edit");
     expect(edits).toHaveLength(1);
@@ -144,7 +174,7 @@ describe("rich editor rendering", () => {
       operationId: firstEdit.operationId,
       reason: "ack",
     });
-    const language = root.querySelector<HTMLInputElement>(".mw-code-language")!;
+    const language = root.querySelector<HTMLInputElement>(".mm-code-language")!;
     const down = new MouseEvent("mousedown", {
       bubbles: true,
       cancelable: true,
@@ -160,17 +190,29 @@ describe("rich editor rendering", () => {
     app.destroy();
   });
 
-  it("disables formatting in Preview and only exposes the code language field in a code block", () => {
+  it("disables editing in a host preview and exposes the code language field in Mint", () => {
+    const preview = makeApp("plain");
+    const previewBold = preview.root.querySelector<HTMLButtonElement>(
+      '[data-testid="toolbar-bold"]',
+    )!;
+    preview.app.receiveDocument({
+      protocolVersion: PROTOCOL_VERSION,
+      type: "document",
+      markdown: "plain",
+      version: 2,
+      profile: "github",
+      mode: "preview",
+      reason: "external",
+    });
+    expect(previewBold.disabled).toBe(true);
+    preview.app.destroy();
+
     const { app, root } = makeApp("plain");
     const bold = root.querySelector<HTMLButtonElement>(
       '[data-testid="toolbar-bold"]',
     )!;
-    const language = root.querySelector<HTMLInputElement>(".mw-code-language")!;
+    const language = root.querySelector<HTMLInputElement>(".mm-code-language")!;
     expect(language.hidden).toBe(true);
-    root.querySelector<HTMLButtonElement>('[data-mode="preview"]')!.click();
-    expect(bold.disabled).toBe(true);
-    expect(language.hidden).toBe(true);
-    root.querySelector<HTMLButtonElement>('[data-mode="rich"]')!.click();
     expect(bold.disabled).toBe(false);
     const code = schema.nodes.code_block!;
     app.view.dispatch(
@@ -287,14 +329,12 @@ describe("rich editor rendering", () => {
       true,
     );
     expect(
-      Array.from(
-        root.querySelectorAll<HTMLButtonElement>(".mw-tool-button"),
-      ).find((button) => button.textContent === "☑ Task"),
+      root.querySelector<HTMLButtonElement>(
+        '[data-testid="toolbar-task-list"]',
+      ),
     ).toHaveProperty("disabled", true);
     expect(
-      Array.from(
-        root.querySelectorAll<HTMLButtonElement>(".mw-tool-button"),
-      ).find((button) => button.textContent === "Table"),
+      root.querySelector<HTMLButtonElement>('[data-testid="toolbar-table"]'),
     ).toHaveProperty("disabled", true);
     app.destroy();
   });
@@ -331,7 +371,7 @@ describe("sync safety", () => {
     const before = messages.length;
     broken.view.dispatch(broken.view.state.tr.insertText("!"));
     expect(messages.length).toBe(before);
-    expect(root.querySelector(".mw-status")?.textContent).toContain(
+    expect(root.querySelector(".mm-status")?.textContent).toContain(
       "Read-only",
     );
     broken.destroy();
@@ -361,7 +401,7 @@ describe("sync safety", () => {
     expect(
       messages.filter((message: any) => message.type === "edit"),
     ).toHaveLength(editCount);
-    expect(root.querySelector<HTMLElement>(".mw-recover")?.hidden).toBe(false);
+    expect(root.querySelector<HTMLElement>(".mm-recover")?.hidden).toBe(false);
     app.destroy();
   });
 
@@ -381,9 +421,9 @@ describe("sync safety", () => {
       },
     };
     const { app, root } = makeApp("authoritative", api);
-    root.querySelector<HTMLButtonElement>(".mw-recover")!.click();
+    root.querySelector<HTMLButtonElement>(".mm-recover")!.click();
     const apply = Array.from(
-      root.querySelectorAll<HTMLButtonElement>(".mw-recovery-dialog button"),
+      root.querySelectorAll<HTMLButtonElement>(".mm-recovery-dialog button"),
     ).find((button) => button.textContent === "Apply draft");
     apply?.click();
     const recover = messages.find(
@@ -400,7 +440,7 @@ describe("sync safety", () => {
           currentMarkdown: "authoritative",
           currentVersion: 1,
           profile: "github",
-          draftUri: "untitled:markdown-weaver-recovery.md",
+          draftUri: "untitled:markdown-mint-recovery.md",
         },
       }),
     );
@@ -413,9 +453,9 @@ describe("sync safety", () => {
       reason: "recovery",
     });
     expect(
-      root.querySelector<HTMLTextAreaElement>(".mw-source-textarea")?.value,
+      root.querySelector<HTMLTextAreaElement>(".mm-source-textarea")?.value,
     ).toBe("authoritative");
-    expect(root.querySelector<HTMLButtonElement>(".mw-recover")?.hidden).toBe(
+    expect(root.querySelector<HTMLButtonElement>(".mm-recover")?.hidden).toBe(
       false,
     );
     app.destroy();
@@ -434,11 +474,11 @@ describe("sync safety", () => {
       reason: "external",
     });
     expect(
-      root.querySelector<HTMLTextAreaElement>(".mw-source-textarea")?.value,
+      root.querySelector<HTMLTextAreaElement>(".mm-source-textarea")?.value,
     ).toBe("local");
     editor.dispatchEvent(new Event("compositionend", { bubbles: true }));
     expect(
-      root.querySelector<HTMLTextAreaElement>(".mw-source-textarea")?.value,
+      root.querySelector<HTMLTextAreaElement>(".mm-source-textarea")?.value,
     ).toBe("外部");
     app.destroy();
   });

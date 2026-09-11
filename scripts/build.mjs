@@ -1,5 +1,6 @@
 import { build, context } from "esbuild";
 import { existsSync, mkdirSync } from "node:fs";
+import { cp, mkdir } from "node:fs/promises";
 import { writeThirdPartyNotices } from "./third-party-notices.mjs";
 
 const watch = process.argv.includes("--watch");
@@ -7,6 +8,16 @@ const extensionOnly = process.argv.includes("--extension-only");
 const webviewOnly = process.argv.includes("--webview-only");
 
 mkdirSync("dist", { recursive: true });
+
+async function copyRenderingAssets() {
+  await mkdir("dist/katex/fonts", { recursive: true });
+  await cp("node_modules/katex/dist/katex.min.css", "dist/katex/katex.css");
+  await cp("node_modules/katex/dist/fonts", "dist/katex/fonts", {
+    recursive: true,
+  });
+}
+
+await copyRenderingAssets();
 await writeThirdPartyNotices();
 
 const extensionOptions = {
@@ -32,6 +43,7 @@ const webviewOptions = {
   sourcemap: true,
   minify: false,
   legalComments: "none",
+  loader: { ".svg": "text" },
 };
 
 const integrationOptions = {
@@ -42,6 +54,18 @@ const integrationOptions = {
   format: "cjs",
   target: "node18",
   external: ["vscode"],
+  sourcemap: true,
+  minify: false,
+  legalComments: "none",
+};
+
+const mermaidOptions = {
+  entryPoints: ["src/webview/mermaidRuntime.ts"],
+  bundle: true,
+  outfile: "dist/mermaid.js",
+  platform: "browser",
+  format: "iife",
+  target: "es2022",
   sourcemap: true,
   minify: false,
   legalComments: "none",
@@ -66,6 +90,7 @@ if (!extensionOnly) {
     );
   }
   contexts.push(await buildOne(webviewOptions));
+  contexts.push(await buildOne(mermaidOptions));
   if (!watch) {
     if (!existsSync("tests/extension/integration/index.ts")) {
       throw new Error(

@@ -133,6 +133,39 @@ describe("Markdown core", () => {
     expect(serializeMarkdown(snapshot.doc, snapshot)).toBe(source);
   });
 
+  it("keeps fenced and nested details content through rendering", () => {
+    const fencedSource =
+      "<details>\n<summary>Example</summary>\n\n```html\n</details>\n```\n\n" +
+      "After the fence\n</details>\n";
+    const fencedSnapshot = parseMarkdown(fencedSource, "github");
+
+    expect(fencedSnapshot.doc.childCount).toBe(1);
+    expect(fencedSnapshot.doc.firstChild?.attrs.kind).toBe("details");
+    expect(fencedSnapshot.doc.firstChild?.attrs.source).toBe(fencedSource);
+    expect(serializeMarkdown(fencedSnapshot.doc, fencedSnapshot)).toBe(
+      fencedSource,
+    );
+    const fencedHtml = renderMarkdown(fencedSource, "github");
+    expect(fencedHtml).toContain("After the fence");
+    expect(fencedHtml).toContain("&lt;/");
+
+    const nestedSource =
+      "<details>\n<summary>Outer</summary>\n\nOuter before\n\n" +
+      "<details>\n<summary>Inner</summary>\n\nInner body\n</details>\n\n" +
+      "Outer after\n</details>\n";
+    const nestedSnapshot = parseMarkdown(nestedSource, "github");
+
+    expect(nestedSnapshot.doc.childCount).toBe(1);
+    expect(nestedSnapshot.doc.firstChild?.attrs.kind).toBe("details");
+    expect(serializeMarkdown(nestedSnapshot.doc, nestedSnapshot)).toBe(
+      nestedSource,
+    );
+    const nestedHtml = renderMarkdown(nestedSource, "github");
+    expect(nestedHtml).toContain("Outer before");
+    expect(nestedHtml).toContain("Inner body");
+    expect(nestedHtml).toContain("Outer after");
+  });
+
   it("keeps terminal line endings on raw atoms in canonical serialization", () => {
     for (const source of [
       "<div>raw</div>\n",
