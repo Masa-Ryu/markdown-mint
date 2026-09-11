@@ -19,3 +19,4 @@ dist/test-extension.js*
 dist/*.map
 sample.md
 md/**
+github-markdown-test-suite/**
