@@ -421,34 +421,47 @@ body {
   padding-inline-start: 0.8em;
 }
 
-/* KaTeX is shipped locally. Keep block equations scrollable without changing
- * paragraph width and keep inline equations aligned with surrounding text. */
+/* KaTeX is shipped locally. Its vertical lists (fractions, limits, and
+ * superscripts) need a real line box; `normal` is too short in some VS Code
+ * themes and can make the glyphs appear clipped. Keep block equations
+ * scrollable without changing paragraph width and give both forms a little
+ * more visual weight. */
 .markdown-body .mm-math,
 .mm-document-content .mm-math {
   color: var(--vscode-foreground, #d4d4d4);
-  line-height: normal;
+  line-height: 1.35;
 }
 .markdown-body .mm-math-inline,
 .mm-document-content .mm-math-inline {
   display: inline-block;
   max-width: 100%;
-  vertical-align: -0.15em;
-  line-height: normal;
+  vertical-align: -0.12em;
+  line-height: 1.35;
   white-space: nowrap;
 }
-.mm-math-inline .katex,
+.markdown-body .mm-math-inline .katex,
 .mm-document-content .mm-math-inline .katex {
-  line-height: normal;
+  font-size: 1.25em;
+  line-height: 1.3;
 }
 .markdown-body .mm-math-block,
 .mm-document-content .mm-math-block {
   display: block;
   max-width: 100%;
-  margin: 1.2em 0;
+  margin: 1.35em 0;
   overflow-x: auto;
   overflow-y: visible;
-  padding: 0.45em 0;
-  line-height: normal;
+  padding: 0.65em 0;
+  line-height: 1.35;
+}
+.markdown-body .mm-math-block > .katex-display,
+.mm-document-content .mm-math-block > .katex-display {
+  margin: 0;
+}
+.markdown-body .mm-math-block > .katex-display > .katex,
+.mm-document-content .mm-math-block > .katex-display > .katex {
+  font-size: 1.35em;
+  line-height: 1.3;
 }
 .markdown-body .mm-math-fallback,
 .mm-document-content .mm-math-fallback {
@@ -456,6 +469,8 @@ body {
   border: 1px solid var(--mm-border);
   border-radius: 4px;
   background: var(--mm-code-background);
+  font-size: 1.05em;
+  line-height: 1.45;
   white-space: pre-wrap;
 }
 .markdown-body .mm-math-fallback code,
