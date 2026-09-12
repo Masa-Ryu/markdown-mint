@@ -1031,6 +1031,24 @@ textarea:focus-visible {
   background: transparent;
   box-shadow: none;
 }
+@keyframes mm-table-toolbar-reveal {
+  from {
+    opacity: 0;
+    transform: translateY(-2px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.mm-table-toolbar.is-revealing {
+  animation: mm-table-toolbar-reveal 180ms ease-out both;
+}
+@media (prefers-reduced-motion: reduce) {
+  .mm-table-toolbar.is-revealing {
+    animation: none;
+  }
+}
 .mm-table-toolbar:not([hidden]) {
   display: flex;
 }
