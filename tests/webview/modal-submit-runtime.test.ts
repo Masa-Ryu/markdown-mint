@@ -120,7 +120,7 @@ describe("modal Ctrl+Enter runtime integration", () => {
   });
 
   it("submits the real table dialog from a numeric input", async () => {
-    const { root, messages } = makeApp();
+    const { app, root, messages } = makeApp();
     openToolbarDialog(root, "toolbar-table");
 
     const dialog = root.querySelector<HTMLDialogElement>(".mm-table-dialog")!;
@@ -136,8 +136,17 @@ describe("modal Ctrl+Enter runtime integration", () => {
 
     await pressCtrlEnter(inputs[1]!);
 
+    let tableRows: number | undefined;
+    let tableColumns: number | undefined;
+    app.view.state.doc.descendants((node) => {
+      if (node.type.spec.tableRole !== "table") return true;
+      tableRows = node.childCount;
+      tableColumns = node.firstChild?.childCount;
+      return false;
+    });
     expect(dialog.open).toBe(false);
     expect(editMessages(messages)).toHaveLength(1);
-    expect(String(editMessages(messages)[0]?.markdown)).toContain("|  |  |");
+    expect(tableRows).toBe(3);
+    expect(tableColumns).toBe(2);
   });
 });
