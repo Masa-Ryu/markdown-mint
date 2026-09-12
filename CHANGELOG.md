@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Reduced unnecessary edit-time serialization, hidden preview rendering, and
+  re-highlighting of unchanged code while preserving synchronization, safety,
+  and display quality.
+
 - Improved inline Alert editing without changing its visual design. Lazy
   blockquote continuation lines, quoted blank lines, separators, and line
   endings round-trip correctly; input keeps the existing textarea and focus;
