@@ -95,3 +95,43 @@ The webview suite covers composition start/end and defers external snapshots
 without dropping local input. The browser fixture can dispatch composition DOM
 events but cannot create the native IME candidate window; Japanese IME behavior
 still needs one manual check in VS Code.
+
+## Direct block editing regression suite
+
+Run the real-browser interaction checks with:
+
+```sh
+npm run test:browser:blocks
+```
+
+The suite uses Chromium mouse clicks, double clicks, drag selection, key presses,
+and native focus transitions against the actual Webview bundle. It checks code
+language selection and metadata preservation; Alert type selection and body
+selection; inline Details headings, separate disclosure controls, nested bodies,
+HTML summary preservation, cancellation, blur, Tab, and composition event order;
+and existing Math/Mermaid source updates without duplicate insertion.
+
+Arrow tests cross paragraph, code, Alert, structured Details, closed Details, and
+consecutive rendered blocks in both directions. Actual textarea wrapping is
+measured at a narrow viewport, including leaving the final displayed Alert row
+and typing immediately into the next body. The suite verifies the preferred
+horizontal caret coordinate survives short intermediate bodies and that empty
+bodies, document edges, navigation, and cancellation emit no host edits or dirty
+state. Synthetic composition events cover event handling only; these checks do
+not exercise an OS IME candidate window or replace Japanese IME testing in VS Code.
+
+The five required `md/*test*.md` files are also rendered in their corresponding
+CommonMark, GitHub, or GitLab profile, in Rich, dedicated Preview, and a native
+preview fixture. Native fixtures call the same safe core renderer as the native
+extension contribution and load the installed VS Code stylesheet, shared CSS,
+KaTeX, Mermaid, and CSP. They do not replace `npm run test:extension` or prove
+host-level focus/IME behavior. Screenshots of each document and its representative
+code, Alert, Details, Math, and Mermaid blocks are saved under
+`output/playwright/block-editing/`.
+
+To run an individual case, set `MM_BLOCK_BROWSER_CASE` to a test function name
+fragment, for example `WrappedVerticalNavigation`. Set
+`MM_BLOCK_BROWSER_TEST_PORT` to change the suite's default port, `4175`.
+The native document fixture is also available interactively at
+`/native.html?fixture=document&file=github-test.md`; only the five repository
+acceptance documents are allowed.

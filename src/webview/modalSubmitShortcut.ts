@@ -31,6 +31,15 @@ export function installModalSubmitShortcut(
   platform = typeof navigator !== "undefined" ? navigator.platform : "",
 ): () => void {
   const ownerDocument = root instanceof Document ? root : root.ownerDocument;
+  let composing = false;
+  let endedAt = -Infinity;
+  const onCompositionStart = (): void => {
+    composing = true;
+  };
+  const onCompositionEnd = (): void => {
+    composing = false;
+    endedAt = Date.now();
+  };
   const onKeyDown = (event: Event): void => {
     if (!(event instanceof KeyboardEvent)) return;
     if (
@@ -39,6 +48,9 @@ export function installModalSubmitShortcut(
       event.altKey ||
       event.shiftKey ||
       event.isComposing ||
+      event.keyCode === 229 ||
+      composing ||
+      Date.now() - endedAt < 50 ||
       event.repeat
     )
       return;
@@ -68,5 +80,15 @@ export function installModalSubmitShortcut(
   };
 
   ownerDocument.addEventListener("keydown", onKeyDown, true);
-  return () => ownerDocument.removeEventListener("keydown", onKeyDown, true);
+  ownerDocument.addEventListener("compositionstart", onCompositionStart, true);
+  ownerDocument.addEventListener("compositionend", onCompositionEnd, true);
+  return () => {
+    ownerDocument.removeEventListener("keydown", onKeyDown, true);
+    ownerDocument.removeEventListener(
+      "compositionstart",
+      onCompositionStart,
+      true,
+    );
+    ownerDocument.removeEventListener("compositionend", onCompositionEnd, true);
+  };
 }

@@ -1,6 +1,19 @@
 # Changelog
 
-## Unreleased
+## 0.0.32
+
+- Keep code and Alert bodies directly editable; use single-click language/type
+  labels and preserve source whitespace, fences, metadata, and body selections.
+- Edit Details headings inline with independent disclosure controls and a
+  structured, directly editable body. Preserve original tags, attributes,
+  nested source, local expansion state, IME input, and conflicting drafts.
+- Edit existing Math/Mermaid source from their header labels without inserting
+  duplicate blocks or losing focus after an update.
+- Move in both directions between editable bodies with plain arrows, including
+  wrapped Alert rows, persistent horizontal caret positions, closed/rendered
+  block stops, and document-end caret targets that do not dirty Markdown.
+
+## Earlier unreleased changes
 
 - Fixed block spacing across the rich editor, dedicated preview, and native
   Markdown preview. Rich NodeView wrappers now own outer margins while their
@@ -52,7 +65,7 @@
   paragraphs at their boundaries; native textarea composition and host history
   commands remain protected.
 
-- Added double-click Alert editing through the existing Profile Feature dialog.
+- Added Alert source editing through the existing Profile Feature dialog.
   Insert and Edit modes now share the dialog, preserve the existing Alert body,
   update the same raw Alert block, and keep lazy continuation source unchanged
   when only the Alert type changes.

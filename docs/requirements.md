@@ -54,33 +54,88 @@ The webview regression suite covers these flows, including CRLF and
 save/reload round trips. Live VS Code and operating-system IME behavior remain
 manual checks.
 
-Double-clicking an Alert card in the Rich Editor opens the existing Profile
-Feature dialog in Edit mode. The dialog initializes the Alert type and body
-from the current source, uses **Update** to change the same raw Alert block,
-and returns focus to the Alert body textarea. Toolbar insertion continues to
-use the same dialog in Insert mode with its existing defaults. Type-only edits
-replace only the `[!TYPE]` marker, preserving lazy continuation lines and
-other source bytes; body edits use the existing Alert body writer. An Alert
-edit is rejected if the document, profile, or editing state changed while the
-dialog was open.
+The Alert type label opens an inline selector with a single click. Changing
+its type replaces only the `[!TYPE]` marker and restores the body's native
+selection range. Click, double-click, and drag in the body retain their native
+caret/selection meaning. An optional **Edit source…** action inside the type
+picker opens the existing Profile Feature dialog in Edit mode. Insertion
+continues to use the toolbar dialog. External changes invalidate an active
+source edit while keeping the draft available to copy.
 
-## Code block vertical boundary navigation
+## Direct block editing and navigation (0.0.32)
 
-In the Rich Editor, plain `ArrowUp` leaves a code block only when
-`EditorView.endOfTextblock("up")` reports that the caret is on the first visual
-row. This keeps ordinary movement within later logical lines and wrapped rows.
-The destination is found with a text-only ProseMirror selection search, so
-paragraphs, headings, list items, blockquotes, and adjacent code blocks receive
-an editable caret rather than a leaf-node selection. An adjacent Alert focuses
-its existing body textarea. Shift/Ctrl/Cmd/Alt, composition, non-empty
-selections, language/menu controls, and expanded-code modal focus are left to
-their existing handlers.
+Code keeps its editable ProseMirror contentDOM, language search/custom names,
+metadata-removal confirmation, copy, line numbers, highlight, wrap, and expand
+controls. Clicking the language label once opens the chooser; chooser arrows
+stay in the candidate list. A language-only change preserves the original fence,
+line endings, body whitespace, and metadata.
 
-The webview suite covers these guards, document immutability, nested containers,
-and selection-only navigation. Visual first-row/wrap behavior and the real
-operating-system IME candidate UI require confirmation in a live VS Code
-Extension Development Host; the package/native checks below do not replace
-that manual geometry check.
+Alert keeps its native textarea and source-preserving marker/body writer. Its
+outer ProseMirror NodeSelection identifies the owning Alert while the native
+textarea owns the character selection. Body input continues through the same
+host synchronization, recovery, clipboard, and Undo/Redo path. Moving focus
+alone creates no edit. The textarea measures its height after attachment and
+when its width changes so wrapped body text remains visible.
+
+Details uses a structured `details` node with the same ProseMirror body surface
+as ordinary paragraphs, lists, nested Details, and code. The arrow button alone
+toggles visibility; a single click on the summary opens a one-line input,
+including while collapsed. Enter commits, Escape cancels only this draft, and
+blur/Tab commit without reclaiming the explicitly chosen focus. Empty summaries
+are preserved. Existing summary HTML/Markdown is edited as source so decoration
+and unknown attributes are retained. The original opening/summary/closing tags
+and a nested source snapshot preserve untouched body bytes and nested blocks.
+Malformed or unsupported summary structures remain raw, source-preserving
+rendered blocks; they do not gain a misleading flattened body editor.
+
+Details expansion is local display state, independent of the Markdown `open`
+attribute. Header/body updates and unrelated rerenders keep that state. Closing
+an active body moves its selection to the owning block and focus to the visible
+arrow. Header sessions validate the live target, profile, source, and editability;
+removed/conflicting targets retain the heading draft in a copyable dialog.
+
+Math and Mermaid keep their renderers and existing diagram controls. Their
+small header labels open the existing source dialog with **Update**, which
+updates that block rather than inserting another. Cancelling and unchanged
+submissions emit no edit. Fence metadata and unchanged source delimiters are
+preserved; conflicting external updates leave the source draft visible.
+
+`bodyNavigation.ts` transfers a plain collapsed caret in both directions among
+ordinary text, code, Alert, and open Details bodies. Closed Details and rendered
+atoms provide a block-selection stop without opening or editing. Horizontal
+movement crosses only the first/last character boundary. Vertical movement uses
+ProseMirror layout coordinates and a temporary styled textarea layout mirror,
+including wrapping, font metrics, width, line height, and scrolling. A retained
+horizontal target survives short intermediate rows and resets on other keys,
+mouse input, or typing. Existing table keys, modified arrows, selection ranges,
+IME candidate keys, and expanded-code controls keep their own handlers.
+Document-edge caret targets use the existing transient paragraph mechanism:
+only typing commits them to Markdown or host history.
+
+Validation is recorded separately for real Chromium keyboard/mouse/layout
+checks and VS Code native APIs. `npm run test:browser:blocks` covers header
+clicks, cancel/unchanged edits, selection retention, exact source updates,
+bidirectional boundaries, wrapped Alert rows, focus, nested/closed Details,
+and rendered-block passage. It also loads `md/common-test.md`,
+`md/github-test.md`, `md/github-test-class-B.md`, `md/gitlab-test.md`, and
+`md/gitlab-test-class-B.md` in rich, dedicated preview, and the native CSS
+fixture, saving screenshots in `output/playwright/block-editing/`.
+
+The final 0.0.32 verification on 2026-09-12 passed `npm run compile`,
+`npm test` (383 tests in 29 files), `npm run lint` (zero errors; 33 existing
+`no-explicit-any` warnings), `npm run format:check`, `npm run test:extension`
+(installed VS Code, exit 0), and `npm run package` (bundled formatter verified).
+The browser block suite passed 11 interaction groups including 15 fixture/surface
+checks; the spacing suite passed 37 cases on each of three surfaces. The run
+saved 89 block screenshots, including focused views of the affected blocks in
+all five required documents. The artifact is `markdown-mint-0.0.32.vsix`.
+
+Manual checks still required: actual Japanese OS IME candidate windows and
+compositionend key ordering in VS Code; browser zoom/font scaling across
+mixed scripts; native cross-region drag/copy/cut between an Alert textarea and
+the outer ProseMirror document; and repeated Undo/Redo of header/body changes
+through the visible Extension Host UI. Synthetic composition events and the
+native API acceptance suite do not establish those manual observations.
 
 - Toolbar buttons and selects use the editor or widget foreground paired with
   their surface background. Primary and secondary dialog actions use their

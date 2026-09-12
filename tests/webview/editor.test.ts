@@ -947,7 +947,7 @@ describe("rich editor rendering", () => {
     expect(document.activeElement).toBe(bodyEditor);
     app.destroy();
   });
-  it("moves directly between consecutive alert bodies without a NodeSelection", () => {
+  it("moves directly between consecutive alert bodies and synchronizes the owning selection", () => {
     const { app, root } = makeApp(
       "Before\n\n> [!NOTE]\n> First\n\n> [!TIP]\n> Second\n\nAfter",
     );
@@ -972,7 +972,7 @@ describe("rich editor rendering", () => {
     expect(document.activeElement).toBe(second);
     expect(second.selectionStart).toBe(0);
     expect(second.selectionEnd).toBe(0);
-    expect(app.view.state.selection).not.toBeInstanceOf(NodeSelection);
+    expect(app.view.state.selection).toBeInstanceOf(NodeSelection);
 
     second.setSelectionRange(0, 0);
     const left = new KeyboardEvent("keydown", {
@@ -985,7 +985,7 @@ describe("rich editor rendering", () => {
     expect(document.activeElement).toBe(first);
     expect(first.selectionStart).toBe(first.value.length);
     expect(first.selectionEnd).toBe(first.value.length);
-    expect(app.view.state.selection).not.toBeInstanceOf(NodeSelection);
+    expect(app.view.state.selection).toBeInstanceOf(NodeSelection);
     app.destroy();
   });
   it("uses a transient paragraph after a final alert without changing Markdown until typing", () => {
@@ -1453,7 +1453,7 @@ describe("code block vertical boundaries", () => {
     app.destroy();
   });
 
-  it("does not route the existing ArrowDown behavior through the upward handler", () => {
+  it("moves from the last displayed code row to the next body", () => {
     const { app, root, messages } = makeApp(
       ["Before", "", "```ts", "first", "second", "```", "", "After"].join("\n"),
     );
@@ -1464,9 +1464,10 @@ describe("code block vertical boundaries", () => {
 
     const event = dispatchCodeKey(root, "ArrowDown");
 
-    expect(event.defaultPrevented).toBe(false);
-    expect(endOfTextblock).not.toHaveBeenCalled();
-    expect(app.view.state.selection.$from.parent.type.name).toBe("code_block");
+    expect(event.defaultPrevented).toBe(true);
+    expect(endOfTextblock).toHaveBeenCalledWith("down");
+    expect(app.view.state.selection.$from.parent.type.name).toBe("paragraph");
+    expect(app.view.state.selection.$from.parent.textContent).toBe("After");
     expect(messages.filter(isEditMessage)).toHaveLength(0);
 
     endOfTextblock.mockRestore();
@@ -1653,7 +1654,7 @@ describe("code block vertical boundaries", () => {
     app.destroy();
   });
 
-  it("focuses an adjacent Alert body instead of selecting its raw atom", () => {
+  it("focuses an adjacent Alert body and synchronizes its owning raw atom", () => {
     const source = [
       "> [!NOTE]",
       "> Alert body",
@@ -1676,7 +1677,7 @@ describe("code block vertical boundaries", () => {
     expect(event.defaultPrevented).toBe(true);
     expect(document.activeElement).toBe(body);
     expect(body.selectionStart).toBe(body.value.length);
-    expect(app.view.state.selection).not.toBeInstanceOf(NodeSelection);
+    expect(app.view.state.selection).toBeInstanceOf(NodeSelection);
     expect(messages.filter(isEditMessage)).toHaveLength(0);
 
     endOfTextblock.mockRestore();

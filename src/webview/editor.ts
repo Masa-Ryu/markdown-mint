@@ -58,6 +58,9 @@ import {
   type StarterPluginState,
 } from "./starter";
 import { createWritingInputRules } from "./input-rules";
+import { BodyNavigation } from "./bodyNavigation";
+import { blockSourceEditor } from "./blockSourceEditing";
+import { createDetailsNodeView } from "./detailsNodeView";
 import {
   createAlertNodeView,
   createRenderedNodeView,
@@ -256,6 +259,7 @@ interface ProfileFeatureEditTarget {
   profile: DocumentProfile;
   source: string;
   returnFocus: HTMLElement | null;
+  bodySelection?: [number, number, "forward" | "backward" | "none"] | undefined;
 }
 
 type TableToolbarAction =
@@ -951,12 +955,6 @@ function topLevelRangeNodes(
   return result;
 }
 
-function isAlertBlock(node: PMNode | null | undefined): node is PMNode {
-  return (
-    node?.type.name === "raw_block" && String(node.attrs.kind ?? "") === "alert"
-  );
-}
-
 function removeTopLevelRange(doc: PMNode, range: TransientBlankRange): PMNode {
   const children: PMNode[] = [];
   let position = 0;
@@ -1079,15 +1077,26 @@ class CodeBlockNodeView {
   private languageActiveIndex = -1;
   private languageQuery = "";
   private destroyed = false;
+  private languageStartInfo: string | null = null;
+  private languageStartNode: PMNode | null = null;
+  private languageComposing = false;
+  private languageCompositionEndedAt = -Infinity;
+  private readonly canEdit: () => boolean;
 
   constructor(
     node: PMNode,
     view: EditorView,
     getPos: () => number | undefined,
     controlOptions: CodeBlockControlOptions = {},
+    canEdit: () => boolean = () => view.editable,
+    private readonly preserveDraft: (
+      draft: string,
+      message: string,
+    ) => void = () => undefined,
   ) {
     this.view = view;
     this.getPos = getPos;
+    this.canEdit = canEdit;
     this.dom = document.createElement("div");
     this.dom.className = "mm-code-block-view";
     this.card = document.createElement("div");
@@ -1160,6 +1169,13 @@ class CodeBlockNodeView {
     this.languageInput.addEventListener("keydown", (event) =>
       this.handleLanguageKeyDown(event),
     );
+    this.languageInput.addEventListener("compositionstart", () => {
+      this.languageComposing = true;
+    });
+    this.languageInput.addEventListener("compositionend", () => {
+      this.languageComposing = false;
+      this.languageCompositionEndedAt = Date.now();
+    });
     this.languageMenu.addEventListener("click", (event) => {
       const target = event.target;
       if (!(target instanceof Element)) return;
@@ -1267,7 +1283,14 @@ class CodeBlockNodeView {
   }
 
   private openLanguagePicker(): void {
-    if (this.destroyed) return;
+    if (this.destroyed || !this.canEdit()) return;
+    const position = this.positionOf();
+    this.languageStartInfo =
+      position === undefined
+        ? null
+        : String(this.view.state.doc.nodeAt(position)?.attrs.params ?? "");
+    this.languageStartNode =
+      position === undefined ? null : this.view.state.doc.nodeAt(position);
     this.languagePickerOpen = true;
     this.languageQuery = "";
     this.languageActiveIndex = 0;
@@ -1474,11 +1497,19 @@ class CodeBlockNodeView {
       return;
     }
     const result = this.setCodeLanguage(value);
+    if (result === "conflict") return;
     this.closeLanguagePicker(result === "confirmation" ? false : true);
   }
 
   private handleLanguageKeyDown(event: KeyboardEvent): void {
-    if (event.isComposing || event.keyCode === 229) return;
+    if (
+      event.isComposing ||
+      event.keyCode === 229 ||
+      this.languageComposing ||
+      (event.key === "Enter" &&
+        Date.now() - this.languageCompositionEndedAt < 50)
+    )
+      return;
     const buttons = Array.from(
       this.languageMenu.querySelectorAll<HTMLButtonElement>(
         "[data-mm-language-option]",
@@ -1538,7 +1569,8 @@ class CodeBlockNodeView {
 
   private setCodeLanguage(
     language: string,
-  ): "applied" | "unchanged" | "confirmation" {
+  ): "applied" | "unchanged" | "confirmation" | "conflict" {
+    if (!this.canEdit()) return "unchanged";
     const position = this.positionOf();
     if (position === undefined) return "unchanged";
     const current = this.view.state.doc.nodeAt(position);
@@ -1546,6 +1578,20 @@ class CodeBlockNodeView {
     if (language && !isValidCodeLanguageIdentifier(language))
       return "unchanged";
     const currentInfo = String(current.attrs.params ?? "");
+    if (
+      this.languageStartNode &&
+      (current !== this.languageStartNode ||
+        currentInfo !== this.languageStartInfo)
+    ) {
+      this.languageInput.setAttribute(
+        "data-mm-language-error",
+        "The language changed externally; reopen the picker to edit the current value.",
+      );
+      this.languageInput.setAttribute("aria-invalid", "true");
+      this.languageInput.title =
+        "The block changed while the language picker was open. Your input is kept here to copy; reopen the picker to use the current block.";
+      return "conflict";
+    }
     const nextInfo = language
       ? replaceCodeLanguageIdentifier(currentInfo, language)
       : "";
@@ -1563,6 +1609,7 @@ class CodeBlockNodeView {
     current: PMNode,
     nextInfo: string,
   ): void {
+    if (!this.canEdit()) return;
     this.view.focus();
     this.view.dispatch(
       this.view.state.tr.setNodeMarkup(position, undefined, {
@@ -1676,6 +1723,11 @@ class CodeBlockNodeView {
 
   destroy(): void {
     this.destroyed = true;
+    if (this.languagePickerOpen && this.languageInput.value)
+      this.preserveDraft(
+        this.languageInput.value,
+        "The code block was removed or reloaded. Your language draft was preserved.",
+      );
     this.closeLanguagePicker(false);
     this.closeLanguageRemovalConfirmation(false);
     document.removeEventListener("pointerdown", this.languageOutsideHandler);
@@ -2205,6 +2257,14 @@ export class MarkdownEditorApp {
         "data-testid": "rich-editor",
       },
       nodeViews: {
+        details: (node, view, getPos) =>
+          createDetailsNodeView(node, view, getPos, {
+            getProfile: () => this.profile,
+            canEdit: () => this.canEditBlock(),
+            composition: (active) => this.handleBlockComposition(active),
+            preserveDraft: (draft, message) =>
+              this.preserveHeaderDraft(draft, message),
+          }),
         list_item: (node, view, getPos) =>
           new TaskItemNodeView(node, view, getPos),
         code_block: (node, view, getPos) =>
@@ -2213,6 +2273,8 @@ export class MarkdownEditorApp {
             view,
             getPos,
             this.codeBlockControlOptions(),
+            () => this.canEditBlock() && !this.composing,
+            (draft, message) => this.preserveHeaderDraft(draft, message),
           ),
         image: (node) => new ImageNodeView(node, () => this.resourceBaseUrl),
         raw_block: (node, view, getPos) =>
@@ -2222,16 +2284,28 @@ export class MarkdownEditorApp {
                 view,
                 getPos,
                 () => this.profile,
-                (direction, position) =>
-                  this.moveSelectionAroundAlert(direction, position),
+                (direction, position, event) =>
+                  this.moveSelectionAroundAlert(direction, position, event),
                 (command: AlertHistoryCommand) => this.sendHostCommand(command),
                 ((position, returnFocus) =>
                   this.openProfileFeatureAlertEditor(
                     position,
                     returnFocus,
                   )) satisfies AlertEditRequest,
+                {
+                  canEdit: () => this.canEditBlock(),
+                  composition: (active) => this.handleBlockComposition(active),
+                },
               )
-            : createRenderedNodeView(node, view, getPos, () => this.profile),
+            : createRenderedNodeView(
+                node,
+                view,
+                getPos,
+                () => this.profile,
+                (position, returnFocus) =>
+                  this.openRenderedBlockEditor(position, returnFocus),
+                { canEdit: () => this.canEditBlock() && !this.composing },
+              ),
         raw_inline: (node, view, getPos) =>
           createRenderedNodeView(node, view, getPos, () => this.profile),
       },
@@ -2380,6 +2454,7 @@ export class MarkdownEditorApp {
     this.transientBlanks = null;
     this.previewEnhancer?.dispose();
     this.previewEnhancer = undefined;
+    this.bodyNavigation?.destroy();
     this.view.destroy();
   }
 
@@ -2577,8 +2652,7 @@ export class MarkdownEditorApp {
       first?.focus();
       return true;
     }
-    if (this.handleCodeBlockBoundaryKeyDown(event)) return true;
-    if (this.handleAdjacentAlertKeyDown(event)) return true;
+    if (this.navigation.handleKeyDown(event, this.composing)) return true;
     // ProseMirror's `Mod` keymap covers the normal path. Keep an explicit
     // platform-aware fallback for hosts that stop the keymap event while a
     // webview command is pending (and for embedded test hosts).
@@ -2600,205 +2674,19 @@ export class MarkdownEditorApp {
     return false;
   }
 
-  private handleCodeBlockBoundaryKeyDown(event: KeyboardEvent): boolean {
-    if (
-      event.key !== "ArrowUp" ||
-      event.isComposing ||
-      event.keyCode === 229 ||
-      this.composing ||
-      event.shiftKey ||
-      event.ctrlKey ||
-      event.metaKey ||
-      event.altKey
-    )
-      return false;
+  private bodyNavigation: BodyNavigation | undefined;
 
-    const selection = this.view.state.selection;
-    if (!(selection instanceof TextSelection) || !selection.empty) return false;
-    const position = this.codeBlockPosition(selection);
-    if (position === null || !this.isCodeBlockTextEvent(event, position))
-      return false;
-    if (this.isCodeBlockExpanded(position)) {
-      // Expanded code is a modal surface. Do not let ProseMirror's fallback
-      // vertical motion carry the selection into the background document.
-      event.preventDefault();
-      return true;
-    }
-
-    // DOM geometry, rather than a document offset, distinguishes the first
-    // visual row from a wrapped continuation of the same logical line.
-    let atVisualStart = false;
-    try {
-      atVisualStart = this.view.endOfTextblock("up");
-    } catch {
-      // A host without usable layout must keep the browser's normal behavior.
-      return false;
-    }
-    if (!atVisualStart || !this.moveSelectionBeforeBlock(position))
-      return false;
-
-    event.preventDefault();
-    return true;
-  }
-
-  private codeBlockPosition(selection: TextSelection): number | null {
-    for (let depth = selection.$from.depth; depth > 0; depth -= 1) {
-      if (selection.$from.node(depth).type.name === "code_block")
-        return selection.$from.before(depth);
-    }
-    return null;
-  }
-
-  private isCodeBlockTextEvent(
-    event: KeyboardEvent,
-    position: number,
-  ): boolean {
-    const nodeDOM = this.view.nodeDOM(position);
-    if (!(nodeDOM instanceof Element)) return false;
-
-    // CodeBlockNodeView.stopEvent() normally keeps controls out of the
-    // ProseMirror keymap. Keep the check here as well for delegated and
-    // synthetic events, especially while a menu or picker owns focus.
-    const active = this.view.dom.ownerDocument.activeElement;
-    if (
-      active instanceof Element &&
-      nodeDOM.contains(active) &&
-      active.closest("input,select,textarea,button")
-    )
-      return false;
-
-    const target = event.target;
-    // A keyboard event delivered directly to the contenteditable root still
-    // represents the current ProseMirror selection, so allow that form for
-    // embedded hosts and tests. Events from a concrete control are rejected
-    // above or by the code-content check below.
-    if (target === this.view.dom) return true;
-    if (!(target instanceof Node) || !nodeDOM.contains(target)) return false;
-    const element = target instanceof Element ? target : target.parentNode;
-    if (!(element instanceof Element)) return false;
-    if (element.closest("input,select,textarea,button")) return false;
-    return Boolean(element.closest(".mm-code-block-pre code"));
-  }
-
-  private isCodeBlockExpanded(position: number): boolean {
-    const nodeDOM = this.view.nodeDOM(position);
-    if (!(nodeDOM instanceof Element)) return false;
-    const block = nodeDOM.matches(".mm-code-block")
-      ? nodeDOM
-      : nodeDOM.querySelector<HTMLElement>(".mm-code-block");
-    return block?.classList.contains("mm-code-block-expanded") ?? false;
-  }
-
-  private handleAdjacentAlertKeyDown(event: KeyboardEvent): boolean {
-    if (
-      (event.key !== "ArrowRight" && event.key !== "ArrowLeft") ||
-      event.isComposing ||
-      this.composing ||
-      event.shiftKey ||
-      event.ctrlKey ||
-      event.metaKey ||
-      event.altKey
-    )
-      return false;
-    const selection = this.view.state.selection;
-    if (!(selection instanceof TextSelection) || !selection.empty) return false;
-    const paragraph = selection.$from.parent;
-    if (
-      selection.$from.depth !== 1 ||
-      paragraph.type.name !== "paragraph" ||
-      (event.key === "ArrowRight" &&
-        selection.$from.parentOffset !== paragraph.content.size) ||
-      (event.key === "ArrowLeft" && selection.$from.parentOffset !== 0)
-    )
-      return false;
-
-    const blockPosition = selection.$from.before(1);
-    let index = -1;
-    let position = 0;
-    for (
-      let childIndex = 0;
-      childIndex < this.view.state.doc.childCount;
-      childIndex += 1
-    ) {
-      if (position === blockPosition) {
-        index = childIndex;
-        break;
-      }
-      position += this.view.state.doc.child(childIndex).nodeSize;
-    }
-    if (index < 0) return false;
-
-    const adjacentIndex = event.key === "ArrowRight" ? index + 1 : index - 1;
-    if (adjacentIndex < 0 || adjacentIndex >= this.view.state.doc.childCount)
-      return false;
-    let adjacentPosition = 0;
-    for (let childIndex = 0; childIndex < adjacentIndex; childIndex += 1)
-      adjacentPosition += this.view.state.doc.child(childIndex).nodeSize;
-    if (!isAlertBlock(this.view.state.doc.child(adjacentIndex))) return false;
-    const focused = this.focusAlertBody(
-      adjacentPosition,
-      event.key === "ArrowRight" ? "start" : "end",
-    );
-    if (!focused) return false;
-    event.preventDefault();
-    return true;
-  }
-
-  private moveSelectionBeforeBlock(position: number): boolean {
-    const state = this.view.state;
-    if (position <= 0) return false;
-
-    let nearest: Selection | null;
-    try {
-      nearest = Selection.findFrom(state.doc.resolve(position), -1);
-    } catch {
-      return false;
-    }
-
-    // Alerts are selectable raw atoms in the document, but their usable caret
-    // lives in the NodeView textarea. Focus it directly instead of trapping
-    // the user in a NodeSelection between an Alert and the code block.
-    if (
-      nearest &&
-      nearest.from < position &&
-      !nearest.$from.parent.isTextblock &&
-      isAlertBlock(state.doc.nodeAt(nearest.from)) &&
-      this.focusAlertBody(nearest.from, "end")
-    )
-      return true;
-
-    let target: Selection | null;
-    try {
-      // `textOnly` guarantees that images, raw atoms, and other leaf nodes do
-      // not become the destination of a code-block boundary move.
-      target = Selection.findFrom(state.doc.resolve(position), -1, true);
-    } catch {
-      return false;
-    }
-    if (
-      !target ||
-      !target.empty ||
-      target.from >= position ||
-      !target.$from.parent.isTextblock
-    )
-      return false;
-
-    this.view.dispatch(state.tr.setSelection(target).scrollIntoView());
-    this.view.focus();
-    return true;
-  }
-
-  private focusAlertBody(position: number, edge: "start" | "end"): boolean {
-    const dom = this.view.nodeDOM(position);
-    if (!(dom instanceof Element)) return false;
-    const editor = dom.querySelector<HTMLTextAreaElement>(
-      ".mm-alert-body-editor",
-    );
-    if (!editor) return false;
-    const caret = edge === "start" ? 0 : editor.value.length;
-    editor.focus({ preventScroll: true });
-    editor.setSelectionRange(caret, caret);
-    return true;
+  private get navigation(): BodyNavigation {
+    return (this.bodyNavigation ??= new BodyNavigation(
+      this.view,
+      (position, node) =>
+        this.moveSelectionAfterBlock(
+          this.view.state,
+          position,
+          node,
+          (transaction) => this.view.dispatch(transaction),
+        ),
+    ));
   }
 
   private exitTable(
@@ -2902,81 +2790,9 @@ export class MarkdownEditorApp {
   private moveSelectionAroundAlert(
     direction: AlertBoundaryDirection,
     position: number,
+    event?: KeyboardEvent,
   ): boolean {
-    const state = this.view.state;
-    const node = state.doc.nodeAt(position);
-    if (!isAlertBlock(node)) return false;
-
-    // Adjacent raw alert atoms have no text position for Selection.near() to
-    // find. Focus the neighbouring NodeView directly so the user never lands
-    // on a ProseMirror NodeSelection between two alert editors.
-    let index = -1;
-    let childPosition = 0;
-    for (
-      let childIndex = 0;
-      childIndex < state.doc.childCount;
-      childIndex += 1
-    ) {
-      if (childPosition === position) {
-        index = childIndex;
-        break;
-      }
-      childPosition += state.doc.child(childIndex).nodeSize;
-    }
-    const adjacentIndex = direction === "before" ? index - 1 : index + 1;
-    if (
-      index >= 0 &&
-      adjacentIndex >= 0 &&
-      adjacentIndex < state.doc.childCount &&
-      isAlertBlock(state.doc.child(adjacentIndex))
-    ) {
-      let adjacentPosition = 0;
-      for (let childIndex = 0; childIndex < adjacentIndex; childIndex += 1)
-        adjacentPosition += state.doc.child(childIndex).nodeSize;
-      return this.focusAlertBody(
-        adjacentPosition,
-        direction === "before" ? "end" : "start",
-      );
-    }
-
-    const blockEnd = position + node.nodeSize;
-    if (direction === "before") {
-      if (position <= 0) return false;
-      let target: Selection;
-      try {
-        target = Selection.near(state.doc.resolve(position), -1);
-      } catch {
-        return false;
-      }
-      if (target.from >= position || !target.$from.parent.isTextblock)
-        return false;
-      this.view.dispatch(state.tr.setSelection(target).scrollIntoView());
-      this.view.focus();
-      return true;
-    }
-
-    if (blockEnd < state.doc.content.size) {
-      let target: Selection;
-      try {
-        target = Selection.near(state.doc.resolve(blockEnd), 1);
-      } catch {
-        return false;
-      }
-      if (target.from <= blockEnd || !target.$from.parent.isTextblock)
-        return false;
-      this.view.dispatch(state.tr.setSelection(target).scrollIntoView());
-      this.view.focus();
-      return true;
-    }
-
-    const moved = this.moveSelectionAfterBlock(
-      state,
-      position,
-      node,
-      (transaction) => this.view.dispatch(transaction),
-    );
-    if (moved) this.view.focus();
-    return moved;
+    return this.navigation.moveFromTextarea(direction, position, event);
   }
 
   private gfmUnavailable(dispatch?: (tr: Transaction) => void): boolean {
@@ -2989,6 +2805,20 @@ export class MarkdownEditorApp {
     const oldSelection = this.view.state.selection;
     const applied = this.view.state.applyTransaction(tr);
     const transactions = applied.transactions;
+    const editTarget = this.profileFeatureEditTarget;
+    if (editTarget && editTarget.document === this.view.state.doc) {
+      let position = editTarget.position;
+      let deleted = false;
+      for (const transaction of transactions) {
+        const mapped = transaction.mapping.mapResult(position, 1);
+        position = mapped.pos;
+        deleted ||= mapped.deleted;
+      }
+      if (!deleted && applied.state.doc.nodeAt(position) === editTarget.node) {
+        editTarget.position = position;
+        editTarget.document = applied.state.doc;
+      }
+    }
     const appendMeta = transactions
       .map(
         (transaction) =>
@@ -3311,6 +3141,59 @@ export class MarkdownEditorApp {
     return { copyText: (value) => this.copyCodeBlockText(value) };
   }
 
+  private canEditBlock(): boolean {
+    return (
+      this.initialized &&
+      !this.previewOnly &&
+      this.mode === "rich" &&
+      !this.parseError &&
+      !this.conflict &&
+      !this.syncPaused &&
+      !this.pendingProfile &&
+      this.view?.editable !== false
+    );
+  }
+
+  private handleBlockComposition(active: boolean): void {
+    this.composing = active;
+    if (!active) {
+      // The final native input event can follow compositionend. Defer external
+      // replacement until that event has had a chance to synchronize the draft.
+      queueMicrotask(() => {
+        if (this.destroyed || this.composing) return;
+        this.flushExternalAfterComposition();
+        this.flushDeferredHostCommand();
+      });
+    }
+  }
+
+  private preserveHeaderDraft(draft: string, message: string): void {
+    if (this.destroyed) return;
+    const dialog = document.createElement("dialog");
+    dialog.className = "mm-input-dialog mm-block-draft-dialog";
+    dialog.setAttribute("aria-label", "Preserved block draft");
+    const help = document.createElement("p");
+    help.textContent = message;
+    const input = document.createElement("textarea");
+    input.className = "mm-dialog-input";
+    input.setAttribute("aria-label", "Block draft to copy");
+    input.value = draft;
+    input.readOnly = true;
+    const close = document.createElement("button");
+    close.type = "button";
+    close.textContent = "Close";
+    close.addEventListener("click", () => {
+      this.closeDialog(dialog);
+      dialog.remove();
+    });
+    dialog.addEventListener("cancel", () => dialog.remove());
+    dialog.append(help, input, close);
+    this.root.append(dialog);
+    this.openDialog(dialog);
+    input.focus();
+    input.select();
+  }
+
   private async copyCodeBlockText(value: string): Promise<boolean> {
     if (this.vscode && this.clipboardAvailable) {
       try {
@@ -3458,6 +3341,22 @@ export class MarkdownEditorApp {
         editingDisabled ||
         (element.dataset.gfmOnly === "true" && this.profile === "commonmark");
     }
+    const blockEditingDisabled = !this.canEditBlock();
+    for (const control of this.root.querySelectorAll<
+      | HTMLButtonElement
+      | HTMLInputElement
+      | HTMLSelectElement
+      | HTMLTextAreaElement
+    >(
+      ".mm-alert-body-editor, .mm-alert-type-trigger, .mm-alert-type-select, .mm-alert-details-action, .mm-block-source-trigger, .mm-code-language-trigger, .mm-code-language-inline, .mm-details-summary",
+    ))
+      control.disabled = blockEditingDisabled;
+    for (const body of this.root.querySelectorAll<HTMLElement>(
+      ".mm-details-body",
+    )) {
+      if (blockEditingDisabled) body.contentEditable = "false";
+      else body.removeAttribute("contenteditable");
+    }
     for (const button of Array.from(
       this.root.querySelectorAll<HTMLButtonElement>(".mm-mode-button"),
     )) {
@@ -3484,7 +3383,7 @@ export class MarkdownEditorApp {
     if (editingDisabled) {
       this.closeWritingPopups();
       this.closeEmojiPicker();
-      this.closeProfileFeatureDialog();
+      this.invalidateProfileFeatureDialog();
     }
     this.updateProfileToolbar();
     if (this.selectionToolbar) {
@@ -3504,7 +3403,7 @@ export class MarkdownEditorApp {
     if (this.tableDialogOpen) this.closeTableDialog(message);
     this.closeWritingPopups();
     this.closeEmojiPicker();
-    this.closeProfileFeatureDialog();
+    this.invalidateProfileFeatureDialog();
     this.conflict = true;
     this.syncPaused = true;
     this.statusEl.title = message;
@@ -4334,7 +4233,7 @@ export class MarkdownEditorApp {
 
   private openProfileFeatureDialog(
     id: ProfileFeatureId,
-    invokingButton: HTMLButtonElement,
+    invokingButton: HTMLButtonElement | null = null,
   ): void {
     const feature = this.profileFeatureDefinition(id);
     if (!feature || !this.canUseProfileFeature(feature)) {
@@ -4356,6 +4255,7 @@ export class MarkdownEditorApp {
     this.profileFeatureDialog.querySelector("h2")!.textContent =
       "Insert " + feature.label;
     this.profileFeatureApplyButton.textContent = "Insert";
+    this.profileFeatureApplyButton.disabled = false;
     this.profileFeatureAlertType.parentElement!.hidden = id !== "alert";
     this.profileFeatureTitleInput.parentElement!.hidden = id !== "details";
     this.profileFeatureTermInput.parentElement!.hidden =
@@ -4442,12 +4342,21 @@ export class MarkdownEditorApp {
       profile: this.profile,
       source,
       returnFocus: returnFocus ?? null,
+      bodySelection:
+        returnFocus instanceof HTMLTextAreaElement
+          ? [
+              returnFocus.selectionStart,
+              returnFocus.selectionEnd,
+              returnFocus.selectionDirection,
+            ]
+          : undefined,
     };
     this.profileFeatureDialogOpen = true;
     this.profileFeatureDialog.dataset.profileFeature = "alert";
     this.profileFeatureDialog.dataset.profileFeatureMode = "edit";
     this.profileFeatureDialog.querySelector("h2")!.textContent = "Edit Alert";
     this.profileFeatureApplyButton.textContent = "Update";
+    this.profileFeatureApplyButton.disabled = false;
     this.profileFeatureAlertType.parentElement!.hidden = false;
     this.profileFeatureTitleInput.parentElement!.hidden = true;
     this.profileFeatureTermInput.parentElement!.hidden = true;
@@ -4458,6 +4367,35 @@ export class MarkdownEditorApp {
     this.profileFeatureError.hidden = true;
     this.profileFeatureError.textContent = "";
     this.openDialog(this.profileFeatureDialog);
+    this.profileFeatureBodyInput.focus();
+  }
+
+  private openRenderedBlockEditor(
+    position: number,
+    returnFocus?: HTMLElement,
+  ): void {
+    if (!this.canEditBlock() || this.composing || this.profileFeatureDialogOpen)
+      return;
+    const node = this.view.state.doc.nodeAt(position);
+    const sourceEditor = node && blockSourceEditor(node);
+    if (!node || !sourceEditor) return;
+    this.openProfileFeatureDialog(sourceEditor.kind);
+    if (!this.profileFeatureDialogOpen) return;
+    this.profileFeatureSelection = null;
+    this.profileFeatureEditTarget = {
+      position,
+      node,
+      document: this.view.state.doc,
+      documentGeneration: this.documentGeneration,
+      profile: this.profile,
+      source: String(node.attrs.source ?? ""),
+      returnFocus: returnFocus ?? null,
+    };
+    this.profileFeatureDialog.dataset.profileFeatureMode = "edit";
+    this.profileFeatureDialog.querySelector("h2")!.textContent =
+      sourceEditor.kind === "math" ? "Edit Math" : "Edit Mermaid";
+    this.profileFeatureApplyButton.textContent = "Update";
+    this.profileFeatureBodyInput.value = sourceEditor.body;
     this.profileFeatureBodyInput.focus();
   }
 
@@ -4481,6 +4419,17 @@ export class MarkdownEditorApp {
     return {};
   }
 
+  private invalidateProfileFeatureDialog(): void {
+    if (!this.profileFeatureEditTarget) {
+      this.closeProfileFeatureDialog();
+      return;
+    }
+    this.profileFeatureError.hidden = false;
+    this.profileFeatureError.textContent =
+      "The document or editing mode changed; nothing was updated. Copy your draft before closing this dialog.";
+    this.profileFeatureApplyButton.disabled = true;
+  }
+
   private closeProfileFeatureDialog(
     message?: string,
     restoreFocus = true,
@@ -4494,6 +4443,18 @@ export class MarkdownEditorApp {
     this.profileFeatureDialogOpen = false;
     const button = this.profileFeatureInvokingButton;
     const editReturnFocus = this.profileFeatureEditTarget?.returnFocus;
+    const bodySelection = this.profileFeatureEditTarget?.bodySelection;
+    const editTarget = this.profileFeatureEditTarget;
+    const returnNode =
+      editTarget &&
+      editTarget.documentGeneration === this.documentGeneration &&
+      this.profileFeatureError.hidden
+        ? this.view.nodeDOM(editTarget.position)
+        : null;
+    const updatedHeader =
+      returnNode instanceof HTMLElement
+        ? returnNode.querySelector<HTMLElement>(".mm-block-source-trigger")
+        : null;
     this.profileFeatureInvokingButton = null;
     this.profileFeatureSelection = null;
     this.profileFeatureDocumentGeneration = -1;
@@ -4508,10 +4469,12 @@ export class MarkdownEditorApp {
       if (editReturnFocus?.isConnected) {
         editReturnFocus.focus({ preventScroll: true });
         if (editReturnFocus instanceof HTMLTextAreaElement) {
-          const length = editReturnFocus.value.length;
-          editReturnFocus.setSelectionRange(length, length);
+          if (bodySelection)
+            editReturnFocus.setSelectionRange(...bodySelection);
         }
-      } else if (button?.isConnected) button.focus();
+      } else if (updatedHeader?.isConnected)
+        updatedHeader.focus({ preventScroll: true });
+      else if (button?.isConnected) button.focus();
     }
   }
 
@@ -4553,6 +4516,7 @@ export class MarkdownEditorApp {
     if (editTarget) {
       const stale =
         !this.profileFeatureDialogOpen ||
+        !this.canEditBlock() ||
         !this.initialized ||
         this.previewOnly ||
         this.mode !== "rich" ||
@@ -4572,12 +4536,41 @@ export class MarkdownEditorApp {
         currentNode !== editTarget.node ||
         !currentNode ||
         currentNode.type.name !== "raw_block" ||
-        String(currentNode.attrs.kind ?? "") !== "alert" ||
+        (String(currentNode.attrs.kind ?? "") !== "alert" &&
+          !blockSourceEditor(currentNode)) ||
         String(currentNode.attrs.source ?? "") !== editTarget.source
       ) {
-        this.closeProfileFeatureDialog(
-          "The document changed while this Alert dialog was open; nothing was updated.",
-        );
+        this.profileFeatureError.hidden = false;
+        this.profileFeatureError.textContent =
+          "The document changed while this block dialog was open; nothing was updated. Your draft is still available here to copy.";
+        this.setNotice(this.profileFeatureError.textContent, "error");
+        return;
+      }
+
+      const sourceEditor = blockSourceEditor(currentNode);
+      if (sourceEditor) {
+        const body = this.profileFeatureBodyInput.value;
+        const nextSource =
+          body === sourceEditor.body
+            ? editTarget.source
+            : sourceEditor.replace(body);
+        // Validate the wrapper as one block; never silently split a source
+        // containing a closing math delimiter into newly inserted blocks.
+        const parsed = this.core.parseMarkdown(nextSource, this.profile).doc;
+        if (parsed.childCount !== 1 || !blockSourceEditor(parsed.firstChild!)) {
+          this.profileFeatureError.hidden = false;
+          this.profileFeatureError.textContent =
+            "The source must remain one Math or Mermaid block. Your draft has been kept.";
+          return;
+        }
+        if (nextSource !== editTarget.source)
+          this.dispatchTransaction(
+            this.view.state.tr.setNodeMarkup(editTarget.position, undefined, {
+              ...currentNode.attrs,
+              source: nextSource,
+            }),
+          );
+        this.closeProfileFeatureDialog();
         return;
       }
 
@@ -7029,7 +7022,7 @@ export class MarkdownEditorApp {
 
     this.closeWritingPopups();
     this.closeEmojiPicker();
-    this.closeProfileFeatureDialog();
+    this.invalidateProfileFeatureDialog();
     this.pendingProfile = { profile };
     this.profileSelect.value = profile;
     if (this.composing || this.hasPendingHostSync()) {
@@ -7277,7 +7270,7 @@ export class MarkdownEditorApp {
     this.profile = message.profile;
     this.updateProfileSelect();
     this.closeEmojiPicker();
-    this.closeProfileFeatureDialog();
+    this.invalidateProfileFeatureDialog();
     if (this.pendingProfile && message.profile === this.pendingProfile.profile)
       this.pendingProfile = null;
     this.updateEditingControlState();
@@ -7405,11 +7398,12 @@ export class MarkdownEditorApp {
     }
     if (this.sync.inflight || this.sync.queuedEdit || this.dirty) {
       this.closeWritingPopups();
-      this.closeProfileFeatureDialog(
-        this.profileFeatureEditTarget
-          ? "The document changed while this Alert dialog was open; nothing was updated."
-          : undefined,
-      );
+      if (!this.profileFeatureEditTarget) this.closeProfileFeatureDialog();
+      else {
+        this.profileFeatureError.hidden = false;
+        this.profileFeatureError.textContent =
+          "The document changed; nothing was updated. Copy your draft before closing this dialog.";
+      }
       this.pendingExternal = message;
       // A profile/configuration broadcast can arrive with the same text while
       // a local edit is in flight. Keep the local document, but retain the
@@ -7570,7 +7564,11 @@ export class MarkdownEditorApp {
     const abortedAlertEdit =
       this.profileFeatureEditTarget !== null &&
       (!preserveState || message.mode === "preview");
-    if (abortedAlertEdit) this.closeProfileFeatureDialog();
+    if (abortedAlertEdit) {
+      this.profileFeatureError.hidden = false;
+      this.profileFeatureError.textContent =
+        "The document changed; nothing was updated. Copy your draft before closing this dialog.";
+    }
 
     if (!preserveState) {
       if (this.tableDialogOpen)

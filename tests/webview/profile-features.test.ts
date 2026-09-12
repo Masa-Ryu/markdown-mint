@@ -205,9 +205,9 @@ describe("profile feature toolbar", () => {
       ".mm-profile-feature-dialog",
     )!;
 
-    alertView.dispatchEvent(
-      new MouseEvent("dblclick", { bubbles: true, cancelable: true }),
-    );
+    alertView
+      .querySelector<HTMLButtonElement>(".mm-alert-details-action")!
+      .click();
 
     expect(root.querySelectorAll(".mm-profile-feature-dialog")).toHaveLength(1);
     expect(dialog.dataset.profileFeatureMode).toBe("edit");
@@ -232,9 +232,9 @@ describe("profile feature toolbar", () => {
     const source = "> [!TIP]\n> first\n\n> [!NOTE]\n> second";
     const { app, root } = makeApp(source);
     const alerts = root.querySelectorAll<HTMLElement>(".mm-alert-node-view");
-    alerts[1]!.dispatchEvent(
-      new MouseEvent("dblclick", { bubbles: true, cancelable: true }),
-    );
+    alerts[1]!
+      .querySelector<HTMLButtonElement>(".mm-alert-details-action")!
+      .click();
     const dialog = root.querySelector<HTMLDialogElement>(
       ".mm-profile-feature-dialog",
     )!;
@@ -253,11 +253,7 @@ describe("profile feature toolbar", () => {
   it("preserves lazy continuation source on a type-only Alert update", () => {
     const source = "> [!TIP]\n> First\ncontinued\n> Last";
     const { app, root } = makeApp(source);
-    root
-      .querySelector<HTMLElement>(".mm-alert-node-view")!
-      .dispatchEvent(
-        new MouseEvent("dblclick", { bubbles: true, cancelable: true }),
-      );
+    root.querySelector<HTMLButtonElement>(".mm-alert-details-action")!.click();
     const dialog = root.querySelector<HTMLDialogElement>(
       ".mm-profile-feature-dialog",
     )!;
@@ -272,11 +268,7 @@ describe("profile feature toolbar", () => {
 
   it("updates Alert body and type in place without inserting another node", () => {
     const { app, root } = makeApp("> [!NOTE]\n> Server restarted");
-    root
-      .querySelector<HTMLElement>(".mm-alert-node-view")!
-      .dispatchEvent(
-        new MouseEvent("dblclick", { bubbles: true, cancelable: true }),
-      );
+    root.querySelector<HTMLButtonElement>(".mm-alert-details-action")!.click();
     const dialog = root.querySelector<HTMLDialogElement>(
       ".mm-profile-feature-dialog",
     )!;
@@ -299,9 +291,9 @@ describe("profile feature toolbar", () => {
     const bodyEditor = root.querySelector<HTMLTextAreaElement>(
       ".mm-alert-body-editor",
     )!;
-    bodyEditor.dispatchEvent(
-      new MouseEvent("dblclick", { bubbles: true, cancelable: true }),
-    );
+    bodyEditor.focus();
+    bodyEditor.setSelectionRange(2, 5);
+    root.querySelector<HTMLButtonElement>(".mm-alert-details-action")!.click();
     const dialog = root.querySelector<HTMLDialogElement>(
       ".mm-profile-feature-dialog",
     )!;
@@ -317,17 +309,14 @@ describe("profile feature toolbar", () => {
 
     expect(currentSource(app)).toBe(source);
     expect(document.activeElement).toBe(bodyEditor);
-    expect(bodyEditor.selectionStart).toBe(bodyEditor.value.length);
+    expect(bodyEditor.selectionStart).toBe(2);
+    expect(bodyEditor.selectionEnd).toBe(5);
     app.destroy();
   });
 
   it("rejects an Alert update after the authoritative document changes", () => {
     const { app, root } = makeApp("> [!TIP]\n> Original");
-    root
-      .querySelector<HTMLElement>(".mm-alert-node-view")!
-      .dispatchEvent(
-        new MouseEvent("dblclick", { bubbles: true, cancelable: true }),
-      );
+    root.querySelector<HTMLButtonElement>(".mm-alert-details-action")!.click();
     const dialog = root.querySelector<HTMLDialogElement>(
       ".mm-profile-feature-dialog",
     )!;
@@ -351,14 +340,14 @@ describe("profile feature toolbar", () => {
     app.destroy();
   });
 
-  it("keeps Alert double-click editing disabled during composition", () => {
+  it("keeps Alert header source editing disabled during composition", () => {
     const { app, root } = makeApp("> [!TIP]\n> Original");
     const editor = root.querySelector<HTMLElement>(".ProseMirror")!;
     const alertView = root.querySelector<HTMLElement>(".mm-alert-node-view")!;
     editor.dispatchEvent(new Event("compositionstart", { bubbles: true }));
-    alertView.dispatchEvent(
-      new MouseEvent("dblclick", { bubbles: true, cancelable: true }),
-    );
+    alertView
+      .querySelector<HTMLButtonElement>(".mm-alert-details-action")!
+      .click();
     expect(
       root
         .querySelector<HTMLDialogElement>(".mm-profile-feature-dialog")!

@@ -28,6 +28,8 @@ import warningTriangleAsset from "../../assets/warning-triangle.svg?raw";
 import alertOctagonAsset from "../../assets/alert-octagon.svg?raw";
 import alertCommentAsset from "../../assets/alert-comment.svg?raw";
 import { parseAlertSource } from "./alerts";
+import { detailsTagRanges, parseDetailsSource } from "./details";
+export { parseDetailsSource } from "./details";
 export {
   alertSourceWithBody,
   alertSourceWithType,
@@ -328,6 +330,44 @@ const baseNodes: Record<string, NodeSpec> = {
   },
   raw_block: rawBlockSpec,
   raw_inline: rawInlineSpec,
+  details: {
+    group: "block",
+    content: "block+",
+    defining: true,
+    isolating: true,
+    attrs: {
+      source: { default: "" },
+      kind: { default: "details" },
+      summarySource: { default: "" },
+      sourceProfile: { default: "github" },
+    },
+    toDOM: (node) => [
+      "div",
+      {
+        "data-mm-details-source": serializeDetails(node),
+        "data-mm-details-profile": node.attrs.sourceProfile,
+      },
+      ["div", { contenteditable: "false" }, node.attrs.summarySource],
+      ["div", { "data-mm-details-content": "true" }, 0],
+    ],
+    parseDOM: [
+      {
+        tag: "div[data-mm-details-source]",
+        contentElement: "[data-mm-details-content]",
+        getAttrs: (dom) => {
+          const source =
+            (dom as HTMLElement).getAttribute("data-mm-details-source") ?? "";
+          return {
+            source,
+            summarySource: parseDetailsSource(source)?.summary ?? "",
+            sourceProfile:
+              (dom as HTMLElement).getAttribute("data-mm-details-profile") ??
+              "github",
+          };
+        },
+      },
+    ],
+  },
 };
 
 const marks: Record<string, MarkSpec> = {
@@ -455,6 +495,7 @@ type KnownNodeTypes = {
   hard_break: NodeType;
   raw_block: NodeType;
   raw_inline: NodeType;
+  details: NodeType;
   bullet_list: NodeType;
   ordered_list: NodeType;
   list_item: NodeType;
@@ -1714,28 +1755,22 @@ function detailsFenceRanges(source: string): DetailsRange[] {
 }
 
 function detectDetails(source: string): DetailsRange[] {
-  const fenceRanges = detailsFenceRanges(source);
-  const insideFence = (offset: number): boolean =>
-    fenceRanges.some((range) => offset >= range.start && offset < range.end);
   const ranges: DetailsRange[] = [];
   const stack: number[] = [];
-  const tags = /<\/?details\b[^>]*>/gi;
-  let match: RegExpExecArray | null;
-  while ((match = tags.exec(source)) != null) {
-    const offset = match.index;
-    if (insideFence(offset)) continue;
+  for (const tag of detailsTagRanges(source)) {
+    const offset = tag.start;
     const lineStart =
       Math.max(
         source.lastIndexOf("\n", offset),
         source.lastIndexOf("\r", offset),
       ) + 1;
     const prefix = source.slice(lineStart, offset);
-    if (!match[0]!.startsWith("</") && prefix.trim() !== "") continue;
-    if (match[0]!.startsWith("</")) {
+    if (!tag.closing && prefix.trim() !== "") continue;
+    if (tag.closing) {
       if (stack.length === 0) continue;
       const start = stack.pop()!;
       if (stack.length === 0) {
-        let end = offset + match[0]!.length;
+        let end = tag.end;
         end += source.slice(end).match(/^(?:\r\n|\n|\r)/)?.[0].length ?? 0;
         ranges.push({ start, end });
       }
@@ -1832,10 +1867,17 @@ function parseInternal(source: string, profile: Profile): MarkdownSnapshot {
       const detail = event.detail;
       const body = source.slice(detail.start, detail.end);
       const separator = source.slice(detail.end, nextStart);
-      const node = nodeTypes.raw_block.create({
-        source: body,
-        kind: "details",
-      });
+      const parts = parseDetailsSource(body);
+      const node = parts
+        ? nodeTypes.details.create(
+            {
+              source: body,
+              summarySource: parts.summary,
+              sourceProfile: profile,
+            },
+            detailsBodySnapshot(parts.body, profile).doc.content,
+          )
+        : nodeTypes.raw_block.create({ source: body, kind: "details" });
       nodes.push(node);
       blocks.push({
         node,
@@ -2232,6 +2274,61 @@ function serializeTableCell(node: PMNode): string {
   return value || " ";
 }
 
+// Details keep a nested snapshot so an edited paragraph does not regenerate
+// untouched code, unknown HTML, nested Details, or their original separators.
+const detailsBodySnapshots = new Map<string, MarkdownSnapshot>();
+
+function detailsBodySnapshot(
+  source: string,
+  profile: Profile,
+): MarkdownSnapshot {
+  const key = `${profile}\u0000${source}`;
+  let snapshot = detailsBodySnapshots.get(key);
+  if (!snapshot) {
+    snapshot = parseInternal(source, profile);
+    if (detailsBodySnapshots.size >= 64)
+      detailsBodySnapshots.delete(detailsBodySnapshots.keys().next().value!);
+    detailsBodySnapshots.set(key, snapshot);
+  }
+  return snapshot;
+}
+
+function serializeDetails(node: PMNode): string {
+  const source = String(node.attrs.source ?? "");
+  const parts = parseDetailsSource(source);
+  if (!parts) return source;
+  const snapshot = detailsBodySnapshot(
+    parts.body,
+    node.attrs.sourceProfile as Profile,
+  );
+  let body = node.content.eq(snapshot.doc.content)
+    ? parts.body
+    : serializeMarkdown(
+        schema.topNodeType.create(null, node.content),
+        snapshot,
+      );
+  if (
+    !node.content.eq(snapshot.doc.content) &&
+    !snapshot.blocks?.length &&
+    body
+  ) {
+    const ending = parts.body.includes("\r\n") ? "\r\n" : "\n";
+    // An empty body has no block snapshots. Retain its original whitespace,
+    // then give the first typed paragraph valid Markdown block boundaries.
+    const prefix = parts.body.endsWith(`${ending}${ending}`)
+      ? parts.body
+      : parts.body + `${ending}${ending}`;
+    body = prefix + body + `${ending}${ending}`;
+  }
+  return (
+    parts.beforeSummary +
+    String(node.attrs.summarySource ?? parts.summary) +
+    parts.afterSummary +
+    body +
+    parts.closing
+  );
+}
+
 function serializeBlock(node: PMNode, tableCell = false): string {
   switch (node.type.name) {
     case "paragraph":
@@ -2258,6 +2355,8 @@ function serializeBlock(node: PMNode, tableCell = false): string {
     }
     case "raw_block":
       return String(node.attrs.source ?? "").replace(/(?:\r\n|\n|\r)+$/, "");
+    case "details":
+      return serializeDetails(node).replace(/(?:\r\n|\n|\r)+$/, "");
     case "bullet_list":
       return childrenOf(node)
         .map((item) => serializeListItem(item, "- "))
@@ -2608,6 +2707,7 @@ function sourceMatches(
 }
 
 function normalisedRaw(node: PMNode): string {
+  if (node.type.name === "details") return serializeDetails(node);
   if (node.type.name === "raw_block" || node.type.name === "raw_inline")
     return String(node.attrs.source ?? "");
   return "";
@@ -2627,6 +2727,38 @@ function sourceNeedsExactCanonicalPreservation(source: string): boolean {
     /!\[[^\]]*\]\([^)]*\)\{(?:width|height)=/i.test(source) ||
     /:[a-zA-Z0-9_+-]+:/.test(source)
   );
+}
+
+/** An info-string edit must not reserialize code or its original fence. */
+function codeInfoOnlySource(
+  node: PMNode,
+  previous: MarkdownBlockSnapshot,
+): string | null {
+  if (
+    node.type.name !== "code_block" ||
+    previous.node.type !== node.type ||
+    !node.content.eq(previous.node.content)
+  )
+    return null;
+  const opening = previous.source.match(
+    /^( {0,3}(?:`{3,}|~{3,}))([^\r\n]*)(?:\r\n|\r|\n|$)/,
+  );
+  if (
+    !opening ||
+    opening[2]!.trim() !== String(previous.node.attrs.params ?? "")
+  )
+    return null;
+  const params = String(node.attrs.params ?? "");
+  if (
+    /[\r\n]/.test(params) ||
+    (opening[1]!.includes("`") && params.includes("`"))
+  )
+    return null;
+  const info = opening[2]!;
+  const leading = info.match(/^[\t ]*/)?.[0] ?? "";
+  const trailing = info.slice(leading.length).match(/[\t ]*$/)?.[0] ?? "";
+  const end = opening[1]!.length + info.length;
+  return opening[1] + leading + params + trailing + previous.source.slice(end);
 }
 
 export function serializeMarkdown(
@@ -2649,7 +2781,7 @@ export function serializeMarkdown(
       .map((node) => serializeBlock(node))
       .join("\n\n");
     const last = children[children.length - 1];
-    if (last?.type.name === "raw_block") {
+    if (last?.type.name === "raw_block" || last?.type.name === "details") {
       const rawEnding = lineBreakSuffix(String(last.attrs.source ?? ""));
       if (rawEnding) {
         const ending = rawEnding.includes("\r\n")
@@ -2695,10 +2827,19 @@ export function serializeMarkdown(
 
     const samePosition = blocks[index];
     const insertion = !samePosition || nextMatchedPrevious[index] === index;
+    const codeInfoSource =
+      !insertion && samePosition && codeInfoOnlySource(node, samePosition);
+    if (codeInfoSource) {
+      output += codeInfoSource;
+      continue;
+    }
     if (index > 0 && !output.endsWith(`${ending}${ending}`)) {
       output += output.endsWith(ending) ? ending : `${ending}${ending}`;
     }
-    const generated = toLineEnding(serializeBlock(node), ending);
+    const generated =
+      node.type.name === "details"
+        ? serializeBlock(node)
+        : toLineEnding(serializeBlock(node), ending);
     output += generated;
     if (!insertion && samePosition) {
       // Markdown-it's map includes the final line ending in a block body,
@@ -3268,6 +3409,19 @@ function renderNode(node: PMNode, state: RenderState): string {
       return "<hr>";
     case "code_block":
       return renderCodeBlock(node, state);
+    case "details": {
+      const parts = parseDetailsSource(String(node.attrs.source ?? ""));
+      const summary = renderInlineSource(
+        String(node.attrs.summarySource ?? ""),
+        state.profile,
+        state,
+      );
+      return `<details${parts?.open ? " open" : ""}><summary>${summary}</summary>${childrenOf(
+        node,
+      )
+        .map((child) => renderNode(child, state))
+        .join("\n")}</details>`;
+    }
     case "raw_inline":
       return renderRawInline(node, state);
     case "raw_block": {
@@ -3367,6 +3521,14 @@ function renderNode(node: PMNode, state: RenderState): string {
     default:
       return escapeHtml(node.textContent);
   }
+}
+
+/** Render summary source with the same sanitisation policy as the preview. */
+export function renderDetailsSummaryHtml(
+  source: string,
+  profile: Profile = "github",
+): string {
+  return renderInlineSource(source, profile);
 }
 
 function renderInlineSource(

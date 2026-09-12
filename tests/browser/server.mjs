@@ -1,8 +1,9 @@
 import http from "node:http";
 import { readFile } from "node:fs/promises";
 import { extname, resolve, sep } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import katex from "katex";
+import { build } from "esbuild";
 
 const repository = resolve(fileURLToPath(new URL("../..", import.meta.url)));
 const vscodeMarkdownCss =
@@ -19,6 +20,38 @@ const contentTypes = {
 };
 const browserContentSecurityPolicy =
   "default-src 'none'; img-src 'self' https: data:; style-src 'self'; style-src-elem 'self'; style-src-attr 'unsafe-inline'; font-src 'self' data:; script-src 'self' 'nonce-mm-test-nonce'; connect-src 'none'";
+
+const documentFixtures = new Map([
+  ["common-test.md", "commonmark"],
+  ["github-test.md", "github"],
+  ["github-test-class-B.md", "github"],
+  ["gitlab-test.md", "gitlab"],
+  ["gitlab-test-class-B.md", "gitlab"],
+]);
+let nativeRenderer;
+
+async function renderDocumentFixture(filename) {
+  const profile = documentFixtures.get(filename);
+  if (!profile) throw new Error("Unknown document fixture");
+  // The native extension contribution uses this same safe core renderer.
+  // Bundle lazily so existing static spacing fixtures retain their fast start.
+  if (!nativeRenderer) {
+    const outfile = resolve(repository, "output/playwright/native-core.cjs");
+    nativeRenderer = build({
+      entryPoints: [resolve(repository, "src/core/index.ts")],
+      outfile,
+      bundle: true,
+      platform: "node",
+      format: "cjs",
+      target: "node18",
+      legalComments: "none",
+      loader: { ".svg": "text" },
+    }).then(() => import(pathToFileURL(outfile).href));
+  }
+  const core = await nativeRenderer;
+  const source = await readFile(resolve(repository, "md", filename), "utf8");
+  return core.renderMarkdown(source, profile);
+}
 
 const nativeMermaidSources = [
   [
@@ -250,6 +283,19 @@ const server = http.createServer(async (request, response) => {
         html = html.replace(
           /<main class="markdown-body" data-testid="native-content">[\s\S]*?<\/main>/,
           `<main class="markdown-body" data-testid="native-content">${spacing}</main>`,
+        );
+      }
+      if (
+        pathname === "/native.html" &&
+        requestUrl.searchParams.get("fixture") === "document"
+      ) {
+        const rendered = await renderDocumentFixture(
+          requestUrl.searchParams.get("file"),
+        );
+        html = html.replace(
+          /<main class="markdown-body" data-testid="native-content">[\s\S]*?<\/main>/,
+          () =>
+            `<main class="markdown-body" data-testid="native-content">${rendered}</main>`,
         );
       }
       body = Buffer.from(html, "utf8");

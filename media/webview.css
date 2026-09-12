@@ -1333,3 +1333,86 @@ body.vscode-high-contrast-light .mm-empty-line-insert {
     height: 20px;
   }
 }
+
+/* Rich-only controls live in NodeViews; shared/native preview CSS stays inert. */
+.mm-alert-type-trigger,
+.mm-block-source-trigger,
+.mm-details-summary,
+.mm-details-toggle {
+  font: inherit;
+  color: inherit;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  text-align: left;
+}
+.mm-alert-type-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5em;
+}
+.mm-alert-type-picker {
+  display: flex;
+  align-items: center;
+  gap: 0.5em;
+  margin-bottom: 0.5em;
+}
+.mm-alert-type-picker[hidden],
+.mm-details-body[hidden],
+.mm-details-summary-input[hidden],
+.mm-details-summary[hidden] {
+  display: none;
+}
+.mm-block-source-trigger {
+  display: block;
+  font-size: 0.85em;
+  color: var(--vscode-descriptionForeground);
+  margin-bottom: 0.35em;
+}
+.mm-alert-type-trigger:focus-visible,
+.mm-block-source-trigger:focus-visible,
+.mm-details-toggle:focus-visible,
+.mm-details-summary:focus-visible,
+.mm-details-summary-input:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: 3px;
+}
+.mm-details-node {
+  margin: 1em 0;
+  padding: 0.6em 0.85em;
+  border: 1px solid var(--mm-border);
+  border-radius: 5px;
+  background: var(--mm-code-background);
+}
+.mm-details-header {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5em;
+  font-weight: 650;
+}
+.mm-details-toggle {
+  flex: 0 0 1em;
+}
+.mm-details-summary {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.mm-details-summary-input {
+  flex: 1;
+  width: 100%;
+  min-width: 0;
+  font: inherit;
+  color: var(--vscode-input-foreground);
+  background: var(--vscode-input-background);
+  border: 1px solid var(--vscode-input-border, transparent);
+}
+.mm-details-body {
+  margin-top: 0.65em;
+}
+.mm-details-body > :last-child {
+  margin-bottom: 0;
+}
+.mm-details-body > :first-child {
+  margin-top: 0;
+}

@@ -1,10 +1,17 @@
 import { Decoration, DecorationSet } from "prosemirror-view";
-import { Plugin, PluginKey } from "prosemirror-state";
+import { NodeSelection, Plugin, PluginKey } from "prosemirror-state";
 import type { EditorState } from "prosemirror-state";
 import type { Node as PMNode } from "prosemirror-model";
 import type { EditorView, NodeView } from "prosemirror-view";
 import * as core from "../core/index";
-import { alertSourceWithBody, parseAlertSource } from "../core/alerts";
+import {
+  ALERT_TYPES,
+  alertSourceWithBody,
+  alertSourceWithType,
+  parseAlertSource,
+  type AlertType,
+} from "../core/alerts";
+import { blockSourceEditor } from "./blockSourceEditing";
 import {
   escapeHtml,
   highlightCodeSpans,
@@ -315,12 +322,18 @@ export type AlertHistoryCommand = "undo" | "redo";
 export type AlertBoundaryExit = (
   direction: AlertBoundaryDirection,
   position: number,
+  event?: KeyboardEvent,
 ) => boolean;
 export type AlertEditRequest = (
   position: number,
   returnFocus?: HTMLElement,
 ) => void;
 export const ALERT_LOCAL_INPUT_META = "markdown-mint-alert-local-input";
+
+export interface BlockEditingOptions {
+  canEdit?: () => boolean;
+  composition?: (active: boolean) => void;
+}
 
 function dependsOnDocumentContext(node: PMNode): boolean {
   if (node.type.name !== "raw_block" && node.type.name !== "raw_inline")
@@ -383,6 +396,8 @@ export function createRenderedNodeView(
   view: EditorView,
   getPos: (() => number | undefined) | undefined,
   getProfile?: () => Profile,
+  onEditRequest?: AlertEditRequest,
+  options: BlockEditingOptions = {},
 ): NodeView {
   let current = node;
   let lastDocument = view.state.doc;
@@ -445,6 +460,27 @@ export function createRenderedNodeView(
     appendGeneratedHtml(dom, html);
     dom.hidden = false;
     updateRenderedBlockLayout(current, dom);
+    const sourceEditor = blockSourceEditor(current);
+    if (sourceEditor && onEditRequest) {
+      const header = document.createElement("button");
+      header.type = "button";
+      header.className = "mm-block-source-trigger";
+      header.dataset.mmBlockSource = sourceEditor.kind;
+      header.textContent = sourceEditor.kind === "math" ? "Math" : "Mermaid";
+      header.setAttribute("aria-label", `Edit ${header.textContent} source`);
+      header.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        const position = positionOf();
+        if (
+          position !== undefined &&
+          view.editable &&
+          (options.canEdit?.() ?? true)
+        )
+          onEditRequest(position, header);
+      });
+      dom.prepend(header);
+    }
     updateEmptyBoundaryMarkers();
     enhancer = enhanceRenderedContent(dom);
   };
@@ -517,6 +553,7 @@ export function createAlertNodeView(
   onBoundaryExit?: AlertBoundaryExit,
   onHistoryCommand?: (command: AlertHistoryCommand) => boolean,
   onEditRequest?: AlertEditRequest,
+  options: BlockEditingOptions = {},
 ): NodeView {
   let current = node;
   let lastDocument = view.state.doc;
@@ -525,6 +562,10 @@ export function createAlertNodeView(
   let bodyComposing = false;
   let disposed = false;
   let enhancer: RenderingEnhancer | undefined;
+  let savedBodySelection:
+    [number, number, "forward" | "backward" | "none"] | null = null;
+  const canEdit = (): boolean =>
+    !disposed && view.editable && (options.canEdit?.() ?? true);
 
   const dom = document.createElement("div");
   dom.className = "mm-rendered-node mm-alert-node-view";
@@ -543,12 +584,24 @@ export function createAlertNodeView(
   bodyEditor.setAttribute("placeholder", "Write alert content…");
   bodyEditor.setAttribute("spellcheck", "true");
   bodyEditor.rows = 1;
+  let resizeFrame: number | undefined;
+  let measuredWidth = -1;
+  const resizeObserver =
+    typeof ResizeObserver === "undefined"
+      ? undefined
+      : new ResizeObserver(() => {
+          const width = bodyEditor.clientWidth;
+          if (width === measuredWidth || disposed) return;
+          measuredWidth = width;
+          resizeBodyEditor();
+        });
 
   const resizeBodyEditor = (): void => {
     bodyEditor.style.height = "auto";
     const height = Math.max(bodyEditor.scrollHeight, 36);
     bodyEditor.style.height = `${height}px`;
   };
+  resizeObserver?.observe(dom);
 
   const sourceFor = (value: PMNode): string =>
     String(value.attrs.source ?? value.textContent ?? "");
@@ -562,6 +615,7 @@ export function createAlertNodeView(
   };
 
   const updateSource = (): void => {
+    if (!canEdit()) return;
     const position = positionOf();
     if (position === undefined) return;
     const currentNode = view.state.doc.nodeAt(position);
@@ -621,7 +675,105 @@ export function createAlertNodeView(
     if (alert && title) {
       const parts = parseAlertSource(sourceFor(current));
       if (bodyEditor.value !== parts.body) bodyEditor.value = parts.body;
-      alert.replaceChildren(title, bodyEditor);
+      const trigger = document.createElement("button");
+      trigger.type = "button";
+      trigger.className = "mm-alert-type-trigger";
+      trigger.setAttribute("aria-label", "Change Alert type");
+      trigger.setAttribute("aria-expanded", "false");
+      trigger.append(...Array.from(title.childNodes));
+      title.append(trigger);
+      const picker = document.createElement("div");
+      picker.className = "mm-alert-type-picker";
+      picker.hidden = true;
+      const select = document.createElement("select");
+      select.className = "mm-alert-type-select";
+      select.setAttribute("aria-label", "Alert type");
+      for (const type of ALERT_TYPES) {
+        const option = document.createElement("option");
+        option.value = type;
+        option.textContent = type;
+        select.append(option);
+      }
+      select.value = parts.marker.toUpperCase();
+      let startSource = sourceFor(current);
+      let sessionNode: PMNode | null = null;
+      const restoreBody = (): void => {
+        if (!bodyEditor.isConnected) return;
+        bodyEditor.focus({ preventScroll: true });
+        if (savedBodySelection)
+          bodyEditor.setSelectionRange(...savedBodySelection);
+      };
+      const openPicker = (): void => {
+        if (!canEdit() || bodyComposing) return;
+        const position = positionOf();
+        sessionNode =
+          position === undefined ? null : view.state.doc.nodeAt(position);
+        if (sessionNode) startSource = sourceFor(sessionNode);
+        savedBodySelection = [
+          bodyEditor.selectionStart,
+          bodyEditor.selectionEnd,
+          bodyEditor.selectionDirection,
+        ];
+        picker.hidden = false;
+        trigger.setAttribute("aria-expanded", "true");
+        select.focus();
+      };
+      trigger.addEventListener("click", openPicker);
+      select.addEventListener("change", () => {
+        if (!canEdit() || !ALERT_TYPES.includes(select.value as AlertType))
+          return;
+        const position = positionOf();
+        const target =
+          position === undefined ? null : view.state.doc.nodeAt(position);
+        if (
+          !target ||
+          target !== sessionNode ||
+          sourceFor(target) !== startSource
+        )
+          return;
+        const source = alertSourceWithType(
+          startSource,
+          select.value as AlertType,
+        );
+        if (source !== startSource)
+          view.dispatch(
+            view.state.tr.setNodeMarkup(position!, undefined, {
+              ...target.attrs,
+              source,
+            }),
+          );
+        picker.hidden = true;
+        trigger.setAttribute("aria-expanded", "false");
+        restoreBody();
+      });
+      picker.addEventListener("keydown", (event) => {
+        if (
+          event.key !== "Escape" ||
+          event.isComposing ||
+          event.keyCode === 229
+        )
+          return;
+        event.preventDefault();
+        picker.hidden = true;
+        trigger.setAttribute("aria-expanded", "false");
+        restoreBody();
+      });
+      picker.append(select);
+      if (onEditRequest) {
+        const advanced = document.createElement("button");
+        advanced.type = "button";
+        advanced.className = "mm-alert-details-action";
+        advanced.textContent = "Edit source…";
+        advanced.addEventListener("click", () => {
+          const position = positionOf();
+          if (position === undefined || !canEdit()) return;
+          picker.hidden = true;
+          trigger.setAttribute("aria-expanded", "false");
+          onEditRequest(position, bodyEditor);
+        });
+        picker.append(advanced);
+      }
+      alert.replaceChildren(title, picker, bodyEditor);
       resizeBodyEditor();
       if (bodyEditorHadFocus) {
         bodyEditor.focus({ preventScroll: true });
@@ -637,22 +789,32 @@ export function createAlertNodeView(
   };
 
   bodyEditor.addEventListener("mousedown", (event) => event.stopPropagation());
-  dom.addEventListener("dblclick", (event) => {
-    if (!onEditRequest || bodyComposing) return;
+  bodyEditor.addEventListener("focus", () => {
     const position = positionOf();
-    if (position === undefined) return;
-    event.preventDefault();
-    event.stopPropagation();
-    onEditRequest(position, bodyEditor);
+    if (
+      position !== undefined &&
+      view.state.doc.nodeAt(position)?.type.name === "raw_block" &&
+      !(
+        view.state.selection instanceof NodeSelection &&
+        view.state.selection.from === position
+      )
+    )
+      view.dispatch(
+        view.state.tr.setSelection(
+          NodeSelection.create(view.state.doc, position),
+        ),
+      );
   });
   // NodeView stopEvent handling can keep the editor-level composition state
   // from seeing events from this native textarea. Track the textarea itself so
   // a synthetic/native IME event cannot trigger alert boundary navigation.
   bodyEditor.addEventListener("compositionstart", () => {
     bodyComposing = true;
+    options.composition?.(true);
   });
   bodyEditor.addEventListener("compositionend", () => {
     bodyComposing = false;
+    options.composition?.(false);
   });
   // The editor's global keymap handles Enter for ProseMirror blocks. Keep the
   // alert textarea's native newline behavior by stopping the event before it
@@ -662,7 +824,7 @@ export function createAlertNodeView(
       event.stopPropagation();
       return;
     }
-    if (event.isComposing || bodyComposing) return;
+    if (event.isComposing || bodyComposing || event.keyCode === 229) return;
     const modifier = event.ctrlKey || event.metaKey;
     if (modifier && !event.altKey) {
       const key = event.key.toLowerCase();
@@ -684,20 +846,14 @@ export function createAlertNodeView(
       return;
     if (bodyEditor.selectionStart !== bodyEditor.selectionEnd) return;
     const direction =
-      event.key === "ArrowRight"
+      event.key === "ArrowRight" || event.key === "ArrowDown"
         ? "after"
-        : event.key === "ArrowLeft"
+        : event.key === "ArrowLeft" || event.key === "ArrowUp"
           ? "before"
           : null;
     if (!direction) return;
     const position = positionOf();
-    if (
-      position === undefined ||
-      (direction === "after"
-        ? bodyEditor.selectionEnd !== bodyEditor.value.length
-        : bodyEditor.selectionStart !== 0) ||
-      !onBoundaryExit?.(direction, position)
-    )
+    if (position === undefined || !onBoundaryExit?.(direction, position, event))
       return;
     event.preventDefault();
     event.stopPropagation();
@@ -708,6 +864,12 @@ export function createAlertNodeView(
   });
 
   render();
+  resizeFrame = bodyEditor.ownerDocument.defaultView?.requestAnimationFrame(
+    () => {
+      resizeFrame = undefined;
+      if (!disposed) resizeBodyEditor();
+    },
+  );
 
   return {
     dom,
@@ -763,6 +925,9 @@ export function createAlertNodeView(
     ignoreMutation: () => true,
     destroy: () => {
       disposed = true;
+      resizeObserver?.disconnect();
+      if (resizeFrame !== undefined)
+        bodyEditor.ownerDocument.defaultView?.cancelAnimationFrame(resizeFrame);
       enhancer?.dispose();
       enhancer = undefined;
     },
