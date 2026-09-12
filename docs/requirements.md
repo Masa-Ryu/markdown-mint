@@ -461,6 +461,51 @@ The 0.0.5 and earlier evidence above remains historical.
   placeholders. Manual OS IME candidate-window and zoom checks remain real
   VS Code checks.
 
+## 0.0.32 Rich Editor color-literal authoring aid
+
+- In the Mint Rich Editor, a standalone six-digit RGB literal matching
+  `#[0-9A-Fa-f]{6}` is displayed with that exact value as its text color. The
+  original spelling and case remain unchanged in the ProseMirror document and
+  serialized Markdown.
+- The authoring aid is a display-only `Decoration.inline` in the existing
+  rendering plugin. It adds no schema mark or AST data, rebuilds with the
+  existing document-change lifecycle, and maps its ranges without rescanning
+  on selection-only transactions.
+- ASCII letters, digits, and underscore are token characters, so embedded
+  substrings such as `abc#ff0000` and `#ff0000abc` are not decorated. Japanese
+  and other non-ASCII prose can directly surround a literal.
+- Paragraphs, headings, blockquotes, lists, table cells, strong, emphasis, and
+  strike text are supported consistently in CommonMark, GitHub, and GitLab
+  profiles. Inline code, fenced code blocks, link text, and raw nodes are
+  intentionally excluded.
+- Dedicated Preview, native Markdown Preview, the Source editor, and Alert
+  body textareas are unchanged. No contrast correction, background, badge,
+  swatch, border, underline, or font-weight styling is added.
+- Automated coverage verifies accepted and rejected literals, supported and
+  excluded contexts, live add/remove/color updates, selection-only mapping,
+  Undo/Redo, exact source round trips, all three profiles, strict style input,
+  and coexistence with heading, footnote, and syntax-highlight decorations.
+- Final automated validation passed TypeScript compilation and all 364 unit
+  tests across 26 files. Formatting passed; lint reported zero errors and the
+  existing 33 test-suite `any` warnings. The native Extension Development Host
+  acceptance run exited successfully.
+- The real browser regression suite passed 37 Rich Editor/Dedicated Preview
+  cases and 37 native-preview fixture cases. All five required Markdown
+  fixtures rendered visibly under their matching profile with their source
+  unchanged and no unsolicited edit message.
+- Light- and dark-theme browser inspection confirmed the exact computed colors
+  for red, green, blue, mixed-case, numeric, and bold literals. Inline code,
+  link text, and fenced code remained undecorated; the Dedicated Preview had no
+  color-literal decoration, source text was byte-for-byte unchanged, and the
+  color fixture produced no CSP violation. Screenshots were captured under
+  ignored `output/playwright/` test output.
+- A focused scan benchmark measured a 0.05 ms median for the 48,767-byte
+  long-lines fixture and 5.23 ms for the 434,328-byte, 40,000-cell table
+  fixture (20 runs each). Both fixtures remained editable and Undo restored
+  their exact source in the real browser harness.
+- Packaging produced the verified 0.0.32 VSIX with 96 files (4.73 MB), including
+  the bundled formatter and updated Webview implementation.
+
 ## Explicit limits
 
 Paste/drop image asset copying is optional follow-up work. Native IME and visual
