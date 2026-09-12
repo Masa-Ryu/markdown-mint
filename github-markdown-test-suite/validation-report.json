@@ -1,0 +1,169 @@
+{
+  "date": "2026-09-11",
+  "status": "static_and_local_structural_checks_passed",
+  "live_github_render_verified": false,
+  "extension_ui_verified": false,
+  "parser": {
+    "name": "markdown-it-py",
+    "version": "4.2.0",
+    "preset": "commonmark",
+    "enabled_rules": [
+      "table",
+      "strikethrough"
+    ],
+    "maxNesting": 200,
+    "scope": "structural checking only, not GitHub post-processing, math, diagrams, emoji or footnotes"
+  },
+  "observations": [
+    {
+      "name": "local_parser_depth_limit",
+      "default_maxNesting": 20,
+      "table_count_at_default_limit": 0,
+      "table_count_at_validation_limit": 12,
+      "note": "12 nested list levels exhaust the default parser nesting allowance in this local configuration. This is not a GitHub compatibility assertion."
+    }
+  ],
+  "checks": [
+    {
+      "name": "LARGE table dimensions",
+      "status": "passed",
+      "details": {
+        "data_rows": 500,
+        "columns": 12,
+        "data_cells": 6000
+      }
+    },
+    {
+      "name": "WIDE table dimensions",
+      "status": "passed",
+      "details": {
+        "data_rows": 30,
+        "columns": 24,
+        "data_cells": 720
+      }
+    },
+    {
+      "name": "COORD table dimensions",
+      "status": "passed",
+      "details": {
+        "data_rows": 40,
+        "columns": 12,
+        "data_cells": 480
+      }
+    },
+    {
+      "name": "Optional stress table dimensions",
+      "status": "passed",
+      "details": {
+        "data_rows": 2000,
+        "columns": 20,
+        "data_cells": 40000
+      }
+    },
+    {
+      "name": "Main fixture table count",
+      "status": "passed",
+      "details": 12
+    },
+    {
+      "name": "Main fenced code blocks have valid closing fences",
+      "status": "passed",
+      "details": 19
+    },
+    {
+      "name": "Case IDs and final paragraph",
+      "status": "passed",
+      "details": {
+        "cases": 31,
+        "final_sentinel_outside_code": true
+      }
+    },
+    {
+      "name": "JSON fences parse",
+      "status": "passed",
+      "details": {
+        "json": 1,
+        "geojson": 1,
+        "topojson": 1
+      }
+    },
+    {
+      "name": "GeoJSON and TopoJSON closed rings",
+      "status": "passed",
+      "details": {
+        "geometries_agree": true,
+        "coordinates_in_range": true
+      }
+    },
+    {
+      "name": "ASCII STL topology",
+      "status": "passed",
+      "details": {
+        "faces": 4,
+        "undirected_edges": 6,
+        "watertight": true,
+        "outward_normals": true,
+        "signed_volume": 1333.3333333333333
+      }
+    },
+    {
+      "name": "Relative resource targets exist",
+      "status": "passed",
+      "details": [
+        "README.md",
+        "assets/sample space.png",
+        "assets/sample-dark.png",
+        "assets/sample.gif",
+        "assets/sample.jpg",
+        "assets/sample.png",
+        "assets/sample.svg",
+        "assets/target.md",
+        "assets/wide.png",
+        "github-context-test.md",
+        "github-negative-test.md",
+        "github-test.md"
+      ]
+    },
+    {
+      "name": "Main internal navigation targets",
+      "status": "passed",
+      "details": 32
+    },
+    {
+      "name": "Whitespace, encodings, graphemes and real EOF fixtures",
+      "status": "passed",
+      "details": {
+        "crlf": true,
+        "bom": true,
+        "no_final_newline_files": 4,
+        "two_space_break": true,
+        "combining_character": true,
+        "zero_width_space": true,
+        "unclosed_fence_to_eof": true
+      }
+    },
+    {
+      "name": "Clipboard TSV dimensions and empty cells",
+      "status": "passed",
+      "details": {
+        "rows": 3,
+        "columns": 4
+      }
+    },
+    {
+      "name": "Negative table examples match structural expectations",
+      "status": "passed",
+      "details": {
+        "mismatched_header": "not a table",
+        "body_missing_cell": "empty",
+        "body_excess_cell": "not displayed"
+      }
+    }
+  ],
+  "main_file": {
+    "bytes": 132817,
+    "lines": 1619,
+    "case_count": 31,
+    "table_count": 12
+  }
+}

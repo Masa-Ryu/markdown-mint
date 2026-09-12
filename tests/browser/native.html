@@ -3,11 +3,27 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src 'self' https: data:; style-src 'self'; style-src-elem 'self'; style-src-attr 'unsafe-inline'; font-src 'self' data:; script-src 'self' 'nonce-mm-test-nonce'; connect-src 'none';">
+  <script nonce="mm-test-nonce">
+    window.__markdownMintCspViolations = [];
+    document.addEventListener('securitypolicyviolation', event => {
+      window.__markdownMintCspViolations.push({
+        directive: event.effectiveDirective,
+        blockedURI: event.blockedURI
+      });
+      document.documentElement.dataset.mmCspViolationCount = String(window.__markdownMintCspViolations.length);
+      document.documentElement.dataset.mmCspLastDirective = event.effectiveDirective;
+      document.documentElement.setAttribute('data-mm-csp-last-blocked', String(event.blockedURI || 'unknown'));
+      document.documentElement.setAttribute('data-mm-csp-last-source', String(event.sourceFile || 'unknown'));
+      document.documentElement.setAttribute('data-mm-csp-last-sample', String(event.sample || 'unknown'));
+    });
+  </script>
   <!-- This is the native preview cascade: VS Code's stylesheet first, then
        the extension's shared preview contribution. -->
   <link rel="stylesheet" href="/__vscode__/markdown.css">
   <link rel="stylesheet" href="/media/document.css">
   <link rel="stylesheet" href="/dist/katex/katex.css">
+  <link rel="stylesheet" href="/tests/browser/native-theme.css">
 </head>
 <body>
   <main class="markdown-body" data-testid="native-content">
@@ -21,8 +37,11 @@
       <thead><tr><th>Name</th><th>値</th><th>空欄</th></tr></thead>
       <tbody><tr><td>A</td><td>日本語</td><td></td></tr></tbody>
     </table>
+    <!-- The server fills this marker for ?fixture=math with the same KaTeX
+         wrappers used by the extension's native Markdown renderer. -->
+    <!-- markdown-mint-math-fixture -->
   </main>
-  <script>
+  <script nonce="mm-test-nonce">
     window.__markdownMintNative = {
       metrics() {
         const content = document.querySelector('[data-testid="native-content"]');
@@ -35,6 +54,11 @@
           checkbox: content?.querySelector('li.task-list-item input')?.getBoundingClientRect().toJSON(),
           table: content?.querySelector('table')?.getBoundingClientRect().toJSON(),
           cells: Array.from(content?.querySelectorAll('th,td') ?? []).map(cell => cell.getBoundingClientRect().toJSON()),
+          math: {
+            blocks: content?.querySelectorAll('.mm-math-block').length ?? 0,
+            matrices: content?.querySelectorAll('.mm-math-block mtable').length ?? 0,
+            inline: content?.querySelectorAll('.mm-math-inline').length ?? 0,
+          },
           font: content ? getComputedStyle(content).fontFamily : '',
           size: content ? getComputedStyle(content).fontSize : '',
           line: content ? getComputedStyle(content).lineHeight : ''
@@ -42,6 +66,6 @@
       }
     };
   </script>
-  <script src="/dist/mermaid.js"></script>
+  <script nonce="mm-test-nonce" src="/dist/mermaid.js"></script>
 </body>
 </html>

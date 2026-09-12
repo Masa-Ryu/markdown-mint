@@ -20,6 +20,12 @@ function replaceTopLevel(
   return schema.topNodeType.create(null, children);
 }
 
+function childrenOf(node: PMNode): PMNode[] {
+  const children: PMNode[] = [];
+  node.forEach((child) => children.push(child));
+  return children;
+}
+
 describe("Markdown core", () => {
   it("parses common rich Markdown into the shared PM schema", () => {
     const snapshot = parseMarkdown(
@@ -164,6 +170,175 @@ describe("Markdown core", () => {
     expect(nestedHtml).toContain("Outer before");
     expect(nestedHtml).toContain("Inner body");
     expect(nestedHtml).toContain("Outer after");
+  });
+
+  it("keeps display math together when a line resembles a Setext underline", () => {
+    const source =
+      "$$\n\\sum_{n=1}^{100}\n\\frac{1}{n^2}\n=\n\\frac{\\pi^2}{6}\n$$\n";
+    const snapshot = parseMarkdown(source, "github");
+
+    expect(snapshot.doc.childCount).toBe(1);
+    expect(snapshot.doc.firstChild?.type.name).toBe("raw_block");
+    expect(snapshot.doc.firstChild?.attrs.kind).toBe("math-block");
+    expect(snapshot.doc.firstChild?.attrs.source).toBe(source);
+    expect(serializeMarkdown(snapshot.doc, snapshot)).toBe(source);
+    expect(renderMarkdown(source, "github")).toContain(
+      'class="mm-math mm-math-block"',
+    );
+  });
+
+  it("parses the complete multiline display and matrix stress cases", () => {
+    const source = `## 14. Math Stress Test
+
+Inline: $E = mc^2$
+
+Inline complex:
+
+$\\frac{-b \\pm \\sqrt{b^2 - 4ac}}{2a}$
+
+Block:
+
+$$
+\\sum_{n=1}^{100}
+\\frac{1}{n^2}
+=
+\\frac{\\pi^2}{6}
+$$
+
+Matrix:
+
+$$
+A =
+\\begin{bmatrix}
+1 & 2 & 3 \\\\
+4 & 5 & 6 \\\\
+7 & 8 & 9
+\\end{bmatrix}
+$$
+`;
+    const snapshot = parseMarkdown(source, "github");
+    const blocks = childrenOf(snapshot.doc).filter(
+      (node) => node.attrs.kind === "math-block",
+    );
+    const headings = childrenOf(snapshot.doc).filter(
+      (node) => node.type.name === "heading",
+    );
+
+    expect(blocks).toHaveLength(2);
+    expect(blocks[0]?.attrs.source).toContain("\n=\n");
+    expect(blocks[1]?.attrs.source).toContain("\\begin{bmatrix}");
+    expect(headings).toHaveLength(1);
+    expect(headings[0]?.attrs.level).toBe(2);
+    const html = renderMarkdown(source, "github");
+    expect(html.match(/katex-display/g) ?? []).toHaveLength(2);
+    expect(html).toContain("mtable");
+    expect(serializeMarkdown(snapshot.doc, snapshot)).toBe(source);
+  });
+
+  it("keeps adjacent display math, following prose, and Setext headings distinct", () => {
+    const source = "Title\n-----\n\n$$\na^2\n$$\n$$\nb^2\n$$\n\nAfter\n";
+    const snapshot = parseMarkdown(source, "github");
+    const children = childrenOf(snapshot.doc);
+    expect(children.map((node) => node.type.name)).toEqual([
+      "heading",
+      "raw_block",
+      "raw_block",
+      "paragraph",
+    ]);
+    expect(children[0]?.attrs.level).toBe(2);
+    expect(children[1]?.attrs.kind).toBe("math-block");
+    expect(children[2]?.attrs.kind).toBe("math-block");
+    expect(children[3]?.textContent).toBe("After");
+  });
+
+  it("preserves TeX escapes and excludes code or currency dollars", () => {
+    const source =
+      "`$code$` \\$5 and $x$ and $\\{x \\mid x > 0\\}$\n\n```markdown\n$x$\n$$\nnot math\n$$\n```\n";
+    const snapshot = parseMarkdown(source, "github");
+    const paragraph = snapshot.doc.firstChild!;
+    const inlineMath = childrenOf(paragraph).filter(
+      (node) => node.attrs.kind === "math_inline",
+    );
+    expect(inlineMath.map((node) => node.attrs.source)).toEqual([
+      "$x$",
+      "$\\{x \\mid x > 0\\}$",
+    ]);
+    expect(paragraph.textContent).toContain("$code$");
+    expect(snapshot.doc.child(1).type.name).toBe("code_block");
+    expect(snapshot.doc.child(1).textContent).toContain("$$");
+    expect(serializeMarkdown(snapshot.doc, snapshot)).toBe(source);
+  });
+
+  it("does not let an unclosed delimiter hide later Markdown", () => {
+    const source = "$$\nunclosed\n\n# Next heading\n\nVisible paragraph\n";
+    const snapshot = parseMarkdown(source, "github");
+    const children = childrenOf(snapshot.doc);
+    expect(children.some((node) => node.attrs.kind === "math-block")).toBe(
+      false,
+    );
+    expect(children.some((node) => node.type.name === "heading")).toBe(true);
+    expect(snapshot.doc.textContent).toContain("Visible paragraph");
+  });
+
+  it("keeps existing math fences available in every Markdown profile", () => {
+    for (const profile of ["github", "gitlab", "commonmark"] as const) {
+      const snapshot = parseMarkdown("```math\nx^2\n```\n", profile);
+      expect(snapshot.doc.childCount).toBe(1);
+      expect(snapshot.doc.firstChild?.type.name).toBe("raw_block");
+      expect(snapshot.doc.firstChild?.attrs.kind).toBe("math-block");
+      expect(renderMarkdown("```math\nx^2\n```\n", profile)).toContain(
+        "katex-display",
+      );
+    }
+  });
+
+  it("keeps nested quote, list, table, and details parsing unchanged", () => {
+    const source =
+      "> $$\n> quoted\n> $$\n\n- $$\n  listed\n  $$\n\n| A | B |\n| --- | --- |\n| 1 | 2 |\n\n<details>\n\n$$\ninside\n$$\n\n</details>\n";
+    const snapshot = parseMarkdown(source, "github");
+    const children = childrenOf(snapshot.doc);
+    expect(children[0]?.type.name).toBe("blockquote");
+    expect(children[0]?.textContent).toContain("$$");
+    expect(children[1]?.type.name).toBe("bullet_list");
+    expect(children[1]?.textContent).toContain("$$");
+    expect(children[2]?.type.name).toBe("table");
+    expect(children[3]?.attrs.kind).toBe("details");
+    expect(renderMarkdown(source, "github")).toContain("inside");
+  });
+
+  it("preserves inline math before Markdown-it can reinterpret its contents", () => {
+    const source =
+      "Inline $a * b$ and escaped $x\\$y$; code `$z$`; unclosed $nope.\n";
+    const snapshot = parseMarkdown(source, "github");
+    const paragraph = snapshot.doc.firstChild!;
+    const math = childrenOf(paragraph).filter(
+      (node) =>
+        node.type.name === "raw_inline" && node.attrs.kind === "math_inline",
+    );
+
+    expect(math.map((node) => node.attrs.source)).toEqual([
+      "$a * b$",
+      "$x\\$y$",
+    ]);
+    expect(
+      childrenOf(paragraph).some(
+        (node) => node.type.name === "text" && node.textContent.includes("$z$"),
+      ),
+    ).toBe(true);
+    expect(serializeMarkdown(snapshot.doc, snapshot)).toBe(source);
+  });
+
+  it("does not recognize an unmatched display delimiter or code math as math", () => {
+    const source = "$$\nunclosed\n\n```markdown\n$x$\n```\n";
+    const snapshot = parseMarkdown(source, "github");
+    const nodes: PMNode[] = [];
+    snapshot.doc.forEach((node) => nodes.push(node));
+
+    expect(nodes[0]?.type.name).not.toBe("raw_block");
+    expect(nodes[0]?.type.name).toBe("paragraph");
+    expect(nodes[1]?.type.name).toBe("code_block");
+    expect(nodes[1]?.textContent).toBe("$x$");
+    expect(nodes.some((node) => node.attrs.kind === "math-block")).toBe(false);
   });
 
   it("keeps terminal line endings on raw atoms in canonical serialization", () => {

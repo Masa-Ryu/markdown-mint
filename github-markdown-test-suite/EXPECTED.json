@@ -1,0 +1,422 @@
+{
+  "verified_against_documentation_on": "2026-09-11",
+  "target": "GitHub.com repository Markdown file unless explicitly marked context/observational",
+  "live_github_render_verified": false,
+  "extension_interactions_executed": false,
+  "cases": [
+    {
+      "id": "GH-TEXT-01",
+      "file": "github-test.md",
+      "title": "文字装飾",
+      "expected": "装飾の開始・終了位置を保持する。単一チルダは現行GitHub Docs掲載の打ち消し線も確認する。kbdの細かな外観はGitHubとの比較観察対象。",
+      "sources": [
+        "https://docs.github.com/en/get-started/writing-on-github/getting-started-with-writing-and-formatting-on-github/basic-writing-and-formatting-syntax",
+        "https://github.github.com/gfm/"
+      ],
+      "classification": "documented"
+    },
+    {
+      "id": "GH-HEAD-01",
+      "file": "github-test.md",
+      "title": "見出しと重複アンカー",
+      "expected": "H1〜H6、Setext見出し、重複見出しと独自アンカーを区別する。GitHubのOutlineはサイトUIであり本文への自動TOC挿入とは別。",
+      "sources": [
+        "https://docs.github.com/en/get-started/writing-on-github/getting-started-with-writing-and-formatting-on-github/basic-writing-and-formatting-syntax",
+        "https://github.github.com/gfm/"
+      ],
+      "classification": "documented"
+    },
+    {
+      "id": "GH-BREAK-01",
+      "file": "github-test.md",
+      "title": "改行と水平線",
+      "expected": ".mdでは通常のソース改行は強制改行ではない。行末二スペース・バックスラッシュ・brは改行として扱う。末尾空白を整形で消す場合は同じ意味を保つ代替記法が必要。",
+      "sources": [
+        "https://docs.github.com/en/get-started/writing-on-github/getting-started-with-writing-and-formatting-on-github/basic-writing-and-formatting-syntax",
+        "https://github.github.com/gfm/"
+      ],
+      "classification": "documented"
+    },
+    {
+      "id": "GH-LINK-01",
+      "file": "github-test.md",
+      "title": "リンクと参照定義",
+      "expected": "明示リンク・標準URL自動リンク・メール・相対リンク・参照形式を確認する。Issue番号の自動解決とは別。参照定義を未使用の不要テキストと誤認して消さない。",
+      "sources": [
+        "https://docs.github.com/en/get-started/writing-on-github/getting-started-with-writing-and-formatting-on-github/basic-writing-and-formatting-syntax",
+        "https://docs.github.com/en/get-started/writing-on-github/working-with-advanced-formatting/autolinked-references-and-urls",
+        "https://github.github.com/gfm/"
+      ],
+      "classification": "documented"
+    },
+    {
+      "id": "GH-IMAGE-01",
+      "file": "github-test.md",
+      "title": "画像と相対パス",
+      "expected": "同梱画像が表示され、相対パス・alt・title・画像リンクを保存後も保持する。寸法と折り返しは同一幅のGitHub表示と比較する。",
+      "sources": [
+        "https://docs.github.com/en/get-started/writing-on-github/getting-started-with-writing-and-formatting-on-github/basic-writing-and-formatting-syntax",
+        "https://docs.github.com/en/get-started/writing-on-github/working-with-advanced-formatting/attaching-files"
+      ],
+      "classification": "documented"
+    },
+    {
+      "id": "GH-IMAGE-02",
+      "file": "github-test.md",
+      "title": "pictureと画像のHTML属性",
+      "expected": "picture要素を消さない。テーマ選択とwidth/height属性の実効値はGitHubのテーマ設定・サニタイズ後の表示で比較する。GitLab式の後置属性とは混同しない。",
+      "sources": [
+        "https://docs.github.com/en/get-started/writing-on-github/getting-started-with-writing-and-formatting-on-github/basic-writing-and-formatting-syntax",
+        "https://github.com/github/markup"
+      ],
+      "classification": "documented-element-observe-attributes"
+    },
+    {
+      "id": "GH-LIST-01",
+      "file": "github-test.md",
+      "title": "リストと開始番号",
+      "expected": "リストの種類、開始番号、tight/looseによる段落構造、リスト内引用・コードの所属が変わらない。",
+      "sources": [
+        "https://docs.github.com/en/get-started/writing-on-github/getting-started-with-writing-and-formatting-on-github/basic-writing-and-formatting-syntax",
+        "https://github.github.com/gfm/"
+      ],
+      "classification": "documented"
+    },
+    {
+      "id": "GH-LIST-02",
+      "file": "github-test.md",
+      "title": "12階層のネスト",
+      "expected": "各子項目が一つ上の項目に所属する。インデント・ドラッグ移動の操作試験で階層が意図せず変化しない。",
+      "sources": [
+        "https://github.github.com/gfm/"
+      ],
+      "classification": "documented-syntax-editor-stress"
+    },
+    {
+      "id": "GH-TASK-01",
+      "file": "github-test.md",
+      "title": "タスクリスト",
+      "expected": "リスト先頭の有効なマーカーをチェックボックスとして表示する。編集時にクリックして状態を変更する機能は、この拡張の操作要件として別途判定する。",
+      "sources": [
+        "https://docs.github.com/en/get-started/writing-on-github/getting-started-with-writing-and-formatting-on-github/basic-writing-and-formatting-syntax",
+        "https://docs.github.com/en/get-started/writing-on-github/working-with-advanced-formatting/about-tasklists",
+        "https://github.github.com/gfm/"
+      ],
+      "classification": "documented"
+    },
+    {
+      "id": "GH-QUOTE-01",
+      "file": "github-test.md",
+      "title": "引用と複合ブロック",
+      "expected": "引用内の段落・リスト・表・コードと、多重引用の所属を保持する。",
+      "sources": [
+        "https://github.github.com/gfm/"
+      ],
+      "classification": "documented"
+    },
+    {
+      "id": "GH-ALERT-01",
+      "file": "github-test.md",
+      "title": "5種類のAlerts",
+      "expected": "NOTE/TIP/IMPORTANT/WARNING/CAUTIONの5種類を独立したトップレベル要素として確認する。ここでは網羅試験のため5件を掲載する。",
+      "sources": [
+        "https://docs.github.com/en/get-started/writing-on-github/getting-started-with-writing-and-formatting-on-github/basic-writing-and-formatting-syntax"
+      ],
+      "classification": "documented"
+    },
+    {
+      "id": "GH-CODE-01",
+      "file": "github-test.md",
+      "title": "インラインコードの境界",
+      "expected": "バッククォートの区切り長を保持し、内部を装飾やリンクへ変換しない。コードスパンとコードブロックを混同しない。",
+      "sources": [
+        "https://github.github.com/gfm/"
+      ],
+      "classification": "documented"
+    },
+    {
+      "id": "GH-CODE-02",
+      "file": "github-test.md",
+      "title": "コードブロックと入れ子のフェンス",
+      "expected": "言語付き・未知言語・チルダ・インデントコードを区別する。4連フェンス内の3連フェンスが外側を閉じない。",
+      "sources": [
+        "https://docs.github.com/en/get-started/writing-on-github/working-with-advanced-formatting/creating-and-highlighting-code-blocks",
+        "https://github.github.com/gfm/"
+      ],
+      "classification": "documented"
+    },
+    {
+      "id": "GH-TABLE-01",
+      "file": "github-test.md",
+      "title": "列配置と表内インライン要素",
+      "expected": "4列を維持して左・中央・右配置を確認する。セル内はインライン要素として解釈し、brと実ソース改行を区別する。",
+      "sources": [
+        "https://docs.github.com/en/get-started/writing-on-github/working-with-advanced-formatting/organizing-information-with-tables",
+        "https://github.github.com/gfm/"
+      ],
+      "classification": "documented"
+    },
+    {
+      "id": "GH-TABLE-02",
+      "file": "github-test.md",
+      "title": "パイプとバッククォートの正例",
+      "expected": "必ず3列になる。コード内もパイプをエスケープし、右端のKEEPが別の列へずれたり失われたりしない。",
+      "sources": [
+        "https://docs.github.com/en/get-started/writing-on-github/working-with-advanced-formatting/organizing-information-with-tables",
+        "https://github.github.com/gfm/"
+      ],
+      "classification": "documented"
+    },
+    {
+      "id": "GH-TABLE-03",
+      "file": "github-test.md",
+      "title": "空セルと文字列保持",
+      "expected": "5列・データ5行を保持する。001、日付、1e3、式らしい文字はMarkdownでは文字列であり計算・数値変換しない。外部表計算ソフトの貼り付け挙動は別。",
+      "sources": [
+        "https://github.github.com/gfm/"
+      ],
+      "classification": "documented-syntax-editor-stress"
+    },
+    {
+      "id": "GH-TABLE-04",
+      "file": "github-test.md",
+      "title": "省略可能な外側パイプ",
+      "expected": "外側パイプがなくても3列の表として認識する。",
+      "sources": [
+        "https://docs.github.com/en/get-started/writing-on-github/working-with-advanced-formatting/organizing-information-with-tables",
+        "https://github.github.com/gfm/"
+      ],
+      "classification": "documented"
+    },
+    {
+      "id": "GH-TABLE-05",
+      "file": "github-test.md",
+      "title": "一列とヘッダーだけの表",
+      "expected": "一列の表とデータ行ゼロの表を扱い、後続文章を勝手にデータ行へしない。",
+      "sources": [
+        "https://github.github.com/gfm/"
+      ],
+      "classification": "documented"
+    },
+    {
+      "id": "GH-TABLE-06",
+      "file": "github-test.md",
+      "title": "500行×12列の表",
+      "expected": "ヘッダーを除き500行×12列＝6,000セル。全行のIDと最終列ENDが保持され、画面外までの選択・コピー・Undoで欠落しない。手順はREADMEのEDITOR-01以降。",
+      "sources": [
+        "https://github.github.com/gfm/"
+      ],
+      "classification": "documented-syntax-editor-stress",
+      "expected_data_rows": 500,
+      "expected_columns": 12,
+      "markers": [
+        "LARGE-TABLE-BEGIN",
+        "LARGE-TABLE-END"
+      ]
+    },
+    {
+      "id": "GH-TABLE-07",
+      "file": "github-test.md",
+      "title": "30行×24列の表",
+      "expected": "ヘッダーを除き30行×24列。横スクロールで最終列まで選択でき、画面全体ではなく意図した範囲でスクロールするか観察する。",
+      "sources": [
+        "https://github.github.com/gfm/"
+      ],
+      "classification": "documented-syntax-editor-stress",
+      "expected_data_rows": 30,
+      "expected_columns": 24,
+      "markers": [
+        "WIDE-TABLE-BEGIN",
+        "WIDE-TABLE-END"
+      ]
+    },
+    {
+      "id": "GH-TABLE-08",
+      "file": "github-test.md",
+      "title": "座標付きコピー貼り付け表",
+      "expected": "コピー元44セルの二次元対応を維持する。結果はEXPECTED.jsonのclipboard_scenariosでも確認できる。これはGitHub閲覧UIの機能ではなく拡張の操作試験。",
+      "sources": [
+        "https://github.github.com/gfm/"
+      ],
+      "classification": "editor-requirement-not-github-ui",
+      "expected_data_rows": 40,
+      "expected_columns": 12,
+      "markers": [
+        "COORD-TABLE-BEGIN",
+        "COORD-TABLE-END"
+      ]
+    },
+    {
+      "id": "GH-MATH-01",
+      "file": "github-test.md",
+      "title": "数式の全区切り形式",
+      "expected": "$...$、バッククォート併用、$$...$$、mathフェンスをMathJax対象として比較する。コード内の数式文字は描画しない。",
+      "sources": [
+        "https://docs.github.com/en/get-started/writing-on-github/working-with-advanced-formatting/writing-mathematical-expressions"
+      ],
+      "classification": "documented"
+    },
+    {
+      "id": "GH-MERMAID-01",
+      "file": "github-test.md",
+      "title": "Mermaidの種類とバージョン",
+      "expected": "GitHub公式の4種の図構文のうちMermaidを確認する。infoで実際のGitHub側のバージョンを記録し、最新版Mermaidの全機能対応は仮定しない。数値は架空。",
+      "sources": [
+        "https://docs.github.com/en/get-started/writing-on-github/working-with-advanced-formatting/creating-diagrams"
+      ],
+      "classification": "documented"
+    },
+    {
+      "id": "GH-GEO-01",
+      "file": "github-test.md",
+      "title": "GeoJSONとTopoJSON",
+      "expected": "架空の閉じた四角形と内部の点を地図として描画する。JSONの構文が有効なことと、GitHubの地図表示が成功することは別の判定。",
+      "sources": [
+        "https://docs.github.com/en/get-started/writing-on-github/working-with-advanced-formatting/creating-diagrams"
+      ],
+      "classification": "documented"
+    },
+    {
+      "id": "GH-STL-01",
+      "file": "github-test.md",
+      "title": "ASCII STLの閉じた四面体",
+      "expected": "4面で閉じた四面体を3D表示する。単独の平面三角形ではなく、面の向きと体積を持つ試料を使う。",
+      "sources": [
+        "https://docs.github.com/en/get-started/writing-on-github/working-with-advanced-formatting/creating-diagrams",
+        "https://docs.github.com/en/repositories/working-with-files/using-files/working-with-non-code-files"
+      ],
+      "classification": "documented"
+    },
+    {
+      "id": "GH-FOOTNOTE-01",
+      "file": "github-test.md",
+      "title": "脚注と繰り返し参照",
+      "expected": "参照・戻り先・複数行の内容を保持し、脚注を文書末尾へ配置する。Wikiでの対応はこの試験には含めない。",
+      "sources": [
+        "https://docs.github.com/en/get-started/writing-on-github/getting-started-with-writing-and-formatting-on-github/basic-writing-and-formatting-syntax"
+      ],
+      "classification": "documented"
+    },
+    {
+      "id": "GH-DETAILS-01",
+      "file": "github-test.md",
+      "title": "折りたたみ内の複合内容",
+      "expected": "details/summaryとopen属性を保持する。展開後の表・画像・コードも編集後に失われない。Alertsのネスト試験はここに混ぜない。",
+      "sources": [
+        "https://docs.github.com/en/get-started/writing-on-github/working-with-advanced-formatting/organizing-information-with-collapsed-sections"
+      ],
+      "classification": "documented"
+    },
+    {
+      "id": "GH-EMOJI-01",
+      "file": "github-test.md",
+      "title": "絵文字とUnicode",
+      "expected": "短縮絵文字とUnicode文字列を区別する。結合文字・ZWJ絵文字・ゼロ幅文字はカーソル移動／コピーの試料であり、自動的に削除・数値化しない。",
+      "sources": [
+        "https://docs.github.com/en/get-started/writing-on-github/getting-started-with-writing-and-formatting-on-github/basic-writing-and-formatting-syntax"
+      ],
+      "classification": "documented-syntax-editor-stress"
+    },
+    {
+      "id": "GH-ESCAPE-01",
+      "file": "github-test.md",
+      "title": "エスケープとHTMLコメント",
+      "expected": "エスケープ記号を勝手に有効構文へ変更しない。HTMLコメントは非表示でもソースとして保持する。",
+      "sources": [
+        "https://docs.github.com/en/get-started/writing-on-github/getting-started-with-writing-and-formatting-on-github/basic-writing-and-formatting-syntax",
+        "https://github.github.com/gfm/"
+      ],
+      "classification": "documented"
+    },
+    {
+      "id": "GH-FORMAT-01",
+      "file": "github-test.md",
+      "title": "整形と意味保持",
+      "expected": "整形後も列数、開始番号、改行の意味、参照先、コメントを維持する。二回目の整形で追加差分がないことを検査する。表記の正規化と内容の変更を区別する。",
+      "sources": [
+        "https://github.github.com/gfm/"
+      ],
+      "classification": "editor-requirement-not-github-ui"
+    },
+    {
+      "id": "GH-FINAL-01",
+      "file": "github-test.md",
+      "title": "読み込み完了の番兵",
+      "expected": "先行するフェンスやHTMLブロックの閉じ忘れによって最後の文章が消えない。",
+      "sources": [
+        "https://github.github.com/gfm/"
+      ],
+      "classification": "fixture-integrity"
+    }
+  ],
+  "tables": {
+    "GH-TABLE-06": {
+      "data_rows": 500,
+      "columns": 12,
+      "data_cells": 6000,
+      "first_id": "0001",
+      "last_id": "0500",
+      "last_sentinel": "END-0500"
+    },
+    "GH-TABLE-07": {
+      "data_rows": 30,
+      "columns": 24
+    },
+    "GH-TABLE-08": {
+      "data_rows": 40,
+      "columns": 12
+    },
+    "STRESS-TABLE": {
+      "data_rows": 2000,
+      "columns": 20,
+      "data_cells": 40000
+    }
+  },
+  "clipboard_scenarios": [
+    {
+      "id": "EDITOR-01",
+      "table": "GH-TABLE-08",
+      "indexing": "1-based data rows, excluding header",
+      "source": {
+        "first_row": 5,
+        "last_row": 15,
+        "first_column": 3,
+        "last_column": 6
+      },
+      "destination": {
+        "first_row": 25,
+        "first_column": 8
+      },
+      "expected_destination_last_row": 35,
+      "expected_destination_last_column": 11,
+      "expected_cells": 44,
+      "undo": "restore original coordinates in one operation"
+    },
+    {
+      "id": "EDITOR-02",
+      "table": "GH-TABLE-08",
+      "source": {
+        "first_row": 5,
+        "last_row": 15,
+        "first_column": 3,
+        "last_column": 6
+      },
+      "destination": {
+        "first_row": 38,
+        "first_column": 10
+      },
+      "expected_if_auto_expand_enabled": {
+        "data_rows": 48,
+        "columns": 13
+      },
+      "otherwise": "explicit conflict/size warning; do not silently truncate"
+    }
+  ],
+  "boundary_expectations": {
+    "NEG-01": "not a table",
+    "NEG-02": "display fills missing body cells and ignores excess; raw source preservation is a separate requirement",
+    "NEG-03": "unescaped pipe still separates cells inside code syntax",
+    "NEG-08": "nested alerts not a documented supported case",
+    "unclosed-fence": "code continues to EOF"
+  }
+}

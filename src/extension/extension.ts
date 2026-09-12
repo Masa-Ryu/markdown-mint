@@ -39,6 +39,31 @@ export const PREVIEW_VIEW_TYPE = "markdownMint.preview";
 const nativePatchInstalled = new WeakSet<object>();
 const nativeSourceKey = Symbol("markdown-mint-source");
 
+/**
+ * Build the dedicated editor Webview policy.
+ *
+ * KaTeX emits layout-critical inline style attributes (for example `top`,
+ * `height`, and `vertical-align`) for fractions, scripts, and matrices. Keep
+ * external stylesheets and fonts restricted to the Webview resource origin,
+ * while granting only style attributes the narrowly scoped inline permission
+ * they need. Scripts remain nonce-only and connections remain disabled.
+ */
+export function webviewContentSecurityPolicy(
+  cspSource: string,
+  nonce: string,
+): string {
+  return [
+    "default-src 'none'",
+    `img-src ${cspSource} https: data:`,
+    `style-src ${cspSource}`,
+    `style-src-elem ${cspSource}`,
+    "style-src-attr 'unsafe-inline'",
+    `font-src ${cspSource}`,
+    `script-src 'nonce-${nonce}'`,
+    "connect-src 'none'",
+  ].join("; ");
+}
+
 type EditAction = "edit" | "format" | "undo" | "redo";
 
 interface PendingEdit {
@@ -1637,7 +1662,7 @@ export class MarkdownMintEditorProvider
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${webview.cspSource} https: data:; style-src ${webview.cspSource}; font-src ${webview.cspSource}; script-src 'nonce-${nonce}'; connect-src 'none';">
+  <meta http-equiv="Content-Security-Policy" content="${escapeAttribute(webviewContentSecurityPolicy(webview.cspSource, nonce))}">
   <link rel="stylesheet" href="${escapeAttribute(stylesheetUri.toString())}">
   <link rel="stylesheet" href="${escapeAttribute(katexStylesheetUri.toString())}">
   <link rel="stylesheet" href="${escapeAttribute(uiStylesheetUri.toString())}">

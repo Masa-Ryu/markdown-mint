@@ -1,0 +1,32 @@
+{
+  "algorithm": "sha256",
+  "purpose": "pristine fixture integrity only",
+  "files": {
+    "EXPECTED.json": "cc78b0b7d382e333c81e0cb83f7b8dddd8c72bbf3a35ee307c5961e56f626178",
+    "README.md": "d99e443043422edfac2ca305a6130b1dd36a828c5dde1623920c783fae921cbb",
+    "SOURCES.md": "0fe76d1bea16091915b4f6f4346c1a48756608acd79da2e34ff9167731e1711b",
+    "assets/clipboard-3x4.tsv": "b403a68fb9b3fb4ab210b02d46eaa9829f3404c507bc11eedc47114d4e53dd58",
+    "assets/sample space.png": "38e4c878d6bca6386a1118a9b550433c5a1c9b13da75e78347697eb7d5ee54d3",
+    "assets/sample-dark.png": "caad3d5dcadb6ac7da60ea3a4080e2c8867ed11f7fa28a0981f199f27eae220e",
+    "assets/sample.gif": "59d41bd95cc7b87b3571968fb18acbe1a8c821f4a8924c287f0e792b9b32efa1",
+    "assets/sample.jpg": "f6bca2ec81333c389fad08c0e1c70475c53c57ac814874355fdc4e57e32e35d4",
+    "assets/sample.png": "38e4c878d6bca6386a1118a9b550433c5a1c9b13da75e78347697eb7d5ee54d3",
+    "assets/sample.svg": "ab723413445df63e5d70beca9603f37ac4625a068a14acd3d17dbe76fc16a1c9",
+    "assets/target.md": "4d83269f2e0a4bffce1a27162297346f1ed9271146e4b5dfef8b09b3ecd8d3d6",
+    "assets/wide.png": "0e77228c302628fa99bb12487651af96a82b0eb2de6624b99b899a12ef86652f",
+    "edge-cases/crlf.md": "483b18da03c06a231331df87b804e920c50e1842d1fe832c308726bb90685a75",
+    "edge-cases/eof-code.md": "d38d9d9eca82468c5578b602aa8690b2071e5f0c82eb4f5541c4eba63a70fb47",
+    "edge-cases/eof-image.md": "659644eea9c0f5431477847beb105f294ee470cb11f77d5b9596e104586dcf99",
+    "edge-cases/eof-table.md": "dda955335be6bc2a9d6125451ce91f1fef094d1ed1812097b21f5d36730cd795",
+    "edge-cases/frontmatter-preservation.md": "c3a41cb6e8f1f28b5600fcd1a3218842d840a8c1440446ea2397f1f58bf50f19",
+    "edge-cases/unclosed-fence.md": "c9b052a043fa76c1b52ab8cd476a4d19e9bcb2d0bc4b5dd13ebe5a157a654a64",
+    "edge-cases/utf8-bom.md": "509a3ebe903311c426fa3846dbd4fb5a4b947e7efcca5cf92efc39b40bc19c7e",
+    "github-context-test.md": "5926d6fdf5e2e2812afd845eddcb6ff136bb90bce724f780c4201d08c0fb5880",
+    "github-negative-test.md": "decc3720f1154349324bd35cc2b08309a924ed8bcba6de7a121c74cd0c3f73f3",
+    "github-test.md": "bddb473cfe3abf3fa06d06a93a3afcad15a73007337506c776585db3c6dfa715",
+    "stress/github-long-lines.md": "d5bfd77a24b1ff814f5b9ba2540c04241b4c893856299d8c254d6ce476ba0104",
+    "stress/github-table-2000x20.md": "943db3f96a51337109b9255674d3a863693bdb52ba40f34bd03be0ebb6c8c4e9",
+    "validation-report.json": "b57cc707e49d6a7c9fb0b45e3607e607fa9b2fdfebb10e010bcd518cb78c8608",
+    "verify-fixtures.py": "e5aadf8113041b63e2048af2216e984230d16f28fa171a224dd5e4bcba24af27"
+  }
+}
