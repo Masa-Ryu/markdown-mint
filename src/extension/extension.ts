@@ -100,6 +100,9 @@ interface PanelSession {
   readonly mode: PanelMode;
   readonly disposables: vscode.Disposable[];
   ready: boolean;
+  previewRenderKey?: string;
+  previewRenderGeneration: number;
+  previewDirty: boolean;
 }
 
 interface ResourceInfo {
@@ -310,7 +313,7 @@ export class MarkdownMintEditorProvider
     this.lastDocumentUri = document.uri;
     const state = this.getOrCreateState(document);
     const session = this.attachPanel(document, webviewPanel, state, "editor");
-    this.sendDocument(session, "initial");
+    this.sendDocumentIfVisible(session, "initial");
   }
 
   public async openPreview(uri?: vscode.Uri): Promise<void> {
@@ -329,8 +332,8 @@ export class MarkdownMintEditorProvider
       existing.reveal(existing.viewColumn, true);
       const session = this.sessions.get(existing);
       if (session) {
-        this.sendDocument(session, "external");
-        void this.renderIntoPanel(session);
+        this.sendDocumentIfVisible(session, "external");
+        this.requestPreviewRender(session);
       }
       return;
     }
@@ -342,9 +345,10 @@ export class MarkdownMintEditorProvider
       { enableScripts: true, retainContextWhenHidden: true },
     );
     this.previewPanels.set(key, panel);
-    const session = this.attachPanel(document, panel, state, "preview");
-    this.sendDocument(session, "initial");
-    void this.renderIntoPanel(session);
+    this.attachPanel(document, panel, state, "preview");
+    // The ready handshake sends the initial document and drains the first
+    // preview render. Posting before the webview is ready can otherwise cause
+    // the same snapshot to be sent twice.
   }
 
   public async openSource(
@@ -431,6 +435,8 @@ export class MarkdownMintEditorProvider
       mode,
       disposables: [],
       ready: false,
+      previewRenderGeneration: 0,
+      previewDirty: mode === "preview",
     };
     state.panels.add(session);
     this.sessions.set(panel, session);
@@ -442,10 +448,25 @@ export class MarkdownMintEditorProvider
       ),
       panel.onDidDispose(() => this.detachPanel(session)),
     );
+    const panelWithViewState = panel as vscode.WebviewPanel & {
+      onDidChangeViewState?: (listener: () => void) => vscode.Disposable;
+    };
+    if (panelWithViewState.onDidChangeViewState) {
+      session.disposables.push(
+        panelWithViewState.onDidChangeViewState(() => {
+          if (session.mode === "preview" && this.previewPanelVisible(session))
+            this.requestPreviewRender(session);
+        }),
+      );
+    }
     return session;
   }
 
   private detachPanel(session: PanelSession): void {
+    if (session.mode === "preview") {
+      session.ready = false;
+      session.previewRenderGeneration += 1;
+    }
     this.sessions.delete(session.panel);
     session.state.panels.delete(session);
     for (const disposable of session.disposables.splice(0))
@@ -571,9 +592,6 @@ export class MarkdownMintEditorProvider
       }
       if (profileChanged) state.profile = this.profileFor(state.uri);
       this.broadcastDocument(state, { reason: "external" });
-      for (const session of state.panels) {
-        if (session.mode === "preview") void this.renderIntoPanel(session);
-      }
     }
   }
 
@@ -662,8 +680,8 @@ export class MarkdownMintEditorProvider
     switch (message.type) {
       case "ready":
         session.ready = true;
-        this.sendDocument(session, "initial");
-        if (session.mode === "preview") await this.renderIntoPanel(session);
+        this.sendDocumentIfVisible(session, "initial");
+        if (session.mode === "preview") this.requestPreviewRender(session);
         return;
       case "edit":
         await this.enqueue(session.state, () =>
@@ -799,7 +817,7 @@ export class MarkdownMintEditorProvider
       this.post(session, opened);
       // The original panel remains bound to its TextDocument. The UI reloads
       // this authoritative snapshot after the separate draft is opened.
-      this.sendDocument(session, "recovery");
+      this.sendDocumentIfVisible(session, "recovery");
     } catch (error) {
       this.rejectEdit(
         session,
@@ -825,7 +843,7 @@ export class MarkdownMintEditorProvider
           message.operationId,
         ),
       );
-      this.sendDocument(session, "external");
+      this.sendDocumentIfVisible(session, "external");
       return;
     }
 
@@ -848,7 +866,7 @@ export class MarkdownMintEditorProvider
             message.operationId,
           ),
         );
-        this.sendDocument(session, "external");
+        this.sendDocumentIfVisible(session, "external");
         return;
       }
       state.profile = this.profileFor(latest.uri);
@@ -859,13 +877,13 @@ export class MarkdownMintEditorProvider
       }
       for (const panelSession of state.panels) {
         const isRequester = panelSession === session;
-        this.sendDocument(
+        this.sendDocumentIfVisible(
           panelSession,
           isRequester ? "ack" : "external",
           isRequester ? message.operationId : undefined,
         );
         if (panelSession.mode === "preview")
-          void this.renderIntoPanel(panelSession);
+          this.requestPreviewRender(panelSession);
       }
     } catch (error) {
       this.post(
@@ -971,7 +989,7 @@ export class MarkdownMintEditorProvider
         document,
         "The Markdown document changed before it could be saved.",
       );
-      this.sendDocument(session, "external");
+      this.sendDocumentIfVisible(session, "external");
       return;
     }
 
@@ -1245,12 +1263,75 @@ export class MarkdownMintEditorProvider
     }
   }
 
-  private async renderIntoPanel(session: PanelSession): Promise<void> {
+  private previewPanelVisible(session: PanelSession): boolean {
+    const panel = session.panel as vscode.WebviewPanel & {
+      visible?: boolean;
+    };
+    return panel.visible !== false;
+  }
+
+  private previewStateKey(
+    session: PanelSession,
+    document: vscode.TextDocument = session.state.document,
+  ): string {
+    const resource = this.resourceInfo(document.uri, session.panel.webview);
+    const typography = this.typographyFor(document.uri);
+    return JSON.stringify([
+      document.getText(),
+      session.state.profile,
+      resource.baseUrl ?? "",
+      typography.fontFamily,
+      typography.fontSize,
+      typography.lineHeight,
+    ]);
+  }
+
+  private requestPreviewRender(session: PanelSession): void {
+    if (session.mode !== "preview") return;
+    if (!session.ready || !this.previewPanelVisible(session)) {
+      session.previewDirty = true;
+      return;
+    }
+    const key = this.previewStateKey(session);
+    if (session.previewRenderKey === key) {
+      session.previewDirty = false;
+      return;
+    }
+    session.previewDirty = true;
+    const generation = ++session.previewRenderGeneration;
+    void this.renderIntoPanel(session, generation);
+  }
+
+  private async renderIntoPanel(
+    session: PanelSession,
+    generation: number,
+  ): Promise<void> {
+    if (
+      session.mode !== "preview" ||
+      !session.ready ||
+      !this.previewPanelVisible(session)
+    )
+      return;
     const document = await this.currentDocument(session.state);
+    const markdown = document.getText();
+    const version = document.version;
+    const profile = session.state.profile;
+    const resource = this.resourceInfo(document.uri, session.panel.webview);
+    const typography = this.typographyFor(document.uri);
+    const key = JSON.stringify([
+      markdown,
+      profile,
+      resource.baseUrl ?? "",
+      typography.fontFamily,
+      typography.fontSize,
+      typography.lineHeight,
+    ]);
+    if (session.previewRenderKey === key) {
+      session.previewDirty = false;
+      return;
+    }
     try {
-      const rendered = await Promise.resolve(
-        renderMarkdown(document.getText(), session.state.profile),
-      );
+      const rendered = await Promise.resolve(renderMarkdown(markdown, profile));
       const html = rewriteNativeImageUris(extractHtml(rendered), {
         currentDocument: document.uri,
         resourceProvider: {
@@ -1258,24 +1339,53 @@ export class MarkdownMintEditorProvider
             session.panel.webview.asWebviewUri(uri),
         },
       });
-      const resource = this.resourceInfo(document.uri, session.panel.webview);
+      if (
+        generation !== session.previewRenderGeneration ||
+        !this.previewPanelVisible(session) ||
+        session.state.profile !== profile ||
+        session.state.document.version !== version ||
+        session.state.document.getText() !== markdown
+      ) {
+        session.previewDirty = true;
+        return;
+      }
       const message: HostMessage = {
         protocolVersion: PROTOCOL_VERSION,
         type: "preview",
-        markdown: document.getText(),
+        markdown,
         html,
-        version: document.version,
-        profile: session.state.profile,
-        typography: this.typographyFor(document.uri),
+        version,
+        profile,
+        typography,
         ...(resource.baseUrl ? { resourceBaseUrl: resource.baseUrl } : {}),
       };
       this.post(session, message);
+      session.previewRenderKey = key;
+      session.previewDirty = false;
     } catch (error) {
+      if (generation !== session.previewRenderGeneration) return;
       this.post(
         session,
         this.errorMessage(errorMessage(error, "Preview rendering failed.")),
       );
     }
+  }
+
+  private sendDocumentIfVisible(
+    session: PanelSession,
+    reason: HostDocumentReason,
+    operationId?: string,
+    draftMarkdown?: string,
+  ): void {
+    if (session.mode === "preview" && !this.previewPanelVisible(session)) {
+      // A retained preview can be stale while hidden. Do not make its webview
+      // parse or replace DOM for a snapshot the user cannot see; the next
+      // visibility event requests the current source/profile/resource state.
+      session.previewDirty = true;
+      session.previewRenderGeneration += 1;
+      return;
+    }
+    this.sendDocument(session, reason, operationId, draftMarkdown);
   }
 
   private sendDocument(
@@ -1311,13 +1421,13 @@ export class MarkdownMintEditorProvider
     },
   ): void {
     for (const session of state.panels) {
-      this.sendDocument(
+      this.sendDocumentIfVisible(
         session,
         details.reason,
         details.operationId,
         details.draftMarkdown,
       );
-      if (session.mode === "preview") void this.renderIntoPanel(session);
+      if (session.mode === "preview") this.requestPreviewRender(session);
     }
   }
 
@@ -1342,7 +1452,7 @@ export class MarkdownMintEditorProvider
     };
     this.post(session, rejection);
     if (reason === "stale")
-      this.sendDocument(session, "recovery", undefined, draftMarkdown);
+      this.sendDocumentIfVisible(session, "recovery", undefined, draftMarkdown);
   }
 
   private rejectFormat(

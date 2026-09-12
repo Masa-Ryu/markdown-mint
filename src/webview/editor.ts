@@ -166,6 +166,19 @@ interface RecoveryState {
   recoveryTimestamp?: number;
 }
 
+interface DerivedViewsOptions {
+  renderPreview?: boolean;
+  refreshCompatibility?: boolean;
+}
+
+interface PendingDerivedViews {
+  markdown: string;
+  profile: DocumentProfile;
+  resourceBaseUrl: string | undefined;
+  document: PMNode;
+  revision: number;
+}
+
 export interface PendingEdit {
   operationId: string;
   baseVersion: number;
@@ -307,6 +320,21 @@ function normalizeIssues(
 ): CompatibilityIssue[] {
   if (!value) return [];
   return Array.isArray(value) ? value : (value.issues ?? []);
+}
+
+function derivedStateKey(
+  markdown: string,
+  profile: DocumentProfile,
+  resourceBaseUrl?: string,
+): string {
+  return JSON.stringify([markdown, profile, resourceBaseUrl ?? ""]);
+}
+
+function compatibilityStateKey(
+  markdown: string,
+  profile: DocumentProfile,
+): string {
+  return JSON.stringify([markdown, profile]);
 }
 
 function getCellSelection(selection: Selection): CellSelection | null {
@@ -1399,8 +1427,22 @@ export class MarkdownEditorApp {
   private readonly statusEl: HTMLElement;
   private readonly previewEl: HTMLElement;
   private previewEnhancer: RenderingEnhancer | undefined;
-  private derivedViewFrame: number | null = null;
-  private deferredDerivedMarkdown: string | null = null;
+  /**
+   * The last Markdown snapshot produced for the current PM document.
+   *
+   * Display-only operations (for example switching to Preview immediately
+   * after typing) must not serialize the same document again. The pointer is
+   * deliberately bounded to the current document node; any real document
+   * replacement or edit naturally invalidates it.
+   */
+  private serializedDocument: PMNode | null = null;
+  private previewRenderKey: string | null = null;
+  private previewUsesTextFallback = false;
+  private compatibilityKey: string | null = null;
+  private previewNeedsRefresh = true;
+  private pendingDerivedViews: PendingDerivedViews | null = null;
+  private derivedViewsTimer: ReturnType<typeof setTimeout> | undefined;
+  private derivedViewsRevision = 0;
   private readonly sourceEl: HTMLTextAreaElement;
   private readonly recoverButton: HTMLButtonElement;
   private profileSelect!: HTMLSelectElement;
@@ -1717,6 +1759,9 @@ export class MarkdownEditorApp {
         paste: (view, event) => this.handlePaste(view, event as ClipboardEvent),
       },
     });
+    // The initial document came from the host, so it is already the current
+    // serialized snapshot even when the starter plugin adds a virtual node.
+    this.serializedDocument = this.view.state.doc;
     if (this.parseError || !this.initialized) {
       this.view.setProps({ editable: () => false });
       this.statusEl.textContent = this.parseError
@@ -1761,13 +1806,22 @@ export class MarkdownEditorApp {
     this.restoreRecoveryState();
     this.setInitialized(this.initialized);
     this.setMode(this.mode, false);
-    this.refreshDerivedViews(initial.markdown);
+    this.refreshDerivedViews(initial.markdown, undefined, {
+      renderPreview: this.mode === "preview",
+      refreshCompatibility: this.mode === "preview",
+    });
+    if (this.mode !== "preview") this.scheduleDerivedViews(initial.markdown);
     this.postReady();
   }
 
   destroy(): void {
     this.destroyed = true;
-    this.cancelScheduledDerivedViews();
+    this.derivedViewsRevision += 1;
+    this.pendingDerivedViews = null;
+    if (this.derivedViewsTimer !== undefined) {
+      clearTimeout(this.derivedViewsTimer);
+      this.derivedViewsTimer = undefined;
+    }
     window.removeEventListener("message", this.messageHandler);
     window.removeEventListener("resize", this.writingToolbarResizeHandler);
     this.stage.removeEventListener("scroll", this.writingToolbarScrollHandler);
@@ -2266,8 +2320,7 @@ export class MarkdownEditorApp {
           // and compatibility are derived views and can share one frame across
           // a burst of native textarea input events.
           this.sourceEl.value = markdown;
-          this.scheduleDerivedViews(markdown);
-        } else this.refreshDerivedViews(markdown);
+        }
         if (
           this.vscode &&
           !this.syncPaused &&
@@ -2275,6 +2328,16 @@ export class MarkdownEditorApp {
           !this.previewOnly
         )
           this.sync.enqueue(markdown);
+        // The serialized source is the single snapshot shared by recovery,
+        // synchronization, and all later derived work. Keep the edit message
+        // ahead of optional rendering/diagnostics so typing never waits for a
+        // hidden preview to parse and replace its DOM.
+        if (!alertLocalInput)
+          this.refreshDerivedViews(markdown, undefined, {
+            renderPreview: this.mode === "preview",
+            refreshCompatibility: false,
+          });
+        this.scheduleDerivedViews(markdown);
       }
     }
     if (selectionSet || docChanged || discardedTransient)
@@ -2353,6 +2416,10 @@ export class MarkdownEditorApp {
   }
 
   private currentMarkdown(): string {
+    if (this.parseError && this.preservedSource !== null)
+      return this.preservedSource;
+    if (this.serializedDocument === this.view.state.doc)
+      return this.lastValidMarkdown;
     return this.serializeCurrent() ?? this.lastValidMarkdown;
   }
 
@@ -2376,6 +2443,7 @@ export class MarkdownEditorApp {
         serialized,
       );
       this.lastValidMarkdown = markdown;
+      this.serializedDocument = this.view.state.doc;
       return markdown;
     } catch (error) {
       this.parseError =
@@ -2391,84 +2459,89 @@ export class MarkdownEditorApp {
     }
   }
 
-  private refreshDerivedViews(markdown: string, fallbackHtml?: string): void {
-    this.cancelScheduledDerivedViews();
-    const freshMarkdown = (() => {
-      if (this.parseError && this.preservedSource !== null)
-        return this.preservedSource;
-      try {
-        const serialized = this.core.serializeMarkdown(
-          this.documentForSerialization(),
-          this.previousSnapshot,
-        );
-        return serializeStarterSource(
-          this.view.state,
-          this.starterOriginalSource,
-          serialized,
-        );
-      } catch {
-        return markdown;
-      }
-    })();
-    this.renderDerivedViews(freshMarkdown, fallbackHtml);
-  }
+  private refreshDerivedViews(
+    markdown: string,
+    fallbackHtml?: string,
+    options: DerivedViewsOptions = {},
+  ): void {
+    if (this.destroyed) return;
+    const renderPreview = options.renderPreview ?? this.mode === "preview";
+    const refreshCompatibility = options.refreshCompatibility ?? true;
+    const previewKey = derivedStateKey(
+      markdown,
+      this.profile,
+      this.resourceBaseUrl,
+    );
+    const hasHostFallback = fallbackHtml !== undefined;
 
-  private renderDerivedViews(markdown: string, fallbackHtml?: string): void {
     this.sourceEl.value = markdown;
-    try {
-      // Rendering deliberately receives freshly serialized Markdown on every
-      // update. This keeps dedicated preview behavior aligned with VS Code's
-      // native Markdown preview after formatting and conflict resolution.
-      this.previewEl.innerHTML = this.core.renderMarkdown(
-        markdown,
-        this.profile,
-      );
-    } catch {
-      if (fallbackHtml !== undefined) this.previewEl.innerHTML = fallbackHtml;
-      else this.previewEl.textContent = markdown;
+    if (renderPreview) {
+      if (
+        this.previewNeedsRefresh ||
+        this.previewRenderKey !== previewKey ||
+        (hasHostFallback && this.previewUsesTextFallback)
+      ) {
+        try {
+          // A host-rendered preview is already produced by the same safe core
+          // renderer. Prefer it when supplied so the document and preview
+          // notifications do not trigger a second full parse in the webview.
+          this.previewEl.innerHTML =
+            fallbackHtml ?? this.core.renderMarkdown(markdown, this.profile);
+          this.previewUsesTextFallback = false;
+        } catch {
+          if (fallbackHtml !== undefined) {
+            this.previewEl.innerHTML = fallbackHtml;
+            this.previewUsesTextFallback = false;
+          } else {
+            this.previewEl.textContent = markdown;
+            this.previewUsesTextFallback = true;
+          }
+        }
+        this.resolveDisplayImages(this.previewEl);
+        this.previewEnhancer?.dispose();
+        this.previewEnhancer = enhanceRenderedContent(this.previewEl);
+        this.previewRenderKey = previewKey;
+        this.previewNeedsRefresh = false;
+      }
+    } else {
+      this.previewNeedsRefresh = true;
     }
-    this.resolveDisplayImages(this.previewEl);
-    this.previewEnhancer?.dispose();
-    this.previewEnhancer =
-      this.mode === "preview"
-        ? enhanceRenderedContent(this.previewEl)
-        : undefined;
+
     // ImageNodeView ignores this display-only attribute mutation so the
     // absolute webview URI never leaks into the ProseMirror document.
     this.resolveDisplayImages(this.view.dom);
-    this.refreshCompatibility(markdown);
+    if (refreshCompatibility) this.refreshCompatibility(markdown);
   }
 
   private scheduleDerivedViews(markdown: string): void {
-    this.deferredDerivedMarkdown = markdown;
-    if (this.derivedViewFrame !== null) return;
-    const run = (): void => {
-      this.derivedViewFrame = null;
-      const nextMarkdown = this.deferredDerivedMarkdown;
-      this.deferredDerivedMarkdown = null;
-      if (nextMarkdown !== null && !this.destroyed)
-        this.renderDerivedViews(nextMarkdown);
+    if (this.destroyed) return;
+    const revision = ++this.derivedViewsRevision;
+    this.pendingDerivedViews = {
+      markdown,
+      profile: this.profile,
+      resourceBaseUrl: this.resourceBaseUrl,
+      document: this.view.state.doc,
+      revision,
     };
-    if (typeof requestAnimationFrame === "function")
-      this.derivedViewFrame = requestAnimationFrame(run);
-    else {
-      // Vitest and a few lightweight embedders do not expose rAF. A microtask
-      // still moves derived work off the input dispatch stack without delaying
-      // the source/sync path.
-      this.derivedViewFrame = -1;
-      queueMicrotask(run);
-    }
-  }
-
-  private cancelScheduledDerivedViews(): void {
-    if (
-      this.derivedViewFrame !== null &&
-      this.derivedViewFrame >= 0 &&
-      typeof cancelAnimationFrame === "function"
-    )
-      cancelAnimationFrame(this.derivedViewFrame);
-    this.derivedViewFrame = null;
-    this.deferredDerivedMarkdown = null;
+    if (this.derivedViewsTimer !== undefined) return;
+    this.derivedViewsTimer = setTimeout(() => {
+      this.derivedViewsTimer = undefined;
+      const pending = this.pendingDerivedViews;
+      this.pendingDerivedViews = null;
+      if (
+        this.destroyed ||
+        !pending ||
+        pending.revision !== this.derivedViewsRevision ||
+        pending.document !== this.view.state.doc ||
+        pending.profile !== this.profile ||
+        pending.resourceBaseUrl !== this.resourceBaseUrl
+      )
+        return;
+      this.refreshDerivedViews(pending.markdown, undefined, {
+        renderPreview: this.mode === "preview",
+        refreshCompatibility: true,
+      });
+    }, 0);
   }
 
   /** Resolve local image references for the webview display only. */
@@ -2484,6 +2557,8 @@ export class MarkdownEditorApp {
   }
 
   private refreshCompatibility(markdown: string): void {
+    const key = compatibilityStateKey(markdown, this.profile);
+    if (this.compatibilityKey === key) return;
     let issues: CompatibilityIssue[] = [];
     try {
       issues = normalizeIssues(
@@ -2494,6 +2569,7 @@ export class MarkdownEditorApp {
         { level: "warning", message: "Compatibility inspection failed." },
       ];
     }
+    this.compatibilityKey = key;
     this.compatibilityEl.replaceChildren();
     if (!issues.length) {
       this.compatibilityEl.textContent = "";
@@ -5726,6 +5802,7 @@ export class MarkdownEditorApp {
         // leaving the PM structure untouched. Keep the existing state object
         // so CellSelection and the scroll position survive unchanged.
         this.lastValidMarkdown = formatted;
+        this.serializedDocument = this.view.state.doc;
         this.refreshDerivedViews(formatted);
       } else {
         const selection = this.view.state.selection;
@@ -5744,17 +5821,27 @@ export class MarkdownEditorApp {
     }
   }
 
-  private setMode(mode: EditorMode, requestHost = true): void {
+  private setMode(
+    mode: EditorMode,
+    requestHost = true,
+    options: { refreshPreview?: boolean } = {},
+  ): void {
     if (this.previewOnly && mode !== "preview" && mode !== "source") return;
     if (mode !== this.mode) {
       this.closeWritingPopups();
       this.closeEmojiPicker();
+      this.derivedViewsRevision += 1;
+      this.pendingDerivedViews = null;
     }
     if (this.tableDialogOpen && mode !== "rich") this.closeTableDialog();
     this.mode = mode;
     if (mode !== "preview") {
       this.previewEnhancer?.dispose();
       this.previewEnhancer = undefined;
+      // The preview DOM remains mounted while hidden, but its enhancer is
+      // disposed. Force a fresh display pass when Preview is selected again,
+      // even if the Markdown/profile/resource key is unchanged.
+      this.previewNeedsRefresh = true;
     }
     for (const panel of Array.from(
       this.root.querySelectorAll<HTMLElement>("[data-panel]"),
@@ -5765,8 +5852,11 @@ export class MarkdownEditorApp {
       this.view.state.selection,
       this.view.state.selection,
     );
-    if (mode === "preview") {
-      this.refreshDerivedViews(this.currentMarkdown());
+    if (mode === "preview" && options.refreshPreview !== false) {
+      this.refreshDerivedViews(this.currentMarkdown(), undefined, {
+        renderPreview: true,
+        refreshCompatibility: true,
+      });
       if (requestHost && this.hasPendingHostSync())
         this.deferredHostCommand = "preview";
       else if (requestHost)
@@ -6169,10 +6259,54 @@ export class MarkdownEditorApp {
   }
 
   private receivePreview(message: HostPreviewMessage): void {
-    if (message.version < this.version) return;
+    if (
+      message.version < this.version ||
+      message.version < this.authoritativeVersion
+    )
+      return;
     if (this.sync.hasPending || this.dirty) {
       this.setNotice("Preview update waiting for the local draft to sync.");
       return;
+    }
+    // A document notification establishes the authoritative profile for its
+    // version. A preview with the same source/version but another profile is
+    // therefore stale once the local state agrees with that authoritative
+    // profile; do not let it roll the UI back. A valid document -> preview pair
+    // has the same profile and remains eligible below.
+    if (
+      this.initialized &&
+      message.version === this.authoritativeVersion &&
+      message.markdown === this.authoritativeMarkdown &&
+      message.profile !== this.authoritativeProfile &&
+      this.profile === this.authoritativeProfile
+    )
+      return;
+    if (
+      this.initialized &&
+      message.version === this.authoritativeVersion &&
+      message.profile === this.authoritativeProfile &&
+      message.markdown !== this.authoritativeMarkdown
+    )
+      return;
+    if (
+      !this.initialized ||
+      this.authoritativeVersion < message.version ||
+      this.authoritativeMarkdown !== message.markdown ||
+      this.authoritativeProfile !== message.profile
+    ) {
+      this.applyDocument({
+        protocolVersion: PROTOCOL_VERSION,
+        type: "document",
+        markdown: message.markdown,
+        version: message.version,
+        profile: message.profile,
+        mode: "preview",
+        reason: "external",
+        ...(message.resourceBaseUrl
+          ? { resourceBaseUrl: message.resourceBaseUrl }
+          : {}),
+        ...(message.typography ? { typography: message.typography } : {}),
+      });
     }
     this.profile = message.profile;
     this.updateProfileSelect();
@@ -6191,7 +6325,11 @@ export class MarkdownEditorApp {
     this.resourceBaseUrl = message.resourceBaseUrl;
     this.applyTypography(message.typography);
     this.lastValidMarkdown = message.markdown;
-    this.refreshDerivedViews(message.markdown, message.html);
+    this.serializedDocument = this.view.state.doc;
+    this.refreshDerivedViews(message.markdown, message.html, {
+      renderPreview: true,
+      refreshCompatibility: true,
+    });
   }
 
   private handleSaveResult(message: SaveResultMessage): void {
@@ -6311,6 +6449,11 @@ export class MarkdownEditorApp {
       this.applyTypography(message.typography);
       this.version = Math.max(this.version, message.version);
       this.sync.setVersion(Math.max(this.sync.version, message.version));
+      this.refreshDerivedViews(this.lastValidMarkdown, undefined, {
+        renderPreview: false,
+        refreshCompatibility: false,
+      });
+      this.scheduleDerivedViews(this.lastValidMarkdown);
       this.sync.markExternalConflict(
         "A document changed externally while this draft was being edited.",
       );
@@ -6365,9 +6508,13 @@ export class MarkdownEditorApp {
     this.sync.setVersion(Math.max(this.sync.version, message.version));
     this.updateProfileSelect();
     this.updateEditingControlState();
-    // The PM state remains untouched, but profile/resource changes still need
-    // to update the rendered preview and compatibility diagnostics.
-    this.refreshDerivedViews(this.currentMarkdown());
+    // The PM state remains untouched. Use the last serialized local draft so
+    // an authoritative echo cannot reserialize or replace a newer queued edit.
+    this.refreshDerivedViews(this.lastValidMarkdown, undefined, {
+      renderPreview: this.mode === "preview",
+      refreshCompatibility: false,
+    });
+    this.scheduleDerivedViews(this.lastValidMarkdown);
   }
 
   private applyDocument(
@@ -6378,6 +6525,9 @@ export class MarkdownEditorApp {
       this.pendingExternal = message;
       return;
     }
+
+    this.derivedViewsRevision += 1;
+    this.pendingDerivedViews = null;
 
     const previousState = this.view.state;
     const previousDoc = previousState.doc;
@@ -6471,7 +6621,8 @@ export class MarkdownEditorApp {
     this.version = Math.max(this.version, message.version);
     this.operationId = message.operationId;
     this.resourceBaseUrl = message.resourceBaseUrl;
-    if (message.mode === "preview") this.mode = "preview";
+    if (message.mode === "preview")
+      this.setMode("preview", false, { refreshPreview: false });
 
     if (preserveState) {
       if (normalizedSnapshot)
@@ -6485,16 +6636,24 @@ export class MarkdownEditorApp {
       this.syncPaused = false;
       this.reloadRequested = false;
       this.lastValidMarkdown = message.markdown;
+      this.serializedDocument = this.view.state.doc;
       this.pendingExternal = null;
       this.sync.setVersion(this.version);
       this.sync.clear();
-      this.refreshDerivedViews(message.markdown);
-      if (message.mode === "preview") this.setMode("preview", false);
-      else
+      this.refreshDerivedViews(message.markdown, undefined, {
+        // Entering the preview panel is a display event, so make its first
+        // snapshot visible immediately. Rich editing never takes this path;
+        // its compatibility work remains in the deferred batch below.
+        renderPreview: message.mode === "preview" || this.mode === "preview",
+        refreshCompatibility: message.mode === "preview",
+      });
+      if (message.mode !== "preview") {
+        this.scheduleDerivedViews(message.markdown);
         this.updateToolbarState(
           this.view.state.selection,
           this.view.state.selection,
         );
+      }
       if (stage) stage.scrollTop = scrollTop;
       this.clearRecoveryIfSaved();
       this.restoreRecoveryState();
@@ -6516,7 +6675,8 @@ export class MarkdownEditorApp {
       this.view.setProps({ editable: () => false });
       this.syncPaused = true;
       this.sourceEl.value = message.markdown;
-      this.previewEl.textContent = message.markdown;
+      if (message.mode !== "preview")
+        this.previewEl.textContent = message.markdown;
       this.setNotice("Read-only: " + this.parseError, "error");
       this.persistRecovery(this.lastValidMarkdown);
       return;
@@ -6556,16 +6716,21 @@ export class MarkdownEditorApp {
     this.syncPaused = false;
     this.reloadRequested = false;
     this.lastValidMarkdown = message.markdown;
+    this.serializedDocument = this.view.state.doc;
     this.pendingExternal = null;
     this.sync.setVersion(this.version);
     this.sync.clear();
-    this.refreshDerivedViews(message.markdown);
-    if (message.mode === "preview") this.setMode("preview", false);
-    else
+    this.refreshDerivedViews(message.markdown, undefined, {
+      renderPreview: message.mode === "preview" || this.mode === "preview",
+      refreshCompatibility: message.mode === "preview",
+    });
+    if (message.mode !== "preview") {
+      this.scheduleDerivedViews(message.markdown);
       this.updateToolbarState(
         this.view.state.selection,
         this.view.state.selection,
       );
+    }
     if (stage) stage.scrollTop = scrollTop;
     this.clearRecoveryIfSaved();
     this.restoreRecoveryState();
@@ -6642,6 +6807,7 @@ export class MarkdownEditorApp {
     this.parseError = null;
     this.preservedSource = null;
     this.lastValidMarkdown = saved.recoveryDraft;
+    this.serializedDocument = this.view.state.doc;
     this.syncPaused = true;
     this.conflict = true;
     this.view.setProps({ editable: () => !this.previewOnly });
@@ -6658,7 +6824,11 @@ export class MarkdownEditorApp {
     this.statusEl.textContent = this.vscode
       ? "Applying recovered draft…"
       : "Recovered draft loaded locally.";
-    this.refreshDerivedViews(saved.recoveryDraft);
+    this.refreshDerivedViews(saved.recoveryDraft, undefined, {
+      renderPreview: this.mode === "preview",
+      refreshCompatibility: false,
+    });
+    this.scheduleDerivedViews(saved.recoveryDraft);
   }
 
   private clearRecoveryIfSaved(): void {
