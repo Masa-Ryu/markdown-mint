@@ -547,6 +547,34 @@ textarea:focus-visible {
 .mm-emoji-dialog {
   width: min(420px, calc(100vw - 30px));
 }
+.mm-code-language-confirm-dialog {
+  width: min(460px, calc(100vw - 30px));
+}
+.mm-code-language-confirm-help {
+  margin: -4px 0 0;
+  color: var(--vscode-descriptionForeground, var(--mm-control-foreground));
+  font-size: 0.9em;
+}
+.mm-code-language-confirm-info {
+  max-height: min(30vh, 180px);
+  padding: 7px 9px;
+  overflow: auto;
+  border: 1px solid var(--vscode-input-border, var(--mm-control-border));
+  border-radius: 3px;
+  color: var(--vscode-input-foreground, var(--mm-control-foreground));
+  background: var(--vscode-input-background, var(--mm-control-background));
+  font-family: var(
+    --vscode-editor-font-family,
+    ui-monospace,
+    SFMono-Regular,
+    Consolas,
+    monospace
+  );
+  font-size: 0.9em;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
 .mm-emoji-help {
   margin: -4px 0 0;
   color: var(--vscode-descriptionForeground, var(--mm-control-foreground));

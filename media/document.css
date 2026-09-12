@@ -229,6 +229,8 @@ body {
  * card so language and copy controls stay attached while the body scrolls. */
 .markdown-body .mm-code-block,
 .mm-document-content .mm-code-block {
+  --mm-code-font-size: 0.92em;
+  --mm-code-line-height: 1.5;
   min-width: 0;
   margin: 0 0 1em;
   overflow: visible;
@@ -412,15 +414,15 @@ body {
     Consolas,
     monospace
   );
-  font-size: 0.92em;
-  line-height: 1.5;
+  font-size: var(--mm-code-font-size);
+  line-height: var(--mm-code-line-height);
   text-align: end;
   user-select: none;
 }
 .markdown-body .mm-code-line-numbers span,
 .mm-document-content .mm-code-line-numbers span {
   display: block;
-  min-height: 1.5em;
+  min-height: calc(var(--mm-code-line-height) * 1em);
   white-space: nowrap;
 }
 .markdown-body .mm-code-block-pre,
@@ -433,6 +435,8 @@ body {
   overflow: auto;
   border-radius: 0;
   background: transparent;
+  font-size: var(--mm-code-font-size);
+  line-height: var(--mm-code-line-height);
 }
 .markdown-body .mm-code-block-pre code,
 .mm-document-content .mm-code-block-pre code {
@@ -440,7 +444,8 @@ body {
   min-width: max-content;
   padding: 0;
   background: transparent;
-  line-height: 1.5;
+  font-size: inherit;
+  line-height: inherit;
   white-space: pre;
 }
 .markdown-body .mm-code-block.mm-code-wrap-lines .mm-code-block-pre code,

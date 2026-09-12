@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   codeLanguageMetadata,
+  codeLanguageSuffix,
   isValidCodeLanguageIdentifier,
   highlightCodeSpans,
   replaceCodeLanguageIdentifier,
@@ -50,6 +51,35 @@ describe("visual rendering helpers", () => {
     expect(codeLanguageMetadata("html").label).toBe("HTML");
     expect(codeLanguageMetadata("toml").label).toBe("TOML");
     expect(codeLanguageMetadata("tsx").label).toBe("TSX");
+    expect(codeLanguageMetadata("ts").aliases).toEqual(
+      expect.arrayContaining(["ts", "typescript"]),
+    );
+    expect(codeLanguageMetadata("tsx").aliases).not.toEqual(
+      expect.arrayContaining(["ts", "typescript"]),
+    );
+    expect(codeLanguageMetadata("html").aliases).not.toEqual(
+      expect.arrayContaining(["xml"]),
+    );
+    expect(codeLanguageMetadata("xml").aliases).not.toEqual(
+      expect.arrayContaining(["html"]),
+    );
+    expect(codeLanguageMetadata("toml").aliases).not.toEqual(
+      expect.arrayContaining(["ini"]),
+    );
+    expect(codeLanguageMetadata("ini").aliases).not.toEqual(
+      expect.arrayContaining(["toml"]),
+    );
+    expect(codeLanguageMetadata("javascript").aliases).not.toEqual(
+      expect.arrayContaining(["jsx"]),
+    );
+    expect(codeLanguageMetadata("jsx")).toMatchObject({
+      label: "JSX",
+      highlightLanguage: "javascript",
+      kind: "known",
+    });
+    expect(codeLanguageMetadata("jsx").aliases).not.toEqual(
+      expect.arrayContaining(["javascript"]),
+    );
     expect(codeLanguageMetadata("C++")).toMatchObject({
       label: "C++",
       highlightLanguage: "cpp",
@@ -69,6 +99,10 @@ describe("visual rendering helpers", () => {
     expect(replaceCodeLanguageIdentifier('ts title="example.ts"', "js")).toBe(
       'js title="example.ts"',
     );
+    expect(codeLanguageSuffix('ts title="example.ts"')).toBe(
+      ' title="example.ts"',
+    );
+    expect(codeLanguageSuffix("ts")).toBe("");
     expect(isValidCodeLanguageIdentifier("C++")).toBe(true);
     expect(isValidCodeLanguageIdentifier("C#")).toBe(true);
     expect(isValidCodeLanguageIdentifier("bad language")).toBe(false);
