@@ -62,6 +62,49 @@ picker opens the existing Profile Feature dialog in Edit mode. Insertion
 continues to use the toolbar dialog. External changes invalidate an active
 source edit while keeping the draft available to copy.
 
+## Details scanner escaped syntax (0.0.34)
+
+The scanner checks consecutive backslashes immediately before a candidate
+backtick or `<`: odd counts escape that character, while even counts leave it
+available as syntax. Only the escaped character is consumed, so the remaining
+backticks in a run can still start a shorter code span. Escaped comment openers
+and Details tags remain ordinary Markdown text; an escaped closing tag in a
+Details body cannot close its outer block.
+
+This follows [CommonMark 0.31.2 backslash escapes](https://spec.commonmark.org/0.31.2/#backslash-escapes)
+and was checked against the installed markdown-it 14.3.1 CommonMark parser.
+Backslashes inside already-open code or HTML comments remain literal, so they
+do not prevent a real closing delimiter. Code-span matching also stops at blank
+lines, respecting [block-before-inline precedence](https://spec.commonmark.org/0.31.2/#precedence):
+the supplied even-backslash example contains separate paragraphs, not one code
+span spanning the intervening Details. CRLF remains a single line ending.
+
+The implementation adds one small parity helper and bounds the existing code
+delimiter search. It retains sequential consumption of fences, code spans, and
+real comments, with no new Markdown parser or whole-document exclusion pass.
+Original source bytes, tags, attributes, and line endings remain preserved.
+
+There are 29 additional core cases covering odd/even backslashes, escaped
+comment/tag openers, escaped outer closers, remaining delimiter runs, literal
+backslashes inside code/comments, and single versus blank LF/CRLF/CR boundaries.
+Existing nested Details, quoted attributes, malformed fallback, long code spans,
+fences, comments, and round-trip tests remain intact. The browser regression
+edits a Details summary by single click and types directly into its body between
+escaped backtick paragraphs, checking exact saved Markdown and quoted attributes.
+
+The 2026-09-12 verification on main `5372934` plus this change passed
+`npm run compile`, `npm test` (463 tests in 33 files), `npm run lint` (zero errors,
+33 existing warnings), `npm run format:check`, `npm run test:browser:blocks`
+(14 groups, including all five required documents on three surfaces),
+`npm run test:browser:spacing` (37 cases per surface), and
+`npm run test:extension` (installed VS Code, exit 0). The browser run saved
+93 screenshots, including `details-escaped-backticks.png`. The previous Alert
+conflict, expanded-code caret, code/comment exclusion, and heading/TOC tests also
+passed. The version is 0.0.34; OS IME, cross-region clipboard, zoom, and visible
+native Undo/Redo checks remain the manual boundaries documented below.
+`npm run package` produced `markdown-mint-0.0.34.vsix` (96 files, 4.75 MB) and
+passed standalone bundled-formatter verification. `git diff --check` passed.
+
 ## Direct block editing and navigation (0.0.32–0.0.33)
 
 Code keeps its editable ProseMirror contentDOM, language search/custom names,

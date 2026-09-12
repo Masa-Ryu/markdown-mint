@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.0.34
+
+- Keep Details directly editable when surrounding Markdown contains escaped
+  backticks, HTML comment openers, or Details tags. Respect backslash parity,
+  remaining backticks after an escape, and paragraph boundaries while retaining
+  literal code/comment content and exact Markdown source.
+
 ## 0.0.33
 
 - Make focused Alert bodies read-only immediately after a synchronization

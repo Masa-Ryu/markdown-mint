@@ -733,6 +733,60 @@ async function testDetailsHeader(page) {
   );
 }
 
+async function testDetailsBetweenEscapedBackticks(page) {
+  const prefix = "Literal backtick before: \\`";
+  const suffix = "Another literal backtick after: \\`";
+  const source = blocks(
+    prefix,
+    details("Editable body", 'open data-note="keep > attribute"', "Summary"),
+    suffix,
+  );
+  await load(page, source);
+  const before = await saved(page);
+  const container = page.locator(`${rich} > .mm-details-node`);
+  assert.equal(
+    await container.count(),
+    1,
+    "escaped backticks hid the structured Details editor",
+  );
+  assert.equal(
+    await page.evaluate(
+      () => window.markdownMint.view.state.doc.child(1).type.name,
+    ),
+    "details",
+  );
+  assert.equal(await container.getAttribute("data-mm-details-open"), "true");
+  await noEdits(page, before, "render Details between escaped backticks");
+
+  await container.locator(detailsTitle).click();
+  const input = container.locator(detailsInput);
+  await input.waitFor({ state: "visible" });
+  assert.equal((await selection(page)).dialogs, 0);
+  await page.keyboard.press("End");
+  await page.keyboard.type(" edited");
+  await page.keyboard.press("Enter");
+  const renamed = source.replace(
+    "<summary>Summary</summary>",
+    "<summary>Summary edited</summary>",
+  );
+  await expectSource(page, renamed);
+  assert.equal(await container.getAttribute("data-mm-details-open"), "true");
+
+  await caret(page, ".mm-details-body > p", -1);
+  await page.keyboard.type(" updated");
+  const edited = renamed.replace("Editable body", "Editable body updated");
+  await expectSource(page, edited);
+  assert.equal(
+    await container.locator(".mm-details-body > p").textContent(),
+    "Editable body updated",
+  );
+  assert.equal((await selection(page)).dialogs, 0);
+  assert.equal((await saved(page)).markdown, edited);
+  await page.screenshot({
+    path: resolve(output, "details-escaped-backticks.png"),
+  });
+}
+
 async function testMathAndMermaidHeaders(page) {
   for (const [kind, source, replacement] of [
     ["math", "$$\nx^2\n$$", "y^3"],
@@ -929,6 +983,7 @@ async function main() {
       testNestedDetailsAndComposition,
       testRenderedTraversal,
       testDetailsHeader,
+      testDetailsBetweenEscapedBackticks,
       testMathAndMermaidHeaders,
       testDocumentFixtures,
     ]) {

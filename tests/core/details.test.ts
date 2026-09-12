@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import MarkdownIt from "markdown-it";
 import { EditorState } from "prosemirror-state";
 import { detailsTagRanges } from "../../src/core/details";
 import {
@@ -185,4 +186,188 @@ describe("structured source-preserving Details", () => {
       original.replace("custom-language", "typescript"),
     );
   });
+});
+
+describe("Details scanner backslash escapes", () => {
+  const markdownIt = new MarkdownIt("commonmark");
+  const opening = '<details data-note="a > b">';
+  const details = `${opening}\n<summary>Summary</summary>\n\nBody\n\n</details>`;
+  const scannedTags = (source: string) =>
+    detailsTagRanges(source).map(({ start, end }) => source.slice(start, end));
+  const inlineTokens = (source: string) =>
+    markdownIt.parseInline(source, {})[0]!.children!;
+
+  function expectStructured(source: string, block = details): void {
+    const start = source.indexOf(block);
+    const closing = start + block.lastIndexOf("</details>");
+    expect(detailsTagRanges(source)).toEqual([
+      { start, end: start + opening.length, closing: false },
+      { start: closing, end: closing + "</details>".length, closing: true },
+    ]);
+    const parts = parseDetailsSource(
+      source.slice(start, closing + "</details>".length),
+    );
+    expect(parts?.summary).toBe("Summary");
+    expect(parts?.body).toContain("Body");
+    expect(
+      parts &&
+        parts.beforeSummary +
+          parts.summary +
+          parts.afterSummary +
+          parts.body +
+          parts.closing,
+    ).toBe(block);
+    const snapshot = parseMarkdown(source, "commonmark");
+    const structured: string[] = [];
+    snapshot.doc.forEach((node) => {
+      if (node.type.name === "details")
+        structured.push(String(node.attrs.source));
+    });
+    expect(structured).toHaveLength(1);
+    expect(structured[0]!.trimEnd()).toBe(block);
+    expect(serializeMarkdown(snapshot.doc, snapshot)).toBe(source);
+  }
+
+  it.each([1, 3])(
+    "keeps Details between backticks escaped by %i backslashes",
+    (count) => {
+      const literal = "\\".repeat(count) + "`";
+      const source = `${literal}\n\n${details}\n\n${literal}`;
+      expect(inlineTokens(literal).map((token) => token.type)).toEqual([
+        "text",
+      ]);
+      expectStructured(source);
+    },
+  );
+
+  it("keeps an escaped backtick separate from a later real code span", () => {
+    const realCode = "`real inline code: <!-- </details>`";
+    const source = `\\\`\n\n${details}\n\n${realCode}`;
+    expect(inlineTokens(realCode)[0]!.type).toBe("code_inline");
+    expectStructured(source);
+  });
+
+  it.each([1, 3])(
+    "keeps Details after a comment opener escaped by %i backslashes",
+    (count) => {
+      const literal = "\\".repeat(count) + "<!--";
+      expect(inlineTokens(literal).map((token) => token.type)).toEqual([
+        "text",
+      ]);
+      expectStructured(`${literal}\n\n${details}`);
+    },
+  );
+
+  it.each(["\n\n", "\r\n\r\n", "\r\r", "\r\n \t\r\n", "\r\n\r", "\n\r\n"])(
+    "does not join unmatched backticks across a paragraph boundary %j",
+    (boundary) => {
+      const source = "\\\\`" + boundary + details + boundary + "`";
+      const tokens = markdownIt.parse(source, {});
+      expect(
+        tokens.filter((token) => token.type === "html_block"),
+      ).toHaveLength(2);
+      expect(
+        tokens
+          .flatMap((token) => token.children ?? [])
+          .some((token) => token.type === "code_inline"),
+      ).toBe(false);
+      expectStructured(source);
+    },
+  );
+
+  it.each([1, 2, 3, 4])(
+    "matches CommonMark inline code parity for %i backslashes",
+    (count) => {
+      const source = "\\".repeat(count) + "`<details></details>`";
+      const expected = count % 2 ? ["<details>", "</details>"] : [];
+      expect(scannedTags(source)).toEqual(expected);
+      expect(
+        inlineTokens(source)
+          .filter((token) => token.type === "html_inline")
+          .map((token) => token.content),
+      ).toEqual(expected);
+      expect(
+        inlineTokens(source).some((token) => token.type === "code_inline"),
+      ).toBe(count % 2 === 0);
+    },
+  );
+
+  it.each([1, 2, 3, 4])(
+    "matches CommonMark comment opener parity for %i backslashes",
+    (count) => {
+      const source = "\\".repeat(count) + "<!-- <details></details> -->";
+      const expected = count % 2 ? ["<details>", "</details>"] : [];
+      expect(scannedTags(source)).toEqual(expected);
+      const html = inlineTokens(source)
+        .filter((token) => token.type === "html_inline")
+        .map((token) => token.content);
+      expect(html).toEqual(
+        count % 2 ? expected : ["<!-- <details></details> -->"],
+      );
+    },
+  );
+
+  it.each([1, 2, 3, 4])(
+    "matches CommonMark tag escape parity for %i backslashes",
+    (count) => {
+      const slash = "\\".repeat(count);
+      const source = `${slash}<details> ${slash}</details>`;
+      const expected = count % 2 ? [] : ["<details>", "</details>"];
+      expect(scannedTags(source)).toEqual(expected);
+      expect(
+        inlineTokens(source)
+          .filter((token) => token.type === "html_inline")
+          .map((token) => token.content),
+      ).toEqual(expected);
+    },
+  );
+
+  it("does not structure an escaped opening tag or close an outer Details at an escaped tag", () => {
+    const escaped = "\\" + details;
+    expect(parseDetailsSource(escaped)).toBeNull();
+    const snapshot = parseMarkdown(escaped);
+    expect(
+      snapshot.doc.content.content.some((node) => node.type.name === "details"),
+    ).toBe(false);
+    expect(serializeMarkdown(snapshot.doc, snapshot)).toBe(escaped);
+    const body = "\\<details>\n\n\\</details>\n\nBody";
+    const outer = details.replace("Body", body);
+    expect(markdownIt.render(outer)).toContain("<p>&lt;/details&gt;</p>");
+    expectStructured(outer, outer);
+    expect(parseDetailsSource(outer)?.body).toBe(`\n\n${body}\n\n`);
+  });
+
+  it("rescans the remaining backticks after escaping only the first one in a run", () => {
+    const source = "\\``<details></details>`";
+    expect(inlineTokens(source).map((token) => token.type)).toEqual([
+      "text",
+      "code_inline",
+    ]);
+    expect(scannedTags(source)).toEqual([]);
+  });
+
+  it("does not apply escapes to a code span closing backtick or a real comment's terminator", () => {
+    for (const prefix of ["`code\\` ", "<!-- unmatched ``` and \\--> "]) {
+      const source = prefix + "<details></details>";
+      expect(scannedTags(source)).toEqual(["<details>", "</details>"]);
+      expect(
+        inlineTokens(source)
+          .filter((token) => token.type === "html_inline")
+          .slice(-2)
+          .map((token) => token.content),
+      ).toEqual(["<details>", "</details>"]);
+    }
+  });
+
+  it.each(["\n", "\r\n", "\r"])(
+    "keeps a single %j line ending inside a real code span",
+    (ending) => {
+      const source = "`before" + ending + "literal <!-- <details></details>`";
+      expect(scannedTags(source)).toEqual([]);
+      const tokens = markdownIt
+        .parse(source, {})
+        .flatMap((token) => token.children ?? []);
+      expect(tokens.map((token) => token.type)).toEqual(["code_inline"]);
+    },
+  );
 });

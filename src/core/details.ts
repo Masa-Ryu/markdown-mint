@@ -14,6 +14,12 @@ export interface DetailsTagRange {
   closing: boolean;
 }
 
+function isBackslashEscaped(source: string, index: number): boolean {
+  let count = 0;
+  while (index > 0 && source[--index] === "\\") count += 1;
+  return count % 2 === 1;
+}
+
 /** Ignore literal tags in fenced code, inline code, and HTML comments. */
 export function detailsTagRanges(source: string): DetailsTagRange[] {
   // Consume each code/comment region before scanning the following source.
@@ -35,6 +41,12 @@ export function detailsTagRanges(source: string): DetailsTagRange[] {
         : source.length;
       continue;
     }
+    if (isBackslashEscaped(source, match.index)) {
+      // Only the first punctuation character is escaped. Remaining backticks
+      // can still open a shorter code span, as in \``code`.
+      tags.lastIndex = match.index + 1;
+      continue;
+    }
     if (match[0] === "<!--") {
       const end = source.indexOf("-->", tags.lastIndex);
       tags.lastIndex = end >= 0 ? end + 3 : source.length;
@@ -42,13 +54,18 @@ export function detailsTagRanges(source: string): DetailsTagRange[] {
     }
     if (match[0].startsWith("`")) {
       const marker = match[0];
-      let end = source.indexOf(marker, tags.lastIndex);
-      while (
-        end >= 0 &&
-        (source[end - 1] === "`" || source[end + marker.length] === "`")
-      )
-        end = source.indexOf(marker, end + marker.length);
-      if (end >= 0) tags.lastIndex = end + marker.length;
+      // A code span cannot cross a blank line into another paragraph. Treat
+      // CRLF as one line ending, and backslashes inside code as literal text.
+      const codeEnds = /`+|(?:\r\n|\r(?!\n)|\n)[\t ]*(?:\r\n?|\n)/g;
+      codeEnds.lastIndex = tags.lastIndex;
+      let candidate: RegExpExecArray | null;
+      while ((candidate = codeEnds.exec(source))) {
+        if (!candidate[0].startsWith("`")) break;
+        if (candidate[0] === marker) {
+          tags.lastIndex = codeEnds.lastIndex;
+          break;
+        }
+      }
       continue;
     }
     ranges.push({
