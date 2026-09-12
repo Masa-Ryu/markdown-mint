@@ -1,4 +1,8 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { Node as PMNode } from "prosemirror-model";
+import { EditorState } from "prosemirror-state";
+import { parseMarkdown, schema } from "../../src/core";
+import * as visualRendering from "../../src/core/visualRendering";
 import {
   enhanceMixedTaskCheckboxes,
   enhanceRenderedContent,
@@ -6,6 +10,7 @@ import {
 } from "../../src/webview/mermaidEnhancer";
 import { enhanceCodeBlockControls } from "../../src/webview/codeBlockControls";
 import { renderCodeBlock } from "../../src/core/visualRendering";
+import { createRenderingPlugin } from "../../src/webview/rendering";
 
 async function flush(): Promise<void> {
   await new Promise<void>((resolve) => setTimeout(resolve, 0));
@@ -249,5 +254,120 @@ describe("local Mermaid rendering lifecycle", () => {
       "flowchart",
     );
     enhancer.dispose();
+  });
+});
+
+function firstCodeBlock(doc: PMNode): { node: PMNode; position: number } {
+  let result: { node: PMNode; position: number } | undefined;
+  doc.descendants((node, position) => {
+    if (node.type.name !== "code_block") return true;
+    result = { node, position };
+    return false;
+  });
+  if (!result) throw new Error("test document has no code block");
+  return result;
+}
+
+function syntaxRanges(
+  plugin: ReturnType<typeof createRenderingPlugin>,
+  state: EditorState,
+): Array<{ from: number; to: number }> {
+  return (
+    plugin
+      .getState(state)
+      ?.decorations.find()
+      .filter(
+        (decoration) =>
+          (decoration.spec as Record<string, unknown>)["data-mm-syntax"] ===
+          "true",
+      )
+      .map(({ from, to }) => ({ from, to })) ?? []
+  );
+}
+
+function codeRenderingState(): {
+  plugin: ReturnType<typeof createRenderingPlugin>;
+  state: EditorState;
+} {
+  const plugin = createRenderingPlugin(() => "github");
+  const state = EditorState.create({
+    schema,
+    doc: parseMarkdown("before\n\n```ts\nconst value = 1;\n```", "github").doc,
+    plugins: [plugin],
+  });
+  return { plugin, state };
+}
+
+describe("code highlighting decoration reuse", () => {
+  it("reuses an unchanged code block after an ordinary paragraph edit", () => {
+    const highlight = vi.spyOn(visualRendering, "highlightCodeSpans");
+    try {
+      const { plugin, state } = codeRenderingState();
+      expect(syntaxRanges(plugin, state).length).toBeGreaterThan(0);
+      highlight.mockClear();
+
+      const nextState = state.apply(state.tr.insertText(" edited", 1));
+
+      expect(highlight).not.toHaveBeenCalled();
+      expect(syntaxRanges(plugin, nextState).length).toBeGreaterThan(0);
+    } finally {
+      highlight.mockRestore();
+    }
+  });
+
+  it("maps syntax decorations when a paragraph is inserted before the code", () => {
+    const highlight = vi.spyOn(visualRendering, "highlightCodeSpans");
+    try {
+      const { plugin, state } = codeRenderingState();
+      const previousBlock = firstCodeBlock(state.doc);
+      const previousRanges = syntaxRanges(plugin, state);
+      const paragraph = schema.nodes.paragraph!.create(
+        null,
+        schema.text("inserted"),
+      );
+      highlight.mockClear();
+
+      const nextState = state.apply(
+        state.tr.insert(state.doc.child(0).nodeSize, paragraph),
+      );
+
+      const nextBlock = firstCodeBlock(nextState.doc);
+      const offset = nextBlock.position - previousBlock.position;
+      expect(nextBlock.position).toBe(
+        previousBlock.position + paragraph.nodeSize,
+      );
+      expect(highlight).not.toHaveBeenCalled();
+      expect(syntaxRanges(plugin, nextState)).toEqual(
+        previousRanges.map(({ from, to }) => ({
+          from: from + offset,
+          to: to + offset,
+        })),
+      );
+    } finally {
+      highlight.mockRestore();
+    }
+  });
+
+  it("re-highlights when the code text or language changes", () => {
+    const highlight = vi.spyOn(visualRendering, "highlightCodeSpans");
+    try {
+      const first = codeRenderingState();
+      const block = firstCodeBlock(first.state.doc);
+      highlight.mockClear();
+
+      first.state.apply(first.state.tr.insertText("let ", block.position + 1));
+      expect(highlight).toHaveBeenCalledTimes(1);
+
+      highlight.mockClear();
+      first.state.apply(
+        first.state.tr.setNodeMarkup(block.position, undefined, {
+          ...block.node.attrs,
+          params: "javascript",
+        }),
+      );
+      expect(highlight).toHaveBeenCalledTimes(1);
+    } finally {
+      highlight.mockRestore();
+    }
   });
 });

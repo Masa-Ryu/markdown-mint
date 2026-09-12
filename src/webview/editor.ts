@@ -1425,7 +1425,17 @@ export class MarkdownEditorApp {
   private readonly statusEl: HTMLElement;
   private readonly previewEl: HTMLElement;
   private previewEnhancer: RenderingEnhancer | undefined;
+  /**
+   * The last Markdown snapshot produced for the current PM document.
+   *
+   * Display-only operations (for example switching to Preview immediately
+   * after typing) must not serialize the same document again. The pointer is
+   * deliberately bounded to the current document node; any real document
+   * replacement or edit naturally invalidates it.
+   */
+  private serializedDocument: PMNode | null = null;
   private previewRenderKey: string | null = null;
+  private previewUsesTextFallback = false;
   private compatibilityKey: string | null = null;
   private previewNeedsRefresh = true;
   private pendingDerivedViews: PendingDerivedViews | null = null;
@@ -1746,6 +1756,9 @@ export class MarkdownEditorApp {
         paste: (view, event) => this.handlePaste(view, event as ClipboardEvent),
       },
     });
+    // The initial document came from the host, so it is already the current
+    // serialized snapshot even when the starter plugin adds a virtual node.
+    this.serializedDocument = this.view.state.doc;
     if (this.parseError || !this.initialized) {
       this.view.setProps({ editable: () => false });
       this.statusEl.textContent = this.parseError
@@ -2357,6 +2370,10 @@ export class MarkdownEditorApp {
   }
 
   private currentMarkdown(): string {
+    if (this.parseError && this.preservedSource !== null)
+      return this.preservedSource;
+    if (this.serializedDocument === this.view.state.doc)
+      return this.lastValidMarkdown;
     return this.serializeCurrent() ?? this.lastValidMarkdown;
   }
 
@@ -2380,6 +2397,7 @@ export class MarkdownEditorApp {
         serialized,
       );
       this.lastValidMarkdown = markdown;
+      this.serializedDocument = this.view.state.doc;
       return markdown;
     } catch (error) {
       this.parseError =
@@ -2408,20 +2426,30 @@ export class MarkdownEditorApp {
       this.profile,
       this.resourceBaseUrl,
     );
+    const hasHostFallback = fallbackHtml !== undefined;
 
     this.sourceEl.value = markdown;
     if (renderPreview) {
-      if (this.previewNeedsRefresh || this.previewRenderKey !== previewKey) {
+      if (
+        this.previewNeedsRefresh ||
+        this.previewRenderKey !== previewKey ||
+        (hasHostFallback && this.previewUsesTextFallback)
+      ) {
         try {
           // A host-rendered preview is already produced by the same safe core
           // renderer. Prefer it when supplied so the document and preview
           // notifications do not trigger a second full parse in the webview.
           this.previewEl.innerHTML =
             fallbackHtml ?? this.core.renderMarkdown(markdown, this.profile);
+          this.previewUsesTextFallback = false;
         } catch {
-          if (fallbackHtml !== undefined)
+          if (fallbackHtml !== undefined) {
             this.previewEl.innerHTML = fallbackHtml;
-          else this.previewEl.textContent = markdown;
+            this.previewUsesTextFallback = false;
+          } else {
+            this.previewEl.textContent = markdown;
+            this.previewUsesTextFallback = true;
+          }
         }
         this.resolveDisplayImages(this.previewEl);
         this.previewEnhancer?.dispose();
@@ -5728,6 +5756,7 @@ export class MarkdownEditorApp {
         // leaving the PM structure untouched. Keep the existing state object
         // so CellSelection and the scroll position survive unchanged.
         this.lastValidMarkdown = formatted;
+        this.serializedDocument = this.view.state.doc;
         this.refreshDerivedViews(formatted);
       } else {
         const selection = this.view.state.selection;
@@ -5763,6 +5792,10 @@ export class MarkdownEditorApp {
     if (mode !== "preview") {
       this.previewEnhancer?.dispose();
       this.previewEnhancer = undefined;
+      // The preview DOM remains mounted while hidden, but its enhancer is
+      // disposed. Force a fresh display pass when Preview is selected again,
+      // even if the Markdown/profile/resource key is unchanged.
+      this.previewNeedsRefresh = true;
     }
     for (const panel of Array.from(
       this.root.querySelectorAll<HTMLElement>("[data-panel]"),
@@ -6189,15 +6222,17 @@ export class MarkdownEditorApp {
       this.setNotice("Preview update waiting for the local draft to sync.");
       return;
     }
-    // A same-version profile update is valid when it is the first update seen
-    // for that profile. Once the document snapshot has already moved to a new
-    // profile, an older preview result must not overwrite it.
+    // A document notification establishes the authoritative profile for its
+    // version. A preview with the same source/version but another profile is
+    // therefore stale once the local state agrees with that authoritative
+    // profile; do not let it roll the UI back. A valid document -> preview pair
+    // has the same profile and remains eligible below.
     if (
       this.initialized &&
       message.version === this.authoritativeVersion &&
       message.markdown === this.authoritativeMarkdown &&
-      message.profile !== this.profile &&
-      this.profile !== this.authoritativeProfile
+      message.profile !== this.authoritativeProfile &&
+      this.profile === this.authoritativeProfile
     )
       return;
     if (
@@ -6244,6 +6279,7 @@ export class MarkdownEditorApp {
     this.resourceBaseUrl = message.resourceBaseUrl;
     this.applyTypography(message.typography);
     this.lastValidMarkdown = message.markdown;
+    this.serializedDocument = this.view.state.doc;
     this.refreshDerivedViews(message.markdown, message.html, {
       renderPreview: true,
       refreshCompatibility: true,
@@ -6554,6 +6590,7 @@ export class MarkdownEditorApp {
       this.syncPaused = false;
       this.reloadRequested = false;
       this.lastValidMarkdown = message.markdown;
+      this.serializedDocument = this.view.state.doc;
       this.pendingExternal = null;
       this.sync.setVersion(this.version);
       this.sync.clear();
@@ -6633,6 +6670,7 @@ export class MarkdownEditorApp {
     this.syncPaused = false;
     this.reloadRequested = false;
     this.lastValidMarkdown = message.markdown;
+    this.serializedDocument = this.view.state.doc;
     this.pendingExternal = null;
     this.sync.setVersion(this.version);
     this.sync.clear();
@@ -6723,6 +6761,7 @@ export class MarkdownEditorApp {
     this.parseError = null;
     this.preservedSource = null;
     this.lastValidMarkdown = saved.recoveryDraft;
+    this.serializedDocument = this.view.state.doc;
     this.syncPaused = true;
     this.conflict = true;
     this.view.setProps({ editable: () => !this.previewOnly });

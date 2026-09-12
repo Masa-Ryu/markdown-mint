@@ -463,6 +463,10 @@ export class MarkdownMintEditorProvider
   }
 
   private detachPanel(session: PanelSession): void {
+    if (session.mode === "preview") {
+      session.ready = false;
+      session.previewRenderGeneration += 1;
+    }
     this.sessions.delete(session.panel);
     session.state.panels.delete(session);
     for (const disposable of session.disposables.splice(0))

@@ -2,7 +2,7 @@ const assert = require("node:assert/strict");
 const vscode = require("vscode");
 
 async function run() {
-  const extension = vscode.extensions.getExtension("markdown-mint-local.markdown-mint");
+  const extension = vscode.extensions.getExtension("masa-ryu.markdown-mint");
   assert.ok(extension, "Markdown Mint extension is available in the development host");
   await extension.activate();
 

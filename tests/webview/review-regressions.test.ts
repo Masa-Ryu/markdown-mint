@@ -160,6 +160,91 @@ afterEach(() => {
 });
 
 describe("reviewed webview synchronization races", () => {
+  it("reuses the edit snapshot when Preview is opened immediately", () => {
+    const serialize = vi.fn(serializeMarkdown);
+    const render = vi.fn(
+      (source: string, profile: DocumentProfile) =>
+        `<p data-profile="${profile}">${source}</p>`,
+    );
+    const { app, root, messages, persisted } = makeApp({
+      core: {
+        serializeMarkdown: serialize,
+        renderMarkdown: render,
+      },
+    });
+    serialize.mockClear();
+    render.mockClear();
+
+    app.view.dispatch(app.view.state.tr.insertText("!"));
+
+    const edit = edits(messages)[0];
+    expect(edit).toBeDefined();
+    expect(serialize).toHaveBeenCalledTimes(1);
+    expect(persisted.value).toMatchObject({
+      recoveryDraft: edit?.markdown,
+    });
+    expect(render).not.toHaveBeenCalled();
+
+    const setMode = (mode: EditorMode): void => {
+      (
+        app as unknown as {
+          setMode: (nextMode: EditorMode, requestHost?: boolean) => void;
+        }
+      ).setMode(mode, false);
+    };
+    setMode("preview");
+
+    expect(serialize).toHaveBeenCalledTimes(1);
+    expect(render).toHaveBeenCalledTimes(1);
+    expect(render).toHaveBeenCalledWith(edit?.markdown, "github");
+    expect(
+      root.querySelector("[data-testid=preview-content]")?.textContent,
+    ).toBe(edit?.markdown);
+
+    // Leaving Preview disposes its enhancer. Returning to it must recreate
+    // the display even though the Markdown/profile/resource key is unchanged.
+    setMode("rich");
+    setMode("preview");
+    expect(render).toHaveBeenCalledTimes(2);
+  });
+
+  it("uses the latest profile and resource when a hidden preview is shown", () => {
+    const render = vi.fn(
+      (source: string, profile: DocumentProfile) =>
+        `<p data-profile="${profile}">${source}</p><img src="image.png">`,
+    );
+    const { app, root } = makeApp({
+      core: { renderMarkdown: render },
+    });
+    render.mockClear();
+
+    app.receiveDocument(
+      hostDocument("latest", 2, {
+        profile: "gitlab",
+        resourceBaseUrl: "https://example.test/docs/",
+        reason: "external",
+      }),
+    );
+    expect(render).not.toHaveBeenCalled();
+
+    (
+      app as unknown as {
+        setMode: (mode: EditorMode, requestHost?: boolean) => void;
+      }
+    ).setMode("preview", false);
+
+    expect(render).toHaveBeenCalledTimes(1);
+    expect(render).toHaveBeenCalledWith("latest", "gitlab");
+    expect(
+      root.querySelector("[data-testid=preview-content]")?.textContent,
+    ).toBe("latest");
+    expect(
+      root
+        .querySelector<HTMLImageElement>("[data-testid=preview-content] img")
+        ?.getAttribute("src"),
+    ).toBe("https://example.test/docs/image.png");
+  });
+
   it("serializes an edit once and defers hidden preview work until after sync", async () => {
     const serialize = vi.fn(serializeMarkdown);
     const render = vi.fn(renderMarkdown);
@@ -231,6 +316,93 @@ describe("reviewed webview synchronization races", () => {
     ).toBe("latest");
   });
 
+  it("ignores a same-version preview from an older profile after document metadata advanced", () => {
+    const stale = makeApp({ markdown: "x", profile: "commonmark" });
+    stale.app.receiveDocument(
+      hostDocument("x", 5, {
+        profile: "commonmark",
+        reason: "external",
+      }),
+    );
+
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        data: {
+          protocolVersion: PROTOCOL_VERSION,
+          type: "preview",
+          markdown: "x",
+          html: "<h1>stale github</h1>",
+          version: 5,
+          profile: "github",
+        },
+      }),
+    );
+
+    expect(stale.app.profile).toBe("commonmark");
+    expect(stale.app.mode).toBe("rich");
+    expect(
+      stale.root.querySelector("[data-testid=preview-content]")?.innerHTML,
+    ).toBe("");
+  });
+
+  it("accepts a same-profile preview paired with its document", () => {
+    const paired = makeApp({ markdown: "x", profile: "commonmark" });
+    paired.app.receiveDocument(
+      hostDocument("x", 5, {
+        profile: "github",
+        mode: "preview",
+        reason: "external",
+      }),
+    );
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        data: {
+          protocolVersion: PROTOCOL_VERSION,
+          type: "preview",
+          markdown: "x",
+          html: "<h1>paired github</h1>",
+          version: 5,
+          profile: "github",
+        },
+      }),
+    );
+    expect(paired.app.profile).toBe("github");
+    expect(paired.app.mode).toBe("preview");
+  });
+
+  it("accepts a newer preview snapshot", () => {
+    const newer = makeApp({
+      markdown: "x",
+      profile: "commonmark",
+      core: {
+        renderMarkdown: (source) => `<h1>${source}</h1>`,
+      },
+    });
+    newer.app.receiveDocument(
+      hostDocument("x", 5, {
+        profile: "commonmark",
+        reason: "external",
+      }),
+    );
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        data: {
+          protocolVersion: PROTOCOL_VERSION,
+          type: "preview",
+          markdown: "new x",
+          html: "<h1>new preview</h1>",
+          version: 6,
+          profile: "github",
+        },
+      }),
+    );
+    expect(newer.app.profile).toBe("github");
+    expect(newer.app.mode).toBe("preview");
+    expect(
+      newer.root.querySelector("[data-testid=preview-content] h1")?.textContent,
+    ).toBe("new x");
+  });
+
   it("reuses syntax highlighting when an edit only moves an unchanged code block", () => {
     const highlight = vi.spyOn(visualRendering, "highlightCodeSpans");
     try {
@@ -248,6 +420,40 @@ describe("reviewed webview synchronization races", () => {
     } finally {
       highlight.mockRestore();
     }
+  });
+
+  it("applies a later host HTML fallback after a local preview render fails", () => {
+    const render = vi.fn(() => {
+      throw new Error("local renderer unavailable");
+    });
+    const { app, root } = makeApp({ core: { renderMarkdown: render } });
+
+    app.receiveDocument(
+      hostDocument("latest", 2, {
+        mode: "preview",
+        reason: "external",
+      }),
+    );
+    const preview = root.querySelector<HTMLElement>(
+      "[data-testid=preview-content]",
+    )!;
+    expect(preview.textContent).toBe("latest");
+
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        data: {
+          protocolVersion: PROTOCOL_VERSION,
+          type: "preview",
+          markdown: "latest",
+          html: "<h1>host snapshot</h1>",
+          version: 2,
+          profile: "github",
+        },
+      }),
+    );
+
+    expect(render).toHaveBeenCalledTimes(1);
+    expect(preview.innerHTML).toBe("<h1>host snapshot</h1>");
   });
 
   it("keeps an external conflict and never sends a queued edit after an old ack", () => {

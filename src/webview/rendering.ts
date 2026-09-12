@@ -189,10 +189,15 @@ function codeDecorations(block: CodeHighlightState): Decoration[] {
     );
     return to > from
       ? [
-          Decoration.inline(from, to, {
-            class: span.className,
-            "data-mm-syntax": "true",
-          }),
+          Decoration.inline(
+            from,
+            to,
+            {
+              class: span.className,
+              "data-mm-syntax": "true",
+            },
+            { "data-mm-syntax": "true" },
+          ),
         ]
       : [];
   });

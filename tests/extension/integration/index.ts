@@ -18,7 +18,7 @@ export async function run(): Promise<void> {
   const filePath = path.resolve(TEST_FILE);
   const fileUri = vscode.Uri.file(filePath);
   const extension = vscode.extensions.getExtension(
-    "markdown-mint-local.markdown-mint",
+    "masa-ryu.markdown-mint",
   );
   assert.ok(extension, "Markdown Mint is available in the development host");
   await runCodeLensAcceptance(filePath, fileUri, extension);
@@ -436,15 +436,22 @@ async function runCodeLensAcceptance(
     "the sibling source is in another editor group",
   );
 
-  await vscode.window.showTextDocument(markdownDocument, {
+  const sourceEditor = await vscode.window.showTextDocument(markdownDocument, {
     viewColumn: sourceViewColumn,
     preview: false,
   });
   await waitFor(
-    () =>
-      vscode.window.tabGroups.activeTabGroup.viewColumn === sourceViewColumn &&
-      vscode.window.tabGroups.activeTabGroup.activeTab?.input instanceof
-        vscode.TabInputText,
+    () => {
+      const activeGroup = vscode.window.tabGroups.activeTabGroup;
+      const activeInput = activeGroup.activeTab?.input;
+      return (
+        activeGroup.viewColumn === sourceViewColumn &&
+        activeInput instanceof vscode.TabInputText &&
+        activeInput.uri.toString() === fileUri.toString() &&
+        vscode.window.activeTextEditor?.document.uri.toString() ===
+          fileUri.toString()
+      );
+    },
     "the Markdown source editor to be active",
   );
 
@@ -470,8 +477,6 @@ async function runCodeLensAcceptance(
   const original = markdownDocument.getText();
   const dirtyText = original + "\n<!-- CodeLens dirty buffer -->\n";
 
-  const sourceEditor = vscode.window.activeTextEditor;
-  assert.ok(sourceEditor, "the Markdown source TextEditor is active");
   assert.equal(
     await sourceEditor.edit((builder) => {
       builder.replace(fullDocumentRange(markdownDocument), dirtyText);
