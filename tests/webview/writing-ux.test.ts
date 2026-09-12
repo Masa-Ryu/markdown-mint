@@ -914,6 +914,7 @@ describe("bounded writing controls", () => {
       cancelable: true,
     });
     app.view.dom.dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(true);
     expect(document.activeElement).toBe(
       floating.querySelector("button:not(:disabled)"),
     );

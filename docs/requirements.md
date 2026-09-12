@@ -921,6 +921,25 @@ The 0.0.5 and earlier evidence above remains historical.
   blocks, table edges, modifiers, composition setup, source/host/dirty/history
   invariants, paragraph and slash insertion, and all five display fixtures.
 
+## Unreleased Selection Toolbar focus refinement
+
+- Selection Toolbar buttons retain their accessible `aria-label` values while
+  omitting per-button `data-tooltip` attributes, so hover and focus do not
+  obscure the selected text. Existing `:focus-visible` styling remains the
+  focus indication.
+- In Rich mode, when a non-empty `TextSelection` has a visible, eligible
+  Selection Toolbar, Tab captures the existing selection state and focuses the
+  first enabled button. Native button order supplies subsequent Tab and
+  Shift+Tab movement; Enter/Space use the existing commands and Escape returns
+  focus to the editor without a document edit.
+- The Tab interception runs before the existing Table/List keymap path. A
+  collapsed list cursor still indents, table selections still move between
+  cells, and code-block selections remain outside the Selection Toolbar path.
+- Automated writing-UX coverage verifies tooltip removal, accessible labels,
+  Tab focus and selection preservation, Bold activation, Escape, CommonMark
+  disabled-button skipping, list indentation, table navigation, and the
+  removal of the former formatting-toolbar shortcut.
+
 ## Explicit limits
 
 Paste/drop image asset copying is optional follow-up work. Native IME and visual
