@@ -83,6 +83,11 @@ beforeEach(() => {
         height: 0,
       }),
     });
+  if (typeof Text !== "undefined" && !("getClientRects" in Text.prototype))
+    Object.defineProperty(Text.prototype, "getClientRects", {
+      configurable: true,
+      value: () => [],
+    });
 });
 
 afterEach(() => {
@@ -119,7 +124,9 @@ describe("modal Ctrl+Enter runtime integration", () => {
     openToolbarDialog(root, "toolbar-table");
 
     const dialog = root.querySelector<HTMLDialogElement>(".mm-table-dialog")!;
-    const inputs = dialog.querySelectorAll<HTMLInputElement>('input[type="number"]');
+    const inputs = dialog.querySelectorAll<HTMLInputElement>(
+      'input[type="number"]',
+    );
     expect(dialog.open).toBe(true);
     expect(inputs).toHaveLength(2);
     inputs[0]!.value = "2";
