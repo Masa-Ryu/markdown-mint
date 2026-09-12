@@ -10,8 +10,7 @@ function usesMacPrimaryModifier(platform: string): boolean {
 }
 
 function hasSubmitModifier(event: KeyboardEvent, platform: string): boolean {
-  if (usesMacPrimaryModifier(platform))
-    return event.metaKey && !event.ctrlKey;
+  if (usesMacPrimaryModifier(platform)) return event.metaKey && !event.ctrlKey;
   return event.ctrlKey && !event.metaKey;
 }
 
