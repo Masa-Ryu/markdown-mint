@@ -42,12 +42,16 @@ function replaceRequestSubmit(form: HTMLFormElement) {
   return requestSubmit;
 }
 
+async function flushShortcutSubmit(): Promise<void> {
+  await Promise.resolve();
+}
+
 afterEach(() => {
   document.body.replaceChildren();
 });
 
 describe("installModalSubmitShortcut", () => {
-  it("submits each insertion/editing modal with Ctrl+Enter", () => {
+  it("submits each insertion/editing modal with Ctrl+Enter", async () => {
     const kinds: InsertDialogKind[] = [
       "link",
       "image",
@@ -69,6 +73,7 @@ describe("installModalSubmitShortcut", () => {
         cancelable: true,
       });
       input.dispatchEvent(event);
+      await flushShortcutSubmit();
 
       expect(event.defaultPrevented).toBe(true);
       expect(requestSubmit).toHaveBeenCalledTimes(1);
@@ -78,7 +83,52 @@ describe("installModalSubmitShortcut", () => {
     }
   });
 
-  it("does not submit destructive confirmation dialogs", () => {
+  it("submits even when a modal control stops keydown bubbling", async () => {
+    const root = document.createElement("div");
+    document.body.append(root);
+    const { form, input, submit } = appendInsertDialog(root, "image");
+    const requestSubmit = replaceRequestSubmit(form);
+    input.addEventListener("keydown", (event) => event.stopPropagation());
+    const dispose = installModalSubmitShortcut(root);
+
+    input.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "Enter",
+        ctrlKey: true,
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    await flushShortcutSubmit();
+
+    expect(requestSubmit).toHaveBeenCalledTimes(1);
+    expect(requestSubmit).toHaveBeenCalledWith(submit);
+    dispose();
+  });
+
+  it("keeps document-level capture scoped to the supplied editor root", async () => {
+    const root = document.createElement("div");
+    const otherRoot = document.createElement("div");
+    document.body.append(root, otherRoot);
+    const { form, input } = appendInsertDialog(otherRoot, "link");
+    const requestSubmit = replaceRequestSubmit(form);
+    const dispose = installModalSubmitShortcut(root);
+
+    input.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "Enter",
+        ctrlKey: true,
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    await flushShortcutSubmit();
+
+    expect(requestSubmit).not.toHaveBeenCalled();
+    dispose();
+  });
+
+  it("does not submit destructive confirmation dialogs", async () => {
     const root = document.createElement("div");
     document.body.append(root);
     const dialog = document.createElement("dialog");
@@ -102,12 +152,13 @@ describe("installModalSubmitShortcut", () => {
         cancelable: true,
       }),
     );
+    await flushShortcutSubmit();
 
     expect(requestSubmit).not.toHaveBeenCalled();
     dispose();
   });
 
-  it("ignores non-shortcut, composing, and repeated key events", () => {
+  it("ignores non-shortcut, composing, and repeated key events", async () => {
     const ignoredEvents: KeyboardEventInit[] = [
       {},
       { ctrlKey: true, shiftKey: true },
@@ -132,6 +183,7 @@ describe("installModalSubmitShortcut", () => {
           ...modifiers,
         }),
       );
+      await flushShortcutSubmit();
 
       expect(requestSubmit).not.toHaveBeenCalled();
       dispose();
@@ -139,7 +191,7 @@ describe("installModalSubmitShortcut", () => {
     }
   });
 
-  it("does not submit when the primary action is disabled", () => {
+  it("does not submit when the primary action is disabled", async () => {
     const root = document.createElement("div");
     document.body.append(root);
     const { form, input, submit } = appendInsertDialog(root, "table");
@@ -155,6 +207,7 @@ describe("installModalSubmitShortcut", () => {
         cancelable: true,
       }),
     );
+    await flushShortcutSubmit();
 
     expect(requestSubmit).not.toHaveBeenCalled();
     dispose();
