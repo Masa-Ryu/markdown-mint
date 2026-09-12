@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Improved inline Alert editing without changing its visual design. Quoted
+  blank lines and line endings round-trip correctly, input keeps the existing
+  textarea and focus, and ArrowLeft/ArrowRight move between Alert bodies and
+  adjacent paragraphs at their boundaries.
+
 ## 0.0.12
 
 - Added GitHub and GitLab feature controls for alerts, details, math, Mermaid,
