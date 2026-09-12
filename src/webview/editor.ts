@@ -2137,6 +2137,9 @@ export class MarkdownEditorApp {
           if (
             keyboardEvent.key === "Enter" &&
             !keyboardEvent.shiftKey &&
+            !keyboardEvent.ctrlKey &&
+            !keyboardEvent.metaKey &&
+            !keyboardEvent.altKey &&
             this.handleTableEnterKeyDown()
           ) {
             keyboardEvent.preventDefault();
