@@ -2,8 +2,6 @@ name: Capture README media
 
 on:
   workflow_dispatch:
-  push:
-    branches: [docs/visual-readme]
 
 permissions:
   contents: read
@@ -14,15 +12,12 @@ concurrency:
 
 jobs:
   capture:
-    if: github.ref == 'refs/heads/docs/visual-readme'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
-    permissions:
-      contents: write
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
-          ref: ${{ github.ref_name }}
+          persist-credentials: false
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: '22'
@@ -31,7 +26,6 @@ jobs:
         run: |
           npm ci
           npm run build
-          ./node_modules/.bin/prettier --write scripts/capture-readme.mjs
       - name: Install capture-only tooling
         run: |
           npm install --prefix "$RUNNER_TEMP/mm-capture-tools" --ignore-scripts --no-audit --no-fund --save-exact playwright@1.58.2
@@ -47,22 +41,12 @@ jobs:
           VSCODE_MARKDOWN_CSS: ${{ runner.temp }}/mm-markdown.css
         run: node scripts/capture-readme.mjs
       - name: Validate
-        continue-on-error: true
         run: |
           npm run compile
           npm run lint
           npm test
           npm run format:check
-      - name: Commit generated media to this branch only
-        run: |
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add images/readme scripts/capture-readme.mjs
-          if ! git diff --cached --quiet; then
-            git commit -m 'docs: add captured editor screenshots and table demo'
-            git push origin HEAD:docs/visual-readme
-          fi
-      - name: Upload captures and diagnostics
+      - name: Upload captures and diagnostics for review
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
@@ -70,7 +54,5 @@ jobs:
           path: |
             images/readme/
             output/readme-capture/
-            dist/
-            media/
           retention-days: 7
-          if-no-files-found: warn
+          if-no-files-found: error
