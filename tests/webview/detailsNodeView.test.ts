@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { baseKeymap } from "prosemirror-commands";
 import { history, redo, undo } from "prosemirror-history";
+import { keymap } from "prosemirror-keymap";
 import { EditorState, NodeSelection, TextSelection } from "prosemirror-state";
 import { EditorView } from "prosemirror-view";
 import {
@@ -31,7 +33,7 @@ function fixture(
     state: EditorState.create({
       schema,
       doc: snapshot.doc,
-      plugins: [history()],
+      plugins: [history(), keymap(baseKeymap)],
     }),
     nodeViews: {
       details: (node, editor, getPos) =>
@@ -258,6 +260,75 @@ describe("Details header and structured content NodeView", () => {
     expect(f.view.state.selection.from).toBe(0);
     expect(document.activeElement).toBe(f.toggle());
     expect(f.markdown()).toBe(f.source);
+  });
+
+  it("selects the Details card padding without changing source or history", () => {
+    const f = fixture();
+    const card = f.root.querySelector<HTMLElement>(".mm-details-node")!;
+    card.click();
+    expect(f.view.state.selection).toBeInstanceOf(NodeSelection);
+    expect((f.view.state.selection as NodeSelection).node.type.name).toBe(
+      "details",
+    );
+    expect(f.markdown()).toBe(f.source);
+    expect(undo(f.view.state)).toBe(false);
+  });
+
+  it("keeps body text, heading, and toggle clicks on their own paths", () => {
+    const f = fixture();
+    const paragraph = f.body().querySelector("p")!;
+    f.view.dispatch(
+      f.view.state.tr.setSelection(TextSelection.create(f.view.state.doc, 3)),
+    );
+    paragraph.click();
+    expect(f.view.state.selection).toBeInstanceOf(TextSelection);
+    f.title().click();
+    expect(f.input().hidden).toBe(false);
+    f.key("Escape");
+    f.toggle().click();
+    expect(f.view.state.selection).not.toBeInstanceOf(NodeSelection);
+  });
+
+  it.each(["Delete", "Backspace"])(
+    "deletes the selected Details with %s and restores it through undo",
+    (key) => {
+      const source =
+        '<details data-x="keep">\n<summary><strong>More</strong></summary>\n\nBody\n\n</details>\n\nSibling\n';
+      const f = fixture(source);
+      const card = f.root.querySelector<HTMLElement>(".mm-details-node")!;
+      card.click();
+      expect(f.view.state.selection).toBeInstanceOf(NodeSelection);
+      const event = new KeyboardEvent("keydown", {
+        key,
+        bubbles: true,
+        cancelable: true,
+      });
+      f.view.dom.dispatchEvent(event);
+      expect(f.markdown()).toContain("Sibling");
+      expect(f.markdown()).not.toContain("<details");
+      expect(undo(f.view.state, f.view.dispatch)).toBe(true);
+      expect(f.markdown()).toBe(f.source);
+    },
+  );
+
+  it("selects only the nested Details card and keeps the outer card unselected", () => {
+    const f = fixture(
+      "<details open>\n<summary>Outer</summary>\n\n<details>\n<summary>Inner</summary>\n\nBody\n\n</details>\n\n</details>\n",
+    );
+    const cards = f.root.querySelectorAll<HTMLElement>(".mm-details-node");
+    const positions: number[] = [];
+    f.view.state.doc.descendants((node, position) => {
+      if (node.type.name === "details") positions.push(position);
+    });
+    cards[1]!.click();
+    expect(f.view.state.selection).toBeInstanceOf(NodeSelection);
+    expect(f.view.state.selection.from).toBe(positions[1]);
+    expect(cards[1]!.classList.contains("ProseMirror-selectednode")).toBe(true);
+    expect(cards[0]!.classList.contains("ProseMirror-selectednode")).toBe(
+      false,
+    );
+    expect(f.markdown()).toBe(f.source);
+    expect(undo(f.view.state)).toBe(false);
   });
 });
 

@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.0.39
+
+- Remove the persistent Math/Mermaid source labels. Rendered Math and Mermaid
+  blocks now open the existing edit dialog on double click or Enter/Space,
+  while interactive descendants keep their own controls.
+- Select Details and Code nodes from their non-editing padding, headers, or
+  line numbers without adding history or dirty state. Body text and existing
+  controls retain direct editing, and standard Delete/Backspace removes the
+  selected node for host-backed Undo/Redo restoration.
+
 ## 0.0.38
 
 - Keep physical Alert header mouse clicks inert while making the accessible

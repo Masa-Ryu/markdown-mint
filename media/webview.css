@@ -1343,7 +1343,6 @@ body.vscode-high-contrast-light .mm-empty-line-insert {
 }
 
 /* Rich-only controls live in NodeViews; shared/native preview CSS stays inert. */
-.mm-block-source-trigger,
 .mm-details-summary,
 .mm-details-toggle {
   font: inherit;
@@ -1359,13 +1358,6 @@ body.vscode-high-contrast-light .mm-empty-line-insert {
 .mm-details-summary[hidden] {
   display: none;
 }
-.mm-block-source-trigger {
-  display: block;
-  font-size: 0.85em;
-  color: var(--vscode-descriptionForeground);
-  margin-bottom: 0.35em;
-}
-.mm-block-source-trigger:focus-visible,
 .mm-details-toggle:focus-visible,
 .mm-details-summary:focus-visible,
 .mm-details-summary-input:focus-visible {

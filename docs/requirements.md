@@ -127,6 +127,25 @@ synthetic click, Enter, or Space uses the same guarded edit-dialog path. An
 already-open dialog absorbs the follow-up synthetic event so it cannot flush or
 open a second dialog.
 
+## Rendered block editing and selection (0.0.39)
+
+Math and Mermaid rendered blocks no longer show a persistent source label. Their
+NodeView is focusable with an accessible Edit Math or Edit Mermaid name; a
+physical single click keeps normal selection behavior, while a double click or
+Enter/Space reuses the existing guarded Profile Feature edit dialog. Double
+clicks and keyboard events from links, buttons, inputs, selects, and textareas
+inside a renderer are left to those controls.
+
+Details and Code NodeViews select the whole ProseMirror node when their outer
+padding, Details header whitespace, Code header whitespace, or line numbers are
+clicked. Details toggles, summary controls, body content, Code text, language
+controls, menus, and Copy/Expand/More actions retain their existing behavior.
+The nearest nested Details owns its padding event and stops it before an outer
+NodeView can observe it. Selection transactions set `addToHistory: false`, so
+selection alone emits no host edit or dirty state; standard ProseMirror
+Delete/Backspace then removes the selected block and the host-backed Undo/Redo
+path restores its exact source.
+
 ## Details scanner inline token boundaries (0.0.36)
 
 Details range discovery now asks markdown-it's inline tokenizer which source

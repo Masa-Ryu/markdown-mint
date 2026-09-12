@@ -724,11 +724,93 @@ describe("rich editor rendering", () => {
           value: undefined,
         });
     }
-    expect(
-      messages.filter((message: any) => message.type === "edit"),
-    ).toHaveLength(0);
+    expect(messages.filter(isEditMessage)).toHaveLength(0);
     app.destroy();
   });
+
+  it("selects code non-editing areas while preserving controls and text selection", () => {
+    const source =
+      'Before\n\n```ts title="example.ts"\nconst value = 1;\n```\n\nAfter';
+    const { app, root, messages } = makeApp(source);
+    const card = root.querySelector<HTMLElement>(".mm-code-block")!;
+    const header = card.querySelector<HTMLElement>(".mm-code-block-header")!;
+    const lineNumbers = card.querySelector<HTMLElement>(
+      ".mm-code-line-numbers",
+    )!;
+    const code = card.querySelector<HTMLElement>(".mm-code-block-pre code")!;
+
+    app.view.dispatch(
+      app.view.state.tr.setSelection(
+        TextSelection.create(app.view.state.doc, codeBlockPosition(app) + 1),
+      ),
+    );
+    code.click();
+    expect(app.view.state.selection).toBeInstanceOf(TextSelection);
+
+    header.click();
+    expect(app.view.state.selection).toBeInstanceOf(NodeSelection);
+    expect((app.view.state.selection as NodeSelection).node.type.name).toBe(
+      "code_block",
+    );
+    expect(messages.filter(isEditMessage)).toHaveLength(0);
+
+    app.view.dispatch(
+      app.view.state.tr.setSelection(
+        TextSelection.create(app.view.state.doc, codeBlockPosition(app) + 1),
+      ),
+    );
+    lineNumbers.click();
+    expect(app.view.state.selection).toBeInstanceOf(NodeSelection);
+    expect(messages.filter(isEditMessage)).toHaveLength(0);
+
+    app.view.dispatch(
+      app.view.state.tr.setSelection(
+        TextSelection.create(app.view.state.doc, codeBlockPosition(app) + 1),
+      ),
+    );
+    card.click();
+    expect(app.view.state.selection).toBeInstanceOf(NodeSelection);
+    expect(messages.filter(isEditMessage)).toHaveLength(0);
+
+    app.view.dispatch(
+      app.view.state.tr.setSelection(
+        TextSelection.create(app.view.state.doc, codeBlockPosition(app) + 1),
+      ),
+    );
+    const trigger = card.querySelector<HTMLButtonElement>(
+      ".mm-code-language-trigger",
+    )!;
+    trigger.click();
+    expect(app.view.state.selection).toBeInstanceOf(TextSelection);
+    root
+      .querySelector<HTMLButtonElement>(
+        '.mm-code-block [data-mm-code-action="copy"]',
+      )!
+      .click();
+    expect(app.view.state.selection).toBeInstanceOf(TextSelection);
+    app.destroy();
+  });
+
+  it.each(["Delete", "Backspace"])(
+    "deletes a selected code block with %s and restores exact source through undo",
+    (key) => {
+      const source =
+        'Before\n\n```ts title="example.ts"\nconst value = 1;\n```\n\nAfter';
+      const { app, root, messages } = makeApp(source);
+      root.querySelector<HTMLElement>(".mm-code-block-header")!.click();
+      expect(app.view.state.selection).toBeInstanceOf(NodeSelection);
+      const event = new KeyboardEvent("keydown", {
+        key,
+        bubbles: true,
+        cancelable: true,
+      });
+      app.view.dom.dispatchEvent(event);
+      expect(serializeMarkdown(app.view.state.doc)).not.toContain("```ts");
+      expect(serializeMarkdown(app.view.state.doc)).toContain("After");
+      expect(messages.filter(isEditMessage)).toHaveLength(1);
+      app.destroy();
+    },
+  );
   it("edits alert content inline while preserving the raw atom and marker", () => {
     const source = "> [!WARNING]\n> Before";
     const { app, root, messages } = makeApp(source);

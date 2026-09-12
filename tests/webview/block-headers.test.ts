@@ -25,6 +25,20 @@ function setup(source: string) {
   apps.push(app);
   return { root, app, messages };
 }
+
+function openRenderedEditor(
+  root: HTMLElement,
+  kind: "math" | "mermaid",
+  occurrence = 0,
+): void {
+  const node = root.querySelectorAll<HTMLElement>(
+    `[role="button"][aria-label="Edit ${kind === "math" ? "Math" : "Mermaid"}"]`,
+  )[occurrence];
+  if (!node) throw new Error(`rendered ${kind} block is not focusable`);
+  node.dispatchEvent(
+    new MouseEvent("dblclick", { bubbles: true, cancelable: true }),
+  );
+}
 afterEach(() => {
   apps.splice(0).forEach((app) => app.destroy());
   document.body.replaceChildren();
@@ -322,9 +336,7 @@ describe("block header actions", () => {
     "opens and cancels/commits unchanged empty or CRLF source: %s",
     (source) => {
       const { root, messages, app } = setup(source);
-      root
-        .querySelector<HTMLButtonElement>(".mm-block-source-trigger")!
-        .click();
+      openRenderedEditor(root, source.startsWith("```") ? "mermaid" : "math");
       root
         .querySelector<HTMLButtonElement>(
           ".mm-profile-feature-dialog button[type=submit]",
@@ -341,13 +353,92 @@ describe("block header actions", () => {
     },
   );
 
+  it.each([
+    ["math", "$$\nx^2\n$$"],
+    ["mermaid", "```mermaid\ngraph LR\n  A --> B\n```"],
+  ] as const)(
+    "uses the rendered %s block for modal editing",
+    (kind, source) => {
+      const { root, app } = setup(source);
+      const label = kind === "math" ? "Math" : "Mermaid";
+      const rendered = root.querySelector<HTMLElement>(
+        `[role="button"][aria-label="Edit ${label}"]`,
+      )!;
+      expect(rendered).not.toBeNull();
+      expect(rendered.tabIndex).toBe(0);
+      expect(rendered.getAttribute("role")).toBe("button");
+      expect(rendered.getAttribute("aria-label")).toBe(`Edit ${label}`);
+      expect(root.querySelector(".mm-block-source-trigger")).toBeNull();
+
+      const click = new MouseEvent("click", {
+        bubbles: true,
+        cancelable: true,
+        detail: 1,
+      });
+      rendered.dispatchEvent(click);
+      expect(click.defaultPrevented).toBe(false);
+      expect(root.querySelector(".mm-profile-feature-dialog[open]")).toBeNull();
+
+      rendered.dispatchEvent(
+        new MouseEvent("dblclick", { bubbles: true, cancelable: true }),
+      );
+      let dialog = root.querySelector<HTMLDialogElement>(
+        ".mm-profile-feature-dialog[open]",
+      )!;
+      expect(dialog.dataset.profileFeatureMode).toBe("edit");
+      dialog
+        .querySelector<HTMLButtonElement>("button:not([type='submit'])")!
+        .click();
+
+      rendered.focus();
+      for (const key of ["Enter", " "]) {
+        const event = new KeyboardEvent("keydown", {
+          key,
+          bubbles: true,
+          cancelable: true,
+        });
+        rendered.dispatchEvent(event);
+        expect(event.defaultPrevented).toBe(true);
+        dialog = root.querySelector<HTMLDialogElement>(
+          ".mm-profile-feature-dialog[open]",
+        )!;
+        expect(dialog).not.toBeNull();
+        dialog
+          .querySelector<HTMLButtonElement>("button:not([type='submit'])")!
+          .click();
+      }
+
+      const childButton = document.createElement("button");
+      childButton.type = "button";
+      childButton.textContent = "interactive";
+      rendered.append(childButton);
+      childButton.dispatchEvent(
+        new MouseEvent("dblclick", { bubbles: true, cancelable: true }),
+      );
+      expect(root.querySelector(".mm-profile-feature-dialog[open]")).toBeNull();
+      childButton.remove();
+
+      rendered.dispatchEvent(
+        new MouseEvent("dblclick", { bubbles: true, cancelable: true }),
+      );
+      dialog = root.querySelector<HTMLDialogElement>(
+        ".mm-profile-feature-dialog[open]",
+      )!;
+      dialog.querySelector<HTMLTextAreaElement>(
+        "[data-feature-field=body]",
+      )!.value = kind === "math" ? "y^3" : "graph TD\n  C --> D";
+      dialog.querySelector<HTMLButtonElement>("button[type=submit]")!.click();
+      expect(serializeMarkdown(app.view.state.doc)).toContain(
+        kind === "math" ? "y^3" : "C --> D",
+      );
+    },
+  );
+
   it.each(["preview", "readonly"])(
     "preserves an open source draft when %s is imposed",
     (mode) => {
       const { root, app } = setup("$$\nx\n$$");
-      root
-        .querySelector<HTMLButtonElement>(".mm-block-source-trigger")!
-        .click();
+      openRenderedEditor(root, "math");
       const input = root.querySelector<HTMLTextAreaElement>(
         "[data-feature-field=body]",
       )!;
@@ -384,9 +475,7 @@ describe("block header actions", () => {
     "edits the existing rendered source and preserves its wrapper: %s",
     (source) => {
       const { root, app, messages } = setup(source);
-      root
-        .querySelector<HTMLButtonElement>(".mm-block-source-trigger")!
-        .click();
+      openRenderedEditor(root, source.startsWith("```") ? "mermaid" : "math");
       const dialog = root.querySelector<HTMLDialogElement>(
         ".mm-profile-feature-dialog",
       )!;
@@ -402,9 +491,7 @@ describe("block header actions", () => {
           (message) => (message as { type: string }).type === "edit",
         ),
       ).toHaveLength(0);
-      root
-        .querySelector<HTMLButtonElement>(".mm-block-source-trigger")!
-        .click();
+      openRenderedEditor(root, source.startsWith("```") ? "mermaid" : "math");
       input.value = original + "  ";
       dialog.querySelector<HTMLButtonElement>("button[type=submit]")!.click();
       expect(app.view.state.doc.childCount).toBe(1);
@@ -416,9 +503,7 @@ describe("block header actions", () => {
 
   it("maps an existing source edit past earlier changes without matching identical blocks", () => {
     const { root, app } = setup("before\n\n$$\nx\n$$\n\n$$\nx\n$$");
-    root
-      .querySelectorAll<HTMLButtonElement>(".mm-block-source-trigger")[1]!
-      .click();
+    openRenderedEditor(root, "math", 1);
     app.view.dispatch(app.view.state.tr.insertText("moved ", 1));
     const input = root.querySelector<HTMLTextAreaElement>(
       "[data-feature-field=body]",
@@ -436,7 +521,7 @@ describe("block header actions", () => {
 
   it("keeps a rendered source draft visible after the edited node is removed", () => {
     const { root, app } = setup("before\n\n$$\nx\n$$");
-    root.querySelector<HTMLButtonElement>(".mm-block-source-trigger")!.click();
+    openRenderedEditor(root, "math");
     const input = root.querySelector<HTMLTextAreaElement>(
       "[data-feature-field=body]",
     )!;

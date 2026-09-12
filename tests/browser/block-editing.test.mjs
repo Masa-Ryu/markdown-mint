@@ -16,6 +16,7 @@ const alertBody = ".mm-rich-panel .mm-alert-body-editor";
 const detailsTitle = ".mm-details-summary";
 const detailsInput = ".mm-details-summary-input";
 const detailsToggle = ".mm-details-toggle";
+const undoShortcut = process.platform === "darwin" ? "Meta+z" : "Control+z";
 const fence = (language, source) =>
   `\u0060\u0060\u0060${language}\n${source}\n\u0060\u0060\u0060`;
 const blocks = (...values) => values.join("\n\n");
@@ -124,7 +125,7 @@ async function selection(page) {
       text: selected.$from.parent.textContent,
       offset: selected.$from.parentOffset,
       empty: selected.empty,
-      kind: selected.constructor.name,
+      kind: selected.constructor.name.replace(/^_/, ""),
       nodeKind: selected.node?.attrs.kind,
       dialogs: document.querySelectorAll("dialog[open]").length,
     };
@@ -182,6 +183,133 @@ async function testCodeHeader(page) {
       .replace("ts title=example", "custom-language title=example")
       .replace("  const", "  cXonst"),
   );
+}
+
+async function testDetailsAndCodeBlockSelection(page) {
+  const detailsSource = blocks(
+    details("Inner body", "open", "Inner"),
+    details(details("Nested body", "open", "Inner"), "open", "Outer"),
+    "After",
+  );
+  await load(page, detailsSource);
+  const beforeDetails = await saved(page);
+  const outer = page.locator(".mm-details-node").first();
+  const inner = page.locator(".mm-details-node").nth(1);
+  await inner.click({ position: { x: 2, y: 2 } });
+  let state = await selection(page);
+  assert.equal(
+    state.kind,
+    "NodeSelection",
+    "inner padding did not select a node",
+  );
+  const selectedDetails = await page.evaluate(() => ({
+    selected: window.markdownMint.view.state.selection.node?.type.name,
+    outer: document
+      .querySelectorAll(".mm-details-node")[1]
+      ?.classList.contains("ProseMirror-selectednode"),
+    first: document
+      .querySelectorAll(".mm-details-node")[0]
+      ?.classList.contains("ProseMirror-selectednode"),
+  }));
+  assert.equal(selectedDetails.selected, "details");
+  assert.equal(selectedDetails.outer, true);
+  assert.equal(selectedDetails.first, false);
+  await noEdits(page, beforeDetails, "Details padding selection");
+
+  await page.locator(rich).focus();
+  await page.keyboard.press("Delete");
+  await page.waitForFunction(
+    () => document.querySelectorAll(".mm-details-node").length === 1,
+  );
+  assert.equal((await saved(page)).markdown.includes("Nested body"), false);
+  await page.locator(rich).focus();
+  await page.keyboard.press(undoShortcut);
+  await expectSource(page, detailsSource);
+  assert.equal(await page.locator(".mm-details-node").count(), 3);
+
+  const body = outer.locator(":scope > .mm-details-body > p").first();
+  await caret(page, ":nth-match(.mm-details-node, 1) .mm-details-body > p", 1);
+  await body.click({ position: { x: 8, y: 8 } });
+  state = await selection(page);
+  assert.notEqual(
+    state.kind,
+    "NodeSelection",
+    "Details body became block selected",
+  );
+  await outer
+    .locator(":scope > .mm-details-header .mm-details-summary")
+    .click();
+  assert.equal(
+    await outer
+      .locator(":scope > .mm-details-header .mm-details-summary-input")
+      .count(),
+    1,
+    "summary input was not kept in its Details header",
+  );
+  assert.equal(
+    await outer.locator(".mm-details-summary-input").isVisible(),
+    true,
+  );
+  await page.keyboard.press("Escape");
+  const toggle = outer.locator(
+    ":scope > .mm-details-header .mm-details-toggle",
+  );
+  const wasOpen = await outer.getAttribute("data-mm-details-open");
+  await toggle.click();
+  assert.notEqual(await outer.getAttribute("data-mm-details-open"), wasOpen);
+  await toggle.click();
+
+  const codeSource = blocks(
+    "Before",
+    fence("ts title=example", "const value = 1;"),
+    "After",
+  );
+  await load(page, codeSource);
+  const beforeCode = await saved(page);
+  const code = page.locator(".mm-code-block").first();
+  const codeText = code.locator(".mm-code-block-pre code");
+  await caret(page, ".mm-code-block-pre code", 3);
+  await codeText.click({ position: { x: 18, y: 12 } });
+  assert.notEqual(
+    (await selection(page)).kind,
+    "NodeSelection",
+    "code text click became block selected",
+  );
+  await code
+    .locator(".mm-code-block-header")
+    .click({ position: { x: 180, y: 12 } });
+  assert.equal((await selection(page)).kind, "NodeSelection");
+  assert.equal(
+    await page.evaluate(
+      () => window.markdownMint.view.state.selection.node.type.name,
+    ),
+    "code_block",
+  );
+  await noEdits(page, beforeCode, "code header selection");
+
+  await page.locator(rich).focus();
+  await page.keyboard.press("Backspace");
+  await page.waitForFunction(
+    () => document.querySelectorAll(".mm-code-block").length === 0,
+  );
+  assert.equal((await saved(page)).markdown.includes("example"), false);
+  await page.locator(rich).focus();
+  await page.keyboard.press(undoShortcut);
+  await expectSource(page, codeSource);
+  const afterUndoCode = await saved(page);
+
+  await caret(page, ".mm-code-block-pre code", 3);
+  await code.locator(".mm-code-line-numbers").click();
+  assert.equal((await selection(page)).kind, "NodeSelection");
+  await caret(page, ".mm-code-block-pre code", 3);
+  await code.locator(".mm-code-language-trigger").click();
+  assert.notEqual((await selection(page)).kind, "NodeSelection");
+  await page.locator(".mm-code-language-inline").press("Escape");
+  await caret(page, ".mm-code-block-pre code", 3);
+  await code.locator('[data-mm-code-action="expand"]').click();
+  assert.notEqual((await selection(page)).kind, "NodeSelection");
+  await page.keyboard.press("Escape");
+  await noEdits(page, afterUndoCode, "code controls and selection");
 }
 
 async function testAlertHeaderAndSelection(page) {
@@ -1049,7 +1177,17 @@ async function testMathAndMermaidHeaders(page) {
       0,
       `${kind} drawing click opened editing`,
     );
-    await page.locator(`[data-mm-block-source="${kind}"]`).click();
+    const label = kind === "math" ? "Math" : "Mermaid";
+    const rendered = page.locator(
+      `.mm-rendered-node[role="button"][aria-label="Edit ${label}"]`,
+    );
+    await rendered.waitFor();
+    assert.equal(
+      await page.locator(".mm-block-source-trigger").count(),
+      0,
+      `${kind} source label was left in the rendered block`,
+    );
+    await rendered.dblclick();
     const dialog = page.locator(".mm-profile-feature-dialog[open]");
     await dialog.waitFor();
     assert.equal(
@@ -1058,14 +1196,23 @@ async function testMathAndMermaidHeaders(page) {
     );
     await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
     await noEdits(page, before, `${kind} cancel`);
-    await page.locator(`[data-mm-block-source="${kind}"]`).click();
+    for (const key of ["Enter", "Space"]) {
+      await rendered.focus();
+      await page.keyboard.press(key);
+      await dialog.waitFor();
+      await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+      await noEdits(page, before, `${kind} ${key} keyboard cancel`);
+    }
+    await rendered.dblclick();
     await dialog.locator('[data-feature-field="body"]').fill(replacement);
     await dialog.locator('button[type="submit"]').click();
     await page.waitForFunction(() => !window.markdownMint.sync.hasPending);
     const updated = (await saved(page)).markdown;
     assert.ok(updated.includes(replacement));
     assert.equal(
-      await page.locator(`[data-mm-block-source="${kind}"]`).count(),
+      await page
+        .locator(`.mm-rendered-node[role="button"][aria-label="Edit ${label}"]`)
+        .count(),
       1,
       `${kind} edit inserted a duplicate block`,
     );
@@ -1120,7 +1267,7 @@ async function testDocumentFixtures(page) {
           element.querySelectorAll('[data-mm-mermaid-state="error"]'),
         ).map((node) => node.textContent),
         editableHeaders: element.querySelectorAll(
-          ".mm-details-summary,[data-mm-block-source]",
+          '.mm-details-summary,.mm-rendered-node[role="button"][aria-label^="Edit "]',
         ).length,
       }));
       assert.ok(result.width > 200, `${filename} ${mode}: invisible content`);
@@ -1211,6 +1358,7 @@ async function main() {
     page.setDefaultTimeout(8000);
     for (const test of [
       testCodeHeader,
+      testDetailsAndCodeBlockSelection,
       testAlertHeaderAndSelection,
       testAlertConflict,
       testHorizontalNavigation,

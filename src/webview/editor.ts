@@ -27,6 +27,7 @@ import {
 import type { Schema } from "prosemirror-model";
 import {
   EditorState,
+  NodeSelection,
   Plugin,
   PluginKey,
   Selection,
@@ -1091,6 +1092,40 @@ class CodeBlockNodeView {
   private languageComposing = false;
   private languageCompositionEndedAt = -Infinity;
   private readonly canEdit: () => boolean;
+  private readonly handleBlockClick = (event: MouseEvent): void => {
+    const target = event.target;
+    if (!(target instanceof Element)) return;
+    // Code text and its preformatted surface retain native caret, drag, and
+    // word selection. Controls own their events and stop them before this
+    // listener; the closest check also covers menu/input descendants.
+    if (
+      target.closest(
+        ".mm-code-block-pre, .mm-code-language-control, .mm-code-block-actions, .mm-code-menu, button, a, input, select, textarea, dialog",
+      )
+    )
+      return;
+    const position = this.positionOf();
+    if (position === undefined) return;
+    const node = this.view.state.doc.nodeAt(position);
+    if (!node || node.type.name !== "code_block") return;
+    let selection: NodeSelection;
+    try {
+      selection = NodeSelection.create(this.view.state.doc, position);
+    } catch {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    if (
+      this.view.state.selection instanceof NodeSelection &&
+      this.view.state.selection.from === selection.from &&
+      this.view.state.selection.to === selection.to
+    )
+      return;
+    this.view.dispatch(
+      this.view.state.tr.setSelection(selection).setMeta("addToHistory", false),
+    );
+  };
 
   constructor(
     node: PMNode,
@@ -1234,6 +1269,7 @@ class CodeBlockNodeView {
       ...controlOptions,
       getCodeText: () => this.currentCodeText(),
     });
+    this.dom.addEventListener("click", this.handleBlockClick);
   }
 
   private createActionButton(
@@ -1740,6 +1776,7 @@ class CodeBlockNodeView {
     this.closeLanguagePicker(false);
     this.closeLanguageRemovalConfirmation(false);
     document.removeEventListener("pointerdown", this.languageOutsideHandler);
+    this.dom.removeEventListener("click", this.handleBlockClick);
     this.controls.dispose();
   }
 }
@@ -3614,7 +3651,7 @@ export class MarkdownEditorApp {
       | HTMLSelectElement
       | HTMLTextAreaElement
     >(
-      ".mm-block-source-trigger, .mm-code-language-trigger, .mm-code-language-inline, .mm-details-summary",
+      ".mm-code-language-trigger, .mm-code-language-inline, .mm-details-summary",
     ))
       control.disabled = blockEditingDisabled;
     for (const body of this.root.querySelectorAll<HTMLTextAreaElement>(
@@ -4697,10 +4734,6 @@ export class MarkdownEditorApp {
       this.profileFeatureError.hidden
         ? this.view.nodeDOM(editTarget.position)
         : null;
-    const updatedHeader =
-      returnNode instanceof HTMLElement
-        ? returnNode.querySelector<HTMLElement>(".mm-block-source-trigger")
-        : null;
     this.profileFeatureInvokingButton = null;
     this.profileFeatureSelection = null;
     this.profileFeatureDocumentGeneration = -1;
@@ -4720,8 +4753,8 @@ export class MarkdownEditorApp {
           if (bodySelection)
             editReturnFocus.setSelectionRange(...bodySelection);
         }
-      } else if (updatedHeader?.isConnected)
-        updatedHeader.focus({ preventScroll: true });
+      } else if (returnNode instanceof HTMLElement && returnNode.isConnected)
+        returnNode.focus({ preventScroll: true });
       else if (button?.isConnected) button.focus();
     }
   }

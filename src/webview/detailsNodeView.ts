@@ -267,8 +267,42 @@ export function createDetailsNodeView(
         if (!disposed) finish(false, false);
       });
   };
+  const selectWholeNode = (event: MouseEvent): void => {
+    const target = event.target;
+    if (!(target instanceof Element)) return;
+    // Only the nearest Details NodeView owns a click. This makes an inner
+    // card's padding independent from its ancestor's contentDOM.
+    if (target.closest(".mm-details-node") !== dom) return;
+    // The body belongs to ProseMirror's normal text/contentDOM handling. The
+    // controls also keep their own click and focus behavior. This check is
+    // intentionally based on the closest control so nested Details do not
+    // make an outer node selection when their descendants are clicked.
+    if (contentDOM.contains(target)) return;
+    if (
+      target.closest(
+        ".mm-details-toggle, .mm-details-summary, .mm-details-summary-input",
+      )
+    )
+      return;
+    if (target !== dom && target !== header) return;
+    const position = positionOf();
+    if (position === undefined) return;
+    const selection = NodeSelection.create(view.state.doc, position);
+    event.preventDefault();
+    event.stopPropagation();
+    if (
+      view.state.selection instanceof NodeSelection &&
+      view.state.selection.from === selection.from &&
+      view.state.selection.to === selection.to
+    )
+      return;
+    view.dispatch(
+      view.state.tr.setSelection(selection).setMeta("addToHistory", false),
+    );
+  };
   title.addEventListener("click", clickTitle);
   toggle.addEventListener("click", clickToggle);
+  dom.addEventListener("click", selectWholeNode);
   input.addEventListener("keydown", keydown);
   input.addEventListener("blur", blur);
   input.addEventListener("compositionstart", compositionStart);
@@ -327,6 +361,7 @@ export function createDetailsNodeView(
       input.removeEventListener("blur", blur);
       input.removeEventListener("compositionstart", compositionStart);
       input.removeEventListener("compositionend", compositionEnd);
+      dom.removeEventListener("click", selectWholeNode);
     },
   };
 }

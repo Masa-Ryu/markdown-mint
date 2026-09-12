@@ -329,9 +329,7 @@ async function readMetrics(page, rootSelector) {
       if (host.matches(".mm-alert-node-view"))
         return host.querySelector(".markdown-alert");
       if (host.matches(".mm-rendered-node"))
-        return (
-          host.querySelector(":scope > :not(.mm-block-source-trigger)") ?? host
-        );
+        return host.querySelector(":scope > *") ?? host;
       return host;
     };
     const describe = (host, display) => {

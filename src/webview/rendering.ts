@@ -463,6 +463,64 @@ export function createRenderedNodeView(
   dom.setAttribute("aria-live", "polite");
   dom.hidden = initiallyEmpty;
 
+  const isInteractiveTarget = (target: EventTarget | null): boolean =>
+    target instanceof Element &&
+    Boolean(target.closest("button,a,input,select,textarea"));
+  const updateEditorSemantics = (): void => {
+    const sourceEditor = blockSourceEditor(current);
+    if (!inline && sourceEditor && onEditRequest) {
+      dom.tabIndex = 0;
+      dom.setAttribute("role", "button");
+      dom.setAttribute(
+        "aria-label",
+        sourceEditor.kind === "math" ? "Edit Math" : "Edit Mermaid",
+      );
+    } else {
+      dom.removeAttribute("tabindex");
+      dom.removeAttribute("role");
+      dom.removeAttribute("aria-label");
+    }
+  };
+  const openEditor = (event: Event): void => {
+    if (!onEditRequest || inline || isInteractiveTarget(event.target)) return;
+    const position = positionOf();
+    if (
+      position === undefined ||
+      disposed ||
+      !view.editable ||
+      !(options.canEdit?.() ?? true)
+    )
+      return;
+    const live = view.state.doc.nodeAt(position);
+    if (!live || live.type !== current.type || !blockSourceEditor(live)) return;
+    current = live;
+    event.preventDefault();
+    event.stopPropagation();
+    onEditRequest(position, dom);
+  };
+  const handleClick = (event: Event): void => {
+    // A physical click remains a normal selection/operation. `detail === 0`
+    // is the browser's keyboard/accessibility activation path.
+    if ((event as MouseEvent).detail === 0) openEditor(event);
+  };
+  const handleDoubleClick = (event: Event): void => {
+    openEditor(event);
+  };
+  const handleKeyDown = (event: Event): void => {
+    const keyboardEvent = event as KeyboardEvent;
+    if (
+      keyboardEvent.isComposing ||
+      keyboardEvent.keyCode === 229 ||
+      (keyboardEvent.key !== "Enter" && keyboardEvent.key !== " ")
+    )
+      return;
+    openEditor(event);
+  };
+  dom.addEventListener("click", handleClick);
+  dom.addEventListener("dblclick", handleDoubleClick);
+  dom.addEventListener("keydown", handleKeyDown);
+  updateEditorSemantics();
+
   const updateEmptyBoundaryMarkers = (): void => {
     delete dom.dataset.mmDocumentFirst;
     delete dom.dataset.mmDocumentLast;
@@ -490,27 +548,7 @@ export function createRenderedNodeView(
     appendGeneratedHtml(dom, html);
     dom.hidden = false;
     updateRenderedBlockLayout(current, dom);
-    const sourceEditor = blockSourceEditor(current);
-    if (sourceEditor && onEditRequest) {
-      const header = document.createElement("button");
-      header.type = "button";
-      header.className = "mm-block-source-trigger";
-      header.dataset.mmBlockSource = sourceEditor.kind;
-      header.textContent = sourceEditor.kind === "math" ? "Math" : "Mermaid";
-      header.setAttribute("aria-label", `Edit ${header.textContent} source`);
-      header.addEventListener("click", (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        const position = positionOf();
-        if (
-          position !== undefined &&
-          view.editable &&
-          (options.canEdit?.() ?? true)
-        )
-          onEditRequest(position, header);
-      });
-      dom.prepend(header);
-    }
+    updateEditorSemantics();
     updateEmptyBoundaryMarkers();
     enhancer = enhanceRenderedContent(dom);
   };
@@ -535,6 +573,7 @@ export function createRenderedNodeView(
       current = nextNode;
       lastDocument = view.state.doc;
       dom.dataset.mmRenderedNode = current.type.name;
+      updateEditorSemantics();
       if (nextEmpty) {
         enhancer?.dispose();
         enhancer = undefined;
@@ -563,6 +602,9 @@ export function createRenderedNodeView(
     ignoreMutation: () => true,
     destroy: () => {
       disposed = true;
+      dom.removeEventListener("click", handleClick);
+      dom.removeEventListener("dblclick", handleDoubleClick);
+      dom.removeEventListener("keydown", handleKeyDown);
       enhancer?.dispose();
       enhancer = undefined;
     },
