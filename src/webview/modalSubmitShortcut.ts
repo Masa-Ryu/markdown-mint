@@ -8,10 +8,17 @@ const INSERT_DIALOG_SELECTOR = [
 /**
  * Submit insertion/editing dialogs with Ctrl+Enter without affecting
  * confirmation or recovery dialogs.
+ *
+ * Listen on the owning document in the capture phase so controls inside a
+ * modal cannot accidentally hide the shortcut by stopping keydown bubbling.
+ * Submission is deferred until the key event finishes dispatching so a modal's
+ * own key handler can update its current selection first (for example, the
+ * table-size grid).
  */
 export function installModalSubmitShortcut(
   root: Document | HTMLElement = document,
 ): () => void {
+  const ownerDocument = root instanceof Document ? root : root.ownerDocument;
   const onKeyDown = (event: Event): void => {
     if (!(event instanceof KeyboardEvent)) return;
     if (
@@ -27,6 +34,8 @@ export function installModalSubmitShortcut(
 
     const target = event.target;
     if (!(target instanceof Element)) return;
+    if (root instanceof HTMLElement && !root.contains(target)) return;
+
     const dialog = target.closest<HTMLDialogElement>(INSERT_DIALOG_SELECTOR);
     if (!dialog?.open) return;
 
@@ -38,11 +47,14 @@ export function installModalSubmitShortcut(
     if (!submitter) return;
 
     event.preventDefault();
-    event.stopPropagation();
-    if (typeof form.requestSubmit === "function") form.requestSubmit(submitter);
-    else submitter.click();
+    queueMicrotask(() => {
+      if (!dialog.open || !dialog.isConnected || !form.isConnected) return;
+      if (submitter.disabled || !submitter.isConnected) return;
+      if (typeof form.requestSubmit === "function") form.requestSubmit(submitter);
+      else submitter.click();
+    });
   };
 
-  root.addEventListener("keydown", onKeyDown);
-  return () => root.removeEventListener("keydown", onKeyDown);
+  ownerDocument.addEventListener("keydown", onKeyDown, true);
+  return () => ownerDocument.removeEventListener("keydown", onKeyDown, true);
 }
