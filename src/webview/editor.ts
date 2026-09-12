@@ -3924,9 +3924,9 @@ export class MarkdownEditorApp {
     imageTitle.id = "mm-image-dialog-title";
     imageTitle.textContent = "Insert image";
     this.imageUrlInput = makeField(
-      "Image URL",
-      "url",
-      "https://example.com/image.png",
+      "Image path or URL",
+      "text",
+      "./images/example.png",
     );
     this.imageAltInput = makeField("Alt text", "text", "Description");
     const imageActions = document.createElement("div");

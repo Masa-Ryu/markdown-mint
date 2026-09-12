@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Fixed image insertion to accept relative paths while preserving the original
+  Markdown source and existing absolute URL support.
+
 - Fixed Block quote toolbar toggling to unwrap blockquotes with ProseMirror's
   lift transform while preserving Markdown, block structure, and cursor
   position.
