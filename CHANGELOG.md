@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Fixed Block quote toolbar toggling to unwrap blockquotes with ProseMirror's
+  lift transform while preserving Markdown, block structure, and cursor
+  position.
+
 - Reduced unnecessary edit-time serialization, hidden preview rendering, and
   re-highlighting of unchanged code while preserving synchronization, safety,
   and display quality.

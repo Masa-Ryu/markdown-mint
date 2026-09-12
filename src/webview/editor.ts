@@ -40,6 +40,7 @@ import {
   sinkListItem,
   splitListItem,
 } from "prosemirror-schema-list";
+import { liftTarget } from "prosemirror-transform";
 import {
   isHostMessage,
   PROTOCOL_VERSION,
@@ -852,15 +853,13 @@ function commandForBlock(typeName: string, attrs?: Record<string, unknown>) {
       if (quoteDepth !== null) {
         if (!dispatch) return true;
         const quoteNode = state.selection.$from.node(quoteDepth);
-        dispatch(
-          state.tr
-            .replaceWith(
-              state.selection.$from.before(quoteDepth),
-              state.selection.$from.after(quoteDepth),
-              quoteNode.content,
-            )
-            .scrollIntoView(),
+        const quoteRange = state.selection.$from.blockRange(
+          state.selection.$to,
+          (node) => node === quoteNode,
         );
+        const target = quoteRange ? liftTarget(quoteRange) : null;
+        if (!quoteRange || target === null) return false;
+        dispatch(state.tr.lift(quoteRange, target).scrollIntoView());
         return true;
       }
 
