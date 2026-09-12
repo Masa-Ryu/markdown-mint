@@ -8,7 +8,10 @@ import {
   enhanceRenderedContent,
   type MermaidRuntime,
 } from "../../src/webview/mermaidEnhancer";
-import { enhanceCodeBlockControls } from "../../src/webview/codeBlockControls";
+import {
+  enhanceCodeBlockControls,
+  syncCodeLineNumberHeights,
+} from "../../src/webview/codeBlockControls";
 import { renderCodeBlock } from "../../src/core/visualRendering";
 import { createRenderingPlugin } from "../../src/webview/rendering";
 
@@ -250,6 +253,48 @@ describe("local Mermaid rendering lifecycle", () => {
     binding.dispose();
     expect(card.classList.contains("mm-code-block-expanded")).toBe(false);
     expect(document.querySelector(".mm-code-focus-backdrop")).toBeNull();
+  });
+
+  it("keeps one line number per logical line when wrapped code is measured", () => {
+    const source = Array.from(
+      { length: 20 },
+      (_, index) => `line ${index + 1} with a long source value`,
+    ).join("\n");
+    const root = document.createElement("div");
+    root.innerHTML = renderCodeBlock(source, "ts");
+    document.body.append(root);
+    const block = root.firstElementChild as HTMLElement;
+    block.classList.add("mm-code-wrap-lines");
+
+    syncCodeLineNumberHeights(block);
+
+    const numbers = Array.from(
+      block.querySelectorAll<HTMLElement>(".mm-code-line-numbers span"),
+    );
+    expect(numbers).toHaveLength(20);
+    expect(numbers.map((number) => number.textContent)).toEqual([
+      "1",
+      "2",
+      "3",
+      "4",
+      "5",
+      "6",
+      "7",
+      "8",
+      "9",
+      "10",
+      "11",
+      "12",
+      "13",
+      "14",
+      "15",
+      "16",
+      "17",
+      "18",
+      "19",
+      "20",
+    ]);
+    expect(numbers.every((number) => number.style.minHeight)).toBe(true);
   });
 
   it("sets the native indeterminate property from the safe task state", () => {

@@ -19,4 +19,19 @@ describe("shared document math styles", () => {
       /\.markdown-body \.mm-math-fallback,\s*\.mm-document-content \.mm-math-fallback\s*\{[\s\S]*?font-size:\s*1\.05em;\s*line-height:\s*1\.45;/,
     );
   });
+
+  it("uses one code font metric for gutters and bodies across preview surfaces", () => {
+    expect(documentCss).toMatch(
+      /\.markdown-body \.mm-code-block,\s*\.mm-document-content \.mm-code-block\s*\{[\s\S]*?--mm-code-font-size:\s*0\.92em;[\s\S]*?--mm-code-line-height:\s*1\.5;/,
+    );
+    expect(documentCss).toMatch(
+      /\.markdown-body \.mm-code-line-numbers,\s*\.mm-document-content \.mm-code-line-numbers\s*\{[\s\S]*?font-size:\s*var\(--mm-code-font-size\);[\s\S]*?line-height:\s*var\(--mm-code-line-height\);/,
+    );
+    expect(documentCss).toMatch(
+      /\.markdown-body \.mm-code-block-pre,\s*\.mm-document-content \.mm-code-block-pre\s*\{[\s\S]*?font-size:\s*var\(--mm-code-font-size\);[\s\S]*?line-height:\s*var\(--mm-code-line-height\);/,
+    );
+    expect(documentCss).toMatch(
+      /\.markdown-body \.mm-code-block-pre code,\s*\.mm-document-content \.mm-code-block-pre code\s*\{[\s\S]*?font-size:\s*inherit;[\s\S]*?line-height:\s*inherit;/,
+    );
+  });
 });

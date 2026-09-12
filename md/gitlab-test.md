@@ -10,9 +10,9 @@ GitLab Flavored Markdown (GLFM)およびGitLab固有機能のテストファイ�
 
 **Bold**
 
-*Italic*
+_Italic_
 
-***Bold + Italic***
+_**Bold + Italic**_
 
 ~~Strikethrough~~
 
@@ -55,21 +55,21 @@ Preview
 
 ## 4. Table
 
-| Feature | Status | Priority |
-| :--- | :---: | ---: |
-| Rich Editor | ✅ | 1 |
-| Preview | 🚧 | 2 |
-| Formatter | ⬜ | 3 |
-| GitLab Profile | ✅ | 4 |
+| Feature        | Status | Priority |
+| :------------- | :----: | -------: |
+| Rich Editor    |   ✅   |        1 |
+| Preview        |   🚧   |        2 |
+| Formatter      |   ⬜   |        3 |
+| GitLab Profile |   ✅   |        4 |
 
 ### Table Selection Test
 
-| A | B | C | D |
+| A   | B   | C   | D   |
 | --- | --- | --- | --- |
-| A1 | B1 | C1 | D1 |
-| A2 | B2 | C2 | D2 |
-| A3 | B3 | C3 | D3 |
-| A4 | B4 | C4 | D4 |
+| A1  | B1  | C1  | D1  |
+| A2  | B2  | C2  | D2  |
+| A3  | B3  | C3  | D3  |
+| A4  | B4  | C4  | D4  |
 
 `B2:C3`をドラッグ選択してコピーし、別セルへ貼り付けます。
 
@@ -178,6 +178,7 @@ GitLab supports footnotes.[^1]
 Another footnote.[^gitlab]
 
 [^1]: GitLab footnote number one.
+
 [^gitlab]: GitLab Flavored Markdown test.
 
 ---
@@ -327,10 +328,10 @@ A \| B
 
 ## 22. Formatter Test
 
-|Column A|Column B|Column C|
-|---|:---:|---:|
-|Left|Center|Right|
-|GitLab|Markdown|Test|
+| Column A | Column B | Column C |
+| -------- | :------: | -------: |
+| Left     |  Center  |    Right |
+| GitLab   | Markdown |     Test |
 
 Fruits
 : Apple
@@ -376,8 +377,8 @@ Formatを2回実行し、2回目に差分が発生しないことを確認しま
 
 ## 24. End Test
 
-| Last | Table |
-| --- | --- |
-| GitLab | Test |
+| Last   | Table |
+| ------ | ----- |
+| GitLab | Test  |
 
 表の後ろにカーソルを置き、新しい段落を追加できることを確認します。
