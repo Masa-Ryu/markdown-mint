@@ -27,12 +27,32 @@ generated layout attributes are exercised under CSP.
 Use `http://127.0.0.1:4173/?fixture=math&mode=preview` to show the dedicated
 preview panel instead of the editable surface.
 
+Use `http://127.0.0.1:4173/?fixture=mermaid` for the real Mermaid flowchart and
+sequence regression fixture. After the diagrams render, evaluate
+`window.__markdownMintHarness.mermaidCheck()` in the browser. It checks the
+six flowchart node-label anchors and viewport-coordinate center deltas, keeps
+the Yes/No edge labels and sequence messages aligned, confirms the source is
+unchanged, and reports CSP violations. `style-src-elem` violations for an
+inline stylesheet are expected for Mermaid 11.17.2; unexpected directives or
+blocked URLs fail the check.
+
+Use `http://127.0.0.1:4173/?fixture=mermaid-coverage` for the broader flowchart
+TD, subgraph, rounded/diamond/rectangular, Japanese, multiline, Markdown
+label, class-diagram, and state-diagram coverage. The same helper checks the
+visible node geometry and diagram-type boundaries.
+
 Open `http://127.0.0.1:4173/native.html?fixture=math` to run the same equations
 through the native preview cascade. The server generates the KaTeX markup with
 `trust: false`, so the rich editor, dedicated preview, and native preview can
 be compared at the same viewport and font settings.
 The native fixture supplies a small dark-theme variable sheet because a standalone
 browser tab does not receive VS Code's injected `--vscode-*` theme variables.
+
+Open `http://127.0.0.1:4173/native.html?fixture=mermaid` to run the same
+Mermaid flowchart and sequence placeholders through the native preview script.
+Its `window.__markdownMintNative.metrics().mermaid` result reports node anchors,
+viewport-coordinate center deltas, edge labels, sequence messages, and source
+preservation.
 
 The server maps `/__vscode__/markdown.css` to the installed VS Code Markdown
 stylesheet before `media/document.css` is loaded. Set `VSCODE_MARKDOWN_CSS` on

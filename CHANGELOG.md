@@ -7,12 +7,19 @@
   while preserving normal in-code movement, controls, modifiers, IME, and
   expanded-code focus trapping.
 
+- Fixed Mermaid flowchart node labels that drifted right when Mermaid's inline
+  stylesheet was blocked by the strict Webview CSP. Shared external CSS now
+  restores centering only for `flowchart-v2` node labels; edge labels, other
+  diagram types, CSP, sanitization, and Markdown source preservation remain
+  unchanged.
+
 - Simplified the code-language picker to show language labels only while
   retaining searchable identifiers, aliases, and highlighting metadata.
 
-- Fixed Ctrl+Enter submission for link, image, profile-feature, and table
-  insertion/editing modals by capturing the shortcut at the document boundary
-  before nested controls can stop propagation. Submission still preserves IME
+- Fixed modal submit shortcuts to use the platform primary modifier: Command+Enter
+  on macOS and Ctrl+Enter on Windows/Linux. Link, image, profile-feature, and
+  table insertion/editing modals capture the shortcut at the document boundary
+  before nested controls can stop propagation. Submission preserves IME
   composition, excludes destructive confirmations, and lets modal-local key
   handlers update their state before the form is submitted.
 

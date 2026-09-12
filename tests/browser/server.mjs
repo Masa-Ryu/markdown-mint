@@ -20,6 +20,52 @@ const contentTypes = {
 const browserContentSecurityPolicy =
   "default-src 'none'; img-src 'self' https: data:; style-src 'self'; style-src-elem 'self'; style-src-attr 'unsafe-inline'; font-src 'self' data:; script-src 'self' 'nonce-mm-test-nonce'; connect-src 'none'";
 
+const nativeMermaidSources = [
+  [
+    "flowchart LR",
+    "    A[Markdown Source] --> B[Rich Editor]",
+    "    B --> C[Preview]",
+    "    C --> D{Looks identical?}",
+    "    D -- Yes --> E[Save]",
+    "    D -- No --> B",
+    "    E --> F[GitHub / GitLab]",
+  ].join("\n"),
+  [
+    "sequenceDiagram",
+    "    participant U as User",
+    "    participant E as Editor",
+    "    participant M as Markdown",
+    "    participant P as Preview",
+    "    U->>E: Edit",
+    "    E->>M: Update",
+    "    M->>P: Render",
+    "    P-->>U: Preview",
+  ].join("\n"),
+];
+
+function escapeHtml(value) {
+  return value.replace(
+    /[&<>"']/g,
+    (character) =>
+      ({
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        '"': "&quot;",
+        "'": "&#39;",
+      })[character],
+  );
+}
+
+function nativeMermaidPlaceholder(source) {
+  const escaped = escapeHtml(source);
+  return `<div class="mm-diagram mm-mermaid" data-mm-mermaid="true" data-mermaid-source="${escaped}" data-mm-mermaid-state="pending"><p class="mm-diagram-status">Rendering Mermaid diagram...</p><pre class="mm-diagram-source">${escaped}</pre></div>`;
+}
+
+const nativeMermaidFixture = nativeMermaidSources
+  .map(nativeMermaidPlaceholder)
+  .join("\n");
+
 function renderNativeMath(source, display) {
   const tag = display ? "div" : "span";
   const className = display
@@ -92,6 +138,14 @@ const server = http.createServer(async (request, response) => {
         html = html.replace(
           "<!-- markdown-mint-math-fixture -->",
           nativeMathFixture,
+        );
+      if (
+        pathname === "/native.html" &&
+        requestUrl.searchParams.get("fixture") === "mermaid"
+      )
+        html = html.replace(
+          "<!-- markdown-mint-mermaid-fixture -->",
+          nativeMermaidFixture,
         );
       body = Buffer.from(html, "utf8");
     }

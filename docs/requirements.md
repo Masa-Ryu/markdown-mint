@@ -414,6 +414,24 @@ The 0.0.5 and earlier evidence above remains historical.
   attributed to the VS Code host environment rather than the project test
   assertions; see the release/PR report for the exact runner location.
 
+## 0.0.29 Mermaid flowchart label alignment verification
+
+- Mermaid 11.17.2 flowcharts emit node-label `<text>` at `x=0` and rely on
+  Mermaid's generated stylesheet for `text-anchor: middle`. The browser
+  harness reproduced the strict-CSP failure: computed `text-anchor` was
+  `start`, and the six reproduction nodes had viewport-coordinate center
+  deltas from 9.27px to 34.64px.
+- `media/document.css` restores `text-anchor: middle` only for
+  `svg[aria-roledescription="flowchart-v2"] .node .label text:not([text-anchor])`. The real
+  Mermaid browser check measured all six nodes at 0.00–0.30px center delta in
+  the Rich Editor, Dedicated Preview, and native Markdown Preview. Yes/No
+  edge labels and sequence messages remained `middle`.
+- The browser fixture kept the production CSP and reported only the known
+  Mermaid inline `style-src-elem` violations; no unexpected CSP violation,
+  external URL, sanitizer regression, or Markdown source change was observed.
+  The before/after screenshots are captured under
+  `output/playwright/mermaid-labels/` during local verification.
+
 ## Explicit limits
 
 Paste/drop image asset copying is optional follow-up work. Native IME and visual

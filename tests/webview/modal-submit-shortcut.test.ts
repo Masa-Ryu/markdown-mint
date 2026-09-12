@@ -3,6 +3,9 @@ import { installModalSubmitShortcut } from "../../src/webview/modalSubmitShortcu
 
 type InsertDialogKind = "link" | "image" | "profile-feature" | "table";
 
+const NON_MAC_PLATFORM = "Linux x86_64";
+const MAC_PLATFORM = "MacIntel";
+
 function appendInsertDialog(
   root: HTMLElement,
   kind: InsertDialogKind,
@@ -51,7 +54,7 @@ afterEach(() => {
 });
 
 describe("installModalSubmitShortcut", () => {
-  it("submits each insertion/editing modal with Ctrl+Enter", async () => {
+  it("submits each insertion/editing modal with Ctrl+Enter on Windows/Linux", async () => {
     const kinds: InsertDialogKind[] = [
       "link",
       "image",
@@ -64,7 +67,7 @@ describe("installModalSubmitShortcut", () => {
       document.body.append(root);
       const { form, input, submit } = appendInsertDialog(root, kind);
       const requestSubmit = replaceRequestSubmit(form);
-      const dispose = installModalSubmitShortcut(root);
+      const dispose = installModalSubmitShortcut(root, NON_MAC_PLATFORM);
 
       const event = new KeyboardEvent("keydown", {
         key: "Enter",
@@ -83,13 +86,56 @@ describe("installModalSubmitShortcut", () => {
     }
   });
 
+  it("submits with Command+Enter on macOS", async () => {
+    const root = document.createElement("div");
+    document.body.append(root);
+    const { form, input, submit } = appendInsertDialog(root, "image");
+    const requestSubmit = replaceRequestSubmit(form);
+    const dispose = installModalSubmitShortcut(root, MAC_PLATFORM);
+
+    const event = new KeyboardEvent("keydown", {
+      key: "Enter",
+      metaKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    input.dispatchEvent(event);
+    await flushShortcutSubmit();
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(requestSubmit).toHaveBeenCalledTimes(1);
+    expect(requestSubmit).toHaveBeenCalledWith(submit);
+    dispose();
+  });
+
+  it("does not treat Ctrl+Enter as the macOS primary shortcut", async () => {
+    const root = document.createElement("div");
+    document.body.append(root);
+    const { form, input } = appendInsertDialog(root, "image");
+    const requestSubmit = replaceRequestSubmit(form);
+    const dispose = installModalSubmitShortcut(root, MAC_PLATFORM);
+
+    input.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "Enter",
+        ctrlKey: true,
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    await flushShortcutSubmit();
+
+    expect(requestSubmit).not.toHaveBeenCalled();
+    dispose();
+  });
+
   it("submits even when a modal control stops keydown bubbling", async () => {
     const root = document.createElement("div");
     document.body.append(root);
     const { form, input, submit } = appendInsertDialog(root, "image");
     const requestSubmit = replaceRequestSubmit(form);
     input.addEventListener("keydown", (event) => event.stopPropagation());
-    const dispose = installModalSubmitShortcut(root);
+    const dispose = installModalSubmitShortcut(root, NON_MAC_PLATFORM);
 
     input.dispatchEvent(
       new KeyboardEvent("keydown", {
@@ -112,7 +158,7 @@ describe("installModalSubmitShortcut", () => {
     document.body.append(root, otherRoot);
     const { form, input } = appendInsertDialog(otherRoot, "link");
     const requestSubmit = replaceRequestSubmit(form);
-    const dispose = installModalSubmitShortcut(root);
+    const dispose = installModalSubmitShortcut(root, NON_MAC_PLATFORM);
 
     input.dispatchEvent(
       new KeyboardEvent("keydown", {
@@ -142,7 +188,7 @@ describe("installModalSubmitShortcut", () => {
     dialog.append(form);
     root.append(dialog);
     const requestSubmit = replaceRequestSubmit(form);
-    const dispose = installModalSubmitShortcut(root);
+    const dispose = installModalSubmitShortcut(root, NON_MAC_PLATFORM);
 
     input.dispatchEvent(
       new KeyboardEvent("keydown", {
@@ -164,6 +210,7 @@ describe("installModalSubmitShortcut", () => {
       { ctrlKey: true, shiftKey: true },
       { ctrlKey: true, altKey: true },
       { metaKey: true },
+      { ctrlKey: true, metaKey: true },
       { ctrlKey: true, isComposing: true },
       { ctrlKey: true, repeat: true },
     ];
@@ -173,7 +220,7 @@ describe("installModalSubmitShortcut", () => {
       document.body.append(root);
       const { form, input } = appendInsertDialog(root, "table");
       const requestSubmit = replaceRequestSubmit(form);
-      const dispose = installModalSubmitShortcut(root);
+      const dispose = installModalSubmitShortcut(root, NON_MAC_PLATFORM);
 
       input.dispatchEvent(
         new KeyboardEvent("keydown", {
@@ -197,7 +244,7 @@ describe("installModalSubmitShortcut", () => {
     const { form, input, submit } = appendInsertDialog(root, "table");
     submit.disabled = true;
     const requestSubmit = replaceRequestSubmit(form);
-    const dispose = installModalSubmitShortcut(root);
+    const dispose = installModalSubmitShortcut(root, NON_MAC_PLATFORM);
 
     input.dispatchEvent(
       new KeyboardEvent("keydown", {
