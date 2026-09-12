@@ -122,3 +122,28 @@ export function alertSourceWithBody(source: string, body: string): string {
     parts.trailingLineEnding
   );
 }
+
+/** Change only the alert marker while preserving every other source byte. */
+export function alertSourceWithType(source: string, type: AlertType): string {
+  const parts = parseAlertSource(source);
+  const marker = `[!${type}]`;
+  const lines = source.split(/(\r\n|\r|\n)/);
+  let lineIndex = 0;
+
+  for (let index = 0; index < lines.length; index += 2) {
+    if (lineIndex !== parts.markerIndex) {
+      lineIndex += 1;
+      continue;
+    }
+    const line = lines[index] ?? "";
+    const updated = line.replace(
+      /\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]/i,
+      marker,
+    );
+    if (updated === line) return source;
+    lines[index] = updated;
+    return lines.join("");
+  }
+
+  return source;
+}

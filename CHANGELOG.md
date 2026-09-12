@@ -21,6 +21,11 @@
   paragraphs at their boundaries; native textarea composition and host history
   commands remain protected.
 
+- Added double-click Alert editing through the existing Profile Feature dialog.
+  Insert and Edit modes now share the dialog, preserve the existing Alert body,
+  update the same raw Alert block, and keep lazy continuation source unchanged
+  when only the Alert type changes.
+
 ## 0.0.23
 
 - Reworked code-block headers across the rich editor, dedicated preview, and
