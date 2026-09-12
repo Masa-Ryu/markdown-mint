@@ -49,6 +49,10 @@ describe("visual rendering helpers", () => {
     const block = renderMath("\\frac{1}{2}", true);
     expect(inline).toContain("katex");
     expect(block).toContain("katex-display");
+    // KaTeX positions scripts and fractions with generated style attributes;
+    // the production Webview CSP explicitly permits those attributes.
+    expect(inline).toMatch(/class="msupsub"[\s\S]*style="/);
+    expect(block).toMatch(/class="mfrac"[\s\S]*style="/);
     expect(renderMath("\\href{javascript:alert(1)}{x}", false)).not.toContain(
       'href="javascript:',
     );

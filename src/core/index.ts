@@ -1,4 +1,6 @@
 import MarkdownIt from "markdown-it";
+import type StateBlock from "markdown-it/lib/rules_block/state_block.mjs";
+import type StateInline from "markdown-it/lib/rules_inline/state_inline.mjs";
 import * as prettier from "prettier/standalone";
 import markdownPrettierPlugin from "prettier/plugins/markdown";
 import type { Options as PrettierOptions } from "prettier";
@@ -491,6 +493,20 @@ export function configureMarkdownIt(
   } else {
     md.enable(["table", "strikethrough"]);
   }
+  // Math must be claimed before Markdown-it's heading/emphasis rules.  A
+  // display equation containing a line with only `=` is otherwise parsed as
+  // a Setext heading, and inline equations containing Markdown punctuation
+  // can be split into unrelated tokens before the renderer sees them.
+  md.block.ruler.before(
+    "heading",
+    "markdown_mint_math_block",
+    markdownMintMathBlock,
+  );
+  md.inline.ruler.before(
+    "text",
+    "markdown_mint_math_inline",
+    markdownMintMathInline,
+  );
   return md;
 }
 
@@ -504,6 +520,88 @@ export function createMarkdownIt(profile: Profile = "github"): MarkdownIt {
 }
 
 const escapedDollarMarker = "\uE000\uE001";
+
+const inlineMathPattern = /^\$(?!\$)(?=\S)(?:\\.|[^$\r\n])*?(?<!\s)\$(?![\w$])/;
+
+function isEscapedAt(source: string, offset: number): boolean {
+  let slashCount = 0;
+  for (let index = offset - 1; index >= 0 && source[index] === "\\"; index -= 1)
+    slashCount += 1;
+  return slashCount % 2 === 1;
+}
+
+function markdownMintMathInline(state: StateInline, silent: boolean): boolean {
+  const start = state.pos;
+  if (
+    state.src.charCodeAt(start) !== 36 ||
+    state.src.charCodeAt(start + 1) === 36 ||
+    isEscapedAt(state.src, start)
+  )
+    return false;
+  const match = state.src.slice(start).match(inlineMathPattern);
+  if (!match) return false;
+  if (!silent) {
+    const token = state.push("math_inline", "math", 0);
+    token.markup = "$";
+    token.content = match[0]!;
+  }
+  state.pos += match[0]!.length;
+  return true;
+}
+
+function markdownMintMathBlock(
+  state: StateBlock,
+  startLine: number,
+  endLine: number,
+  silent: boolean,
+): boolean {
+  // Display delimiters are a top-level construct in Markdown Mint. Nested
+  // block content keeps the existing quote/list parsing path so its source
+  // prefixes are not accidentally sent to KaTeX as part of the expression.
+  if (state.level !== 0) return false;
+  const opening = state.src.slice(
+    state.bMarks[startLine]! + state.tShift[startLine]!,
+    state.eMarks[startLine]!,
+  );
+  const openingTrimmed = opening.trim();
+  if (!/^\$\$\s*$/.test(openingTrimmed)) {
+    // Also accept a compact one-line display expression such as `$$x^2$$`.
+    if (!/^\$\$[\s\S]*\$\$\s*$/.test(openingTrimmed)) return false;
+    if (silent) return true;
+    const token = state.push("math_block", "math", 0);
+    token.block = true;
+    token.map = [startLine, startLine + 1];
+    token.markup = "$$";
+    token.content = openingTrimmed;
+    state.line = startLine + 1;
+    return true;
+  }
+
+  let closingLine = startLine + 1;
+  for (; closingLine < endLine; closingLine += 1) {
+    const line = state.src.slice(
+      state.bMarks[closingLine]! + state.tShift[closingLine]!,
+      state.eMarks[closingLine]!,
+    );
+    if (/^\$\$\s*$/.test(line.trim())) break;
+  }
+  // An unmatched opening delimiter remains an ordinary paragraph.  This is
+  // essential for prose and code examples that happen to contain `$$`.
+  if (closingLine >= endLine) return false;
+  if (silent) return true;
+  const token = state.push("math_block", "math", 0);
+  token.block = true;
+  token.map = [startLine, closingLine + 1];
+  token.markup = "$$";
+  token.content = state.getLines(
+    startLine + 1,
+    closingLine,
+    state.blkIndent,
+    true,
+  );
+  state.line = closingLine + 1;
+  return true;
+}
 
 function maskEscapedDollars(source: string): string {
   // Keep source offsets stable while preventing escaped currency from being
@@ -780,13 +878,9 @@ function parseInline(
     if (!value) return;
     const footnotePattern =
       footnotes && footnotes.size > 0 ? "\\[\\^[^\\]\\r\\n]+\\]" : "(?!)";
-    const mathPattern =
-      "(?<!\\\\)(?<!\\$)\\$(?!\\$)(?=\\S)(?:\\\\.|[^\\$\\r\\n])*?(?<!\\s)\\$(?![\\w$])";
     const pattern = new RegExp(
       "(" +
         footnotePattern +
-        "|" +
-        mathPattern +
         (profile === "gitlab"
           ? "|\\{-[\\s\\S]*?-\\}|\\{\\+[\\s\\S]*?\\+\\}|:[a-zA-Z0-9_+\\-]+:"
           : "|:[a-zA-Z0-9_+\\-]+:") +
@@ -805,8 +899,6 @@ function parseInline(
             footnoteRawInline(source, "footnote_ref", markStack, footnotes),
           );
         else emitText(source);
-      } else if (source.startsWith("$")) {
-        output.push(rawInline(source, "math_inline", markStack));
       } else if (source.startsWith("{-") || source.startsWith("{+")) {
         output.push(rawInline(source, "gitlab-inline-diff", markStack));
       } else {
@@ -897,8 +989,9 @@ function parseInline(
       case "entity":
       case "escape":
       case "html_entity":
-        // Keep the same-length escape marker until the math scan has run.
-        // Restoring it before scanning would turn \$ into a false delimiter.
+        // Restore escaped dollars only after the custom inline rule has
+        // claimed real delimiters. This keeps `\$` literal and prevents it
+        // from becoming a false math opener.
         pushText(child.content ?? "");
         break;
       case "softbreak":
@@ -983,7 +1076,13 @@ function parseInline(
       case "math_inline":
       case "footnote_ref":
       case "footnote_anchor": {
-        const value = tokenText(child);
+        // Math tokens are created before Markdown-it applies escape rules.
+        // Restore an escaped dollar literally so `$x\$y$` stays one source
+        // atom and can be serialized without changing its expression.
+        const value =
+          child.type === "math_inline"
+            ? literalTokenText(child)
+            : tokenText(child);
         const source = value.startsWith("[^")
           ? value
           : `[^${value.replace(/^\^/, "")}]`;
@@ -1238,8 +1337,7 @@ function protectedBlockText(raw: string): boolean {
   const trimmed = raw.trimStart();
   return (
     /^:::[A-Za-z]/.test(trimmed) ||
-    /^>\s*\[!(?:NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]/im.test(raw) ||
-    /^\s*\$\$/.test(trimmed)
+    /^>\s*\[!(?:NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]/im.test(raw)
   );
 }
 
@@ -1396,6 +1494,15 @@ function parseBlocks(
         index += 1;
         break;
       }
+      case "math_block":
+        result.push(
+          nodeTypes.raw_block.create({
+            source: sourceForToken(token, source, offsets),
+            kind: "math-block",
+          }),
+        );
+        index += 1;
+        break;
       case "html_block":
         result.push(
           nodeTypes.raw_block.create({

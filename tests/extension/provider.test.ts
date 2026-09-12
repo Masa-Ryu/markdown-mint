@@ -498,8 +498,11 @@ const vscode = vi.hoisted(() => {
 
 vi.mock("vscode", () => vscode);
 
-const { MarkdownMintEditorProvider, extendMarkdownIt } =
-  await import("../../src/extension/extension");
+const {
+  MarkdownMintEditorProvider,
+  extendMarkdownIt,
+  webviewContentSecurityPolicy,
+} = await import("../../src/extension/extension");
 
 function context(): {
   extensionUri: unknown;
@@ -513,6 +516,17 @@ async function flush(): Promise<void> {
 }
 
 describe("MarkdownMintEditorProvider", () => {
+  it("allows KaTeX style attributes without broadening script or network policy", () => {
+    const policy = webviewContentSecurityPolicy("vscode-resource:", "nonce");
+    expect(policy).toContain("style-src vscode-resource:");
+    expect(policy).toContain("style-src-elem vscode-resource:");
+    expect(policy).toContain("style-src-attr 'unsafe-inline'");
+    expect(policy).toContain("script-src 'nonce-nonce'");
+    expect(policy).toContain("connect-src 'none'");
+    expect(policy).not.toContain("script-src 'unsafe-inline'");
+    expect(policy).not.toContain("unsafe-eval");
+  });
+
   it("applies a validated edit and acknowledges the resulting TextDocument version", async () => {
     vscode.__state.reset();
     const provider = new MarkdownMintEditorProvider(context() as never);
