@@ -1890,7 +1890,7 @@ function parseInternal(source: string, profile: Profile): MarkdownSnapshot {
       const detail = event.detail;
       const body = source.slice(detail.start, detail.end);
       const separator = source.slice(detail.end, nextStart);
-      const parts = cachedDetailsParts(body, profile, detail.tags);
+      const parts = cachedDetailsParts(body, profile, detail.tags, md);
       const node = parts
         ? nodeTypes.details.create(
             {
@@ -2311,12 +2311,15 @@ function cachedDetailsParts(
   source: string,
   profile: Profile,
   tags?: readonly DetailsTagRange[],
+  parser?: MarkdownIt,
 ): DetailsSourceParts | null {
   const key = `${profile}\u0000${source}`;
   if (detailsPartsCache.has(key)) return detailsPartsCache.get(key)!;
+  const resolvedParser = parser ?? createMarkdownIt(profile);
   const parts = splitDetailsSource(
     source,
-    tags ?? detailsTagRanges(source, createMarkdownIt(profile)),
+    tags ?? detailsTagRanges(source, resolvedParser),
+    resolvedParser,
   );
   if (detailsPartsCache.size >= 64)
     detailsPartsCache.delete(detailsPartsCache.keys().next().value!);
