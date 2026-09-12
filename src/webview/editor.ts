@@ -65,9 +65,17 @@ import {
   enhanceRenderedContent,
   ALERT_LOCAL_INPUT_META,
   type AlertBoundaryDirection,
+  type AlertEditRequest,
   type AlertHistoryCommand,
   type RenderingEnhancer,
 } from "./rendering";
+import {
+  ALERT_TYPES,
+  alertSourceWithBody,
+  alertSourceWithType,
+  parseAlertSource,
+  type AlertType,
+} from "../core/alerts";
 import { appendToolbarIcon, type ToolbarIconName } from "./icons";
 import { createListCommand, isListActive, type ListKind } from "./listCommands";
 import {
@@ -238,6 +246,16 @@ interface TableDialogSelection {
   version: number;
   profile: DocumentProfile;
   documentGeneration: number;
+}
+
+interface ProfileFeatureEditTarget {
+  position: number;
+  node: PMNode;
+  document: PMNode;
+  documentGeneration: number;
+  profile: DocumentProfile;
+  source: string;
+  returnFocus: HTMLElement | null;
 }
 
 type TableToolbarAction =
@@ -1951,10 +1969,12 @@ export class MarkdownEditorApp {
   private profileFeatureBodyInput!: HTMLTextAreaElement;
   private profileFeatureBodyLabel!: HTMLSpanElement;
   private profileFeatureError!: HTMLElement;
+  private profileFeatureApplyButton!: HTMLButtonElement;
   private profileFeatureSelection: Selection | null = null;
   private profileFeatureDocumentGeneration = -1;
   private profileFeatureProfile: DocumentProfile | null = null;
   private profileFeatureInvokingButton: HTMLButtonElement | null = null;
+  private profileFeatureEditTarget: ProfileFeatureEditTarget | null = null;
   private profileFeatureId: ProfileFeatureId | null = null;
   private profileFeatureDialogOpen = false;
   private tableDialog!: HTMLDialogElement;
@@ -2205,6 +2225,11 @@ export class MarkdownEditorApp {
                 (direction, position) =>
                   this.moveSelectionAroundAlert(direction, position),
                 (command: AlertHistoryCommand) => this.sendHostCommand(command),
+                ((position, returnFocus) =>
+                  this.openProfileFeatureAlertEditor(
+                    position,
+                    returnFocus,
+                  )) satisfies AlertEditRequest,
               )
             : createRenderedNodeView(node, view, getPos, () => this.profile),
         raw_inline: (node, view, getPos) =>
@@ -3894,9 +3919,9 @@ export class MarkdownEditorApp {
     imageTitle.id = "mm-image-dialog-title";
     imageTitle.textContent = "Insert image";
     this.imageUrlInput = makeField(
-      "Image URL",
-      "url",
-      "https://example.com/image.png",
+      "Image path or URL",
+      "text",
+      "./images/example.png",
     );
     this.imageAltInput = makeField("Alt text", "text", "Description");
     const imageActions = document.createElement("div");
@@ -4068,6 +4093,7 @@ export class MarkdownEditorApp {
     const apply = document.createElement("button");
     apply.type = "submit";
     apply.textContent = "Insert";
+    this.profileFeatureApplyButton = apply;
     actions.append(cancel, apply);
     form.append(title, alertField, titleField, termField, bodyField, actions);
     form.addEventListener("submit", (event) => {
@@ -4187,12 +4213,15 @@ export class MarkdownEditorApp {
     if (!this.captureProfileFeatureSelection()) return;
     this.closeWritingPopups();
     this.closeEmojiPicker();
+    this.profileFeatureEditTarget = null;
     this.profileFeatureId = id;
     this.profileFeatureInvokingButton = invokingButton;
     this.profileFeatureDialogOpen = true;
     this.profileFeatureDialog.dataset.profileFeature = id;
+    this.profileFeatureDialog.dataset.profileFeatureMode = "insert";
     this.profileFeatureDialog.querySelector("h2")!.textContent =
       "Insert " + feature.label;
+    this.profileFeatureApplyButton.textContent = "Insert";
     this.profileFeatureAlertType.parentElement!.hidden = id !== "alert";
     this.profileFeatureTitleInput.parentElement!.hidden = id !== "details";
     this.profileFeatureTermInput.parentElement!.hidden =
@@ -4236,6 +4265,68 @@ export class MarkdownEditorApp {
     else this.profileFeatureBodyInput.focus();
   }
 
+  private openProfileFeatureAlertEditor(
+    position: number,
+    returnFocus?: HTMLElement,
+  ): void {
+    const feature = this.profileFeatureDefinition("alert");
+    if (
+      !feature ||
+      this.profileFeatureDialogOpen ||
+      !this.view.editable ||
+      !this.canUseProfileFeature(feature)
+    )
+      return;
+    const document = this.view.state.doc;
+    const node = document.nodeAt(position);
+    if (
+      !node ||
+      node.type.name !== "raw_block" ||
+      String(node.attrs.kind ?? "") !== "alert"
+    )
+      return;
+
+    const source = String(node.attrs.source ?? "");
+    const parts = parseAlertSource(source);
+    const marker = parts.marker.toUpperCase();
+    const alertType = ALERT_TYPES.includes(marker as AlertType)
+      ? (marker as AlertType)
+      : "NOTE";
+
+    this.closeWritingPopups();
+    this.closeEmojiPicker();
+    this.profileFeatureSelection = null;
+    this.profileFeatureDocumentGeneration = -1;
+    this.profileFeatureProfile = null;
+    this.profileFeatureId = "alert";
+    this.profileFeatureInvokingButton = null;
+    this.profileFeatureEditTarget = {
+      position,
+      node,
+      document,
+      documentGeneration: this.documentGeneration,
+      profile: this.profile,
+      source,
+      returnFocus: returnFocus ?? null,
+    };
+    this.profileFeatureDialogOpen = true;
+    this.profileFeatureDialog.dataset.profileFeature = "alert";
+    this.profileFeatureDialog.dataset.profileFeatureMode = "edit";
+    this.profileFeatureDialog.querySelector("h2")!.textContent = "Edit Alert";
+    this.profileFeatureApplyButton.textContent = "Update";
+    this.profileFeatureAlertType.parentElement!.hidden = false;
+    this.profileFeatureTitleInput.parentElement!.hidden = true;
+    this.profileFeatureTermInput.parentElement!.hidden = true;
+    this.profileFeatureAlertType.value = alertType;
+    this.profileFeatureBodyLabel.textContent = "Body";
+    this.profileFeatureBodyInput.setAttribute("aria-label", "Body");
+    this.profileFeatureBodyInput.value = parts.body;
+    this.profileFeatureError.hidden = true;
+    this.profileFeatureError.textContent = "";
+    this.openDialog(this.profileFeatureDialog);
+    this.profileFeatureBodyInput.focus();
+  }
+
   private profileFeatureValues(): ProfileFeatureValues {
     const id = this.profileFeatureId;
     const body = this.profileFeatureBodyInput.value;
@@ -4260,18 +4351,34 @@ export class MarkdownEditorApp {
     message?: string,
     restoreFocus = true,
   ): void {
-    if (!this.profileFeatureDialogOpen && !this.profileFeatureSelection) return;
+    if (
+      !this.profileFeatureDialogOpen &&
+      !this.profileFeatureSelection &&
+      !this.profileFeatureEditTarget
+    )
+      return;
     this.profileFeatureDialogOpen = false;
     const button = this.profileFeatureInvokingButton;
+    const editReturnFocus = this.profileFeatureEditTarget?.returnFocus;
     this.profileFeatureInvokingButton = null;
     this.profileFeatureSelection = null;
     this.profileFeatureDocumentGeneration = -1;
     this.profileFeatureProfile = null;
+    this.profileFeatureEditTarget = null;
     this.profileFeatureId = null;
     this.profileFeatureDialog.removeAttribute("data-profile-feature");
+    this.profileFeatureDialog.removeAttribute("data-profile-feature-mode");
     this.closeDialog(this.profileFeatureDialog);
     if (message) this.setNotice(message, "error");
-    if (restoreFocus && button?.isConnected) button.focus();
+    if (restoreFocus) {
+      if (editReturnFocus?.isConnected) {
+        editReturnFocus.focus({ preventScroll: true });
+        if (editReturnFocus instanceof HTMLTextAreaElement) {
+          const length = editReturnFocus.value.length;
+          editReturnFocus.setSelectionRange(length, length);
+        }
+      } else if (button?.isConnected) button.focus();
+    }
   }
 
   private runProfileFeature(id: ProfileFeatureId): boolean {
@@ -4308,6 +4415,76 @@ export class MarkdownEditorApp {
   }
 
   private commitProfileFeatureDialog(): void {
+    const editTarget = this.profileFeatureEditTarget;
+    if (editTarget) {
+      const stale =
+        !this.profileFeatureDialogOpen ||
+        !this.initialized ||
+        this.previewOnly ||
+        this.mode !== "rich" ||
+        this.parseError ||
+        this.conflict ||
+        this.syncPaused ||
+        this.composing ||
+        Boolean(this.pendingProfile) ||
+        this.profile !== editTarget.profile ||
+        this.documentGeneration !== editTarget.documentGeneration ||
+        editTarget.document !== this.view.state.doc;
+      const currentNode = stale
+        ? null
+        : this.view.state.doc.nodeAt(editTarget.position);
+      if (
+        stale ||
+        currentNode !== editTarget.node ||
+        !currentNode ||
+        currentNode.type.name !== "raw_block" ||
+        String(currentNode.attrs.kind ?? "") !== "alert" ||
+        String(currentNode.attrs.source ?? "") !== editTarget.source
+      ) {
+        this.closeProfileFeatureDialog(
+          "The document changed while this Alert dialog was open; nothing was updated.",
+        );
+        return;
+      }
+
+      const candidateType = this.profileFeatureAlertType.value.toUpperCase();
+      if (!ALERT_TYPES.includes(candidateType as AlertType)) {
+        this.profileFeatureError.hidden = false;
+        this.profileFeatureError.textContent = "Choose a valid Alert type.";
+        this.profileFeatureAlertType.focus();
+        return;
+      }
+      const nextType = candidateType as AlertType;
+      const originalParts = parseAlertSource(editTarget.source);
+      let nextSource = editTarget.source;
+      if (this.profileFeatureBodyInput.value !== originalParts.body) {
+        nextSource = alertSourceWithBody(
+          nextSource,
+          this.profileFeatureBodyInput.value,
+        );
+      }
+      if (nextType.toLowerCase() !== originalParts.marker.toLowerCase())
+        nextSource = alertSourceWithType(nextSource, nextType);
+
+      try {
+        if (nextSource !== String(currentNode.attrs.source ?? ""))
+          this.dispatchTransaction(
+            this.view.state.tr.setNodeMarkup(editTarget.position, undefined, {
+              ...currentNode.attrs,
+              source: nextSource,
+            }),
+          );
+      } catch {
+        this.profileFeatureError.hidden = false;
+        this.profileFeatureError.textContent =
+          "The Alert could not be updated.";
+        this.profileFeatureBodyInput.focus();
+        return;
+      }
+      this.closeProfileFeatureDialog();
+      return;
+    }
+
     const saved = this.profileFeatureSelection;
     const id = this.profileFeatureId;
     if (!saved || !id) return;
@@ -7094,7 +7271,11 @@ export class MarkdownEditorApp {
     }
     if (this.sync.inflight || this.sync.queuedEdit || this.dirty) {
       this.closeWritingPopups();
-      this.closeProfileFeatureDialog();
+      this.closeProfileFeatureDialog(
+        this.profileFeatureEditTarget
+          ? "The document changed while this Alert dialog was open; nothing was updated."
+          : undefined,
+      );
       this.pendingExternal = message;
       // A profile/configuration broadcast can arrive with the same text while
       // a local edit is in flight. Keep the local document, but retain the
@@ -7252,6 +7433,11 @@ export class MarkdownEditorApp {
       }
     }
 
+    const abortedAlertEdit =
+      this.profileFeatureEditTarget !== null &&
+      (!preserveState || message.mode === "preview");
+    if (abortedAlertEdit) this.closeProfileFeatureDialog();
+
     if (!preserveState) {
       if (this.tableDialogOpen)
         this.closeTableDialog(
@@ -7314,6 +7500,11 @@ export class MarkdownEditorApp {
       this.clearRecoveryIfSaved();
       this.restoreRecoveryState();
       this.flushDeferredHostCommand();
+      if (abortedAlertEdit)
+        this.setNotice(
+          "The document changed while this Alert dialog was open; nothing was updated.",
+          "error",
+        );
       return;
     }
 
@@ -7334,6 +7525,11 @@ export class MarkdownEditorApp {
       if (message.mode !== "preview")
         this.previewEl.textContent = message.markdown;
       this.setNotice("Read-only: " + this.parseError, "error");
+      if (abortedAlertEdit)
+        this.setNotice(
+          "The document changed while this Alert dialog was open; nothing was updated.",
+          "error",
+        );
       this.persistRecovery(this.lastValidMarkdown);
       return;
     }
@@ -7391,6 +7587,11 @@ export class MarkdownEditorApp {
     this.clearRecoveryIfSaved();
     this.restoreRecoveryState();
     this.flushDeferredHostCommand();
+    if (abortedAlertEdit)
+      this.setNotice(
+        "The document changed while this Alert dialog was open; nothing was updated.",
+        "error",
+      );
   }
 
   private flushExternalAfterComposition(): void {

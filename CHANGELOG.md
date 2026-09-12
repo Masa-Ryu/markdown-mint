@@ -5,6 +5,9 @@
 - Simplified the code-language picker to show language labels only while
   retaining searchable identifiers, aliases, and highlighting metadata.
 
+- Fixed image insertion to accept relative paths while preserving the original
+  Markdown source and existing absolute URL support.
+
 - Fixed Block quote toolbar toggling to unwrap blockquotes with ProseMirror's
   lift transform while preserving Markdown, block structure, and cursor
   position.
@@ -23,6 +26,11 @@
   ArrowLeft/ArrowRight move between consecutive Alert bodies and adjacent
   paragraphs at their boundaries; native textarea composition and host history
   commands remain protected.
+
+- Added double-click Alert editing through the existing Profile Feature dialog.
+  Insert and Edit modes now share the dialog, preserve the existing Alert body,
+  update the same raw Alert block, and keep lazy continuation source unchanged
+  when only the Alert type changes.
 
 ## 0.0.23
 

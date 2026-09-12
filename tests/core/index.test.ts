@@ -10,6 +10,7 @@ import {
   serializeMarkdown,
   alertSourceParts,
   alertSourceWithBody,
+  alertSourceWithType,
 } from "../../src/core/index";
 
 function replaceTopLevel(
@@ -227,6 +228,13 @@ describe("Markdown core", () => {
         expect(serialized).not.toMatch(/(?<!\r)\n/);
       expect(renderMarkdown(serialized, "github")).toContain("Edited");
     }
+  });
+
+  it("changes only the alert marker when the type changes", () => {
+    const source = "> [!TIP]\r\n> First\r\ncontinued\r\n> Last\r\n";
+    expect(alertSourceWithType(source, "WARNING")).toBe(
+      "> [!WARNING]\r\n> First\r\ncontinued\r\n> Last\r\n",
+    );
   });
 
   it("keeps display math together when a line resembles a Setext underline", () => {

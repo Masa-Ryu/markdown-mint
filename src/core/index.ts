@@ -28,7 +28,11 @@ import warningTriangleAsset from "../../assets/warning-triangle.svg?raw";
 import alertOctagonAsset from "../../assets/alert-octagon.svg?raw";
 import alertCommentAsset from "../../assets/alert-comment.svg?raw";
 import { parseAlertSource } from "./alerts";
-export { alertSourceWithBody, parseAlertSource } from "./alerts";
+export {
+  alertSourceWithBody,
+  alertSourceWithType,
+  parseAlertSource,
+} from "./alerts";
 export type { AlertSourceParts } from "./alerts";
 export const alertSourceParts = parseAlertSource;
 
