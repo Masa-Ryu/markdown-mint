@@ -1328,7 +1328,7 @@ function protectedFence(
 ): boolean {
   const info = token.info?.trim().split(/\s+/, 1)[0]?.toLowerCase() ?? "";
   if (
-    /^(?:mermaid|math|latex|tex|asciimath|mdx|jsx|tsx|html|frontmatter|yaml|geojson|topojson|stl|plantuml|kroki|blockdiag|graphviz)$/.test(
+    /^(?:mermaid|math|latex|tex|asciimath|mdx|frontmatter|yaml|geojson|topojson|stl|plantuml|kroki|blockdiag|graphviz)$/.test(
       info,
     )
   )

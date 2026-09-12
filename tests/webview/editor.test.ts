@@ -42,6 +42,33 @@ async function flush(): Promise<void> {
   await Promise.resolve();
 }
 
+function chooseCodeLanguage(
+  root: HTMLElement,
+  query: string,
+  optionIdentifier: string,
+): void {
+  const trigger = root.querySelector<HTMLButtonElement>(
+    ".mm-code-language-trigger",
+  );
+  if (!trigger)
+    throw new Error(`code language trigger is not rendered: ${root.innerHTML}`);
+  trigger.click();
+  const input = root.querySelector<HTMLInputElement>(
+    ".mm-code-language-inline",
+  );
+  if (!input) throw new Error("code language picker is not rendered");
+  input.value = query;
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+  const option = Array.from(
+    root.querySelectorAll<HTMLButtonElement>("[data-mm-language-option]"),
+  ).find(
+    (candidate) => candidate.dataset.mmLanguageOption === optionIdentifier,
+  );
+  if (!option)
+    throw new Error(`language option ${optionIdentifier} is not rendered`);
+  option.click();
+}
+
 function makeApp(
   markdown?: string,
   api?: VSCodeApiLike,
@@ -268,6 +295,77 @@ describe("rich editor rendering", () => {
     app.destroy();
   });
 
+  it("keeps shared highlight grammars from collapsing explicit language identities", () => {
+    const cases = [
+      ["ts", "TypeScript", "ts", "ts"],
+      ["typescript", "ts", "typescript", "typescript"],
+      ["tsx", "TypeScript", "typescript", "typescript"],
+      ["html", "XML", "xml", "xml"],
+      ["xml", "HTML", "html", "html"],
+      ["toml", "INI", "ini", "ini"],
+      ["ini", "TOML", "toml", "toml"],
+      ["javascript", "JSX", "jsx", "jsx"],
+      ["jsx", "JavaScript", "javascript", "javascript"],
+    ] as const;
+
+    for (const [current, query, option, expected] of cases) {
+      const { app, root } = makeApp(`\`\`\`${current}\nvalue\n\`\`\``);
+      chooseCodeLanguage(root, query, option);
+      expect(app.view.state.doc.firstChild?.attrs.params).toBe(expected);
+      app.destroy();
+    }
+
+    const suffix = makeApp('```tsx title="component.tsx"\nvalue\n```');
+    chooseCodeLanguage(suffix.root, "TypeScript", "typescript");
+    expect(suffix.app.view.state.doc.firstChild?.attrs.params).toBe(
+      'typescript title="component.tsx"',
+    );
+    suffix.app.destroy();
+  });
+
+  it("confirms metadata loss before removing a language identifier", () => {
+    const cases = [
+      ['ts title="example.ts"', 'title="example.ts"'],
+      ["acme-dsl custom=value", "custom=value"],
+    ] as const;
+
+    for (const [params, visibleSuffix] of cases) {
+      const { app, root, messages } = makeApp(`\`\`\`${params}\nvalue\n\`\`\``);
+      chooseCodeLanguage(root, "", "");
+      const dialog = root.querySelector<HTMLDialogElement>(
+        ".mm-code-language-confirm-dialog",
+      );
+      expect(dialog?.textContent).toContain(visibleSuffix);
+      expect(app.view.state.doc.firstChild?.attrs.params).toBe(params);
+      expect(
+        messages.filter((message: any) => message.type === "edit"),
+      ).toHaveLength(0);
+
+      dialog
+        ?.querySelector<HTMLButtonElement>("button:not([type='submit'])")
+        ?.click();
+      expect(root.querySelector(".mm-code-language-confirm-dialog")).toBeNull();
+      expect(app.view.state.doc.firstChild?.attrs.params).toBe(params);
+      expect(
+        messages.filter((message: any) => message.type === "edit"),
+      ).toHaveLength(0);
+
+      chooseCodeLanguage(root, "", "");
+      const confirmDialog = root.querySelector<HTMLDialogElement>(
+        ".mm-code-language-confirm-dialog",
+      );
+      confirmDialog
+        ?.querySelector<HTMLButtonElement>("button[type='submit']")
+        ?.click();
+      expect(app.view.state.doc.firstChild?.attrs.params).toBe("");
+      expect(
+        messages.filter((message: any) => message.type === "edit"),
+      ).toHaveLength(1);
+      expect(lastEditMarkdown(messages)).not.toContain(params);
+      app.destroy();
+    }
+  });
+
   it("keeps no-language and explicit plaintext selections distinct", () => {
     const { app, root, messages } = makeApp("```ts\nvalue\n```");
     const trigger = root.querySelector<HTMLButtonElement>(
@@ -278,6 +376,7 @@ describe("rich editor rendering", () => {
       .querySelector<HTMLButtonElement>('[data-mm-language-option=""]')
       ?.click();
     expect(app.view.state.doc.firstChild?.attrs.params).toBe("");
+    expect(root.querySelector(".mm-code-language-confirm-dialog")).toBeNull();
     expect(
       root.querySelector<HTMLElement>(".mm-code-block")?.dataset,
     ).toMatchObject({ mmCodeLanguageKind: "unspecified" });

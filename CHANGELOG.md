@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Fixed explicit code-language switching for languages that share a
+  highlight.js grammar, aligned code-block gutter/body typography across
+  preview surfaces, and added confirmation before removing info-string
+  metadata.
+
 - Reduced unnecessary edit-time serialization, hidden preview rendering, and
   re-highlighting of unchanged code while preserving synchronization, safety,
   and display quality.

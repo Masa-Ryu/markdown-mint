@@ -363,6 +363,28 @@ The 0.0.5 and earlier evidence above remains historical.
   screenshots above. Real OS IME candidate UI and pixel measurements at
   100%, 150%, and 200% zoom remain manual checks.
 
+## 0.0.25 code-block follow-up verification
+
+- Explicit language identities remain distinct from shared highlight.js
+  grammars: TSX/TypeScript, HTML/XML, TOML/INI, and JSX/JavaScript can be
+  selected independently while same-language aliases preserve their spelling
+  and info-string suffixes.
+- Removing a language from an info string with additional metadata opens a
+  cancellable warning. Cancel leaves the document untouched; confirmation
+  removes the complete info string in one edit. Suffix-free removal remains
+  immediate.
+- Browser-harness verification covered the rich editor and dedicated preview.
+  Computed metrics matched for line numbers, `pre`, and `code`: `12.88px`
+  font size and `19.32px` line height. The searchable picker selected TSX and
+  updated the rendered card without collapsing the language identity.
+- Unit validation passed 291 tests across 23 files, TypeScript compilation,
+  lint with zero errors (33 existing `any` warnings), formatting, and package
+  verification. The native Extension Host check was attempted but terminated
+  before assertions with `SIGABRT` under Node `v24.5.0` and VS Code `1.137.0`;
+  A retry under Node `v18.0.0` produced the same result, so the failure is
+  attributed to the VS Code host environment rather than the project test
+  assertions; see the release/PR report for the exact runner location.
+
 ## Explicit limits
 
 Paste/drop image asset copying is optional follow-up work. Native IME and visual

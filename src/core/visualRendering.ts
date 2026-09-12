@@ -29,7 +29,12 @@ export interface CodeLanguageMetadata {
 }
 
 export const MAX_RENDER_SOURCE_LENGTH = 250_000;
-const LANGUAGE_ALIASES: Record<string, string> = {
+/**
+ * Resolve a Markdown info-string identifier to the highlight.js grammar that
+ * should render it. Different Markdown languages may intentionally share one
+ * grammar, so this table is not used to determine language identity.
+ */
+const LANGUAGE_HIGHLIGHT_ALIASES: Record<string, string> = {
   c: "c",
   cc: "cpp",
   cpp: "cpp",
@@ -43,6 +48,7 @@ const LANGUAGE_ALIASES: Record<string, string> = {
   go: "go",
   html: "xml",
   http: "http",
+  ini: "ini",
   java: "java",
   javascript: "javascript",
   js: "javascript",
@@ -79,6 +85,64 @@ const LANGUAGE_ALIASES: Record<string, string> = {
   zsh: "bash",
 };
 
+/**
+ * Resolve an info-string identifier to its Markdown language identity. Keep
+ * this list explicit instead of deriving it from the highlight grammar: TSX
+ * and TypeScript, HTML and XML, TOML and INI, and JSX and JavaScript are
+ * distinct user-facing choices even when their syntax is highlighted by the
+ * same grammar.
+ */
+const LANGUAGE_IDENTITIES: Record<string, string> = {
+  c: "c",
+  cc: "cpp",
+  cpp: "cpp",
+  "c++": "cpp",
+  cxx: "cpp",
+  csharp: "csharp",
+  cs: "csharp",
+  "c#": "csharp",
+  css: "css",
+  csv: "csv",
+  go: "go",
+  html: "html",
+  http: "http",
+  ini: "ini",
+  java: "java",
+  javascript: "javascript",
+  js: "javascript",
+  json: "json",
+  jsonc: "json",
+  jsx: "jsx",
+  kotlin: "kotlin",
+  kt: "kotlin",
+  less: "less",
+  md: "markdown",
+  markdown: "markdown",
+  mdx: "markdown",
+  mjs: "javascript",
+  php: "php",
+  py: "python",
+  python: "python",
+  rb: "ruby",
+  ruby: "ruby",
+  rs: "rust",
+  rust: "rust",
+  scss: "scss",
+  sh: "bash",
+  shell: "bash",
+  sql: "sql",
+  swift: "swift",
+  text: "plaintext",
+  toml: "toml",
+  ts: "typescript",
+  tsx: "tsx",
+  typescript: "typescript",
+  xml: "xml",
+  yaml: "yaml",
+  yml: "yaml",
+  zsh: "bash",
+};
+
 const LANGUAGE_LABELS: Record<string, string> = {
   bash: "Shell",
   c: "C",
@@ -94,6 +158,7 @@ const LANGUAGE_LABELS: Record<string, string> = {
   ini: "INI",
   java: "Java",
   javascript: "JavaScript",
+  jsx: "JSX",
   json: "JSON",
   kotlin: "Kotlin",
   less: "Less",
@@ -124,7 +189,9 @@ const LANGUAGE_BADGES: Record<string, string> = {
   "c#": "C#",
   css: "CSS",
   html: "HTML",
+  ini: "INI",
   javascript: "JS",
+  jsx: "JSX",
   json: "{}",
   markdown: "MD",
   plaintext: "TXT",
@@ -149,7 +216,7 @@ function languageIdentifier(language: string): string {
 function normalizedLanguage(language: string): string {
   const first = language.trim().split(/\s+/, 1)[0] ?? "";
   const lower = first.toLowerCase();
-  return LANGUAGE_ALIASES[lower] ?? lower;
+  return LANGUAGE_HIGHLIGHT_ALIASES[lower] ?? lower;
 }
 
 function knownLanguage(language: string): string | undefined {
@@ -161,6 +228,13 @@ function knownLanguage(language: string): string | undefined {
 /** Return the first info-string token without altering the original string. */
 export function codeLanguageIdentifier(language: string): string {
   return languageIdentifier(language);
+}
+
+/** Return the info-string text after the first language identifier. */
+export function codeLanguageSuffix(language: string): string {
+  const withoutLeadingWhitespace = language.trimStart();
+  const identifier = languageIdentifier(withoutLeadingWhitespace);
+  return identifier ? withoutLeadingWhitespace.slice(identifier.length) : "";
 }
 
 /** Resolve display metadata independently from the value saved in Markdown. */
@@ -196,11 +270,15 @@ export function codeLanguageMetadata(language: string): CodeLanguageMetadata {
       kind: "custom",
     };
 
-  const aliases = Object.entries(LANGUAGE_ALIASES)
-    .filter(([, resolved]) => resolved === highlightLanguage)
+  const identity = LANGUAGE_IDENTITIES[lower] ?? lower;
+  const aliases = Object.entries(LANGUAGE_IDENTITIES)
+    .filter(([, resolved]) => resolved === identity)
     .map(([alias]) => alias);
   const label =
-    LANGUAGE_LABELS[lower] ?? LANGUAGE_LABELS[highlightLanguage] ?? identifier;
+    LANGUAGE_LABELS[lower] ??
+    LANGUAGE_LABELS[identity] ??
+    LANGUAGE_LABELS[highlightLanguage] ??
+    identifier;
   return {
     identifier,
     label,
@@ -233,6 +311,7 @@ export function codeLanguageOptions(): readonly CodeLanguageMetadata[] {
     "c#",
     "c++",
     "html",
+    "jsx",
     "toml",
     "tsx",
   ];

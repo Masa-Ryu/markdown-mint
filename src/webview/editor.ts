@@ -94,6 +94,7 @@ import {
   codeLanguageIcon,
   codeLanguageMetadata,
   codeLanguageOptions,
+  codeLanguageSuffix,
   isValidCodeLanguageIdentifier,
   replaceCodeLanguageIdentifier,
 } from "../core/visualRendering";
@@ -1031,6 +1032,7 @@ class CodeBlockNodeView {
   private readonly languageOutsideHandler: (event: MouseEvent) => void;
   private readonly lineNumbers: HTMLDivElement;
   private readonly controls: CodeBlockControlBinding;
+  private languageRemovalDialog: HTMLDialogElement | null = null;
   private languagePickerOpen = false;
   private languageActiveIndex = -1;
   private languageQuery = "";
@@ -1341,8 +1343,8 @@ class CodeBlockNodeView {
       const queryAlias =
         query &&
         isValidCodeLanguageIdentifier(query) &&
-        (option.identifier.toLowerCase() === queryIdentifier ||
-          option.aliases.includes(queryIdentifier))
+        option.identifier.toLowerCase() !== queryIdentifier &&
+        option.aliases.includes(queryIdentifier)
           ? query
           : undefined;
       const selectedIdentifier = option.aliases.includes(currentIdentifier)
@@ -1434,8 +1436,8 @@ class CodeBlockNodeView {
       );
       return;
     }
-    this.setCodeLanguage(value);
-    this.closeLanguagePicker(true);
+    const result = this.setCodeLanguage(value);
+    this.closeLanguagePicker(result === "confirmation" ? false : true);
   }
 
   private handleLanguageKeyDown(event: KeyboardEvent): void {
@@ -1497,17 +1499,33 @@ class CodeBlockNodeView {
     this.lineNumbers.replaceChildren(fragment);
   }
 
-  private setCodeLanguage(language: string): void {
+  private setCodeLanguage(
+    language: string,
+  ): "applied" | "unchanged" | "confirmation" {
     const position = this.positionOf();
-    if (position === undefined) return;
+    if (position === undefined) return "unchanged";
     const current = this.view.state.doc.nodeAt(position);
-    if (!current || current.type.name !== "code_block") return;
-    if (language && !isValidCodeLanguageIdentifier(language)) return;
+    if (!current || current.type.name !== "code_block") return "unchanged";
+    if (language && !isValidCodeLanguageIdentifier(language))
+      return "unchanged";
     const currentInfo = String(current.attrs.params ?? "");
     const nextInfo = language
       ? replaceCodeLanguageIdentifier(currentInfo, language)
       : "";
-    if (nextInfo === currentInfo) return;
+    if (nextInfo === currentInfo) return "unchanged";
+    if (!language && codeLanguageSuffix(currentInfo).trim()) {
+      this.openLanguageRemovalConfirmation(currentInfo);
+      return "confirmation";
+    }
+    this.applyCodeLanguage(position, current, nextInfo);
+    return "applied";
+  }
+
+  private applyCodeLanguage(
+    position: number,
+    current: PMNode,
+    nextInfo: string,
+  ): void {
     this.view.focus();
     this.view.dispatch(
       this.view.state.tr.setNodeMarkup(position, undefined, {
@@ -1515,6 +1533,84 @@ class CodeBlockNodeView {
         params: nextInfo,
       }),
     );
+  }
+
+  private openLanguageRemovalConfirmation(currentInfo: string): void {
+    this.closeLanguageRemovalConfirmation(false);
+    const ownerDocument = this.dom.ownerDocument;
+    const dialog = ownerDocument.createElement("dialog");
+    dialog.className = "mm-input-dialog mm-code-language-confirm-dialog";
+    const title = ownerDocument.createElement("h2");
+    title.id = `${this.languageMenu.id}-confirm-title`;
+    title.textContent = "Remove code block language?";
+    dialog.setAttribute("aria-labelledby", title.id);
+    const help = ownerDocument.createElement("p");
+    help.className = "mm-code-language-confirm-help";
+    help.textContent = "This code block also contains additional info:";
+    const info = ownerDocument.createElement("div");
+    info.className = "mm-code-language-confirm-info";
+    info.textContent = codeLanguageSuffix(currentInfo).trim();
+    const warning = ownerDocument.createElement("p");
+    warning.className = "mm-code-language-confirm-help";
+    warning.textContent =
+      "Markdown cannot safely preserve this metadata without a language identifier.";
+    const actions = ownerDocument.createElement("div");
+    actions.className = "mm-dialog-actions";
+    const cancel = ownerDocument.createElement("button");
+    cancel.type = "button";
+    cancel.textContent = "Cancel";
+    cancel.addEventListener("click", () =>
+      this.closeLanguageRemovalConfirmation(true),
+    );
+    const confirm = ownerDocument.createElement("button");
+    confirm.type = "submit";
+    confirm.className = "mm-dialog-primary";
+    confirm.textContent = "Remove language and metadata";
+    actions.append(cancel, confirm);
+    const form = ownerDocument.createElement("form");
+    form.className = "mm-dialog-form";
+    form.addEventListener("submit", (event) => {
+      event.preventDefault();
+      this.closeLanguageRemovalConfirmation(false);
+      const position = this.positionOf();
+      const current =
+        position === undefined
+          ? undefined
+          : this.view.state.doc.nodeAt(position);
+      if (
+        position === undefined ||
+        !current ||
+        current.type.name !== "code_block" ||
+        String(current.attrs.params ?? "") !== currentInfo
+      )
+        return;
+      this.applyCodeLanguage(position, current, "");
+    });
+    dialog.addEventListener("cancel", (event) => {
+      event.preventDefault();
+      this.closeLanguageRemovalConfirmation(true);
+    });
+    form.append(title, help, info, warning, actions);
+    dialog.append(form);
+    this.dom.append(dialog);
+    this.languageRemovalDialog = dialog;
+    try {
+      if (typeof dialog.showModal === "function") dialog.showModal();
+      else dialog.setAttribute("open", "true");
+    } catch {
+      dialog.setAttribute("open", "true");
+    }
+    cancel.focus();
+  }
+
+  private closeLanguageRemovalConfirmation(restoreFocus: boolean): void {
+    const dialog = this.languageRemovalDialog;
+    if (!dialog) return;
+    this.languageRemovalDialog = null;
+    if (typeof dialog.close === "function" && dialog.open) dialog.close();
+    else dialog.removeAttribute("open");
+    dialog.remove();
+    if (restoreFocus && !this.destroyed) this.languageTrigger.focus();
   }
 
   update(node: PMNode): boolean {
@@ -1544,6 +1640,7 @@ class CodeBlockNodeView {
   destroy(): void {
     this.destroyed = true;
     this.closeLanguagePicker(false);
+    this.closeLanguageRemovalConfirmation(false);
     document.removeEventListener("pointerdown", this.languageOutsideHandler);
     this.controls.dispose();
   }
