@@ -5,9 +5,21 @@ const INSERT_DIALOG_SELECTOR = [
   'dialog[aria-labelledby="mm-image-dialog-title"]',
 ].join(", ");
 
+function usesMacPrimaryModifier(platform: string): boolean {
+  return /Mac|iPhone|iPad/.test(platform);
+}
+
+function hasSubmitModifier(event: KeyboardEvent, platform: string): boolean {
+  if (usesMacPrimaryModifier(platform))
+    return event.metaKey && !event.ctrlKey;
+  return event.ctrlKey && !event.metaKey;
+}
+
 /**
- * Submit insertion/editing dialogs with Ctrl+Enter without affecting
- * confirmation or recovery dialogs.
+ * Submit insertion/editing dialogs with the platform primary modifier + Enter
+ * without affecting confirmation or recovery dialogs.
+ *
+ * macOS uses Command+Enter. Windows/Linux use Ctrl+Enter.
  *
  * Listen on the owning document in the capture phase so controls inside a
  * modal cannot accidentally hide the shortcut by stopping keydown bubbling.
@@ -17,15 +29,15 @@ const INSERT_DIALOG_SELECTOR = [
  */
 export function installModalSubmitShortcut(
   root: Document | HTMLElement = document,
+  platform = typeof navigator !== "undefined" ? navigator.platform : "",
 ): () => void {
   const ownerDocument = root instanceof Document ? root : root.ownerDocument;
   const onKeyDown = (event: Event): void => {
     if (!(event instanceof KeyboardEvent)) return;
     if (
       event.key !== "Enter" ||
-      !event.ctrlKey ||
+      !hasSubmitModifier(event, platform) ||
       event.altKey ||
-      event.metaKey ||
       event.shiftKey ||
       event.isComposing ||
       event.repeat

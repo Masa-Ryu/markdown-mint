@@ -14,7 +14,10 @@ import { installModalSubmitShortcut } from "../../src/webview/modalSubmitShortcu
 const apps: MarkdownEditorApp[] = [];
 const disposers: Array<() => void> = [];
 
-function makeApp(markdown = "before"): {
+function makeApp(
+  markdown = "before",
+  platform = "Linux x86_64",
+): {
   app: MarkdownEditorApp;
   root: HTMLElement;
   messages: unknown[];
@@ -29,7 +32,7 @@ function makeApp(markdown = "before"): {
     initialDocument: { markdown, version: 1, profile: "github" },
   });
   apps.push(app);
-  disposers.push(installModalSubmitShortcut(root));
+  disposers.push(installModalSubmitShortcut(root, platform));
   return { app, root, messages };
 }
 
@@ -52,11 +55,14 @@ function openToolbarDialog(root: HTMLElement, testId: string): void {
   button.click();
 }
 
-async function pressCtrlEnter(target: HTMLElement): Promise<void> {
+async function pressShortcutEnter(
+  target: HTMLElement,
+  modifiers: Pick<KeyboardEventInit, "ctrlKey" | "metaKey">,
+): Promise<void> {
   target.dispatchEvent(
     new KeyboardEvent("keydown", {
       key: "Enter",
-      ctrlKey: true,
+      ...modifiers,
       bubbles: true,
       cancelable: true,
     }),
@@ -96,9 +102,9 @@ afterEach(() => {
   document.body.replaceChildren();
 });
 
-describe("modal Ctrl+Enter runtime integration", () => {
-  it("submits the real image dialog", async () => {
-    const { root, messages } = makeApp();
+describe("modal primary-modifier Enter runtime integration", () => {
+  it("submits the real image dialog with Command+Enter on macOS", async () => {
+    const { root, messages } = makeApp("before", "MacIntel");
     openToolbarDialog(root, "toolbar-image");
 
     const dialog = root.querySelector<HTMLDialogElement>(
@@ -110,7 +116,7 @@ describe("modal Ctrl+Enter runtime integration", () => {
     inputs[0]!.value = "./images/example.png";
     inputs[1]!.value = "Example";
 
-    await pressCtrlEnter(inputs[1]!);
+    await pressShortcutEnter(inputs[1]!, { metaKey: true });
 
     expect(dialog.open).toBe(false);
     expect(editMessages(messages)).toHaveLength(1);
@@ -119,7 +125,7 @@ describe("modal Ctrl+Enter runtime integration", () => {
     );
   });
 
-  it("submits the real table dialog from a numeric input", async () => {
+  it("submits the real table dialog with Ctrl+Enter on Windows/Linux", async () => {
     const { app, root, messages } = makeApp();
     openToolbarDialog(root, "toolbar-table");
 
@@ -134,7 +140,7 @@ describe("modal Ctrl+Enter runtime integration", () => {
     inputs[1]!.value = "3";
     inputs[1]!.dispatchEvent(new Event("input", { bubbles: true }));
 
-    await pressCtrlEnter(inputs[1]!);
+    await pressShortcutEnter(inputs[1]!, { ctrlKey: true });
 
     let tableRows: number | undefined;
     let tableColumns: number | undefined;
