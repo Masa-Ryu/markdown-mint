@@ -401,6 +401,9 @@ textarea:focus-visible {
   top: 0;
   left: 0;
 }
+.mm-empty-line-popup {
+  min-width: min(238px, calc(100vw - 12px));
+}
 .mm-popup-panel .mm-tool-button {
   display: inline-flex;
   min-width: 0;

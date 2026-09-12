@@ -79,6 +79,12 @@
 
 ## Earlier unreleased changes
 
+- Improved the Rich Editor's empty-line Insert block menu with explicit Bullet
+  list and Ordered list labels, two-dimensional keyboard navigation that skips
+  profile-disabled items, and a transient `/` trigger for the same popup.
+  Canceling the slash menu restores and materializes one literal slash, while
+  committed commands consume it without adding a slash-only edit.
+
 - Improved TextDocument-authoritative synchronization and save handling. Exact
   edit bases now survive queued input, delayed or duplicate acknowledgements,
   and bounded stale retries; safe independent external changes are merged
