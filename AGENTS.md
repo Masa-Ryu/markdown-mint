@@ -1,5 +1,3 @@
-計画は最上位モデルで、実装作業はサブエージェントの GPT-5.6 Luna Max で実施する。
-
 # Repository Guidelines
 
 ## Repository Overview
