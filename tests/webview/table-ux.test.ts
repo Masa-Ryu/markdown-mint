@@ -55,6 +55,87 @@ function dispatchCellText(app: MarkdownEditorApp, cell: Element): void {
   );
 }
 
+function selectTableCell(
+  app: MarkdownEditorApp,
+  root: HTMLElement,
+  row: number,
+  column: number,
+  textOffset = 0,
+): void {
+  const cell =
+    root.querySelectorAll<HTMLTableRowElement>("tr")[row]?.children[column];
+  if (!(cell instanceof HTMLElement))
+    throw new Error(`Missing table cell at ${row},${column}`);
+  const cellPos = app.view.posAtDOM(cell, 0);
+  app.view.dispatch(
+    app.view.state.tr.setSelection(
+      TextSelection.near(
+        app.view.state.doc.resolve(cellPos + 1 + textOffset),
+        1,
+      ),
+    ),
+  );
+}
+
+function dispatchEditorKey(
+  app: MarkdownEditorApp,
+  key: string,
+  options: {
+    shiftKey?: boolean;
+    isComposing?: boolean;
+    keyCode?: number;
+  } = {},
+): KeyboardEvent {
+  const { isComposing, keyCode, ...keyboardOptions } = options;
+  const event = new KeyboardEvent("keydown", {
+    key,
+    ...keyboardOptions,
+    bubbles: true,
+    cancelable: true,
+  });
+  if (isComposing !== undefined)
+    Object.defineProperty(event, "isComposing", { value: isComposing });
+  if (keyCode !== undefined)
+    Object.defineProperty(event, "keyCode", { value: keyCode });
+  app.view.dom.dispatchEvent(event);
+  return event;
+}
+
+function activeTableCell(app: MarkdownEditorApp): {
+  row: number;
+  column: number;
+} {
+  const selection = app.view.state.selection;
+  const resolved =
+    selection instanceof CellSelection ? selection.$headCell : selection.$head;
+  let cellDepth = -1;
+  let tableDepth = -1;
+  for (let depth = resolved.depth; depth > 0; depth -= 1) {
+    const role = resolved.node(depth).type.spec.tableRole;
+    if (cellDepth < 0 && (role === "cell" || role === "header_cell"))
+      cellDepth = depth;
+    if (role === "table") {
+      tableDepth = depth;
+      break;
+    }
+  }
+  if (cellDepth < 0 || tableDepth < 0)
+    throw new Error("Selection is not inside a table cell");
+  const table = resolved.node(tableDepth);
+  const tableStart = resolved.start(tableDepth);
+  const cellPos =
+    selection instanceof CellSelection
+      ? selection.$headCell.pos
+      : resolved.before(cellDepth);
+  const map = TableMap.get(table);
+  const rect = map.findCell(cellPos - tableStart);
+  return { row: rect.top, column: rect.left };
+}
+
+function tableRowCount(app: MarkdownEditorApp): number {
+  return app.view.state.doc.firstChild?.childCount ?? 0;
+}
+
 beforeEach(() => {
   document.body.replaceChildren();
   if (typeof Range !== "undefined" && !Range.prototype.getClientRects)
@@ -352,6 +433,226 @@ describe("table insertion dialog", () => {
     expect(messageType(messages, "edit")).toHaveLength(1);
     expect(app.view.state.doc.firstChild?.childCount).toBe(3);
     expect(app.view.state.doc.firstChild?.firstChild?.childCount).toBe(4);
+  });
+});
+
+describe("table Enter navigation", () => {
+  it("moves to the next row in the same column without changing the document", () => {
+    const source =
+      "| H1 | H2 |\n| --- | --- |\n| A1 | A2 |\n| B1 | B2 |\n| C1 | C2 |";
+    const { app, root, messages } = makeApp(source);
+    const before = app.view.state.doc.toJSON();
+
+    selectTableCell(app, root, 1, 0);
+    dispatchEditorKey(app, "Enter");
+    expect(activeTableCell(app)).toEqual({ row: 2, column: 0 });
+    expect(app.view.state.doc.toJSON()).toEqual(before);
+    expect(messageType(messages, "edit")).toHaveLength(0);
+
+    selectTableCell(app, root, 1, 1);
+    dispatchEditorKey(app, "Enter");
+    expect(activeTableCell(app)).toEqual({ row: 2, column: 1 });
+
+    selectTableCell(app, root, 2, 1);
+    dispatchEditorKey(app, "Enter");
+    expect(activeTableCell(app)).toEqual({ row: 3, column: 1 });
+    expect(app.view.state.doc.toJSON()).toEqual(before);
+    expect(messageType(messages, "edit")).toHaveLength(0);
+  });
+
+  it("does not split text when Enter is pressed in the middle of a cell", () => {
+    const source = "| H1 | H2 |\n| --- | --- |\n| Alpha | A2 |\n| Beta | B2 |";
+    const { app, root, messages } = makeApp(source);
+    const before = app.view.state.doc.toJSON();
+
+    selectTableCell(app, root, 1, 0, 2);
+    dispatchEditorKey(app, "Enter");
+
+    expect(activeTableCell(app)).toEqual({ row: 2, column: 0 });
+    expect(app.view.state.doc.toJSON()).toEqual(before);
+    expect(app.view.state.doc.firstChild?.child(1).child(0).textContent).toBe(
+      "Alpha",
+    );
+    expect(messageType(messages, "edit")).toHaveLength(0);
+  });
+
+  it("adds one row at a time on the final row and preserves the column", () => {
+    const { app, root, messages } = makeApp(
+      "| H1 | H2 |\n| --- | --- |\n| A1 | A2 |",
+    );
+
+    selectTableCell(app, root, 1, 0);
+    dispatchEditorKey(app, "Enter");
+    expect(tableRowCount(app)).toBe(3);
+    expect(activeTableCell(app)).toEqual({ row: 2, column: 0 });
+    expect(messageType(messages, "edit")).toHaveLength(1);
+
+    const firstEdit = latestEdit(messages)!;
+    app.receiveDocument({
+      protocolVersion: PROTOCOL_VERSION,
+      type: "document",
+      markdown: String(firstEdit.markdown),
+      version: 2,
+      profile: "github",
+      operationId: String(firstEdit.operationId),
+      reason: "ack",
+    });
+    dispatchEditorKey(app, "Enter");
+    expect(tableRowCount(app)).toBe(4);
+    expect(activeTableCell(app)).toEqual({ row: 3, column: 0 });
+    expect(messageType(messages, "edit")).toHaveLength(2);
+  });
+
+  it("adds the final row cell at the same non-first column", () => {
+    const { app, root } = makeApp(
+      "| H1 | H2 | H3 |\n| --- | --- | --- |\n| A1 | A2 | A3 |",
+    );
+
+    selectTableCell(app, root, 1, 2);
+    dispatchEditorKey(app, "Enter");
+
+    expect(tableRowCount(app)).toBe(3);
+    expect(app.view.state.doc.firstChild?.lastChild?.childCount).toBe(3);
+    expect(activeTableCell(app)).toEqual({ row: 2, column: 2 });
+  });
+
+  it("keeps Shift+Enter as a hard break and restores it after serialization", () => {
+    const { app, root, messages } = makeApp(
+      "| H1 |\n| --- |\n| one |\n| two |",
+    );
+
+    selectTableCell(app, root, 1, 0, 3);
+    dispatchEditorKey(app, "Enter", { shiftKey: true });
+
+    expect(activeTableCell(app)).toEqual({ row: 1, column: 0 });
+    const cell = app.view.state.doc.firstChild?.child(1).child(0);
+    expect(cell?.firstChild?.childCount).toBe(2);
+    expect(cell?.firstChild?.lastChild?.type.name).toBe("hard_break");
+    const markdown = String(latestEdit(messages)?.markdown ?? "");
+    expect(markdown).toContain("<br>");
+
+    const reloaded = makeApp(markdown);
+    const reloadedCell = reloaded.app.view.state.doc.firstChild
+      ?.child(1)
+      .child(0);
+    expect(reloadedCell?.firstChild?.childCount).toBe(2);
+    expect(reloadedCell?.firstChild?.lastChild?.type.name).toBe("hard_break");
+  });
+
+  it("ignores composition Enter, including keyCode 229, until composition ends", () => {
+    const { app, root } = makeApp("| H1 |\n| --- |\n| final |");
+    selectTableCell(app, root, 1, 0);
+    const before = app.view.state.doc.toJSON();
+
+    app.view.dom.dispatchEvent(
+      new Event("compositionstart", { bubbles: true }),
+    );
+    app.view.dom.dispatchEvent(
+      new Event("compositionupdate", { bubbles: true }),
+    );
+    dispatchEditorKey(app, "Enter", { isComposing: true, keyCode: 229 });
+    expect(tableRowCount(app)).toBe(2);
+    expect(app.view.state.doc.toJSON()).toEqual(before);
+    expect(activeTableCell(app)).toEqual({ row: 1, column: 0 });
+
+    app.view.dom.dispatchEvent(new Event("compositionend", { bubbles: true }));
+    dispatchEditorKey(app, "Enter", { keyCode: 229 });
+    expect(tableRowCount(app)).toBe(2);
+    dispatchEditorKey(app, "Enter");
+    expect(tableRowCount(app)).toBe(3);
+    expect(activeTableCell(app)).toEqual({ row: 2, column: 0 });
+  });
+
+  it("clears a CellSelection without changing the table", () => {
+    const source = "| H1 | H2 |\n| --- | --- |\n| A1 | A2 |\n| B1 | B2 |";
+    const { app, root, messages } = makeApp(source);
+    const rows = root.querySelectorAll<HTMLTableRowElement>("tr");
+    const anchor = app.view.posAtDOM(rows[1]!.children[0]!, 0) - 1;
+    const head = app.view.posAtDOM(rows[1]!.children[1]!, 0) - 1;
+    app.view.dispatch(
+      app.view.state.tr.setSelection(
+        CellSelection.create(app.view.state.doc, anchor, head),
+      ),
+    );
+    const before = app.view.state.doc.toJSON();
+
+    dispatchEditorKey(app, "Enter");
+
+    expect(app.view.state.selection).toBeInstanceOf(TextSelection);
+    expect(activeTableCell(app)).toEqual({ row: 1, column: 1 });
+    expect(app.view.state.doc.toJSON()).toEqual(before);
+    expect(messageType(messages, "edit")).toHaveLength(0);
+  });
+
+  it("keeps ordinary paragraph Enter behavior outside tables", () => {
+    const { app } = makeApp("one\n\ntwo");
+    app.view.dispatch(
+      app.view.state.tr.setSelection(
+        TextSelection.create(app.view.state.doc, 4),
+      ),
+    );
+
+    dispatchEditorKey(app, "Enter");
+
+    expect(app.view.state.doc.childCount).toBe(3);
+    expect(app.view.state.doc.child(0).textContent).toBe("one");
+    expect(app.view.state.doc.child(1).textContent).toBe("");
+  });
+
+  it("keeps Tab and Shift+Tab table navigation unchanged", () => {
+    const { app, root, messages } = makeApp(
+      "| H1 | H2 | H3 |\n| --- | --- | --- |\n| A1 | A2 | A3 |",
+    );
+    const before = app.view.state.doc.toJSON();
+
+    selectTableCell(app, root, 1, 1);
+    dispatchEditorKey(app, "Tab");
+    expect(activeTableCell(app)).toEqual({ row: 1, column: 2 });
+    dispatchEditorKey(app, "Tab", { shiftKey: true });
+    expect(activeTableCell(app)).toEqual({ row: 1, column: 1 });
+    expect(app.view.state.doc.toJSON()).toEqual(before);
+    expect(messageType(messages, "edit")).toHaveLength(0);
+  });
+
+  it("makes final-row insertion one undoable edit that can be restored by redo", () => {
+    const source = "| H1 |\n| --- |\n| final |";
+    const { app, root, messages } = makeApp(source);
+    selectTableCell(app, root, 1, 0);
+    dispatchEditorKey(app, "Enter");
+    const added = String(latestEdit(messages)?.markdown ?? "");
+    const edit = latestEdit(messages)!;
+    expect(tableRowCount(app)).toBe(3);
+    expect(messageType(messages, "edit")).toHaveLength(1);
+
+    app.receiveDocument({
+      protocolVersion: PROTOCOL_VERSION,
+      type: "document",
+      markdown: added,
+      version: 2,
+      profile: "github",
+      operationId: String(edit.operationId),
+      reason: "ack",
+    });
+
+    app.receiveDocument({
+      protocolVersion: PROTOCOL_VERSION,
+      type: "document",
+      markdown: source,
+      version: 3,
+      profile: "github",
+      reason: "undo",
+    });
+    expect(tableRowCount(app)).toBe(2);
+
+    app.receiveDocument({
+      protocolVersion: PROTOCOL_VERSION,
+      type: "document",
+      markdown: added,
+      version: 4,
+      profile: "github",
+      reason: "redo",
+    });
+    expect(tableRowCount(app)).toBe(3);
   });
 });
 

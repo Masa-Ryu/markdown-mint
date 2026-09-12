@@ -459,6 +459,31 @@ function tableContext(selection: Selection): TableContext | null {
   };
 }
 
+function activeTableCell(
+  selection: Selection,
+  context: TableContext,
+): ReturnType<TableMap["findCell"]> {
+  const cellPos =
+    selection instanceof CellSelection
+      ? selection.$headCell.pos
+      : context.cellPos;
+  return context.map.findCell(cellPos - context.tableStart);
+}
+
+function textSelectionInTableCell(
+  doc: PMNode,
+  tableStart: number,
+  map: TableMap,
+  table: PMNode,
+  row: number,
+  column: number,
+): Selection {
+  const safeRow = Math.max(0, Math.min(map.height - 1, row));
+  const safeColumn = Math.max(0, Math.min(map.width - 1, column));
+  const cellPos = tableStart + map.positionAt(safeRow, safeColumn, table);
+  return TextSelection.near(doc.resolve(cellPos + 1), 1);
+}
+
 function selectionTouchesTable(selection: Selection): boolean {
   if (tableContext(selection)) return true;
   for (let depth = selection.$to.depth; depth > 0; depth -= 1) {
@@ -2095,6 +2120,30 @@ export class MarkdownEditorApp {
           createRenderedNodeView(node, view, getPos, () => this.profile),
       },
       handleDOMEvents: {
+        keydown: (_view, event) => {
+          const keyboardEvent = event as KeyboardEvent;
+          // Let the browser/IME commit composition text without allowing the
+          // editor keymap to interpret the same Enter as table navigation.
+          if (
+            keyboardEvent.key === "Enter" &&
+            (keyboardEvent.isComposing ||
+              this.composing ||
+              keyboardEvent.keyCode === 229)
+          )
+            return true;
+          // ProseMirror deliberately ignores the first key near compositionend
+          // on some browsers. Handle a genuine post-composition table Enter
+          // here so it still performs the requested navigation immediately.
+          if (
+            keyboardEvent.key === "Enter" &&
+            !keyboardEvent.shiftKey &&
+            this.handleTableEnterKeyDown()
+          ) {
+            keyboardEvent.preventDefault();
+            return true;
+          }
+          return false;
+        },
         compositionstart: () => {
           this.composing = true;
           this.closeWritingPopups();
@@ -2102,6 +2151,10 @@ export class MarkdownEditorApp {
           this.closeProfileFeatureDialog();
           this.updateProfileToolbar();
           this.updateWritingToolbarState();
+          return false;
+        },
+        compositionupdate: () => {
+          this.composing = true;
           return false;
         },
         compositionend: () => {
@@ -2279,7 +2332,13 @@ export class MarkdownEditorApp {
           ? this.gfmUnavailable(dispatch)
           : commandForMark("strike", this.schema)(state, dispatch),
       "Mod-`": commandForMark("code", this.schema),
-      Enter: enter,
+      Enter: (state, dispatch) => {
+        if (this.composing) return false;
+        const context = tableContext(state.selection);
+        return context
+          ? this.moveToNextTableRow(state, context, dispatch)
+          : enter(state, dispatch);
+      },
       "Shift-Enter": shiftEnter,
       "Mod-z": () => this.sendHostCommand("undo"),
       "Mod-y": () => this.sendHostCommand("redo"),
@@ -2301,6 +2360,88 @@ export class MarkdownEditorApp {
       ArrowDown: (state, dispatch) => this.exitTableAtEnd(state, dispatch),
     };
     return map;
+  }
+
+  private moveToNextTableRow(
+    state: EditorState,
+    context: TableContext,
+    dispatch?: (tr: Transaction) => void,
+  ): boolean {
+    const rect = activeTableCell(state.selection, context);
+    if (!dispatch) return true;
+
+    if (state.selection instanceof CellSelection) {
+      dispatch(
+        state.tr
+          .setSelection(
+            textSelectionInTableCell(
+              state.doc,
+              context.tableStart,
+              context.map,
+              context.table,
+              rect.top,
+              rect.left,
+            ),
+          )
+          .scrollIntoView(),
+      );
+      return true;
+    }
+
+    if (rect.bottom < context.map.height) {
+      dispatch(
+        state.tr
+          .setSelection(
+            textSelectionInTableCell(
+              state.doc,
+              context.tableStart,
+              context.map,
+              context.table,
+              rect.bottom,
+              rect.left,
+            ),
+          )
+          .scrollIntoView(),
+      );
+      return true;
+    }
+
+    let transaction: Transaction | undefined;
+    if (!addRowAfter(state, (tr) => (transaction = tr))) return true;
+    if (!transaction) return true;
+
+    const tablePosition = context.tableStart - 1;
+    const insertedTable = transaction.doc.nodeAt(tablePosition);
+    if (!insertedTable || insertedTable.type.spec.tableRole !== "table") {
+      dispatch(transaction.scrollIntoView());
+      return true;
+    }
+    const insertedMap = TableMap.get(insertedTable);
+    dispatch(
+      transaction
+        .setSelection(
+          textSelectionInTableCell(
+            transaction.doc,
+            context.tableStart,
+            insertedMap,
+            insertedTable,
+            insertedMap.height - 1,
+            rect.left,
+          ),
+        )
+        .scrollIntoView(),
+    );
+    return true;
+  }
+
+  private handleTableEnterKeyDown(): boolean {
+    const state = this.view.state;
+    const context = tableContext(state.selection);
+    if (!context) return false;
+    const handled = this.moveToNextTableRow(state, context, (transaction) =>
+      this.view.dispatch(transaction),
+    );
+    return handled;
   }
 
   private handleAppKeyDown(event: KeyboardEvent): boolean {

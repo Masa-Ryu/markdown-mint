@@ -38,7 +38,7 @@ Drag across cells to select a rectangular range. Use **Ctrl+C / Cmd+C**, select 
 
 You can also paste tab-separated data into a table. This is useful for transferring rows from spreadsheet tools; it does not reproduce a spreadsheet's merged cells or arbitrary formatting.
 
-Use **Tab** and **Shift+Tab** to move between cells. Press **Escape** while editing a table to move to a paragraph after it.
+Use **Enter** to move to the next row in the same column; pressing it in the final row adds one empty row and keeps the column. Use **Shift+Enter** for an in-cell line break. **Tab** and **Shift+Tab** continue to move between cells. Press **Escape** while editing a table to move to a paragraph after it.
 
 ## Choose a Markdown profile
 
