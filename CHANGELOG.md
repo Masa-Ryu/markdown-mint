@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Fixed Block quote toolbar toggling to unwrap blockquotes with ProseMirror's
+  lift transform while preserving Markdown, block structure, and cursor
+  position.
 - Fixed explicit code-language switching for languages that share a
   highlight.js grammar, aligned code-block gutter/body typography across
   preview surfaces, and added confirmation before removing info-string

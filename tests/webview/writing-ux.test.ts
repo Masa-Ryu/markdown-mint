@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { Node as PMNode } from "prosemirror-model";
 import { TextSelection } from "prosemirror-state";
 import {
   parseMarkdown,
@@ -9,6 +10,7 @@ import {
 import { PROTOCOL_VERSION } from "../../src/shared/protocol";
 import {
   createEditorApp,
+  type DocumentMessage,
   type MarkdownEditorApp,
 } from "../../src/webview/editor";
 
@@ -49,6 +51,71 @@ function messagesOfType(
       typeof message === "object" &&
       message !== null &&
       (message as { type?: unknown }).type === type,
+  );
+}
+
+function quoteButton(root: HTMLElement): HTMLButtonElement {
+  return root.querySelector<HTMLButtonElement>(
+    '[data-testid="toolbar-quote"]',
+  )!;
+}
+
+function clickToolbarButton(button: HTMLButtonElement): MouseEvent {
+  const mousedown = new MouseEvent("mousedown", {
+    bubbles: true,
+    cancelable: true,
+  });
+  button.dispatchEvent(mousedown);
+  button.click();
+  return mousedown;
+}
+
+function emptyParagraphCount(doc: PMNode): number {
+  let count = 0;
+  doc.descendants((node) => {
+    if (node.type.name === "paragraph" && node.content.size === 0) count += 1;
+  });
+  return count;
+}
+
+function paragraphTextPosition(
+  doc: PMNode,
+  paragraphIndex: number,
+  offset: number,
+): number {
+  let position = 0;
+  for (let index = 0; index < paragraphIndex; index += 1)
+    position += doc.child(index).nodeSize;
+  return position + 1 + offset;
+}
+
+function hostDocument(
+  markdown: string,
+  version: number,
+  options: { operationId?: string; reason?: string } = {},
+): DocumentMessage {
+  return {
+    protocolVersion: PROTOCOL_VERSION,
+    type: "document",
+    markdown,
+    version,
+    profile: "github",
+    ...options,
+  };
+}
+
+function acknowledgeLastEdit(
+  app: MarkdownEditorApp,
+  messages: unknown[],
+  version: number,
+): void {
+  const edit = editMessages(messages).at(-1);
+  if (!edit) throw new Error("Expected a pending edit");
+  app.receiveDocument(
+    hostDocument(String(edit.markdown), version, {
+      operationId: String(edit.operationId),
+      reason: "ack",
+    }),
   );
 }
 
@@ -293,19 +360,161 @@ describe("bounded writing controls", () => {
     expect(editMessages(messages)).toHaveLength(1);
   });
 
-  it("toggles block quote with toolbar button", () => {
+  it("toggles block quote through mousedown and click while preserving the cursor", () => {
     const { app, root } = makeApp("hello");
-    const quote = root.querySelector<HTMLButtonElement>(
-      '[data-testid="toolbar-quote"]',
-    )!;
+    const quote = quoteButton(root);
+    const originalDoc = app.view.state.doc;
+    const originalSelection = TextSelection.create(originalDoc, 4);
+    app.view.dispatch(app.view.state.tr.setSelection(originalSelection));
 
-    quote.click();
+    expect(clickToolbarButton(quote).defaultPrevented).toBe(true);
     expect(app.view.state.doc.firstChild?.type.name).toBe("blockquote");
     expect(serializeMarkdown(app.view.state.doc)).toBe("> hello");
+    expect(app.view.state.doc.childCount).toBe(1);
+    expect(emptyParagraphCount(app.view.state.doc)).toBe(0);
 
-    quote.click();
+    expect(clickToolbarButton(quote).defaultPrevented).toBe(true);
     expect(app.view.state.doc.firstChild?.type.name).toBe("paragraph");
     expect(serializeMarkdown(app.view.state.doc)).toBe("hello");
+    expect(app.view.state.doc.eq(originalDoc)).toBe(true);
+    expect(app.view.state.doc.childCount).toBe(originalDoc.childCount);
+    expect(emptyParagraphCount(app.view.state.doc)).toBe(0);
+    expect(app.view.state.selection.from).toBe(originalSelection.from);
+    expect(app.view.state.selection.to).toBe(originalSelection.to);
+  });
+
+  it("round-trips a quoted paragraph without changing surrounding paragraphs", () => {
+    const source = "before\n\nhello\n\nafter";
+    const { app, root } = makeApp(source);
+    const originalDoc = app.view.state.doc;
+    app.view.dispatch(
+      app.view.state.tr.setSelection(
+        TextSelection.create(
+          originalDoc,
+          paragraphTextPosition(originalDoc, 1, 3),
+        ),
+      ),
+    );
+    const quote = quoteButton(root);
+
+    clickToolbarButton(quote);
+    expect(app.view.state.doc.childCount).toBe(3);
+    expect(app.view.state.doc.child(1).type.name).toBe("blockquote");
+    clickToolbarButton(quote);
+
+    expect(app.view.state.doc.eq(originalDoc)).toBe(true);
+    expect(app.view.state.doc.childCount).toBe(3);
+    expect(
+      Array.from(
+        { length: app.view.state.doc.childCount },
+        (_, index) => app.view.state.doc.child(index).type.name,
+      ),
+    ).toEqual(["paragraph", "paragraph", "paragraph"]);
+    expect(emptyParagraphCount(app.view.state.doc)).toBe(0);
+    expect(serializeMarkdown(app.view.state.doc)).toBe(source);
+  });
+
+  it("round-trips multiple selected paragraphs without changing block structure", () => {
+    const source = "first\n\nsecond\n\nthird";
+    const { app, root } = makeApp(source);
+    const originalDoc = app.view.state.doc;
+    app.view.dispatch(
+      app.view.state.tr.setSelection(
+        TextSelection.create(originalDoc, 1, originalDoc.content.size - 1),
+      ),
+    );
+    const quote = quoteButton(root);
+
+    clickToolbarButton(quote);
+    expect(app.view.state.doc.childCount).toBe(1);
+    expect(app.view.state.doc.firstChild?.type.name).toBe("blockquote");
+    expect(app.view.state.doc.firstChild?.childCount).toBe(3);
+    clickToolbarButton(quote);
+
+    expect(app.view.state.doc.eq(originalDoc)).toBe(true);
+    expect(app.view.state.doc.childCount).toBe(3);
+    expect(emptyParagraphCount(app.view.state.doc)).toBe(0);
+    expect(serializeMarkdown(app.view.state.doc)).toBe(source);
+  });
+
+  it("does not add a paragraph when toggling an existing empty paragraph", () => {
+    const { app, root } = makeApp("one");
+    const end = TextSelection.atEnd(app.view.state.doc);
+    app.view.dispatch(app.view.state.tr.setSelection(end).split(end.from));
+    const originalDoc = app.view.state.doc;
+    const originalSelection = app.view.state.selection;
+    expect(originalDoc.childCount).toBe(2);
+    expect(emptyParagraphCount(originalDoc)).toBe(1);
+
+    const quote = quoteButton(root);
+    clickToolbarButton(quote);
+    expect(app.view.state.doc.firstChild?.type.name).toBe("paragraph");
+    expect(app.view.state.doc.lastChild?.type.name).toBe("blockquote");
+    clickToolbarButton(quote);
+
+    expect(app.view.state.doc.eq(originalDoc)).toBe(true);
+    expect(app.view.state.doc.childCount).toBe(originalDoc.childCount);
+    expect(emptyParagraphCount(app.view.state.doc)).toBe(1);
+    expect(app.view.state.selection.from).toBe(originalSelection.from);
+    expect(app.view.state.selection.to).toBe(originalSelection.to);
+  });
+
+  it("keeps quote structure correct across host undo and redo snapshots", () => {
+    const { app, root, messages } = makeApp("hello");
+    const originalDoc = app.view.state.doc;
+    const quote = quoteButton(root);
+
+    clickToolbarButton(quote);
+    expect(editMessages(messages)).toHaveLength(1);
+    acknowledgeLastEdit(app, messages, 2);
+    clickToolbarButton(quote);
+    expect(editMessages(messages)).toHaveLength(2);
+    acknowledgeLastEdit(app, messages, 3);
+    expect(app.view.state.doc.eq(originalDoc)).toBe(true);
+
+    const undo = new KeyboardEvent("keydown", {
+      bubbles: true,
+      cancelable: true,
+      ctrlKey: true,
+      key: "z",
+    });
+    app.view.dom.dispatchEvent(undo);
+    expect(undo.defaultPrevented).toBe(true);
+    const undoRequest = messages.at(-1) as Record<string, unknown>;
+    expect(undoRequest).toMatchObject({ type: "undo" });
+    app.receiveDocument(
+      hostDocument("> hello", 4, {
+        operationId: String(undoRequest.operationId),
+        reason: "undo",
+      }),
+    );
+    expect(app.view.state.doc.eq(parseMarkdown("> hello", "github").doc)).toBe(
+      true,
+    );
+    expect(app.view.state.doc.childCount).toBe(1);
+    expect(app.view.state.doc.firstChild?.type.name).toBe("blockquote");
+    expect(emptyParagraphCount(app.view.state.doc)).toBe(0);
+
+    const redo = new KeyboardEvent("keydown", {
+      bubbles: true,
+      cancelable: true,
+      ctrlKey: true,
+      key: "y",
+    });
+    app.view.dom.dispatchEvent(redo);
+    expect(redo.defaultPrevented).toBe(true);
+    const redoRequest = messages.at(-1) as Record<string, unknown>;
+    expect(redoRequest).toMatchObject({ type: "redo" });
+    app.receiveDocument(
+      hostDocument("hello", 5, {
+        operationId: String(redoRequest.operationId),
+        reason: "redo",
+      }),
+    );
+    expect(app.view.state.doc.eq(originalDoc)).toBe(true);
+    expect(app.view.state.doc.childCount).toBe(1);
+    expect(app.view.state.doc.firstChild?.type.name).toBe("paragraph");
+    expect(emptyParagraphCount(app.view.state.doc)).toBe(0);
   });
 
   it("reflects the host profile and drains an edit before changing it", () => {
