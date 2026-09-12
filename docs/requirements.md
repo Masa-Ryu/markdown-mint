@@ -559,6 +559,22 @@ The 0.0.5 and earlier evidence above remains historical.
 - Packaging produced the verified 0.0.32 VSIX with 96 files (4.73 MB), including
   the bundled formatter and updated Webview implementation.
 
+## 0.0.33 Insert block menu and slash trigger
+
+- The empty-paragraph `+` affordance opens one shared **Insert block** popup.
+  Its visible labels are **Bullet list**, **Ordered list**, **Task**, **Quote**,
+  **Code**, **Table**, and **Horizontal rule**, while the existing icons,
+  tooltips, profile gating, mouse commands, and table dialog are preserved.
+- The popup follows its two-column row-major layout for ArrowLeft/Right
+  (`±1`) and ArrowUp/Down (`±2`) with modulo wrapping. Disabled profile items
+  are skipped using the same delta; Home and End select the first and last
+  enabled items.
+- In Rich mode, an empty top-level paragraph accepts `/` through ProseMirror's
+  text-input hook without inserting it first. The same popup and saved-selection
+  guards are reused. A committed command consumes the transient trigger; Escape,
+  Tab, and outside cancellation materialize one literal slash; stale document,
+  profile, mode, IME, and destroy paths discard it.
+
 ## Explicit limits
 
 Paste/drop image asset copying is optional follow-up work. Native IME and visual

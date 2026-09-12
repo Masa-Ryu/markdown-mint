@@ -89,6 +89,82 @@ function paragraphTextPosition(
   return position + 1 + offset;
 }
 
+function selectTrailingEmptyParagraph(app: MarkdownEditorApp): void {
+  const end = TextSelection.atEnd(app.view.state.doc);
+  app.view.dispatch(app.view.state.tr.setSelection(end).split(end.from));
+  focusTrailingEmptyParagraph(app);
+}
+
+function focusTrailingEmptyParagraph(app: MarkdownEditorApp): void {
+  const paragraphIndex = app.view.state.doc.childCount - 1;
+  const position = paragraphTextPosition(app.view.state.doc, paragraphIndex, 0);
+  app.view.dispatch(
+    app.view.state.tr.setSelection(
+      TextSelection.create(app.view.state.doc, position),
+    ),
+  );
+}
+
+function settleLastEdit(
+  app: MarkdownEditorApp,
+  messages: unknown[],
+  version = 2,
+): void {
+  acknowledgeLastEdit(app, messages, version);
+}
+
+function prepareTrailingEmptyParagraph(
+  app: MarkdownEditorApp,
+  messages: unknown[],
+): void {
+  selectTrailingEmptyParagraph(app);
+  settleLastEdit(app, messages);
+  focusTrailingEmptyParagraph(app);
+}
+
+function insertPopupItems(root: HTMLElement): HTMLButtonElement[] {
+  return Array.from(
+    root.querySelectorAll<HTMLButtonElement>(
+      ".mm-empty-line-popup button[role='menuitem']",
+    ),
+  );
+}
+
+function openEmptyLinePopup(root: HTMLElement): {
+  panel: HTMLElement;
+  plus: HTMLButtonElement;
+} {
+  const plus = root.querySelector<HTMLButtonElement>(".mm-empty-line-insert")!;
+  plus.dispatchEvent(
+    new MouseEvent("mousedown", { bubbles: true, cancelable: true }),
+  );
+  plus.click();
+  return {
+    panel: root.querySelector<HTMLElement>(".mm-empty-line-popup")!,
+    plus,
+  };
+}
+
+function dispatchPopupKey(panel: HTMLElement, key: string): KeyboardEvent {
+  const event = new KeyboardEvent("keydown", {
+    key,
+    bubbles: true,
+    cancelable: true,
+  });
+  panel.dispatchEvent(event);
+  return event;
+}
+
+function dispatchTextInput(app: MarkdownEditorApp, text: string): boolean {
+  const { from, to } = app.view.state.selection;
+  const fallback = () => app.view.state.tr.insertText(text, from, to);
+  const handled = app.view.someProp("handleTextInput", (handler) =>
+    handler(app.view, from, to, text, fallback),
+  );
+  if (!handled) app.view.dispatch(fallback());
+  return handled === true;
+}
+
 function hostDocument(
   markdown: string,
   version: number,
@@ -275,9 +351,24 @@ describe("bounded writing controls", () => {
       "table",
       "divider",
     ]);
-    expect(popup.textContent).toContain("List");
-    expect(popup.textContent).toContain("Task");
-    expect(popup.textContent).toContain("Horizontal rule");
+    expect(
+      Array.from(
+        popup.querySelectorAll<HTMLButtonElement>('button[role="menuitem"]'),
+      ).map(
+        (item) =>
+          item
+            .querySelector<HTMLElement>(".mm-toolbar-button-label")
+            ?.textContent?.trim() ?? item.textContent?.trim(),
+      ),
+    ).toEqual([
+      "Bullet list",
+      "Ordered list",
+      "Task",
+      "Quote",
+      "Code",
+      "Table",
+      "Horizontal rule",
+    ]);
   });
 
   it("uses one stable tooltip for SVG hover, focus, and disabled menu items", () => {
@@ -647,6 +738,218 @@ describe("bounded writing controls", () => {
     expect(document.activeElement).toBe(
       floating.querySelector("button:not(:disabled)"),
     );
+  });
+
+  it("navigates the Insert block popup as a wrapping two-column grid", () => {
+    const { app, root } = makeApp("one");
+    selectTrailingEmptyParagraph(app);
+    const { panel } = openEmptyLinePopup(root);
+    const items = insertPopupItems(root);
+
+    expect(document.activeElement).toBe(items[0]);
+
+    dispatchPopupKey(panel, "ArrowRight");
+    expect(document.activeElement).toBe(items[1]);
+    dispatchPopupKey(panel, "ArrowRight");
+    expect(document.activeElement).toBe(items[2]);
+
+    items[6]!.focus();
+    dispatchPopupKey(panel, "ArrowDown");
+    expect(document.activeElement).toBe(items[1]);
+
+    items[0]!.focus();
+    dispatchPopupKey(panel, "ArrowLeft");
+    expect(document.activeElement).toBe(items[6]);
+    dispatchPopupKey(panel, "ArrowRight");
+    expect(document.activeElement).toBe(items[0]);
+  });
+
+  it("moves Ordered list to Task with ArrowRight", () => {
+    const { app, root } = makeApp("one");
+    selectTrailingEmptyParagraph(app);
+    const { panel } = openEmptyLinePopup(root);
+    const items = insertPopupItems(root);
+
+    items[1]!.focus();
+    dispatchPopupKey(panel, "ArrowRight");
+    expect(document.activeElement).toBe(items[2]);
+  });
+
+  it("moves down by two visual columns and wraps from Horizontal rule", () => {
+    const { app, root } = makeApp("one");
+    selectTrailingEmptyParagraph(app);
+    const { panel } = openEmptyLinePopup(root);
+    const items = insertPopupItems(root);
+
+    for (const [from, to] of [
+      [0, 2],
+      [1, 3],
+      [2, 4],
+      [3, 5],
+      [6, 1],
+    ] as Array<[number, number]>) {
+      items[from]!.focus();
+      dispatchPopupKey(panel, "ArrowDown");
+      expect(document.activeElement).toBe(items[to]);
+    }
+  });
+
+  it("skips disabled Insert block items with the same navigation step", () => {
+    const { app, root } = makeApp("one", "commonmark");
+    selectTrailingEmptyParagraph(app);
+    const { panel } = openEmptyLinePopup(root);
+    const items = insertPopupItems(root);
+
+    expect(items[2]?.disabled).toBe(true);
+    expect(items[5]?.disabled).toBe(true);
+
+    items[1]!.focus();
+    dispatchPopupKey(panel, "ArrowRight");
+    expect(document.activeElement).toBe(items[3]);
+    expect((document.activeElement as HTMLButtonElement).disabled).toBe(false);
+
+    items[0]!.focus();
+    dispatchPopupKey(panel, "ArrowDown");
+    expect(document.activeElement).toBe(items[4]);
+
+    dispatchPopupKey(panel, "Home");
+    expect(document.activeElement).toBe(items[0]);
+    dispatchPopupKey(panel, "End");
+    expect(document.activeElement).toBe(items[6]);
+  });
+
+  it("opens the same Insert block popup from slash without editing first", () => {
+    const { app, root, messages } = makeApp("one");
+    prepareTrailingEmptyParagraph(app, messages);
+    const before = editMessages(messages).length;
+
+    expect(dispatchTextInput(app, "/")).toBe(true);
+
+    const panel = root.querySelector<HTMLElement>(".mm-empty-line-popup")!;
+    const items = insertPopupItems(root);
+    expect(panel.hidden).toBe(false);
+    expect(document.activeElement).toBe(items[0]);
+    expect(app.view.state.doc.textContent).toBe("one");
+    expect(editMessages(messages)).toHaveLength(before);
+  });
+
+  it("consumes slash when a shared Insert block command is committed", () => {
+    const { app, root, messages } = makeApp("one");
+    prepareTrailingEmptyParagraph(app, messages);
+    const before = editMessages(messages).length;
+    expect(dispatchTextInput(app, "/")).toBe(true);
+
+    const items = insertPopupItems(root);
+    items[0]!.click();
+
+    expect(app.view.state.doc.lastChild?.type.name).toBe("bullet_list");
+    expect(app.view.state.doc.textContent).not.toContain("/");
+    expect(editMessages(messages)).toHaveLength(before + 1);
+    expect(editMessages(messages).at(-1)?.markdown).not.toBe("/");
+    expect(
+      root.querySelector<HTMLElement>(".mm-empty-line-popup")?.hidden,
+    ).toBe(true);
+  });
+
+  it("materializes slash once on Escape and returns focus to the editor", () => {
+    const { app, root, messages } = makeApp("one");
+    prepareTrailingEmptyParagraph(app, messages);
+    const before = editMessages(messages).length;
+    expect(dispatchTextInput(app, "/")).toBe(true);
+    const panel = root.querySelector<HTMLElement>(".mm-empty-line-popup")!;
+
+    const escape = dispatchPopupKey(panel, "Escape");
+
+    expect(escape.defaultPrevented).toBe(true);
+    expect(panel.hidden).toBe(true);
+    expect(app.view.state.doc.textContent).toBe("one/");
+    expect(editMessages(messages)).toHaveLength(before + 1);
+    expect(document.activeElement).toBe(app.view.dom);
+  });
+
+  it("discards a pending slash when an external document makes it stale", () => {
+    const { app, root, messages } = makeApp("one");
+    prepareTrailingEmptyParagraph(app, messages);
+    const before = editMessages(messages).length;
+    expect(dispatchTextInput(app, "/")).toBe(true);
+    const panel = root.querySelector<HTMLElement>(".mm-empty-line-popup")!;
+
+    app.receiveDocument(hostDocument("external", 3, { reason: "external" }));
+
+    expect(panel.hidden).toBe(true);
+    expect(app.view.state.doc.textContent).toBe("external");
+    expect(editMessages(messages)).toHaveLength(before);
+  });
+
+  it("keeps slash as ordinary text outside an eligible empty paragraph", () => {
+    const start = makeApp("hello");
+    start.app.view.dispatch(
+      start.app.view.state.tr.setSelection(
+        TextSelection.create(start.app.view.state.doc, 1),
+      ),
+    );
+    expect(dispatchTextInput(start.app, "/")).toBe(false);
+    expect(start.app.view.state.doc.textContent).toBe("/hello");
+    expect(
+      start.root.querySelector<HTMLElement>(".mm-empty-line-popup")?.hidden,
+    ).toBe(true);
+
+    const middle = makeApp("hello");
+    middle.app.view.dispatch(
+      middle.app.view.state.tr.setSelection(
+        TextSelection.create(
+          middle.app.view.state.doc,
+          paragraphTextPosition(middle.app.view.state.doc, 0, 2),
+        ),
+      ),
+    );
+    expect(dispatchTextInput(middle.app, "/")).toBe(false);
+    expect(middle.app.view.state.doc.textContent).toBe("he/llo");
+
+    const code = makeApp("```js\ncode\n```");
+    code.app.view.dispatch(
+      code.app.view.state.tr.setSelection(
+        TextSelection.atEnd(code.app.view.state.doc),
+      ),
+    );
+    expect(dispatchTextInput(code.app, "/")).toBe(false);
+    expect(code.app.view.state.doc.textContent).toContain("code/");
+    expect(
+      code.root.querySelector<HTMLElement>(".mm-empty-line-popup")?.hidden,
+    ).toBe(true);
+
+    const table = makeApp("| A | B |\n| --- | --- |\n| C | D |");
+    expect(dispatchTextInput(table.app, "/")).toBe(false);
+    expect(table.app.view.state.doc.textContent).toContain("/");
+    expect(
+      table.root.querySelector<HTMLElement>(".mm-empty-line-popup")?.hidden,
+    ).toBe(true);
+
+    const selected = makeApp("hello");
+    selected.app.view.dispatch(
+      selected.app.view.state.tr.setSelection(
+        TextSelection.create(selected.app.view.state.doc, 1, 2),
+      ),
+    );
+    expect(dispatchTextInput(selected.app, "/")).toBe(false);
+    expect(selected.app.view.state.doc.textContent).toBe("/ello");
+  });
+
+  it("keeps slash ordinary during IME composition", () => {
+    const { app, root, messages } = makeApp("one");
+    prepareTrailingEmptyParagraph(app, messages);
+    app.view.dom.dispatchEvent(
+      new Event("compositionstart", { bubbles: true }),
+    );
+    const before = editMessages(messages).length;
+
+    expect(dispatchTextInput(app, "/")).toBe(false);
+    expect(app.view.state.doc.textContent).toBe("one/");
+    expect(
+      root.querySelector<HTMLElement>(".mm-empty-line-popup")?.hidden,
+    ).toBe(true);
+    expect(editMessages(messages)).toHaveLength(before + 1);
+    app.view.dom.dispatchEvent(new Event("compositionend", { bubbles: true }));
   });
 
   it("offers Insert beside a top-level empty paragraph without mutating Markdown until a command is committed", () => {
