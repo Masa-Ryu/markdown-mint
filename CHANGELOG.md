@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Improved the Rich editor table toolbar lifecycle: it stays hidden until the
+  first table focus, then remains mounted and visible while table actions are
+  disabled outside the current table. The initial reveal uses one short,
+  reduced-motion-aware animation; table selection, targeting, serialization,
+  and existing profile/mode restrictions are unchanged.
+
 - Added a Rich Editor authoring aid that displays validated six-digit
   hexadecimal RGB literals in their own color. The display-only decoration
   updates while editing without changing Markdown source, previews, links,
