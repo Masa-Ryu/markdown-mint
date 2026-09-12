@@ -396,7 +396,7 @@ The 0.0.5 and earlier evidence above remains historical.
   attributed to the VS Code host environment rather than the project test
   assertions; see the release/PR report for the exact runner location.
 
-## 0.0.27 Mermaid flowchart label alignment verification
+## 0.0.29 Mermaid flowchart label alignment verification
 
 - Mermaid 11.17.2 flowcharts emit node-label `<text>` at `x=0` and rely on
   Mermaid's generated stylesheet for `text-anchor: middle`. The browser
