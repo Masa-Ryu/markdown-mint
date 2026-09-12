@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Improved the Rich editor table toolbar lifecycle: it stays hidden until the
+  first table focus, then remains mounted and visible while table actions are
+  disabled outside the current table. The initial reveal uses one short,
+  reduced-motion-aware animation; table selection, targeting, serialization,
+  and existing profile/mode restrictions are unchanged.
+
 - Fixed block spacing across the rich editor, dedicated preview, and native
   Markdown preview. Rich NodeView wrappers now own outer margins while their
   inner display blocks stay margin-free; GitLab TOC and description lists use

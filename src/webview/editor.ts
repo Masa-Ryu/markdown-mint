@@ -1961,6 +1961,9 @@ export class MarkdownEditorApp {
   private pendingRecoveryOperationId: string | undefined;
   private stage!: HTMLElement;
   private tableToolbar!: HTMLElement;
+  private tableToolbarRevealed = false;
+  private tableToolbarRevealRequested = false;
+  private tableToolbarRevealTimer: ReturnType<typeof setTimeout> | undefined;
   private profileToolbar!: HTMLElement;
   private profileFeatureDialog!: HTMLDialogElement;
   private profileFeatureAlertType!: HTMLSelectElement;
@@ -2056,6 +2059,7 @@ export class MarkdownEditorApp {
   private readonly writingToolbarScrollHandler = (): void =>
     this.updateWritingToolbarState();
   private readonly writingPointerDownHandler = (event: PointerEvent): void => {
+    this.requestTableToolbarReveal(event.target);
     const active = this.activePopup;
     if (!active) return;
     const target = event.target;
@@ -2284,6 +2288,10 @@ export class MarkdownEditorApp {
           this.updateWritingToolbarState();
           return false;
         },
+        mousedown: (_view, event) => {
+          this.requestTableToolbarReveal(event.target);
+          return false;
+        },
         copy: (view, event) => this.handleCopy(view, event as ClipboardEvent),
         cut: (view, event) => this.handleCut(view, event as ClipboardEvent),
         paste: (view, event) => this.handlePaste(view, event as ClipboardEvent),
@@ -2351,6 +2359,10 @@ export class MarkdownEditorApp {
     if (this.derivedViewsTimer !== undefined) {
       clearTimeout(this.derivedViewsTimer);
       this.derivedViewsTimer = undefined;
+    }
+    if (this.tableToolbarRevealTimer !== undefined) {
+      clearTimeout(this.tableToolbarRevealTimer);
+      this.tableToolbarRevealTimer = undefined;
     }
     for (const pending of this.pendingClipboard.values()) {
       if (pending.timer !== undefined)
@@ -3099,7 +3111,9 @@ export class MarkdownEditorApp {
       }
     }
     if (selectionSet || docChanged || discardedTransient)
-      this.updateToolbarState(oldSelection, this.view.state.selection);
+      this.updateToolbarState(oldSelection, this.view.state.selection, {
+        revealTableToolbar: selectionSet || docChanged || discardedTransient,
+      });
   }
 
   private mapTransientBlankRange(tr: Transaction): void {
@@ -3476,7 +3490,7 @@ export class MarkdownEditorApp {
       this.initialized &&
       !this.parseError &&
       this.mode === "rich" &&
-      isInTable(this.view.state);
+      Boolean(tableContext(this.view.state.selection));
     for (const button of Array.from(
       this.root.querySelectorAll<HTMLButtonElement>(".mm-table-toolbar-button"),
     ))
@@ -5576,6 +5590,18 @@ export class MarkdownEditorApp {
     this.positionWritingPopup();
   }
 
+  private requestTableToolbarReveal(target: EventTarget | null): void {
+    if (
+      this.destroyed ||
+      !this.view ||
+      !(target instanceof Element) ||
+      !this.view.dom.contains(target)
+    )
+      return;
+    this.tableToolbarRevealRequested = Boolean(target.closest("td, th"));
+    if (this.tableToolbarRevealRequested) this.scheduleWritingToolbarUpdate();
+  }
+
   private scheduleWritingToolbarUpdate(): void {
     if (this.destroyed) return;
     const update = (): void => {
@@ -6407,7 +6433,7 @@ export class MarkdownEditorApp {
       this.setNotice("Tables are unavailable in CommonMark.");
       return false;
     }
-    if (!isInTable(this.view.state)) {
+    if (!tableContext(this.view.state.selection)) {
       this.setNotice("Place the cursor inside a table to use table commands.");
       return false;
     }
@@ -6860,6 +6886,7 @@ export class MarkdownEditorApp {
   private updateToolbarState(
     _oldSelection: Selection,
     selection: Selection,
+    options: { revealTableToolbar?: boolean } = {},
   ): void {
     const heading =
       this.root.querySelector<HTMLSelectElement>(".mm-heading-select");
@@ -6871,7 +6898,9 @@ export class MarkdownEditorApp {
     }
     this.updateEditingControlState();
     this.updateListToolbarState(selection);
-    this.updateTableToolbar(selection);
+    this.updateTableToolbar(selection, {
+      allowReveal: options.revealTableToolbar === true,
+    });
     this.updateSelectionToolbar(selection);
     this.updateEmptyLineInsert(selection);
     this.positionWritingPopup();
@@ -6903,7 +6932,22 @@ export class MarkdownEditorApp {
     }
   }
 
-  private updateTableToolbar(selection = this.view.state.selection): void {
+  private revealTableToolbar(): void {
+    if (this.tableToolbarRevealed) return;
+    this.tableToolbarRevealed = true;
+    this.tableToolbar.classList.add("is-revealing");
+    if (this.tableToolbarRevealTimer !== undefined)
+      clearTimeout(this.tableToolbarRevealTimer);
+    this.tableToolbarRevealTimer = setTimeout(() => {
+      this.tableToolbar.classList.remove("is-revealing");
+      this.tableToolbarRevealTimer = undefined;
+    }, 220);
+  }
+
+  private updateTableToolbar(
+    selection = this.view.state.selection,
+    options: { allowReveal?: boolean } = {},
+  ): void {
     if (this.destroyed || !this.tableToolbar || !this.view) return;
     const updateAlignmentState = (
       active: "left" | "center" | "right" | null,
@@ -6926,10 +6970,28 @@ export class MarkdownEditorApp {
       this.mode === "rich" &&
       this.profile !== "commonmark";
     const context = canShow ? tableContext(selection) : null;
-    if (!context) {
+    if (
+      canShow &&
+      context &&
+      (options.allowReveal === true || this.tableToolbarRevealRequested)
+    ) {
+      this.revealTableToolbar();
+      this.tableToolbarRevealRequested = false;
+    }
+
+    const visible = canShow && this.tableToolbarRevealed;
+    const actionsEnabled = visible && context !== null;
+    for (const button of Array.from(
+      this.tableToolbar.querySelectorAll<HTMLButtonElement>(
+        ".mm-table-toolbar-button",
+      ),
+    ))
+      button.disabled = !actionsEnabled;
+
+    this.tableToolbar.hidden = !visible;
+    this.tableToolbar.setAttribute("aria-hidden", String(!visible));
+    if (!visible || !context) {
       updateAlignmentState(null);
-      this.tableToolbar.hidden = true;
-      this.tableToolbar.setAttribute("aria-hidden", "true");
       this.tableToolbar.removeAttribute("data-table-pos");
       this.updateTableNumberingState(null);
       return;
@@ -6957,8 +7019,6 @@ export class MarkdownEditorApp {
       alignments.size === 1 ? ([...alignments][0] ?? null) : null,
     );
 
-    this.tableToolbar.hidden = false;
-    this.tableToolbar.setAttribute("aria-hidden", "false");
     this.tableToolbar.dataset.tablePos = String(context.tableStart - 1);
     this.updateTableNumberingState(context);
   }

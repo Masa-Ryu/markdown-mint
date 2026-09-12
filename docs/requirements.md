@@ -461,6 +461,20 @@ The 0.0.5 and earlier evidence above remains historical.
   placeholders. Manual OS IME candidate-window and zoom checks remain real
   VS Code checks.
 
+## 0.0.32 table toolbar lifecycle
+
+- The Rich GitHub/GitLab table toolbar is hidden when an editor opens, even if
+  the document already contains tables. The first user table focus from a
+  mouse click, keyboard movement, or `CellSelection` reveals the existing
+  toolbar element and plays one short reveal animation.
+- After reveal, moving outside a table keeps the toolbar mounted and visible;
+  all table-specific controls become disabled until the current selection is
+  inside a table again. A different table updates the same toolbar's target,
+  and deleting the final table leaves the revealed toolbar disabled.
+- Preview, CommonMark, read-only, conflict, and other existing availability
+  gates continue to hide or disable the table controls. The revealed flag is
+  held only by the current editor instance and is not serialized or persisted.
+
 ## Explicit limits
 
 Paste/drop image asset copying is optional follow-up work. Native IME and visual
