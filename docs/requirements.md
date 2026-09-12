@@ -414,7 +414,7 @@ The 0.0.5 and earlier evidence above remains historical.
   The before/after screenshots are captured under
   `output/playwright/mermaid-labels/` during local verification.
 
-## 0.0.30 block spacing verification
+## 0.0.31 block spacing verification
 
 - Block rhythm is now measured on the actual display surfaces rather than on
   Markdown source combinations alone. Rich NodeView wrappers own their outer
