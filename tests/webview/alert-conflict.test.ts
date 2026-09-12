@@ -48,7 +48,7 @@ function setup() {
       new InputEvent("input", { bubbles: true, inputType: "insertText" }),
     );
   };
-  const reject = () =>
+  const reject = (currentMarkdown = "authoritative external") =>
     window.dispatchEvent(
       new MessageEvent("message", {
         data: {
@@ -57,7 +57,7 @@ function setup() {
           operationId: edits()[0]!.operationId,
           reason: "stale",
           message: "External change",
-          currentMarkdown: "authoritative external",
+          currentMarkdown,
           currentVersion: 2,
           draftMarkdown: edits()[0]!.markdown,
         },
@@ -105,6 +105,99 @@ describe("Alert conflict input preservation", () => {
     );
     expect(recovery()).toBe(source());
     expect(edits()).toHaveLength(1);
+  });
+
+  it("rebases independent changes with native Alert text accepted before its input event", () => {
+    const { app, body, input, reject, edits, recovery, source } = setup();
+    input("sent");
+    body.value = "accepted before rebase";
+    reject(initial.replace("Before", "Remote before"));
+    const expected = initial
+      .replace("Before", "Remote before")
+      .replace("> body", "> accepted before rebase");
+    expect(source()).toBe(expected);
+    expect(recovery()).toBe(expected);
+    expect(edits()).toHaveLength(2);
+    expect(edits()[1]!.markdown).toBe(expected);
+    const currentBody = app.view.dom.querySelector<HTMLTextAreaElement>(
+      ".mm-alert-body-editor",
+    )!;
+    expect(currentBody.value).toBe("accepted before rebase");
+    expect(currentBody.readOnly).toBe(false);
+  });
+
+  it("waits for final IME input before rebasing an independent rejected edit", async () => {
+    const { app, body, input, reject, edits, recovery, source } = setup();
+    input("sent");
+    body.dispatchEvent(
+      new CompositionEvent("compositionstart", { bubbles: true }),
+    );
+    body.value = "変換途中";
+    reject(initial.replace("Before", "Remote before"));
+    expect(body.readOnly).toBe(true);
+    expect(recovery()).toContain("変換途中");
+    expect(edits()).toHaveLength(1);
+    body.value = "変換確定";
+    body.dispatchEvent(
+      new CompositionEvent("compositionend", { bubbles: true }),
+    );
+    await Promise.resolve();
+    input("変換確定の最終入力");
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    const expected = initial
+      .replace("Before", "Remote before")
+      .replace("> body", "> 変換確定の最終入力");
+    expect(source()).toBe(expected);
+    expect(recovery()).toBe(expected);
+    expect(edits()).toHaveLength(2);
+    expect(edits()[1]!.markdown).toBe(expected);
+    expect(
+      app.view.dom.querySelector<HTMLTextAreaElement>(".mm-alert-body-editor")!
+        .readOnly,
+    ).toBe(false);
+  });
+
+  it("keeps composition input through an ACK before merging a pending external snapshot", async () => {
+    const { app, body, input, edits, recovery, source } = setup();
+    input("sent");
+    const sent = edits()[0]!;
+    body.dispatchEvent(
+      new CompositionEvent("compositionstart", { bubbles: true }),
+    );
+    body.value = "変換途中";
+    app.receiveDocument({
+      protocolVersion: 1,
+      type: "document",
+      markdown: initial.replace("Before", "Remote before"),
+      version: 3,
+      profile: "github",
+      reason: "external",
+    });
+    app.receiveDocument({
+      protocolVersion: 1,
+      type: "document",
+      markdown: sent.markdown!,
+      version: 2,
+      profile: "github",
+      operationId: sent.operationId!,
+      reason: "ack",
+    });
+    expect(body.readOnly).toBe(true);
+    expect(edits()).toHaveLength(1);
+    body.value = "変換確定";
+    body.dispatchEvent(
+      new CompositionEvent("compositionend", { bubbles: true }),
+    );
+    await Promise.resolve();
+    input("変換確定の最終入力");
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    const expected = initial
+      .replace("Before", "Remote before")
+      .replace("> body", "> 変換確定の最終入力");
+    expect(source()).toBe(expected);
+    expect(recovery()).toBe(expected);
+    expect(edits()).toHaveLength(2);
+    expect(edits()[1]!.markdown).toBe(expected);
   });
 
   it("retains compositionend and a later final input after rejection without submitting either", async () => {

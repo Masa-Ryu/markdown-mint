@@ -33,6 +33,18 @@
 
 ## Earlier unreleased changes
 
+- Improved TextDocument-authoritative synchronization and save handling. Exact
+  edit bases now survive queued input, delayed or duplicate acknowledgements,
+  and bounded stale retries; safe independent external changes are merged
+  automatically while overlapping changes preserve both sources. Save results
+  distinguish the requested version from later unsaved input, and real save
+  failures remain visible through VS Code and the Markdown Mint output channel.
+- Recovery data now records document identity, base source, version, and
+  profile. Matching drafts, including an empty draft, restore automatically
+  without a Recover control; parser and serializer failures preserve raw or
+  structured input. Removed the dedicated bottom synchronization/recovery
+  status UI and its empty layout space.
+
 - Improved the Rich editor table toolbar lifecycle: it stays hidden until the
   first table focus, then remains mounted and visible while table actions are
   disabled outside the current table. The initial reveal uses one short,

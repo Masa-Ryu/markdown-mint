@@ -32,6 +32,7 @@ import {
   type RecoverDraftMessage,
   type SaveMessage,
   type SaveResultMessage,
+  type UserNotificationMessage,
   isMarkdownProfile,
   parseWebviewMessage,
 } from "../shared/protocol";
@@ -75,6 +76,7 @@ interface PendingEdit {
   /** Text after the replacement before a separate setEndOfLine edit lands. */
   readonly intermediateMarkdown?: string;
   readonly action: EditAction;
+  readonly session?: PanelSession;
 }
 
 interface PendingCommand {
@@ -545,6 +547,30 @@ export class MarkdownMintEditorProvider
       return;
     }
 
+    // An external edit can land while applyEdit is waiting for its change
+    // event. Retain the submitted draft for the originating panel, but never
+    // replay it on top of the newer TextDocument. The webview can then merge
+    // independent changes against the exact submitted base.
+    for (const candidate of [...state.pending.values()]) {
+      state.pending.delete(candidate.operationId);
+      if (candidate.action === "format") {
+        this.rejectFormat(
+          candidate.session,
+          candidate.operationId,
+          "stale",
+          "The Markdown document changed while formatting was being applied.",
+        );
+      } else if (candidate.session) {
+        this.rejectEdit(
+          candidate.session,
+          candidate.operationId,
+          "stale",
+          "The Markdown document changed while the edit was being applied.",
+          candidate.targetMarkdown,
+        );
+      }
+    }
+
     const pendingCommand = state.pendingCommand;
     if (pendingCommand && pendingCommand.baseVersion < event.document.version) {
       const historyReason =
@@ -568,7 +594,6 @@ export class MarkdownMintEditorProvider
     // Any unrecognized change came from VS Code or another panel. There is no
     // parallel snapshot stack to reconcile; the native VS Code undo service is
     // authoritative for source edits and this panel receives the new snapshot.
-    state.pending.clear();
     const reason: HostDocumentReason =
       event.reason === vscode.TextDocumentChangeReason.Undo
         ? "undo"
@@ -625,12 +650,15 @@ export class MarkdownMintEditorProvider
         );
         return edits;
       }
-      await this.validateMarkdown(before, state.profile);
+      await this.validateMarkdown(before, state.profile, true);
       const formatted = await this.callFormat(before, {
         ...formatter.options,
       });
-      if (formatted.length > MAX_MARKDOWN_LENGTH) return edits;
-      await this.validateMarkdown(formatted, state.profile);
+      if (formatted.length > MAX_MARKDOWN_LENGTH) {
+        this.reportFormatSkip(document, "The formatted Markdown is too large.");
+        return edits;
+      }
+      await this.validateMarkdown(formatted, state.profile, true);
       if (document.version !== version) return edits;
       const change = minimalChange(document, formatted);
       if (change)
@@ -672,7 +700,8 @@ export class MarkdownMintEditorProvider
       session.mode === "preview" &&
       message.type !== "ready" &&
       message.type !== "preview" &&
-      message.type !== "clipboard-write"
+      message.type !== "clipboard-write" &&
+      message.type !== "notify"
     ) {
       this.post(
         session,
@@ -693,6 +722,9 @@ export class MarkdownMintEditorProvider
         return;
       case "clipboard-write":
         await this.handleClipboardWrite(session, message);
+        return;
+      case "notify":
+        this.notifyUser(message);
         return;
       case "recoverDraft":
         await this.enqueue(session.state, () =>
@@ -775,6 +807,7 @@ export class MarkdownMintEditorProvider
         "The Markdown document changed before this edit arrived.",
         message.markdown,
       );
+      if (session) this.sendDocumentIfVisible(session, "external");
       return;
     }
     await this.applyCandidate(
@@ -812,6 +845,23 @@ export class MarkdownMintEditorProvider
     }
   }
 
+  private notifyUser(message: UserNotificationMessage): void {
+    const method =
+      message.level === "error"
+        ? "showErrorMessage"
+        : message.level === "warning"
+          ? "showWarningMessage"
+          : "showInformationMessage";
+    const show = (
+      vscode.window as unknown as Record<
+        string,
+        ((value: string) => Thenable<unknown>) | undefined
+      >
+    )[method];
+    if (show)
+      void show.call(vscode.window, `Markdown Mint: ${message.message}`);
+  }
+
   private async handleRecoverDraft(
     session: PanelSession,
     message: RecoverDraftMessage,
@@ -826,6 +876,7 @@ export class MarkdownMintEditorProvider
         "The Markdown document changed before the draft could be opened.",
         message.markdown,
       );
+      this.sendDocumentIfVisible(session, "external");
       return;
     }
     try {
@@ -940,6 +991,7 @@ export class MarkdownMintEditorProvider
         "stale",
         "The Markdown document changed before formatting started.",
       );
+      if (session) this.sendDocumentIfVisible(session, "external");
       return;
     }
     const before = document.getText();
@@ -961,7 +1013,7 @@ export class MarkdownMintEditorProvider
         );
         return;
       }
-      await this.validateMarkdown(before, state.profile);
+      await this.validateMarkdown(before, state.profile, true);
       const formatted = await this.callFormat(before, {
         ...formatter.options,
       });
@@ -974,7 +1026,7 @@ export class MarkdownMintEditorProvider
         );
         return;
       }
-      await this.validateMarkdown(formatted, state.profile);
+      await this.validateMarkdown(formatted, state.profile, true);
       await this.applyCandidate(
         session,
         state,
@@ -1012,11 +1064,16 @@ export class MarkdownMintEditorProvider
     const state = session.state;
     const document = await this.currentDocument(state);
     if (document.version !== message.baseVersion) {
+      this.reportSaveFailure(
+        document,
+        "The Markdown document changed before it could be saved.",
+      );
       this.postSaveResult(
         session,
         message.operationId,
         false,
         document,
+        message.baseVersion,
         "The Markdown document changed before it could be saved.",
       );
       this.sendDocumentIfVisible(session, "external");
@@ -1035,15 +1092,6 @@ export class MarkdownMintEditorProvider
     }
 
     const latest = await this.currentDocument(state);
-    // A successful format-on-save callback may legitimately advance the
-    // TextDocument version before save() resolves. Treat a clean document as
-    // the authoritative saved result; a dirty document after a reported
-    // success indicates that another change landed during the save pipeline.
-    if (latest.isDirty && saved) {
-      saved = false;
-      failure =
-        "The Markdown document changed while the save was in progress; the result was not acknowledged as current.";
-    }
     if (!saved) {
       const messageText =
         failure ?? "VS Code did not save the Markdown document.";
@@ -1053,12 +1101,19 @@ export class MarkdownMintEditorProvider
         message.operationId,
         false,
         latest,
+        message.baseVersion,
         messageText,
       );
       return;
     }
 
-    this.postSaveResult(session, message.operationId, true, latest);
+    this.postSaveResult(
+      session,
+      message.operationId,
+      true,
+      latest,
+      message.baseVersion,
+    );
     this.broadcastDocument(state, {
       reason: "save",
       operationId: message.operationId,
@@ -1070,6 +1125,7 @@ export class MarkdownMintEditorProvider
     operationId: string,
     saved: boolean,
     document: vscode.TextDocument,
+    requestedVersion: number,
     message?: string,
   ): void {
     const result: SaveResultMessage = {
@@ -1077,6 +1133,8 @@ export class MarkdownMintEditorProvider
       type: "save-result",
       operationId,
       saved,
+      requestedVersion,
+      ...(saved && !document.isDirty ? { savedVersion: document.version } : {}),
       version: document.version,
       isDirty: document.isDirty,
       ...(message
@@ -1182,16 +1240,6 @@ export class MarkdownMintEditorProvider
       });
       return;
     }
-    if (state.pending.size > 0) {
-      this.rejectEdit(
-        session,
-        operationId,
-        "busy",
-        "Another document edit is still being applied.",
-        candidate,
-      );
-      return;
-    }
     try {
       await this.validateMarkdown(candidate, state.profile);
     } catch (error) {
@@ -1233,6 +1281,7 @@ export class MarkdownMintEditorProvider
       baseVersion: document.version,
       targetMarkdown: candidate,
       action,
+      ...(session ? { session } : {}),
       ...(intermediateMarkdown && intermediateMarkdown !== candidate
         ? { intermediateMarkdown }
         : {}),
@@ -1433,6 +1482,7 @@ export class MarkdownMintEditorProvider
       markdown: document.getText(),
       version: document.version,
       profile: session.state.profile,
+      documentId: session.state.key,
       reason,
       mode: session.mode,
       clipboardAvailable: true,
@@ -1483,8 +1533,6 @@ export class MarkdownMintEditorProvider
       ...(draftMarkdown === undefined ? {} : { draftMarkdown }),
     };
     this.post(session, rejection);
-    if (reason === "stale")
-      this.sendDocumentIfVisible(session, "recovery", undefined, draftMarkdown);
   }
 
   private rejectFormat(
@@ -1661,14 +1709,7 @@ export class MarkdownMintEditorProvider
     reason: string,
   ): void {
     const location = document.uri.toString(true);
-    const message = `Markdown Mint: ${reason}`;
     this.output.appendLine(`[format] ${location}: ${reason}`);
-    const setStatusBarMessage = (
-      vscode.window as unknown as {
-        setStatusBarMessage?: (value: string, hideAfter: number) => unknown;
-      }
-    ).setStatusBarMessage;
-    if (setStatusBarMessage) void setStatusBarMessage(message, 5_000);
   }
 
   private reportSaveFailure(
@@ -1678,12 +1719,12 @@ export class MarkdownMintEditorProvider
     const location = document.uri.toString(true);
     const message = `Markdown Mint: ${reason}`;
     this.output.appendLine(`[save] ${location}: ${reason}`);
-    const setStatusBarMessage = (
+    const showErrorMessage = (
       vscode.window as unknown as {
-        setStatusBarMessage?: (value: string, hideAfter: number) => unknown;
+        showErrorMessage?: (value: string) => Thenable<unknown>;
       }
-    ).setStatusBarMessage;
-    if (setStatusBarMessage) void setStatusBarMessage(message, 5_000);
+    ).showErrorMessage;
+    if (showErrorMessage) void showErrorMessage(message);
   }
 
   private typographyFor(uri: vscode.Uri): PreviewTypography {
@@ -1717,16 +1758,45 @@ export class MarkdownMintEditorProvider
   private async validateMarkdown(
     source: string,
     profile: MarkdownProfile,
+    strict = false,
   ): Promise<void> {
     if (source.length > MAX_MARKDOWN_LENGTH)
       throw new Error("Markdown source is too large.");
-    const parsed = await Promise.resolve(parseMarkdown(source, profile));
-    if (!parsed || typeof parsed !== "object")
-      throw new Error("The Markdown parser returned no document.");
+    let parsed: unknown;
+    try {
+      parsed = await Promise.resolve(parseMarkdown(source, profile));
+    } catch (error) {
+      const reason = errorMessage(error, "Markdown parsing failed.");
+      this.output.appendLine(`[parse] ${reason}`);
+      if (strict) throw error;
+      // A parser limitation must not prevent the TextDocument from accepting
+      // ordinary source edits. Formatting remains strict because applying a
+      // formatter result that cannot be parsed would be an unsafe transform.
+      return;
+    }
+    if (!parsed || typeof parsed !== "object") {
+      const reason = "The Markdown parser returned no document.";
+      this.output.appendLine(`[parse] ${reason}`);
+      if (strict) throw new Error(reason);
+      return;
+    }
     const candidate = parsed as CoreParseResult;
-    if (candidate.valid === false)
+    if (candidate.valid === false) {
+      if (!strict) {
+        this.output.appendLine(
+          "[parse] The Markdown candidate failed validation.",
+        );
+        return;
+      }
       throw new Error("The Markdown candidate failed validation.");
+    }
     if (candidate.errors && candidate.errors.length > 0) {
+      if (!strict) {
+        this.output.appendLine(
+          `[parse] ${candidate.errors.map((entry) => String(entry)).join("; ")}`,
+        );
+        return;
+      }
       throw new Error(
         candidate.errors.map((entry) => String(entry)).join("; "),
       );

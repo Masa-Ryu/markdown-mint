@@ -5,8 +5,16 @@ import * as vscode from "vscode";
 
 const VIEW_TYPE = "markdownMint.editor";
 const TEST_FILE = process.env.MARKDOWN_MINT_TEST_FILE;
+const FIXTURE_DIR = process.env.MARKDOWN_MINT_FIXTURE_DIR;
 const OPEN_IN_MINT_COMMAND = "markdownMint.openInEditor";
 const OPEN_IN_MINT_TITLE = "🌿 Open in Markdown Mint";
+const REQUIRED_MARKDOWN_FIXTURES = [
+  ["common-test.md", "Markdown Rich Editor Test"],
+  ["github-test.md", "GitHub Markdown Test"],
+  ["github-test-class-B.md", "GitHub Markdown Torture Test"],
+  ["gitlab-test.md", "GitLab Markdown Test"],
+  ["gitlab-test-class-B.md", "GitLab Markdown Torture Test"],
+] as const;
 
 /**
  * Small Extension Development Host acceptance suite. It intentionally uses
@@ -23,6 +31,7 @@ export async function run(): Promise<void> {
   const api = await extension.activate();
   assert.equal(typeof api.extendMarkdownIt, "function");
   assert.equal(typeof api.renderWithNativeMarkdown, "function");
+  await runRequiredMarkdownFixtureAcceptance(api);
 
   const commands = await vscode.commands.getCommands(true);
   for (const command of [
@@ -380,6 +389,37 @@ export async function run(): Promise<void> {
     vscode.ConfigurationTarget.Workspace,
   );
   await vscode.commands.executeCommand("workbench.action.closeAllEditors");
+}
+
+async function runRequiredMarkdownFixtureAcceptance(api: {
+  renderWithNativeMarkdown: (
+    source: string,
+    uri?: vscode.Uri,
+  ) => Thenable<string>;
+}): Promise<void> {
+  assert.ok(
+    FIXTURE_DIR,
+    "MARKDOWN_MINT_FIXTURE_DIR must point at the required Markdown fixtures",
+  );
+  for (const [filename, heading] of REQUIRED_MARKDOWN_FIXTURES) {
+    const fixturePath = path.join(FIXTURE_DIR, filename);
+    const source = await readFile(fixturePath, "utf8");
+    const html = await api.renderWithNativeMarkdown(
+      source,
+      vscode.Uri.file(fixturePath),
+    );
+    assert.ok(source.length > 0, `${filename} is not empty`);
+    assert.match(html, /<h1\b[^>]*>/, `${filename} renders a heading`);
+    assert.ok(
+      html.includes(heading),
+      `${filename} renders its document heading`,
+    );
+    assert.equal(
+      await readFile(fixturePath, "utf8"),
+      source,
+      `${filename} remains unchanged after rendering`,
+    );
+  }
 }
 
 async function runCodeLensAcceptance(

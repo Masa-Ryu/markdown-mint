@@ -27,10 +27,18 @@ function documentFixture(
 
 function isEditMessage(
   message: unknown,
-): message is { type: "edit"; markdown: string } {
+): message is { type: "edit"; markdown: string; baseVersion: number } {
   if (typeof message !== "object" || message === null) return false;
-  const candidate = message as { type?: unknown; markdown?: unknown };
-  return candidate.type === "edit" && typeof candidate.markdown === "string";
+  const candidate = message as {
+    type?: unknown;
+    markdown?: unknown;
+    baseVersion?: unknown;
+  };
+  return (
+    candidate.type === "edit" &&
+    typeof candidate.markdown === "string" &&
+    typeof candidate.baseVersion === "number"
+  );
 }
 
 function lastEditMarkdown(messages: unknown[]): string {
@@ -86,6 +94,7 @@ function makeApp(
   markdown?: string,
   api?: VSCodeApiLike,
   clipboardAvailable = false,
+  documentId?: string,
 ) {
   const root = document.createElement("div");
   document.body.append(root);
@@ -99,7 +108,10 @@ function makeApp(
     root,
     vscode,
     core: { schema, parseMarkdown, serializeMarkdown, renderMarkdown },
-    initialDocument: documentFixture(markdown, clipboardAvailable),
+    initialDocument: {
+      ...documentFixture(markdown, clipboardAvailable),
+      ...(documentId === undefined ? {} : { documentId }),
+    },
   });
   return { app, root, messages, vscode };
 }
@@ -1686,8 +1698,122 @@ describe("code block vertical boundaries", () => {
 });
 
 describe("sync safety", () => {
+  it("keeps the latest local draft after a stale rejection when changes are independent", () => {
+    const { app, messages } = makeApp("Title\nBody");
+    const end = TextSelection.atEnd(app.view.state.doc);
+    app.view.dispatch(app.view.state.tr.setSelection(end).insertText(" local"));
+    const first = messages.filter(isEditMessage).at(-1) as
+      { operationId?: string; markdown?: string } | undefined;
+    expect(first?.operationId).toBeDefined();
+
+    app.receiveDocument({
+      protocolVersion: PROTOCOL_VERSION,
+      type: "document",
+      markdown: "Remote title\nBody",
+      version: 2,
+      profile: "github",
+      reason: "external",
+    });
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        data: {
+          protocolVersion: PROTOCOL_VERSION,
+          type: "edit-rejected",
+          operationId: first?.operationId,
+          reason: "stale",
+          message: "The document changed.",
+          currentMarkdown: "Remote title\nBody",
+          currentVersion: 2,
+          draftMarkdown: first?.markdown,
+        },
+      }),
+    );
+
+    const rebased = messages.filter(isEditMessage).at(-1);
+    expect(messages.filter(isEditMessage)).toHaveLength(2);
+    expect(rebased?.baseVersion).toBe(2);
+    expect(rebased?.markdown).toContain("Remote title");
+    expect(rebased?.markdown).toContain("local");
+
+    app.view.dispatch(app.view.state.tr.insertText("!"));
+    expect(app.sync.queuedEdit?.markdown).toContain("!");
+    app.destroy();
+  });
+
+  it("ignores a delayed acknowledgement for an older operation without losing newer input", () => {
+    const { app, messages } = makeApp("base");
+    app.view.dispatch(app.view.state.tr.insertText(" first"));
+    const first = messages.filter(isEditMessage).at(-1)! as any;
+    app.receiveDocument({
+      protocolVersion: PROTOCOL_VERSION,
+      type: "document",
+      markdown: first.markdown,
+      version: 2,
+      profile: "github",
+      operationId: first.operationId,
+      reason: "ack",
+    });
+    app.view.dispatch(app.view.state.tr.insertText(" second"));
+    const second = messages.filter(isEditMessage).at(-1)! as any;
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        data: {
+          protocolVersion: PROTOCOL_VERSION,
+          type: "document",
+          markdown: first.markdown,
+          version: 2,
+          profile: "github",
+          operationId: first.operationId,
+          reason: "ack",
+        },
+      }),
+    );
+    expect(app.view.state.doc.textContent).toContain("first");
+    expect(app.view.state.doc.textContent).toContain("second");
+    expect(app.sync.inflight?.operationId).toBe(second.operationId);
+    expect(messages.filter(isEditMessage)).toHaveLength(2);
+    app.destroy();
+  });
+
+  it("applies a newer acknowledgement broadcast from another panel", () => {
+    const source = makeApp("base");
+    const end = TextSelection.atEnd(source.app.view.state.doc);
+    source.app.view.dispatch(
+      source.app.view.state.tr.setSelection(end).insertText(" update"),
+    );
+    const edit = source.messages.filter(isEditMessage).at(-1)! as any;
+
+    const sibling = makeApp("base");
+    sibling.app.receiveDocument({
+      protocolVersion: PROTOCOL_VERSION,
+      type: "document",
+      markdown: edit.markdown,
+      version: 2,
+      profile: "github",
+      operationId: edit.operationId,
+      reason: "ack",
+    });
+
+    expect(sibling.app.view.state.doc.textContent).toBe("base update");
+    expect(sibling.app.sync.hasPending).toBe(false);
+    sibling.app.destroy();
+    source.app.destroy();
+  });
+
+  it("does not render an internal status footer", () => {
+    const { app, root } = makeApp("hello");
+    expect(root.querySelector(".mm-statusbar")).toBeNull();
+    expect(root.querySelector(".mm-status")).toBeNull();
+    expect(root.querySelector(".mm-recover")).toBeNull();
+    expect(
+      root.querySelector(".mm-toolbar-primary > .mm-compatibility"),
+    ).not.toBeNull();
+    app.destroy();
+  });
+
   it("does not submit an empty replacement when serialization fails", () => {
     const messages: unknown[] = [];
+    let recoveryState: unknown;
     const initial = parseMarkdown("hello", "github");
     const { app } = makeApp("hello", {
       postMessage: (message) => messages.push(message),
@@ -1705,7 +1831,13 @@ describe("sync safety", () => {
     document.body.append(root);
     const broken = createEditorApp({
       root,
-      vscode: { postMessage: (message) => messages.push(message) },
+      vscode: {
+        postMessage: (message) => messages.push(message),
+        getState: () => recoveryState,
+        setState: (next) => {
+          recoveryState = next;
+        },
+      },
       core: throwingCore,
       initialDocument: {
         markdown: initial.source,
@@ -1714,15 +1846,72 @@ describe("sync safety", () => {
       },
     });
     const before = messages.length;
+    const beforeEdits = messages.filter(
+      (message: any) => message.type === "edit",
+    ).length;
     broken.view.dispatch(broken.view.state.tr.insertText("!"));
-    expect(messages.length).toBe(before);
-    expect(root.querySelector(".mm-status")?.textContent).toContain(
-      "Read-only",
-    );
+    expect(messages.length).toBeGreaterThan(before);
+    expect(
+      messages.filter((message: any) => message.type === "edit"),
+    ).toHaveLength(beforeEdits);
+    expect(broken.view.editable).toBe(true);
+    expect(broken.view.state.doc.textContent).toContain("hello");
+    expect(root.querySelector(".mm-status")).toBeNull();
+    expect(
+      (recoveryState as { recoveryDocument?: unknown } | undefined)
+        ?.recoveryDocument,
+    ).toBeDefined();
     broken.destroy();
   });
 
-  it("freezes follow-up edits after a stale rejection while retaining the local draft", () => {
+  it("keeps parser failures in raw source and routes editing to the native source document", () => {
+    const messages: unknown[] = [];
+    const appRoot = document.createElement("div");
+    document.body.append(appRoot);
+    const app = createEditorApp({
+      root: appRoot,
+      vscode: { postMessage: (message) => messages.push(message) },
+      core: {
+        schema,
+        parseMarkdown: (source, profile) => {
+          if (source === "unrepresentable")
+            throw new Error("unsupported parser input");
+          return parseMarkdown(source, profile);
+        },
+        serializeMarkdown,
+        renderMarkdown,
+      },
+      initialDocument: {
+        markdown: "hello",
+        version: 1,
+        profile: "github",
+        documentId: "file:///workspace/doc.md",
+      },
+    });
+    app.receiveDocument({
+      protocolVersion: PROTOCOL_VERSION,
+      type: "document",
+      markdown: "unrepresentable",
+      version: 2,
+      profile: "github",
+      documentId: "file:///workspace/doc.md",
+      reason: "external",
+    });
+
+    expect(app.mode).toBe("source");
+    expect(app.view.editable).toBe(false);
+    expect(
+      appRoot.querySelector<HTMLTextAreaElement>(".mm-source-textarea")?.value,
+    ).toBe("unrepresentable");
+    expect(messages.some((message: any) => message.type === "source")).toBe(
+      true,
+    );
+    expect(appRoot.querySelector(".mm-statusbar")).toBeNull();
+    expect(appRoot.querySelector(".mm-status")).toBeNull();
+    app.destroy();
+  });
+
+  it("retains an overlapping stale draft without presenting a recovery control", () => {
     const { app, root, messages } = makeApp("hello");
     app.view.dispatch(app.view.state.tr.insertText("!"));
     const editCount = messages.filter(
@@ -1746,13 +1935,21 @@ describe("sync safety", () => {
     expect(
       messages.filter((message: any) => message.type === "edit"),
     ).toHaveLength(editCount);
-    expect(root.querySelector<HTMLElement>(".mm-recover")?.hidden).toBe(false);
+    expect(app.view.state.doc.textContent).toContain("!?hello");
+    expect(root.querySelector(".mm-recover")).toBeNull();
+    expect(root.querySelector(".mm-statusbar")).toBeNull();
+    expect(messages.some((message: any) => message.type === "notify")).toBe(
+      true,
+    );
     app.destroy();
   });
 
-  it("reloads the authoritative document after the host opens a recovery draft separately", () => {
+  it("automatically restores a same-document draft and keeps an empty draft valid", () => {
     let state: unknown = {
+      documentId: "file:///workspace/doc.md",
       recoveryDraft: "local draft",
+      recoveryBaseMarkdown: "authoritative",
+      recoveryBaseVersion: 1,
       recoveryVersion: 1,
       recoveryProfile: "github",
       recoveryTimestamp: Date.now(),
@@ -1765,45 +1962,78 @@ describe("sync safety", () => {
         state = next;
       },
     };
-    const { app, root } = makeApp("authoritative", api);
-    root.querySelector<HTMLButtonElement>(".mm-recover")!.click();
-    const apply = Array.from(
-      root.querySelectorAll<HTMLButtonElement>(".mm-recovery-dialog button"),
-    ).find((button) => button.textContent === "Apply draft");
-    apply?.click();
-    const recover = messages.find(
-      (message: any) => message.type === "recoverDraft",
-    ) as any;
-    expect(recover?.markdown).toBe("local draft");
-    expect(recover?.baseVersion).toBe(1);
-    window.dispatchEvent(
-      new MessageEvent("message", {
-        data: {
-          protocolVersion: PROTOCOL_VERSION,
-          type: "recovery-opened",
-          operationId: recover.operationId,
-          currentMarkdown: "authoritative",
-          currentVersion: 1,
-          profile: "github",
-          draftUri: "untitled:markdown-mint-recovery.md",
-        },
-      }),
+    const { app, root } = makeApp(
+      "authoritative",
+      api,
+      false,
+      "file:///workspace/doc.md",
     );
+    expect(app.view.state.doc.textContent).toContain("local draft");
+    expect(
+      messages.some(
+        (message: any) =>
+          message.type === "edit" && message.markdown === "local draft",
+      ),
+    ).toBe(true);
+    expect(root.querySelector(".mm-recover")).toBeNull();
+    expect(root.querySelector(".mm-recovery-dialog")).toBeNull();
     app.receiveDocument({
       protocolVersion: PROTOCOL_VERSION,
       type: "document",
+      documentId: "file:///workspace/doc.md",
       markdown: "authoritative",
       version: 1,
       profile: "github",
-      reason: "recovery",
+      reason: "initial",
     });
     expect(
-      root.querySelector<HTMLTextAreaElement>(".mm-source-textarea")?.value,
-    ).toBe("authoritative");
-    expect(root.querySelector<HTMLButtonElement>(".mm-recover")?.hidden).toBe(
-      false,
-    );
+      messages.filter((message: any) => message.type === "edit"),
+    ).toHaveLength(1);
     app.destroy();
+
+    state = {
+      documentId: "file:///workspace/doc.md",
+      recoveryDraft: "",
+      recoveryBaseMarkdown: "authoritative",
+      recoveryBaseVersion: 1,
+      recoveryProfile: "github",
+    };
+    const empty = makeApp(
+      "authoritative",
+      api,
+      false,
+      "file:///workspace/doc.md",
+    );
+    expect(empty.app.view.state.doc.textContent).toBe("");
+    expect(
+      messages.some(
+        (message: any) => message.type === "edit" && message.markdown === "",
+      ),
+    ).toBe(true);
+    expect(empty.root.querySelector(".mm-recover")).toBeNull();
+    empty.app.destroy();
+
+    state = {
+      documentId: "file:///workspace/other.md",
+      recoveryDraft: "old document draft",
+      recoveryBaseMarkdown: "authoritative",
+      recoveryBaseVersion: 1,
+      recoveryProfile: "github",
+    };
+    const wrongDocument = makeApp(
+      "authoritative",
+      api,
+      false,
+      "file:///workspace/doc.md",
+    );
+    expect(wrongDocument.app.view.state.doc.textContent).toBe("authoritative");
+    expect(
+      messages.some(
+        (message: any) =>
+          message.type === "edit" && message.markdown === "old document draft",
+      ),
+    ).toBe(false);
+    wrongDocument.app.destroy();
   });
 
   it("defers an external document until IME composition ends", () => {

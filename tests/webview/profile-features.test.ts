@@ -334,9 +334,7 @@ describe("profile feature toolbar", () => {
     dialog.querySelector<HTMLButtonElement>('button[type="submit"]')!.click();
 
     expect(currentSource(app)).toBe("> [!NOTE]\n> Authoritative update");
-    expect(
-      root.querySelector<HTMLElement>(".mm-status")?.textContent,
-    ).toContain("nothing was updated");
+    expect(root.querySelector(".mm-status")).toBeNull();
     app.destroy();
   });
 
@@ -451,9 +449,7 @@ describe("profile feature toolbar", () => {
       )!
       .click();
     expect(currentSource(app)).not.toContain("<details>");
-    expect(
-      root.querySelector<HTMLElement>(".mm-status")?.textContent,
-    ).toContain("document changed");
+    expect(root.querySelector(".mm-status")).toBeNull();
   });
 
   it("keeps invalid values in the dialog until corrected", () => {
