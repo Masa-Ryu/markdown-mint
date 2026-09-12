@@ -4,6 +4,7 @@ import type { EditorState } from "prosemirror-state";
 import type { Node as PMNode } from "prosemirror-model";
 import type { EditorView, NodeView } from "prosemirror-view";
 import * as core from "../core/index";
+import { alertSourceWithBody, parseAlertSource } from "../core/alerts";
 import {
   escapeHtml,
   highlightCodeSpans,
@@ -262,70 +263,6 @@ export function createRenderedNodeView(
   };
 }
 
-function alertSourceParts(source: string): {
-  readonly body: string;
-  readonly header: string;
-  readonly bodyPrefix: string;
-  readonly lineEnding: string;
-  readonly trailingLineEnding: string;
-} {
-  const lineEnding = source.includes("\r\n")
-    ? "\r\n"
-    : source.includes("\r")
-      ? "\r"
-      : "\n";
-  const normalized = source.replace(/\r\n|\r/g, "\n");
-  const lines = normalized.split("\n");
-  const markerIndex = Math.max(
-    0,
-    lines.findIndex((line) =>
-      /^\s*>?[ \t]*\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]/i.test(line),
-    ),
-  );
-  const markerLine = lines[markerIndex] ?? "";
-  const markerPrefix = markerLine.match(/^(\s*>[ \t]?)/)?.[1] ?? "";
-  const bodySourceLines: string[] = [];
-  for (let index = markerIndex + 1; index < lines.length; index += 1) {
-    const line = lines[index]!;
-    if (!/^\s*>[ \t]?/.test(line)) break;
-    bodySourceLines.push(line);
-  }
-  const firstBodyPrefix = bodySourceLines
-    .map((line) => line.match(/^(\s*>[ \t]?)/)?.[1])
-    .find((prefix): prefix is string => prefix !== undefined);
-  const bodyPrefix = firstBodyPrefix ?? markerPrefix;
-  const body = bodySourceLines
-    .map((line) => line.replace(/^\s*>[ \t]?/, ""))
-    .join("\n");
-  const trailingMatch = normalized.match(/\n+$/);
-  const trailingLineEnding = trailingMatch
-    ? trailingMatch[0].replace(/\n/g, lineEnding)
-    : "";
-  return {
-    body,
-    header: lines.slice(0, markerIndex + 1).join("\n"),
-    bodyPrefix,
-    lineEnding,
-    trailingLineEnding,
-  };
-}
-
-function alertSourceWithBody(source: string, body: string): string {
-  const parts = alertSourceParts(source);
-  const normalizedBody = body.replace(/\r\n|\r/g, "\n");
-  const bodyLines = normalizedBody
-    ? normalizedBody
-        .split("\n")
-        .map((line) => parts.bodyPrefix + line)
-        .join(parts.lineEnding)
-    : "";
-  return (
-    parts.header.replace(/\n/g, parts.lineEnding) +
-    (bodyLines ? parts.lineEnding + bodyLines : "") +
-    parts.trailingLineEnding
-  );
-}
-
 /**
  * Render an alert atom with its body as an inline editor. Alerts remain raw
  * atoms so their original Markdown marker and source shape stay available to
@@ -343,6 +280,7 @@ export function createAlertNodeView(
   let lastDocument = view.state.doc;
   let lastProfile = getProfile?.() ?? "github";
   let lastLocalSource: string | null = null;
+  let bodyComposing = false;
   let disposed = false;
   let enhancer: RenderingEnhancer | undefined;
 
@@ -437,7 +375,7 @@ export function createAlertNodeView(
     const alert = preview.querySelector<HTMLElement>(".markdown-alert");
     const title = alert?.querySelector<HTMLElement>(".markdown-alert-title");
     if (alert && title) {
-      const parts = alertSourceParts(sourceFor(current));
+      const parts = parseAlertSource(sourceFor(current));
       if (bodyEditor.value !== parts.body) bodyEditor.value = parts.body;
       alert.replaceChildren(title, bodyEditor);
       resizeBodyEditor();
@@ -455,6 +393,12 @@ export function createAlertNodeView(
   };
 
   bodyEditor.addEventListener("mousedown", (event) => event.stopPropagation());
+  bodyEditor.addEventListener("compositionstart", () => {
+    bodyComposing = true;
+  });
+  bodyEditor.addEventListener("compositionend", () => {
+    bodyComposing = false;
+  });
   // The editor's global keymap handles Enter for ProseMirror blocks. Keep the
   // alert textarea's native newline behavior by stopping the event before it
   // bubbles to the editor surface; do not prevent the browser default.
@@ -464,6 +408,7 @@ export function createAlertNodeView(
       return;
     }
     if (
+      bodyComposing ||
       event.isComposing ||
       event.shiftKey ||
       event.ctrlKey ||
@@ -540,6 +485,13 @@ export function createAlertNodeView(
     stopEvent: (event) => {
       const target = event.target;
       if (!(target instanceof Element)) return false;
+      const keyboardEvent = event as KeyboardEvent;
+      if (
+        event.type === "keydown" &&
+        ["z", "y"].includes(keyboardEvent.key.toLowerCase()) &&
+        (keyboardEvent.ctrlKey || keyboardEvent.metaKey)
+      )
+        return false;
       return Boolean(target.closest("a,button,input,summary,select,textarea"));
     },
     ignoreMutation: () => true,

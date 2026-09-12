@@ -26,6 +26,7 @@ import lightbulbAsset from "../../assets/lightbulb.svg?raw";
 import warningTriangleAsset from "../../assets/warning-triangle.svg?raw";
 import alertOctagonAsset from "../../assets/alert-octagon.svg?raw";
 import alertCommentAsset from "../../assets/alert-comment.svg?raw";
+import { parseAlertSource } from "./alerts";
 
 /** The Markdown dialect used by the editor and preview. */
 export type Profile = "github" | "gitlab" | "commonmark";
@@ -3091,23 +3092,6 @@ function renderCodeBlock(node: PMNode, state: RenderState): string {
   return rendered ?? renderCodeFallback(source, language);
 }
 
-function stripAlertPrefix(line: string): string {
-  return line.replace(/^\s*>[ \t]?/, "");
-}
-
-function alertBodyFromLines(lines: string[], markerIndex: number): string {
-  const bodyLines: string[] = [];
-  for (let index = markerIndex + 1; index < lines.length; index += 1) {
-    const line = lines[index]!;
-    // An unquoted blank line belongs to the block separator. Only lines that
-    // retain the blockquote marker are part of the alert body, including empty
-    // quoted lines such as ">".
-    if (!/^\s*>[ \t]?/.test(line)) break;
-    bodyLines.push(stripAlertPrefix(line));
-  }
-  return bodyLines.join("\n");
-}
-
 const ALERT_ICON_SOURCES = {
   note: infoIconAsset,
   tip: lightbulbAsset,
@@ -3117,15 +3101,9 @@ const ALERT_ICON_SOURCES = {
 } as const;
 
 function renderAlert(source: string, state: RenderState): string {
-  const lines = source.replace(/\r\n|\r/g, "\n").split("\n");
-  let markerIndex = lines.findIndex((line) =>
-    /^\s*>?[ \t]*\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]/i.test(line),
-  );
-  if (markerIndex < 0) markerIndex = 0;
-  const markerLine = stripAlertPrefix(lines[markerIndex] ?? "");
-  const marker =
-    markerLine.match(/^\s*\[!([^\]]+)\]/i)?.[1]?.toLowerCase() ?? "note";
-  const body = alertBodyFromLines(lines, markerIndex);
+  const parts = parseAlertSource(source);
+  const marker = parts.marker;
+  const body = parts.body;
   const title = marker.charAt(0).toUpperCase() + marker.slice(1);
   const bodyHtml = body ? renderSourceFragment(body, state.profile, state) : "";
   const icon =

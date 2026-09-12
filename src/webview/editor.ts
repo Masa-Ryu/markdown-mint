@@ -2088,6 +2088,42 @@ export class MarkdownEditorApp {
     const state = this.view.state;
     const node = state.doc.nodeAt(position);
     if (!isAlertBlock(node)) return false;
+
+    // Adjacent raw alert atoms have no text position for Selection.near to
+    // enter. Resolve their top-level position explicitly and focus the target
+    // textarea, otherwise ProseMirror falls back to a NodeSelection on the
+    // neighboring atom.
+    let index = -1;
+    let cursor = 0;
+    for (
+      let childIndex = 0;
+      childIndex < state.doc.childCount;
+      childIndex += 1
+    ) {
+      if (cursor === position) {
+        index = childIndex;
+        break;
+      }
+      cursor += state.doc.child(childIndex).nodeSize;
+    }
+    if (index >= 0) {
+      const adjacentIndex = direction === "after" ? index + 1 : index - 1;
+      if (
+        adjacentIndex >= 0 &&
+        adjacentIndex < state.doc.childCount &&
+        isAlertBlock(state.doc.child(adjacentIndex))
+      ) {
+        let adjacentPosition = 0;
+        for (let childIndex = 0; childIndex < adjacentIndex; childIndex += 1)
+          adjacentPosition += state.doc.child(childIndex).nodeSize;
+        const focused = this.focusAlertBody(
+          adjacentPosition,
+          direction === "after" ? "start" : "end",
+        );
+        if (focused) return true;
+      }
+    }
+
     const blockEnd = position + node.nodeSize;
     if (direction === "before") {
       if (position <= 0) return false;

@@ -306,6 +306,46 @@ $$
     expect(renderMarkdown(source, "github")).toContain("inside");
   });
 
+  it("preserves lazy alert continuations, quoted blanks, separators, and CRLF", () => {
+    const source =
+      "> [!TIP]\r\n> First\r\ncontinued\r\n> Last\r\n>\r\n> After blank\r\n\r\nNext\r\n";
+    const snapshot = parseMarkdown(source, "github");
+    const alert = snapshot.doc.firstChild!;
+    expect(alert.type.name).toBe("raw_block");
+    expect(alert.attrs.kind).toBe("alert");
+    expect(serializeMarkdown(snapshot.doc, snapshot)).toBe(source);
+
+    const html = renderMarkdown(source, "github");
+    const alertStart = html.indexOf('<div class="markdown-alert');
+    const alertEnd = html.indexOf("</div>", alertStart) + "</div>".length;
+    const alertHtml = html.slice(alertStart, alertEnd);
+    expect(alertHtml).toContain("First");
+    expect(alertHtml).toContain("continued");
+    expect(alertHtml).toContain("Last");
+    expect(alertHtml).toContain("After blank");
+    expect(alertHtml).not.toContain("Next");
+
+    const changedAlert = schema.nodes.raw_block!.create({
+      ...alert.attrs,
+      source: String(alert.attrs.source).replace("continued", "Changed"),
+    });
+    const changed = replaceTopLevel(snapshot, 0, changedAlert);
+    expect(serializeMarkdown(changed, snapshot)).toBe(
+      source.replace("continued", "Changed"),
+    );
+  });
+
+  it("keeps an unquoted blank outside an alert body", () => {
+    const source = "> [!NOTE]\n> body\n\nParagraph after\n";
+    const snapshot = parseMarkdown(source, "github");
+    expect(snapshot.doc.childCount).toBe(2);
+    expect(snapshot.doc.child(0).attrs.kind).toBe("alert");
+    expect(snapshot.doc.child(1).textContent).toBe("Paragraph after");
+    const html = renderMarkdown(source, "github");
+    const alertEnd = html.indexOf("</div>") + "</div>".length;
+    expect(html.slice(0, alertEnd)).not.toContain("Paragraph after");
+  });
+
   it("preserves inline math before Markdown-it can reinterpret its contents", () => {
     const source =
       "Inline $a * b$ and escaped $x\\$y$; code `$z$`; unclosed $nope.\n";

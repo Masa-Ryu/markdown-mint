@@ -3,9 +3,10 @@
 ## Unreleased
 
 - Improved inline Alert editing without changing its visual design. Quoted
-  blank lines and line endings round-trip correctly, input keeps the existing
-  textarea and focus, and ArrowLeft/ArrowRight move between Alert bodies and
-  adjacent paragraphs at their boundaries.
+  blank lines, lazy continuation lines, and line endings round-trip correctly;
+  input keeps the existing textarea and focus; and ArrowLeft/ArrowRight move
+  between consecutive Alert bodies and adjacent paragraphs at their
+  boundaries. Alert history shortcuts continue to use the host undo service.
 
 ## 0.0.12
 

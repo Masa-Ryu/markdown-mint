@@ -307,6 +307,25 @@ describe("rich editor rendering", () => {
     );
     app.destroy();
   });
+  it("keeps lazy continuation lines in the alert editor when the body changes", () => {
+    const source = "> [!TIP]\r\n> First\r\ncontinued\r\n> Last\r\n\r\nNext\r\n";
+    const { app, root, messages } = makeApp(source);
+    const bodyEditor = root.querySelector<HTMLTextAreaElement>(
+      ".mm-alert-body-editor",
+    )!;
+    expect(bodyEditor.value).toBe("First\ncontinued\nLast");
+
+    bodyEditor.value = "First\ncontinued\nChanged";
+    bodyEditor.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(app.view.state.doc.firstChild?.attrs.source).toContain(
+      "> continued",
+    );
+    expect(app.view.state.doc.firstChild?.attrs.source).toContain("> Changed");
+    expect(lastEditMarkdown(messages)).toBe(
+      "> [!TIP]\r\n> First\r\n> continued\r\n> Changed\r\n\r\nNext\r\n",
+    );
+    app.destroy();
+  });
   it("keeps Enter as a native newline inside alert content", () => {
     const { app, root } = makeApp("> [!NOTE]\n> Before");
     const bodyEditor = root.querySelector<HTMLTextAreaElement>(
@@ -460,6 +479,46 @@ describe("rich editor rendering", () => {
     expect(document.activeElement).toBe(bodyEditor);
     app.destroy();
   });
+
+  it("moves directly between consecutive alert bodies without a NodeSelection", () => {
+    const { app, root } = makeApp(
+      "Before\n\n> [!NOTE]\n> First\n\n> [!TIP]\n> Second",
+    );
+    const editors = root.querySelectorAll<HTMLTextAreaElement>(
+      ".mm-alert-body-editor",
+    );
+    expect(editors).toHaveLength(2);
+
+    editors[0]!.focus();
+    editors[0]!.setSelectionRange(
+      editors[0]!.value.length,
+      editors[0]!.value.length,
+    );
+    const right = new KeyboardEvent("keydown", {
+      bubbles: true,
+      cancelable: true,
+      key: "ArrowRight",
+    });
+    editors[0]!.dispatchEvent(right);
+    expect(right.defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(editors[1]);
+    expect(editors[1]!.selectionStart).toBe(0);
+    expect(editors[1]!.selectionEnd).toBe(0);
+    expect(app.view.state.selection).toBeInstanceOf(TextSelection);
+
+    editors[1]!.setSelectionRange(0, 0);
+    const left = new KeyboardEvent("keydown", {
+      bubbles: true,
+      cancelable: true,
+      key: "ArrowLeft",
+    });
+    editors[1]!.dispatchEvent(left);
+    expect(left.defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(editors[0]);
+    expect(editors[0]!.selectionStart).toBe(editors[0]!.value.length);
+    expect(editors[0]!.selectionEnd).toBe(editors[0]!.value.length);
+    app.destroy();
+  });
   it("uses a transient paragraph after a final alert without changing Markdown until typing", () => {
     const source = "> [!NOTE]\n> End";
     const { app, root, messages } = makeApp(source);
@@ -522,6 +581,69 @@ describe("rich editor rendering", () => {
     bodyEditor.dispatchEvent(selected);
     expect(selected.defaultPrevented).toBe(false);
     expect(document.activeElement).toBe(bodyEditor);
+    app.destroy();
+  });
+
+  it("keeps alert boundary keys inert for the textarea's composition lifecycle", () => {
+    const { app, root } = makeApp("> [!NOTE]\n> Alert");
+    const bodyEditor = root.querySelector<HTMLTextAreaElement>(
+      ".mm-alert-body-editor",
+    )!;
+    bodyEditor.focus();
+    bodyEditor.setSelectionRange(
+      bodyEditor.value.length,
+      bodyEditor.value.length,
+    );
+
+    bodyEditor.dispatchEvent(new Event("compositionstart", { bubbles: true }));
+    for (const key of ["ArrowRight", "ArrowLeft", "Enter"]) {
+      const event = new KeyboardEvent("keydown", {
+        bubbles: true,
+        cancelable: true,
+        key,
+      });
+      bodyEditor.dispatchEvent(event);
+      expect(event.defaultPrevented).toBe(false);
+      expect(document.activeElement).toBe(bodyEditor);
+    }
+    bodyEditor.dispatchEvent(new Event("compositionend", { bubbles: true }));
+
+    const exit = new KeyboardEvent("keydown", {
+      bubbles: true,
+      cancelable: true,
+      key: "ArrowRight",
+    });
+    bodyEditor.dispatchEvent(exit);
+    expect(exit.defaultPrevented).toBe(true);
+    expect(root.querySelector(".mm-alert-body-editor")).not.toBeNull();
+    app.destroy();
+  });
+  it("routes alert history shortcuts through the host undo service", () => {
+    const { app, root, messages } = makeApp("> [!NOTE]\n> Alert");
+    const bodyEditor = root.querySelector<HTMLTextAreaElement>(
+      ".mm-alert-body-editor",
+    )!;
+    bodyEditor.focus();
+
+    const undo = new KeyboardEvent("keydown", {
+      bubbles: true,
+      cancelable: true,
+      key: "z",
+      ctrlKey: true,
+    });
+    bodyEditor.dispatchEvent(undo);
+    expect(undo.defaultPrevented).toBe(true);
+    expect((messages.at(-1) as { type?: string })?.type).toBe("undo");
+
+    const redo = new KeyboardEvent("keydown", {
+      bubbles: true,
+      cancelable: true,
+      key: "y",
+      ctrlKey: true,
+    });
+    bodyEditor.dispatchEvent(redo);
+    expect(redo.defaultPrevented).toBe(true);
+    expect((messages.at(-1) as { type?: string })?.type).toBe("redo");
     app.destroy();
   });
   it("disables editing in a host preview and exposes the code language field in Mint", () => {
