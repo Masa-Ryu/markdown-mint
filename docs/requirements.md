@@ -33,6 +33,22 @@ The focused browser checks were complete in that build. Native integration was
 exercised separately there; native VS Code visual geometry is kept distinct
 from the browser evidence.
 
+## Alert inline editing refinement
+
+Alerts keep their existing visual design and raw Markdown representation while
+their inline textarea becomes more responsive. Alert input updates the source
+without rebuilding the textarea on every keystroke, resizes before dispatching
+the source update, and preserves quoted blank lines and the source line ending
+style. An ArrowRight at the body end or ArrowLeft at the body start moves to an
+adjacent text block; the reverse boundary moves from a paragraph into the
+Alert body. A final Alert receives a transient paragraph so moving out with an
+arrow does not change Markdown until text is entered. Composition events and
+non-collapsed selections keep their native behavior.
+
+The webview regression suite covers these flows, including CRLF and
+save/reload round trips. Live VS Code and operating-system IME behavior remain
+manual checks.
+
 - Toolbar buttons and selects use the editor or widget foreground paired with
   their surface background. Primary and secondary dialog actions use their
   corresponding VS Code button colors, and disabled, focus, hover, and

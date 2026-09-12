@@ -19,6 +19,18 @@ function documentFixture(
   return { markdown, version: 1, profile: "github" };
 }
 
+function isEditMessage(
+  message: unknown,
+): message is { type: "edit"; markdown: string } {
+  if (typeof message !== "object" || message === null) return false;
+  const candidate = message as { type?: unknown; markdown?: unknown };
+  return candidate.type === "edit" && typeof candidate.markdown === "string";
+}
+
+function lastEditMarkdown(messages: unknown[]): string {
+  return messages.filter(isEditMessage).at(-1)?.markdown ?? "";
+}
+
 function makeApp(markdown?: string, api?: VSCodeApiLike) {
   const root = document.createElement("div");
   document.body.append(root);
@@ -275,10 +287,16 @@ describe("rich editor rendering", () => {
       bodyEditor!.value.length,
       bodyEditor!.value.length,
     );
+    const originalBodyEditor = bodyEditor;
     bodyEditor!.value = "After\nSecond line";
     bodyEditor!.dispatchEvent(new Event("input", { bubbles: true }));
 
+    expect(root.querySelector(".mm-alert-body-editor")).toBe(
+      originalBodyEditor,
+    );
     expect(document.activeElement).toBe(bodyEditor);
+    expect(bodyEditor?.selectionStart).toBe("After\nSecond line".length);
+    expect(bodyEditor?.selectionEnd).toBe("After\nSecond line".length);
     expect(app.view.state.doc.firstChild?.type.name).toBe("raw_block");
     expect(app.view.state.doc.firstChild?.attrs.source).toBe(
       "> [!WARNING]\n> After\n> Second line",
@@ -317,6 +335,193 @@ describe("rich editor rendering", () => {
     expect(app.view.state.doc.firstChild?.attrs.source).toBe(
       "> [!NOTE]\n> Before\n> After",
     );
+    app.destroy();
+  });
+  it("keeps quoted blank lines in alert bodies and excludes block separators", () => {
+    const source = "> [!TIP]\n> first\n>\n> second\n\nNext";
+    const { app, root, messages } = makeApp(source);
+    const bodyEditor = root.querySelector<HTMLTextAreaElement>(
+      ".mm-alert-body-editor",
+    )!;
+    expect(bodyEditor.value).toBe("first\n\nsecond");
+
+    bodyEditor.focus();
+    bodyEditor.value = "first\n\nsecond\n";
+    bodyEditor.dispatchEvent(new Event("input", { bubbles: true }));
+    const edited = lastEditMarkdown(messages);
+    expect(edited).toContain("> first\n> \n> second\n> ");
+    expect(edited).toContain("\n\nNext");
+    app.destroy();
+
+    const separatorOnly = makeApp("> [!TIP]\n> first\n\nNext");
+    expect(
+      separatorOnly.root.querySelector<HTMLTextAreaElement>(
+        ".mm-alert-body-editor",
+      )?.value,
+    ).toBe("first");
+    separatorOnly.app.destroy();
+
+    const reloaded = makeApp(edited);
+    expect(
+      reloaded.root.querySelector<HTMLTextAreaElement>(".mm-alert-body-editor")
+        ?.value,
+    ).toBe("first\n\nsecond\n");
+    reloaded.app.destroy();
+  });
+  it("preserves CRLF while round-tripping quoted alert blank lines", () => {
+    const source = "> [!TIP]\r\n> first\r\n>\r\n\r\nNext";
+    const { app, root, messages } = makeApp(source);
+    const bodyEditor = root.querySelector<HTMLTextAreaElement>(
+      ".mm-alert-body-editor",
+    )!;
+    expect(bodyEditor.value).toBe("first\n");
+    bodyEditor.value = "first\n\nsecond";
+    bodyEditor.dispatchEvent(new Event("input", { bubbles: true }));
+    const edited = lastEditMarkdown(messages);
+    expect(edited).toContain("> first\r\n> \r\n> second");
+    expect(edited).not.toContain("> first\n>\n> second");
+    app.destroy();
+  });
+  it("moves between paragraphs and adjacent alert bodies at their text boundaries", () => {
+    const { app, root } = makeApp("Before\n\n> [!NOTE]\n> Alert\n\nAfter");
+    const paragraphs =
+      root.querySelectorAll<HTMLParagraphElement>(".ProseMirror > p");
+    const firstParagraph = app.view.state.doc.child(0)!;
+    const firstParagraphStart = 0;
+    const firstParagraphEnd =
+      firstParagraphStart + 1 + firstParagraph.content.size;
+    app.view.dispatch(
+      app.view.state.tr.setSelection(
+        TextSelection.create(app.view.state.doc, firstParagraphEnd),
+      ),
+    );
+    expect(app.view.state.selection.$from.parent.type.name).toBe("paragraph");
+    expect(app.view.state.selection.$from.depth).toBe(1);
+    expect(app.view.state.selection.from).toBe(firstParagraphEnd);
+    const intoAlert = new KeyboardEvent("keydown", {
+      bubbles: true,
+      cancelable: true,
+      key: "ArrowRight",
+    });
+    paragraphs[0]!.dispatchEvent(intoAlert);
+    const bodyEditor = root.querySelector<HTMLTextAreaElement>(
+      ".mm-alert-body-editor",
+    )!;
+    expect(intoAlert.defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(bodyEditor);
+    expect(bodyEditor.selectionStart).toBe(0);
+    expect(bodyEditor.selectionEnd).toBe(0);
+
+    bodyEditor.setSelectionRange(
+      bodyEditor.value.length,
+      bodyEditor.value.length,
+    );
+    const outOfAlert = new KeyboardEvent("keydown", {
+      bubbles: true,
+      cancelable: true,
+      key: "ArrowRight",
+    });
+    bodyEditor.dispatchEvent(outOfAlert);
+    expect(outOfAlert.defaultPrevented).toBe(true);
+    expect(app.view.state.selection.$from.parent.textContent).toBe("After");
+
+    const last = paragraphs[1]!;
+    const lastParagraph = app.view.state.doc.lastChild!;
+    const lastParagraphPosition =
+      app.view.state.doc.content.size - lastParagraph.nodeSize;
+    const lastStart = lastParagraphPosition + 1;
+    app.view.dispatch(
+      app.view.state.tr.setSelection(
+        TextSelection.create(app.view.state.doc, lastStart),
+      ),
+    );
+    expect(app.view.state.selection.$from.parent.type.name).toBe("paragraph");
+    expect(app.view.state.selection.$from.depth).toBe(1);
+    expect(app.view.state.selection.from).toBe(lastStart);
+    const backIntoAlert = new KeyboardEvent("keydown", {
+      bubbles: true,
+      cancelable: true,
+      key: "ArrowLeft",
+    });
+    last.dispatchEvent(backIntoAlert);
+    expect(backIntoAlert.defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(bodyEditor);
+    expect(bodyEditor.selectionStart).toBe(bodyEditor.value.length);
+    expect(bodyEditor.selectionEnd).toBe(bodyEditor.value.length);
+
+    bodyEditor.setSelectionRange(2, 2);
+    const middle = new KeyboardEvent("keydown", {
+      bubbles: true,
+      cancelable: true,
+      key: "ArrowRight",
+    });
+    bodyEditor.dispatchEvent(middle);
+    expect(middle.defaultPrevented).toBe(false);
+    expect(document.activeElement).toBe(bodyEditor);
+    app.destroy();
+  });
+  it("uses a transient paragraph after a final alert without changing Markdown until typing", () => {
+    const source = "> [!NOTE]\n> End";
+    const { app, root, messages } = makeApp(source);
+    const bodyEditor = root.querySelector<HTMLTextAreaElement>(
+      ".mm-alert-body-editor",
+    )!;
+    bodyEditor.focus();
+    bodyEditor.setSelectionRange(
+      bodyEditor.value.length,
+      bodyEditor.value.length,
+    );
+    const exit = new KeyboardEvent("keydown", {
+      bubbles: true,
+      cancelable: true,
+      key: "ArrowRight",
+    });
+    bodyEditor.dispatchEvent(exit);
+    expect(exit.defaultPrevented).toBe(true);
+    expect(
+      messages.filter((message: any) => message.type === "edit"),
+    ).toHaveLength(0);
+    expect(
+      root.querySelector<HTMLTextAreaElement>(".mm-source-textarea")?.value,
+    ).toBe(source);
+    expect(app.view.state.doc.lastChild?.type.name).toBe("paragraph");
+
+    app.view.dispatch(app.view.state.tr.insertText("Next"));
+    expect(
+      messages.filter((message: any) => message.type === "edit"),
+    ).toHaveLength(1);
+    expect((messages.at(-1) as any).markdown).toContain("Next");
+    app.destroy();
+  });
+  it("does not leave an alert while composing or while a selection is active", () => {
+    const { app, root } = makeApp("> [!NOTE]\n> Alert");
+    const bodyEditor = root.querySelector<HTMLTextAreaElement>(
+      ".mm-alert-body-editor",
+    )!;
+    bodyEditor.focus();
+    bodyEditor.setSelectionRange(
+      bodyEditor.value.length,
+      bodyEditor.value.length,
+    );
+    const composing = new KeyboardEvent("keydown", {
+      bubbles: true,
+      cancelable: true,
+      key: "ArrowRight",
+    });
+    Object.defineProperty(composing, "isComposing", { value: true });
+    bodyEditor.dispatchEvent(composing);
+    expect(composing.defaultPrevented).toBe(false);
+    expect(document.activeElement).toBe(bodyEditor);
+
+    bodyEditor.setSelectionRange(1, bodyEditor.value.length);
+    const selected = new KeyboardEvent("keydown", {
+      bubbles: true,
+      cancelable: true,
+      key: "ArrowLeft",
+    });
+    bodyEditor.dispatchEvent(selected);
+    expect(selected.defaultPrevented).toBe(false);
+    expect(document.activeElement).toBe(bodyEditor);
     app.destroy();
   });
   it("disables editing in a host preview and exposes the code language field in Mint", () => {

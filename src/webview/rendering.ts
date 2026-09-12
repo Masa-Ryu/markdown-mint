@@ -142,6 +142,12 @@ interface CoreWithNodeRenderer {
   ) => string;
 }
 
+export type AlertBoundaryDirection = "before" | "after";
+export type AlertBoundaryExit = (
+  direction: AlertBoundaryDirection,
+  position: number,
+) => boolean;
+
 function dependsOnDocumentContext(node: PMNode): boolean {
   if (node.type.name !== "raw_block" && node.type.name !== "raw_inline")
     return false;
@@ -278,15 +284,19 @@ function alertSourceParts(source: string): {
   );
   const markerLine = lines[markerIndex] ?? "";
   const markerPrefix = markerLine.match(/^(\s*>[ \t]?)/)?.[1] ?? "";
-  const bodyLines = lines.slice(markerIndex + 1);
-  const firstBodyPrefix = bodyLines
+  const bodySourceLines: string[] = [];
+  for (let index = markerIndex + 1; index < lines.length; index += 1) {
+    const line = lines[index]!;
+    if (!/^\s*>[ \t]?/.test(line)) break;
+    bodySourceLines.push(line);
+  }
+  const firstBodyPrefix = bodySourceLines
     .map((line) => line.match(/^(\s*>[ \t]?)/)?.[1])
     .find((prefix): prefix is string => prefix !== undefined);
   const bodyPrefix = firstBodyPrefix ?? markerPrefix;
-  const body = bodyLines
+  const body = bodySourceLines
     .map((line) => line.replace(/^\s*>[ \t]?/, ""))
-    .join("\n")
-    .replace(/^\n+|\n+$/g, "");
+    .join("\n");
   const trailingMatch = normalized.match(/\n+$/);
   const trailingLineEnding = trailingMatch
     ? trailingMatch[0].replace(/\n/g, lineEnding)
@@ -327,9 +337,12 @@ export function createAlertNodeView(
   view: EditorView,
   getPos: (() => number | undefined) | undefined,
   getProfile?: () => Profile,
+  onBoundaryExit?: AlertBoundaryExit,
 ): NodeView {
   let current = node;
   let lastDocument = view.state.doc;
+  let lastProfile = getProfile?.() ?? "github";
+  let lastLocalSource: string | null = null;
   let disposed = false;
   let enhancer: RenderingEnhancer | undefined;
 
@@ -383,12 +396,22 @@ export function createAlertNodeView(
       bodyEditor.value,
     );
     if (String(currentNode.attrs.source ?? "") === source) return;
-    view.dispatch(
-      view.state.tr.setNodeMarkup(position, undefined, {
-        ...currentNode.attrs,
-        source,
-      }),
-    );
+    // EditorView.updateState() invokes this NodeView's update synchronously.
+    // Mark the exact source before dispatch so that the update caused by this
+    // textarea is allowed to keep the existing editor DOM intact.
+    lastLocalSource = source;
+    try {
+      view.dispatch(
+        view.state.tr.setNodeMarkup(position, undefined, {
+          ...currentNode.attrs,
+          source,
+        }),
+      );
+    } catch (error) {
+      // A failed dispatch must not make a later external update look local.
+      lastLocalSource = null;
+      throw error;
+    }
   };
 
   const render = (): void => {
@@ -400,13 +423,14 @@ export function createAlertNodeView(
       : null;
     const selectionEnd = bodyEditorHadFocus ? bodyEditor.selectionEnd : null;
     const renderer = (core as unknown as CoreWithNodeRenderer).renderNodeHtml;
+    const profile = getProfile?.() ?? "github";
     const nodePosition = positionOf();
     const renderInput: PMNode | CoreRenderInput =
       nodePosition === undefined
         ? view.state.doc
         : { document: view.state.doc, nodePosition };
     const html = renderer
-      ? renderer(current, getProfile?.() ?? "github", renderInput)
+      ? renderer(current, profile, renderInput)
       : rawNodeFallback(current);
     enhancer?.dispose();
     appendGeneratedHtml(preview, html);
@@ -427,6 +451,7 @@ export function createAlertNodeView(
       }
     }
     enhancer = enhanceRenderedContent(preview);
+    lastProfile = profile;
   };
 
   bodyEditor.addEventListener("mousedown", (event) => event.stopPropagation());
@@ -434,11 +459,41 @@ export function createAlertNodeView(
   // alert textarea's native newline behavior by stopping the event before it
   // bubbles to the editor surface; do not prevent the browser default.
   bodyEditor.addEventListener("keydown", (event) => {
-    if (event.key === "Enter") event.stopPropagation();
+    if (event.key === "Enter") {
+      event.stopPropagation();
+      return;
+    }
+    if (
+      event.isComposing ||
+      event.shiftKey ||
+      event.ctrlKey ||
+      event.metaKey ||
+      event.altKey
+    )
+      return;
+    if (bodyEditor.selectionStart !== bodyEditor.selectionEnd) return;
+    const direction =
+      event.key === "ArrowRight"
+        ? "after"
+        : event.key === "ArrowLeft"
+          ? "before"
+          : null;
+    if (!direction) return;
+    const position = positionOf();
+    if (
+      position === undefined ||
+      (direction === "after"
+        ? bodyEditor.selectionEnd !== bodyEditor.value.length
+        : bodyEditor.selectionStart !== 0) ||
+      !onBoundaryExit?.(direction, position)
+    )
+      return;
+    event.preventDefault();
+    event.stopPropagation();
   });
   bodyEditor.addEventListener("input", () => {
-    updateSource();
     resizeBodyEditor();
+    updateSource();
   });
 
   render();
@@ -451,11 +506,26 @@ export function createAlertNodeView(
         String(nextNode.attrs.kind ?? "") !== "alert"
       )
         return false;
+      const nextSource = sourceFor(nextNode);
+      const nextProfile = getProfile?.() ?? "github";
       const contextChanged =
         view.state.doc !== lastDocument &&
         (dependsOnDocumentContext(current) ||
           dependsOnDocumentContext(nextNode));
-      if (nextNode.eq(current) && !contextChanged) {
+      const profileChanged = nextProfile !== lastProfile;
+      if (
+        !contextChanged &&
+        !profileChanged &&
+        lastLocalSource !== null &&
+        nextSource === lastLocalSource
+      ) {
+        current = nextNode;
+        lastDocument = view.state.doc;
+        lastLocalSource = null;
+        return true;
+      }
+      lastLocalSource = null;
+      if (nextNode.eq(current) && !contextChanged && !profileChanged) {
         lastDocument = view.state.doc;
         return true;
       }

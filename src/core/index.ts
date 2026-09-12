@@ -2988,6 +2988,19 @@ function stripAlertPrefix(line: string): string {
   return line.replace(/^\s*>[ \t]?/, "");
 }
 
+function alertBodyFromLines(lines: string[], markerIndex: number): string {
+  const bodyLines: string[] = [];
+  for (let index = markerIndex + 1; index < lines.length; index += 1) {
+    const line = lines[index]!;
+    // An unquoted blank line belongs to the block separator. Only lines that
+    // retain the blockquote marker are part of the alert body, including empty
+    // quoted lines such as ">".
+    if (!/^\s*>[ \t]?/.test(line)) break;
+    bodyLines.push(stripAlertPrefix(line));
+  }
+  return bodyLines.join("\n");
+}
+
 const ALERT_ICON_SOURCES = {
   note: infoIconAsset,
   tip: lightbulbAsset,
@@ -3005,11 +3018,7 @@ function renderAlert(source: string, state: RenderState): string {
   const markerLine = stripAlertPrefix(lines[markerIndex] ?? "");
   const marker =
     markerLine.match(/^\s*\[!([^\]]+)\]/i)?.[1]?.toLowerCase() ?? "note";
-  const body = lines
-    .slice(markerIndex + 1)
-    .map(stripAlertPrefix)
-    .join("\n")
-    .replace(/^\n+|\n+$/g, "");
+  const body = alertBodyFromLines(lines, markerIndex);
   const title = marker.charAt(0).toUpperCase() + marker.slice(1);
   const bodyHtml = body ? renderSourceFragment(body, state.profile, state) : "";
   const icon =

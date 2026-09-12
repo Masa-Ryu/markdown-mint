@@ -61,6 +61,7 @@ import {
   createRenderedNodeView,
   createRenderingPlugin,
   enhanceRenderedContent,
+  type AlertBoundaryDirection,
   type RenderingEnhancer,
 } from "./rendering";
 import { appendToolbarIcon, type ToolbarIconName } from "./icons";
@@ -858,6 +859,12 @@ function topLevelRangeNodes(
     position = end;
   }
   return result;
+}
+
+function isAlertBlock(node: PMNode | null | undefined): node is PMNode {
+  return (
+    node?.type.name === "raw_block" && String(node.attrs.kind ?? "") === "alert"
+  );
 }
 
 function removeTopLevelRange(doc: PMNode, range: TransientBlankRange): PMNode {
@@ -1670,7 +1677,14 @@ export class MarkdownEditorApp {
         image: (node) => new ImageNodeView(node, () => this.resourceBaseUrl),
         raw_block: (node, view, getPos) =>
           String(node.attrs.kind ?? "") === "alert"
-            ? createAlertNodeView(node, view, getPos, () => this.profile)
+            ? createAlertNodeView(
+                node,
+                view,
+                getPos,
+                () => this.profile,
+                (direction, position) =>
+                  this.moveSelectionAroundAlert(direction, position),
+              )
             : createRenderedNodeView(node, view, getPos, () => this.profile),
         raw_inline: (node, view, getPos) =>
           createRenderedNodeView(node, view, getPos, () => this.profile),
@@ -1879,6 +1893,7 @@ export class MarkdownEditorApp {
       first?.focus();
       return true;
     }
+    if (this.handleAdjacentAlertKeyDown(event)) return true;
     // ProseMirror's `Mod` keymap covers the normal path. Keep an explicit
     // platform-aware fallback for hosts that stop the keymap event while a
     // webview command is pending (and for embedded test hosts).
@@ -1898,6 +1913,74 @@ export class MarkdownEditorApp {
       return this.sendSaveCommand();
     }
     return false;
+  }
+
+  private handleAdjacentAlertKeyDown(event: KeyboardEvent): boolean {
+    if (
+      (event.key !== "ArrowRight" && event.key !== "ArrowLeft") ||
+      event.isComposing ||
+      this.composing ||
+      event.shiftKey ||
+      event.ctrlKey ||
+      event.metaKey ||
+      event.altKey
+    )
+      return false;
+    const selection = this.view.state.selection;
+    if (!(selection instanceof TextSelection) || !selection.empty) return false;
+    const paragraph = selection.$from.parent;
+    if (
+      selection.$from.depth !== 1 ||
+      paragraph.type.name !== "paragraph" ||
+      (event.key === "ArrowRight" &&
+        selection.$from.parentOffset !== paragraph.content.size) ||
+      (event.key === "ArrowLeft" && selection.$from.parentOffset !== 0)
+    )
+      return false;
+
+    const blockPosition = selection.$from.before(1);
+    let index = -1;
+    let position = 0;
+    for (
+      let childIndex = 0;
+      childIndex < this.view.state.doc.childCount;
+      childIndex += 1
+    ) {
+      if (position === blockPosition) {
+        index = childIndex;
+        break;
+      }
+      position += this.view.state.doc.child(childIndex).nodeSize;
+    }
+    if (index < 0) return false;
+
+    const adjacentIndex = event.key === "ArrowRight" ? index + 1 : index - 1;
+    if (adjacentIndex < 0 || adjacentIndex >= this.view.state.doc.childCount)
+      return false;
+    let adjacentPosition = 0;
+    for (let childIndex = 0; childIndex < adjacentIndex; childIndex += 1)
+      adjacentPosition += this.view.state.doc.child(childIndex).nodeSize;
+    if (!isAlertBlock(this.view.state.doc.child(adjacentIndex))) return false;
+    const focused = this.focusAlertBody(
+      adjacentPosition,
+      event.key === "ArrowRight" ? "start" : "end",
+    );
+    if (!focused) return false;
+    event.preventDefault();
+    return true;
+  }
+
+  private focusAlertBody(position: number, edge: "start" | "end"): boolean {
+    const dom = this.view.nodeDOM(position);
+    if (!(dom instanceof Element)) return false;
+    const editor = dom.querySelector<HTMLTextAreaElement>(
+      ".mm-alert-body-editor",
+    );
+    if (!editor) return false;
+    const caret = edge === "start" ? 0 : editor.value.length;
+    editor.focus({ preventScroll: true });
+    editor.setSelectionRange(caret, caret);
+    return true;
   }
 
   private exitTable(
@@ -1936,46 +2019,113 @@ export class MarkdownEditorApp {
     context: TableContext,
     dispatch?: (tr: Transaction) => void,
   ): boolean {
+    const tablePosition = context.tableStart - 1;
+    return this.moveSelectionAfterBlock(
+      state,
+      tablePosition,
+      context.table,
+      dispatch,
+      (selection) => Boolean(tableContext(selection)),
+    );
+  }
+
+  private moveSelectionAfterBlock(
+    state: EditorState,
+    position: number,
+    node: PMNode,
+    dispatch?: (tr: Transaction) => void,
+    isInsideBlock?: (selection: Selection) => boolean,
+  ): boolean {
     const paragraph = this.schema.nodes.paragraph;
     if (!paragraph) return false;
-    const tablePosition = context.tableStart - 1;
-    const tableEnd = tablePosition + context.table.nodeSize;
+    const blockEnd = position + node.nodeSize;
     let transaction = state.tr;
     let target: Selection;
     try {
-      target = TextSelection.near(
-        state.doc.resolve(Math.min(tableEnd, state.doc.content.size)),
+      target = Selection.near(
+        state.doc.resolve(Math.min(blockEnd, state.doc.content.size)),
         1,
       );
     } catch {
       target = state.selection;
     }
 
-    // Markdown tables may be the final block in a source document. Materialize
-    // a writable paragraph only when the table has no following block, and
-    // keep it transient until the user actually types into it.
-    if (tableContext(target)) {
-      const from = Math.min(tableEnd, transaction.doc.content.size);
-      const trailing = paragraph.create();
-      transaction = transaction
-        .insert(from, trailing)
-        .setMeta(TRANSIENT_BLANK_META, {
-          kind: "append",
-          from,
-          to: from + trailing.nodeSize,
-          count: 1,
-          meaningful: false,
-        } satisfies TransientBlankTransactionMeta);
-      target = TextSelection.near(
-        transaction.doc.resolve(
-          Math.min(from + 1, transaction.doc.content.size),
-        ),
-        1,
-      );
+    // A block with no following text position (notably a final atom) gets a
+    // writable paragraph only as a transient caret target. Table callers pass
+    // an explicit predicate because Selection.near can remain inside a table.
+    const needsTrailingParagraph =
+      target.from < blockEnd || Boolean(isInsideBlock?.(target));
+    if (!needsTrailingParagraph) {
+      transaction = transaction.setSelection(target).scrollIntoView();
+      if (dispatch) dispatch(transaction);
+      return true;
     }
+
+    const from = Math.min(blockEnd, transaction.doc.content.size);
+    const trailing = paragraph.create();
+    transaction = transaction
+      .insert(from, trailing)
+      .setMeta(TRANSIENT_BLANK_META, {
+        kind: "append",
+        from,
+        to: from + trailing.nodeSize,
+        count: 1,
+        meaningful: false,
+      } satisfies TransientBlankTransactionMeta);
+    target = Selection.near(
+      transaction.doc.resolve(Math.min(from + 1, transaction.doc.content.size)),
+      1,
+    );
     transaction = transaction.setSelection(target).scrollIntoView();
     if (dispatch) dispatch(transaction);
     return true;
+  }
+
+  private moveSelectionAroundAlert(
+    direction: AlertBoundaryDirection,
+    position: number,
+  ): boolean {
+    const state = this.view.state;
+    const node = state.doc.nodeAt(position);
+    if (!isAlertBlock(node)) return false;
+    const blockEnd = position + node.nodeSize;
+    if (direction === "before") {
+      if (position <= 0) return false;
+      let target: Selection;
+      try {
+        target = Selection.near(state.doc.resolve(position), -1);
+      } catch {
+        return false;
+      }
+      if (target.from >= position || !target.$from.parent.isTextblock)
+        return false;
+      this.view.dispatch(state.tr.setSelection(target).scrollIntoView());
+      this.view.focus();
+      return true;
+    }
+
+    if (blockEnd < state.doc.content.size) {
+      let target: Selection;
+      try {
+        target = Selection.near(state.doc.resolve(blockEnd), 1);
+      } catch {
+        return false;
+      }
+      if (target.from <= blockEnd || !target.$from.parent.isTextblock)
+        return false;
+      this.view.dispatch(state.tr.setSelection(target).scrollIntoView());
+      this.view.focus();
+      return true;
+    }
+
+    const moved = this.moveSelectionAfterBlock(
+      state,
+      position,
+      node,
+      (transaction) => this.view.dispatch(transaction),
+    );
+    if (moved) this.view.focus();
+    return moved;
   }
 
   private gfmUnavailable(dispatch?: (tr: Transaction) => void): boolean {
