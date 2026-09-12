@@ -32,9 +32,7 @@ export function installModalSubmitShortcut(
 
     const form = dialog.querySelector<HTMLFormElement>("form");
     if (!form) return;
-    const submitter = form.querySelector<
-      HTMLButtonElement | HTMLInputElement
-    >(
+    const submitter = form.querySelector<HTMLButtonElement | HTMLInputElement>(
       'button[type="submit"]:not(:disabled), input[type="submit"]:not(:disabled)',
     );
     if (!submitter) return;
