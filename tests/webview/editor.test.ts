@@ -37,6 +37,19 @@ function lastEditMarkdown(messages: unknown[]): string {
   return messages.filter(isEditMessage).at(-1)?.markdown ?? "";
 }
 
+function openImageDialog(root: HTMLElement): HTMLDialogElement {
+  const button = root.querySelector<HTMLButtonElement>(
+    '[data-testid="toolbar-image"]',
+  );
+  if (!button) throw new Error("image toolbar button is not rendered");
+  button.click();
+  const dialog = root.querySelector<HTMLDialogElement>(
+    '[aria-labelledby="mm-image-dialog-title"]',
+  );
+  if (!dialog) throw new Error("image dialog is not rendered");
+  return dialog;
+}
+
 async function flush(): Promise<void> {
   await new Promise<void>((resolve) => setTimeout(resolve, 0));
   await Promise.resolve();
@@ -1045,6 +1058,98 @@ describe("rich editor rendering", () => {
     expect(bold.disabled).toBe(false);
     app.destroy();
   });
+  it("accepts relative image paths from the insertion dialog", () => {
+    const source = "replace me";
+    const { app, root, messages } = makeApp(source);
+    app.view.dispatch(
+      app.view.state.tr.setSelection(
+        TextSelection.create(app.view.state.doc, 1, 1 + source.length),
+      ),
+    );
+
+    const dialog = openImageDialog(root);
+    const [pathInput, altInput] = Array.from(
+      dialog.querySelectorAll<HTMLInputElement>("input"),
+    );
+    expect(pathInput?.type).toBe("text");
+    expect(pathInput?.getAttribute("type")).toBe("text");
+    expect(pathInput?.validity.typeMismatch).toBe(false);
+    expect(pathInput?.placeholder).toBe("./images/example.png");
+    expect(dialog.textContent).toContain("Image path or URL");
+
+    pathInput!.value = "./images/sample.png";
+    expect(pathInput!.checkValidity()).toBe(true);
+    altInput!.value = "sample";
+    dialog.querySelector<HTMLButtonElement>('button[type="submit"]')!.click();
+
+    expect(app.view.state.doc.firstChild?.firstChild?.attrs.src).toBe(
+      "./images/sample.png",
+    );
+    expect(lastEditMarkdown(messages)).toBe("![sample](./images/sample.png)");
+    expect(lastEditMarkdown(messages)).not.toContain(
+      "vscode-webview-resource:",
+    );
+    app.destroy();
+  });
+
+  it.each([
+    ["images/my image.png", "![sample](<images/my image.png>)"],
+    ["../assets/banner.webp", "![sample](../assets/banner.webp)"],
+  ])(
+    "preserves image path %s through Markdown serialization",
+    (path, expected) => {
+      const source = "replace me";
+      const { app, root, messages } = makeApp(source);
+      app.view.dispatch(
+        app.view.state.tr.setSelection(
+          TextSelection.create(app.view.state.doc, 1, 1 + source.length),
+        ),
+      );
+
+      const dialog = openImageDialog(root);
+      const [pathInput, altInput] = Array.from(
+        dialog.querySelectorAll<HTMLInputElement>("input"),
+      );
+      pathInput!.value = path;
+      altInput!.value = "sample";
+      dialog.querySelector<HTMLButtonElement>('button[type="submit"]')!.click();
+
+      expect(app.view.state.doc.firstChild?.firstChild?.attrs.src).toBe(path);
+      expect(lastEditMarkdown(messages)).toBe(expected);
+      app.destroy();
+    },
+  );
+
+  it.each([
+    [
+      "https://example.com/image.png",
+      "![sample](https://example.com/image.png)",
+    ],
+    ["http://example.com/image.png", "![sample](http://example.com/image.png)"],
+  ])(
+    "keeps absolute image URL %s supported by the insertion dialog",
+    (path, expected) => {
+      const source = "replace me";
+      const { app, root, messages } = makeApp(source);
+      app.view.dispatch(
+        app.view.state.tr.setSelection(
+          TextSelection.create(app.view.state.doc, 1, 1 + source.length),
+        ),
+      );
+
+      const dialog = openImageDialog(root);
+      const [pathInput, altInput] = Array.from(
+        dialog.querySelectorAll<HTMLInputElement>("input"),
+      );
+      pathInput!.value = path;
+      altInput!.value = "sample";
+      dialog.querySelector<HTMLButtonElement>('button[type="submit"]')!.click();
+
+      expect(app.view.state.doc.firstChild?.firstChild?.attrs.src).toBe(path);
+      expect(lastEditMarkdown(messages)).toBe(expected);
+      app.destroy();
+    },
+  );
   it("resolves relative image URLs for display without changing Markdown attrs", async () => {
     const root = document.createElement("div");
     document.body.append(root);
