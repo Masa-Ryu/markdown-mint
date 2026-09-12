@@ -5303,6 +5303,13 @@ export class MarkdownEditorApp {
     );
     tableButton.dataset.gfmOnly = "true";
     addMenuButton(
+      "Image",
+      "Insert image",
+      () => this.insertImage(),
+      undefined,
+      "image",
+    );
+    addMenuButton(
       "Horizontal rule",
       "Horizontal rule",
       () => this.insertHorizontalRule(),
