@@ -33,39 +33,49 @@ function appendInsertDialog(
   return { dialog, form, input, submit };
 }
 
+function replaceRequestSubmit(form: HTMLFormElement) {
+  const requestSubmit = vi.fn();
+  Object.defineProperty(form, "requestSubmit", {
+    configurable: true,
+    value: requestSubmit,
+  });
+  return requestSubmit;
+}
+
 afterEach(() => {
   document.body.replaceChildren();
 });
 
 describe("installModalSubmitShortcut", () => {
-  it.each<InsertDialogKind>([
-    "link",
-    "image",
-    "profile-feature",
-    "table",
-  ])("submits the %s modal with Ctrl+Enter", (kind) => {
-    const root = document.createElement("div");
-    document.body.append(root);
-    const { form, input, submit } = appendInsertDialog(root, kind);
-    const requestSubmit = vi.fn();
-    Object.defineProperty(form, "requestSubmit", {
-      configurable: true,
-      value: requestSubmit,
-    });
-    const dispose = installModalSubmitShortcut(root);
+  it("submits each insertion/editing modal with Ctrl+Enter", () => {
+    const kinds: InsertDialogKind[] = [
+      "link",
+      "image",
+      "profile-feature",
+      "table",
+    ];
 
-    const event = new KeyboardEvent("keydown", {
-      key: "Enter",
-      ctrlKey: true,
-      bubbles: true,
-      cancelable: true,
-    });
-    input.dispatchEvent(event);
+    for (const kind of kinds) {
+      const root = document.createElement("div");
+      document.body.append(root);
+      const { form, input, submit } = appendInsertDialog(root, kind);
+      const requestSubmit = replaceRequestSubmit(form);
+      const dispose = installModalSubmitShortcut(root);
 
-    expect(event.defaultPrevented).toBe(true);
-    expect(requestSubmit).toHaveBeenCalledTimes(1);
-    expect(requestSubmit).toHaveBeenCalledWith(submit);
-    dispose();
+      const event = new KeyboardEvent("keydown", {
+        key: "Enter",
+        ctrlKey: true,
+        bubbles: true,
+        cancelable: true,
+      });
+      input.dispatchEvent(event);
+
+      expect(event.defaultPrevented).toBe(true);
+      expect(requestSubmit).toHaveBeenCalledTimes(1);
+      expect(requestSubmit).toHaveBeenCalledWith(submit);
+      dispose();
+      root.remove();
+    }
   });
 
   it("does not submit destructive confirmation dialogs", () => {
@@ -81,11 +91,7 @@ describe("installModalSubmitShortcut", () => {
     form.append(input, submit);
     dialog.append(form);
     root.append(dialog);
-    const requestSubmit = vi.fn();
-    Object.defineProperty(form, "requestSubmit", {
-      configurable: true,
-      value: requestSubmit,
-    });
+    const requestSubmit = replaceRequestSubmit(form);
     const dispose = installModalSubmitShortcut(root);
 
     input.dispatchEvent(
@@ -101,35 +107,36 @@ describe("installModalSubmitShortcut", () => {
     dispose();
   });
 
-  it.each([
-    ["plain Enter", {}],
-    ["Ctrl+Shift+Enter", { ctrlKey: true, shiftKey: true }],
-    ["Ctrl+Alt+Enter", { ctrlKey: true, altKey: true }],
-    ["Command+Enter", { metaKey: true }],
-    ["IME composition", { ctrlKey: true, isComposing: true }],
-    ["key repeat", { ctrlKey: true, repeat: true }],
-  ] as const)("ignores %s", (_label, modifiers) => {
-    const root = document.createElement("div");
-    document.body.append(root);
-    const { form, input } = appendInsertDialog(root, "table");
-    const requestSubmit = vi.fn();
-    Object.defineProperty(form, "requestSubmit", {
-      configurable: true,
-      value: requestSubmit,
-    });
-    const dispose = installModalSubmitShortcut(root);
+  it("ignores non-shortcut, composing, and repeated key events", () => {
+    const ignoredEvents: KeyboardEventInit[] = [
+      {},
+      { ctrlKey: true, shiftKey: true },
+      { ctrlKey: true, altKey: true },
+      { metaKey: true },
+      { ctrlKey: true, isComposing: true },
+      { ctrlKey: true, repeat: true },
+    ];
 
-    input.dispatchEvent(
-      new KeyboardEvent("keydown", {
-        key: "Enter",
-        bubbles: true,
-        cancelable: true,
-        ...modifiers,
-      }),
-    );
+    for (const modifiers of ignoredEvents) {
+      const root = document.createElement("div");
+      document.body.append(root);
+      const { form, input } = appendInsertDialog(root, "table");
+      const requestSubmit = replaceRequestSubmit(form);
+      const dispose = installModalSubmitShortcut(root);
 
-    expect(requestSubmit).not.toHaveBeenCalled();
-    dispose();
+      input.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "Enter",
+          bubbles: true,
+          cancelable: true,
+          ...modifiers,
+        }),
+      );
+
+      expect(requestSubmit).not.toHaveBeenCalled();
+      dispose();
+      root.remove();
+    }
   });
 
   it("does not submit when the primary action is disabled", () => {
@@ -137,11 +144,7 @@ describe("installModalSubmitShortcut", () => {
     document.body.append(root);
     const { form, input, submit } = appendInsertDialog(root, "table");
     submit.disabled = true;
-    const requestSubmit = vi.fn();
-    Object.defineProperty(form, "requestSubmit", {
-      configurable: true,
-      value: requestSubmit,
-    });
+    const requestSubmit = replaceRequestSubmit(form);
     const dispose = installModalSubmitShortcut(root);
 
     input.dispatchEvent(
