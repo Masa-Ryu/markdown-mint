@@ -16,6 +16,7 @@ import {
   enhanceRenderedContent,
   type RenderingEnhancer,
 } from "./mermaidEnhancer";
+import { colorLiteralDecorations } from "./colorLiterals";
 
 export { enhanceRenderedContent };
 export type { RenderingEnhancer };
@@ -103,7 +104,10 @@ function baseRenderingDecorations(
   getProfile?: () => Profile,
 ): { profile: Profile; decorations: Decoration[] } {
   const profile = getProfile?.() ?? "github";
-  const decorations: Decoration[] = headingDecorations(state, profile);
+  const decorations: Decoration[] = [
+    ...headingDecorations(state, profile),
+    ...colorLiteralDecorations(state.doc),
+  ];
   const footnotes = footnoteDecoration(state, profile);
   if (footnotes) decorations.push(footnotes);
   return { profile, decorations };
