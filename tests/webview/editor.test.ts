@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { NodeSelection, TextSelection } from "prosemirror-state";
 import {
   parseMarkdown,
@@ -102,6 +102,70 @@ function makeApp(
     initialDocument: documentFixture(markdown, clipboardAvailable),
   });
   return { app, root, messages, vscode };
+}
+
+function codeBlockPosition(
+  app: ReturnType<typeof makeApp>["app"],
+  occurrence = 0,
+): number {
+  let found = -1;
+  let seen = 0;
+  app.view.state.doc.descendants((node, position) => {
+    if (node.type.name === "code_block") {
+      if (seen === occurrence) {
+        found = position;
+        return false;
+      }
+      seen += 1;
+    }
+    return true;
+  });
+  if (found < 0) throw new Error(`code block ${occurrence} is not present`);
+  return found;
+}
+
+function selectCodeBlockText(
+  app: ReturnType<typeof makeApp>["app"],
+  offset: number,
+  occurrence = 0,
+): number {
+  const position = codeBlockPosition(app, occurrence);
+  app.view.dispatch(
+    app.view.state.tr.setSelection(
+      TextSelection.create(app.view.state.doc, position + 1 + offset),
+    ),
+  );
+  return position;
+}
+
+type TestKeyboardEventInit = KeyboardEventInit & {
+  keyCode?: number;
+  isComposing?: boolean;
+};
+
+function dispatchCodeKey(
+  root: HTMLElement,
+  key: string,
+  occurrence = 0,
+  init: TestKeyboardEventInit = {},
+): KeyboardEvent {
+  const code = root.querySelectorAll<HTMLElement>(
+    ".mm-code-block-view .mm-code-block-pre code",
+  )[occurrence];
+  if (!code) throw new Error(`code block ${occurrence} is not rendered`);
+  const { keyCode, isComposing, ...keyboardInit } = init;
+  const event = new KeyboardEvent("keydown", {
+    bubbles: true,
+    cancelable: true,
+    ...keyboardInit,
+    key,
+  });
+  if (keyCode !== undefined)
+    Object.defineProperty(event, "keyCode", { value: keyCode });
+  if (isComposing !== undefined)
+    Object.defineProperty(event, "isComposing", { value: isComposing });
+  code.dispatchEvent(event);
+  return event;
 }
 
 beforeEach(() => {
@@ -1312,6 +1376,310 @@ describe("rich editor rendering", () => {
     expect(
       root.querySelector<HTMLButtonElement>('[data-testid="toolbar-table"]'),
     ).toHaveProperty("disabled", true);
+    app.destroy();
+  });
+});
+
+describe("code block vertical boundaries", () => {
+  it("moves from the first visual row to the previous text block", () => {
+    const markdown = [
+      "Before paragraph",
+      "",
+      "```ts",
+      "line 1",
+      "line 2",
+      "```",
+      "",
+      "After paragraph",
+    ].join("\n");
+    const { app, root, messages } = makeApp(markdown);
+    const codePosition = selectCodeBlockText(app, 2);
+    const selectionBefore = app.view.state.selection;
+    expect(selectionBefore.$from.parent.type.name).toBe("code_block");
+    expect(selectionBefore.$from.parentOffset).toBe(2);
+    const endOfTextblock = vi
+      .spyOn(app.view, "endOfTextblock")
+      .mockReturnValue(true);
+
+    const event = dispatchCodeKey(root, "ArrowUp");
+
+    expect(endOfTextblock).toHaveBeenCalledWith("up");
+    expect(event.defaultPrevented).toBe(true);
+    expect(app.view.state.selection.$from.parent.type.name).toBe("paragraph");
+    expect(app.view.state.selection.$from.parent.textContent).toBe(
+      "Before paragraph",
+    );
+    expect(app.view.state.selection.from).toBe(codePosition - 1);
+    expect(messages.filter(isEditMessage)).toHaveLength(0);
+    expect(app.view.state.doc).toBe(selectionBefore.$from.doc);
+
+    endOfTextblock.mockRestore();
+    app.destroy();
+  });
+
+  it("uses the visual boundary result for wrapped and later logical lines", () => {
+    const markdown = [
+      "Before",
+      "",
+      "```ts",
+      "a very long logical line that can wrap across visual rows",
+      "second logical line",
+      "```",
+      "",
+      "After",
+    ].join("\n");
+    const { app, root, messages } = makeApp(markdown);
+    const codePosition = codeBlockPosition(app);
+    const endOfTextblock = vi
+      .spyOn(app.view, "endOfTextblock")
+      .mockReturnValue(false);
+
+    selectCodeBlockText(app, 12);
+    const wrappedRow = dispatchCodeKey(root, "ArrowUp");
+    expect(wrappedRow.defaultPrevented).toBe(false);
+    expect(app.view.state.selection.$from.parent.type.name).toBe("code_block");
+    expect(messages.filter(isEditMessage)).toHaveLength(0);
+
+    selectCodeBlockText(app, 0);
+    endOfTextblock.mockReturnValue(true);
+    const firstRow = dispatchCodeKey(root, "ArrowUp");
+    expect(firstRow.defaultPrevented).toBe(true);
+    expect(app.view.state.selection.$from.parent.type.name).toBe("paragraph");
+    expect(app.view.state.selection.$from.parent.textContent).toBe("Before");
+    expect(app.view.state.selection.from).toBe(codePosition - 1);
+    expect(messages.filter(isEditMessage)).toHaveLength(0);
+
+    endOfTextblock.mockRestore();
+    app.destroy();
+  });
+
+  it("does not route the existing ArrowDown behavior through the upward handler", () => {
+    const { app, root, messages } = makeApp(
+      ["Before", "", "```ts", "first", "second", "```", "", "After"].join("\n"),
+    );
+    selectCodeBlockText(app, "first\nsecond".length);
+    const endOfTextblock = vi
+      .spyOn(app.view, "endOfTextblock")
+      .mockReturnValue(true);
+
+    const event = dispatchCodeKey(root, "ArrowDown");
+
+    expect(event.defaultPrevented).toBe(false);
+    expect(endOfTextblock).not.toHaveBeenCalled();
+    expect(app.view.state.selection.$from.parent.type.name).toBe("code_block");
+    expect(messages.filter(isEditMessage)).toHaveLength(0);
+
+    endOfTextblock.mockRestore();
+    app.destroy();
+  });
+
+  it("moves to the previous code block and supports nested containers", () => {
+    const consecutive = makeApp(
+      ["```js", "one", "```", "", "```ts", "two", "```"].join("\n"),
+    );
+    const consecutiveEndOfTextblock = vi
+      .spyOn(consecutive.app.view, "endOfTextblock")
+      .mockReturnValue(true);
+    selectCodeBlockText(consecutive.app, 0, 1);
+    const consecutiveEvent = dispatchCodeKey(consecutive.root, "ArrowUp", 1);
+    expect(consecutiveEvent.defaultPrevented).toBe(true);
+    expect(consecutive.app.view.state.selection.$from.parent.type.name).toBe(
+      "code_block",
+    );
+    expect(consecutive.app.view.state.selection.$from.parent.textContent).toBe(
+      "one",
+    );
+    expect(consecutive.app.view.state.selection.$from.parentOffset).toBe(
+      consecutive.app.view.state.selection.$from.parent.content.size,
+    );
+    expect(consecutive.app.view.state.selection).not.toBeInstanceOf(
+      NodeSelection,
+    );
+    expect(consecutive.messages.filter(isEditMessage)).toHaveLength(0);
+    consecutiveEndOfTextblock.mockRestore();
+    consecutive.app.destroy();
+
+    for (const markdown of [
+      ["> Before", ">", "> ```ts", "> code", "> ```"].join("\n"),
+      ["- Before", "", "  ```ts", "  code", "  ```"].join("\n"),
+    ]) {
+      const nested = makeApp(markdown);
+      const nestedEndOfTextblock = vi
+        .spyOn(nested.app.view, "endOfTextblock")
+        .mockReturnValue(true);
+      selectCodeBlockText(nested.app, 0);
+      const nestedEvent = dispatchCodeKey(nested.root, "ArrowUp");
+      expect(nestedEvent.defaultPrevented).toBe(true);
+      expect(nested.app.view.state.selection.$from.parent.type.name).toBe(
+        "paragraph",
+      );
+      expect(nested.app.view.state.selection.$from.parent.textContent).toBe(
+        "Before",
+      );
+      expect(nested.app.view.state.selection.$from.depth).toBeGreaterThan(1);
+      expect(nested.messages.filter(isEditMessage)).toHaveLength(0);
+      nestedEndOfTextblock.mockRestore();
+      nested.app.destroy();
+    }
+  });
+
+  it("leaves the document unchanged when no previous text position exists", () => {
+    const { app, root, messages } = makeApp(
+      ["```ts", "first", "second", "```"].join("\n"),
+    );
+    selectCodeBlockText(app, 2);
+    const originalDoc = app.view.state.doc;
+    const originalSelection = app.view.state.selection;
+    const endOfTextblock = vi
+      .spyOn(app.view, "endOfTextblock")
+      .mockReturnValue(true);
+
+    const event = dispatchCodeKey(root, "ArrowUp");
+
+    expect(event.defaultPrevented).toBe(false);
+    expect(app.view.state.doc).toBe(originalDoc);
+    expect(app.view.state.selection.eq(originalSelection)).toBe(true);
+    expect(messages.filter(isEditMessage)).toHaveLength(0);
+    endOfTextblock.mockRestore();
+    app.destroy();
+  });
+
+  it("does not intercept modifiers, non-empty selections, or IME keys", () => {
+    const { app, root, messages } = makeApp(
+      ["Before", "", "```ts", "first", "second", "```"].join("\n"),
+    );
+    const endOfTextblock = vi
+      .spyOn(app.view, "endOfTextblock")
+      .mockReturnValue(true);
+    const cases: TestKeyboardEventInit[] = [
+      { shiftKey: true },
+      { ctrlKey: true },
+      { metaKey: true },
+      { altKey: true },
+      { isComposing: true },
+      { keyCode: 229 },
+    ];
+
+    for (const init of cases) {
+      selectCodeBlockText(app, 2);
+      const event = dispatchCodeKey(root, "ArrowUp", 0, init);
+      expect(event.defaultPrevented).toBe(false);
+      expect(app.view.state.selection.$from.parent.type.name).toBe(
+        "code_block",
+      );
+    }
+
+    selectCodeBlockText(app, 2);
+    const nonEmpty = app.view.state.selection.from;
+    app.view.dispatch(
+      app.view.state.tr.setSelection(
+        TextSelection.create(app.view.state.doc, nonEmpty, nonEmpty + 2),
+      ),
+    );
+    const selectedEvent = dispatchCodeKey(root, "ArrowUp");
+    expect(selectedEvent.defaultPrevented).toBe(false);
+    expect(app.view.state.selection.empty).toBe(false);
+    expect(messages.filter(isEditMessage)).toHaveLength(0);
+    expect(endOfTextblock).not.toHaveBeenCalled();
+
+    endOfTextblock.mockRestore();
+    app.destroy();
+  });
+
+  it("keeps code-block controls and expanded mode out of boundary navigation", () => {
+    const { app, root, messages } = makeApp(
+      ["Before", "", "```ts", "first", "second", "```"].join("\n"),
+    );
+    selectCodeBlockText(app, 2);
+    const endOfTextblock = vi
+      .spyOn(app.view, "endOfTextblock")
+      .mockReturnValue(true);
+    const input = root.querySelector<HTMLInputElement>(
+      ".mm-code-language-inline",
+    )!;
+    root.querySelector<HTMLButtonElement>(".mm-code-language-trigger")!.click();
+    const pickerEvent = new KeyboardEvent("keydown", {
+      bubbles: true,
+      cancelable: true,
+      key: "ArrowUp",
+    });
+    input.dispatchEvent(pickerEvent);
+    expect(pickerEvent.defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(input);
+    expect(endOfTextblock).not.toHaveBeenCalled();
+    expect(app.view.state.selection.$from.parent.type.name).toBe("code_block");
+
+    input.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        bubbles: true,
+        cancelable: true,
+        key: "Escape",
+      }),
+    );
+    const more = root.querySelector<HTMLButtonElement>(
+      '[data-mm-code-action="more"]',
+    )!;
+    more.click();
+    const menuItem = root.querySelector<HTMLButtonElement>(
+      '[data-mm-code-menu-option="wrap"]',
+    )!;
+    const menuEvent = new KeyboardEvent("keydown", {
+      bubbles: true,
+      cancelable: true,
+      key: "ArrowDown",
+    });
+    menuItem.dispatchEvent(menuEvent);
+    expect(menuEvent.defaultPrevented).toBe(true);
+    expect(endOfTextblock).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(
+      root.querySelector('[data-mm-code-menu-option="line-numbers"]'),
+    );
+
+    root
+      .querySelector<HTMLButtonElement>('[data-mm-code-action="expand"]')!
+      .click();
+    app.view.focus();
+    const expandedEvent = dispatchCodeKey(root, "ArrowUp");
+    expect(expandedEvent.defaultPrevented).toBe(true);
+    expect(
+      root
+        .querySelector<HTMLElement>(".mm-code-block")
+        ?.classList.contains("mm-code-block-expanded"),
+    ).toBe(true);
+    expect(app.view.state.selection.$from.parent.type.name).toBe("code_block");
+    expect(messages.filter(isEditMessage)).toHaveLength(0);
+
+    endOfTextblock.mockRestore();
+    app.destroy();
+  });
+
+  it("focuses an adjacent Alert body instead of selecting its raw atom", () => {
+    const source = [
+      "> [!NOTE]",
+      "> Alert body",
+      "",
+      "```ts",
+      "code",
+      "```",
+    ].join("\n");
+    const { app, root, messages } = makeApp(source);
+    selectCodeBlockText(app, 0);
+    const endOfTextblock = vi
+      .spyOn(app.view, "endOfTextblock")
+      .mockReturnValue(true);
+
+    const event = dispatchCodeKey(root, "ArrowUp");
+    const body = root.querySelector<HTMLTextAreaElement>(
+      ".mm-alert-body-editor",
+    )!;
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(body);
+    expect(body.selectionStart).toBe(body.value.length);
+    expect(app.view.state.selection).not.toBeInstanceOf(NodeSelection);
+    expect(messages.filter(isEditMessage)).toHaveLength(0);
+
+    endOfTextblock.mockRestore();
     app.destroy();
   });
 });
