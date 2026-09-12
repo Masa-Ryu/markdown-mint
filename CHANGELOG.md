@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.0.38
+
+- Keep physical Alert header mouse clicks inert while making the accessible
+  `role="button"` activation work for synthetic clicks, Enter, and Space.
+- Ignore duplicate synthetic activation after keyboard opening so one dialog
+  and one source flush are performed.
+
 ## 0.0.37
 
 - Keep Alert bodies directly editable on a single click while opening the

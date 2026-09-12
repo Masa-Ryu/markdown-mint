@@ -118,6 +118,15 @@ the original body selection without a host edit. Update changes the existing
 Alert in place, preserving marker/body source behavior and the existing
 stale-document, conflict, recovery, and composition protections.
 
+## Alert header activation semantics (0.0.38)
+
+The Alert header remains a focusable `role="button"` with the accessible name
+`Edit Alert`. Physical mouse clicks use their nonzero `MouseEvent.detail` and
+remain inert, including the clicks that precede a double click. A zero-detail
+synthetic click, Enter, or Space uses the same guarded edit-dialog path. An
+already-open dialog absorbs the follow-up synthetic event so it cannot flush or
+open a second dialog.
+
 ## Details scanner inline token boundaries (0.0.36)
 
 Details range discovery now asks markdown-it's inline tokenizer which source
@@ -174,6 +183,9 @@ outline assertions to the existing suite. The targeted Alert webview tests and
 the full browser Alert flow cover single-click body editing, single-click
 header inertness, body/header double-click dialog reuse, latest textarea input
 flushing, Cancel/Update focus restoration, and absence of the picker controls.
+
+Final 0.0.38 verification adds physical versus synthetic header activation,
+Enter/Space keyboard activation, and duplicate-dialog suppression assertions.
 
 ## Details scanner block contexts (0.0.35)
 
