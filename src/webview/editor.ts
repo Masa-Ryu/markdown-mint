@@ -61,7 +61,9 @@ import {
   createRenderedNodeView,
   createRenderingPlugin,
   enhanceRenderedContent,
+  ALERT_LOCAL_INPUT_META,
   type AlertBoundaryDirection,
+  type AlertHistoryCommand,
   type RenderingEnhancer,
 } from "./rendering";
 import { appendToolbarIcon, type ToolbarIconName } from "./icons";
@@ -1728,6 +1730,7 @@ export class MarkdownEditorApp {
                 () => this.profile,
                 (direction, position) =>
                   this.moveSelectionAroundAlert(direction, position),
+                (command: AlertHistoryCommand) => this.sendHostCommand(command),
               )
             : createRenderedNodeView(node, view, getPos, () => this.profile),
         raw_inline: (node, view, getPos) =>
@@ -2145,6 +2148,39 @@ export class MarkdownEditorApp {
     const state = this.view.state;
     const node = state.doc.nodeAt(position);
     if (!isAlertBlock(node)) return false;
+
+    // Adjacent raw alert atoms have no text position for Selection.near() to
+    // find. Focus the neighbouring NodeView directly so the user never lands
+    // on a ProseMirror NodeSelection between two alert editors.
+    let index = -1;
+    let childPosition = 0;
+    for (
+      let childIndex = 0;
+      childIndex < state.doc.childCount;
+      childIndex += 1
+    ) {
+      if (childPosition === position) {
+        index = childIndex;
+        break;
+      }
+      childPosition += state.doc.child(childIndex).nodeSize;
+    }
+    const adjacentIndex = direction === "before" ? index - 1 : index + 1;
+    if (
+      index >= 0 &&
+      adjacentIndex >= 0 &&
+      adjacentIndex < state.doc.childCount &&
+      isAlertBlock(state.doc.child(adjacentIndex))
+    ) {
+      let adjacentPosition = 0;
+      for (let childIndex = 0; childIndex < adjacentIndex; childIndex += 1)
+        adjacentPosition += state.doc.child(childIndex).nodeSize;
+      return this.focusAlertBody(
+        adjacentPosition,
+        direction === "before" ? "end" : "start",
+      );
+    }
+
     const blockEnd = position + node.nodeSize;
     if (direction === "before") {
       if (position <= 0) return false;
@@ -2267,6 +2303,9 @@ export class MarkdownEditorApp {
     const docChanged = transactions.some(
       (transaction) => transaction.docChanged,
     );
+    const alertLocalInput = transactions.some(
+      (transaction) => transaction.getMeta(ALERT_LOCAL_INPUT_META) === true,
+    );
     const selectionSet = transactions.some(
       (transaction) => transaction.selectionSet,
     );
@@ -2276,6 +2315,12 @@ export class MarkdownEditorApp {
       const markdown = this.serializeCurrent();
       this.persistRecovery(markdown ?? this.lastValidMarkdown);
       if (markdown !== null) {
+        if (alertLocalInput) {
+          // Keep source integrity, recovery, and host sync synchronous. Preview
+          // and compatibility are derived views and can share one frame across
+          // a burst of native textarea input events.
+          this.sourceEl.value = markdown;
+        }
         if (
           this.vscode &&
           !this.syncPaused &&
@@ -2287,10 +2332,11 @@ export class MarkdownEditorApp {
         // synchronization, and all later derived work. Keep the edit message
         // ahead of optional rendering/diagnostics so typing never waits for a
         // hidden preview to parse and replace its DOM.
-        this.refreshDerivedViews(markdown, undefined, {
-          renderPreview: this.mode === "preview",
-          refreshCompatibility: false,
-        });
+        if (!alertLocalInput)
+          this.refreshDerivedViews(markdown, undefined, {
+            renderPreview: this.mode === "preview",
+            refreshCompatibility: false,
+          });
         this.scheduleDerivedViews(markdown);
       }
     }

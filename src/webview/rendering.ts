@@ -310,10 +310,12 @@ interface CoreWithNodeRenderer {
 }
 
 export type AlertBoundaryDirection = "before" | "after";
+export type AlertHistoryCommand = "undo" | "redo";
 export type AlertBoundaryExit = (
   direction: AlertBoundaryDirection,
   position: number,
 ) => boolean;
+export const ALERT_LOCAL_INPUT_META = "markdown-mint-alert-local-input";
 
 function dependsOnDocumentContext(node: PMNode): boolean {
   if (node.type.name !== "raw_block" && node.type.name !== "raw_inline")
@@ -429,70 +431,6 @@ export function createRenderedNodeView(
   };
 }
 
-function alertSourceParts(source: string): {
-  readonly body: string;
-  readonly header: string;
-  readonly bodyPrefix: string;
-  readonly lineEnding: string;
-  readonly trailingLineEnding: string;
-} {
-  const lineEnding = source.includes("\r\n")
-    ? "\r\n"
-    : source.includes("\r")
-      ? "\r"
-      : "\n";
-  const normalized = source.replace(/\r\n|\r/g, "\n");
-  const lines = normalized.split("\n");
-  const markerIndex = Math.max(
-    0,
-    lines.findIndex((line) =>
-      /^\s*>?[ \t]*\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]/i.test(line),
-    ),
-  );
-  const markerLine = lines[markerIndex] ?? "";
-  const markerPrefix = markerLine.match(/^(\s*>[ \t]?)/)?.[1] ?? "";
-  const bodySourceLines: string[] = [];
-  for (let index = markerIndex + 1; index < lines.length; index += 1) {
-    const line = lines[index]!;
-    if (!/^\s*>[ \t]?/.test(line)) break;
-    bodySourceLines.push(line);
-  }
-  const firstBodyPrefix = bodySourceLines
-    .map((line) => line.match(/^(\s*>[ \t]?)/)?.[1])
-    .find((prefix): prefix is string => prefix !== undefined);
-  const bodyPrefix = firstBodyPrefix ?? markerPrefix;
-  const body = bodySourceLines
-    .map((line) => line.replace(/^\s*>[ \t]?/, ""))
-    .join("\n");
-  const trailingMatch = normalized.match(/\n+$/);
-  const trailingLineEnding = trailingMatch
-    ? trailingMatch[0].replace(/\n/g, lineEnding)
-    : "";
-  return {
-    body,
-    header: lines.slice(0, markerIndex + 1).join("\n"),
-    bodyPrefix,
-    lineEnding,
-    trailingLineEnding,
-  };
-}
-
-function alertSourceWithBody(source: string, body: string): string {
-  const parts = alertSourceParts(source);
-  const normalizedBody = body.replace(/\r\n|\r/g, "\n");
-  const bodyLines = normalizedBody
-    ? normalizedBody
-        .split("\n")
-        .map((line) => parts.bodyPrefix + line)
-        .join(parts.lineEnding)
-    : "";
-  return (
-    parts.header.replace(/\n/g, parts.lineEnding) +
-    (bodyLines ? parts.lineEnding + bodyLines : "") +
-    parts.trailingLineEnding
-  );
-}
-
 /**
  * Render an alert atom with its body as an inline editor. Alerts remain raw
  * atoms so their original Markdown marker and source shape stay available to
@@ -505,11 +443,13 @@ export function createAlertNodeView(
   getPos: (() => number | undefined) | undefined,
   getProfile?: () => Profile,
   onBoundaryExit?: AlertBoundaryExit,
+  onHistoryCommand?: (command: AlertHistoryCommand) => boolean,
 ): NodeView {
   let current = node;
   let lastDocument = view.state.doc;
   let lastProfile = getProfile?.() ?? "github";
   let lastLocalSource: string | null = null;
+  let bodyComposing = false;
   let disposed = false;
   let enhancer: RenderingEnhancer | undefined;
 
@@ -558,7 +498,7 @@ export function createAlertNodeView(
       String(currentNode.attrs.kind ?? "") !== "alert"
     )
       return;
-    const source = alertSourceWithBody(
+    const source = core.alertSourceWithBody(
       String(currentNode.attrs.source ?? ""),
       bodyEditor.value,
     );
@@ -569,10 +509,12 @@ export function createAlertNodeView(
     lastLocalSource = source;
     try {
       view.dispatch(
-        view.state.tr.setNodeMarkup(position, undefined, {
-          ...currentNode.attrs,
-          source,
-        }),
+        view.state.tr
+          .setNodeMarkup(position, undefined, {
+            ...currentNode.attrs,
+            source,
+          })
+          .setMeta(ALERT_LOCAL_INPUT_META, true),
       );
     } catch (error) {
       // A failed dispatch must not make a later external update look local.
@@ -604,7 +546,7 @@ export function createAlertNodeView(
     const alert = preview.querySelector<HTMLElement>(".markdown-alert");
     const title = alert?.querySelector<HTMLElement>(".markdown-alert-title");
     if (alert && title) {
-      const parts = alertSourceParts(sourceFor(current));
+      const parts = core.alertSourceParts(sourceFor(current));
       if (bodyEditor.value !== parts.body) bodyEditor.value = parts.body;
       alert.replaceChildren(title, bodyEditor);
       resizeBodyEditor();
@@ -622,6 +564,15 @@ export function createAlertNodeView(
   };
 
   bodyEditor.addEventListener("mousedown", (event) => event.stopPropagation());
+  // NodeView stopEvent handling can keep the editor-level composition state
+  // from seeing events from this native textarea. Track the textarea itself so
+  // a synthetic/native IME event cannot trigger alert boundary navigation.
+  bodyEditor.addEventListener("compositionstart", () => {
+    bodyComposing = true;
+  });
+  bodyEditor.addEventListener("compositionend", () => {
+    bodyComposing = false;
+  });
   // The editor's global keymap handles Enter for ProseMirror blocks. Keep the
   // alert textarea's native newline behavior by stopping the event before it
   // bubbles to the editor surface; do not prevent the browser default.
@@ -630,13 +581,25 @@ export function createAlertNodeView(
       event.stopPropagation();
       return;
     }
-    if (
-      event.isComposing ||
-      event.shiftKey ||
-      event.ctrlKey ||
-      event.metaKey ||
-      event.altKey
-    )
+    if (event.isComposing || bodyComposing) return;
+    const modifier = event.ctrlKey || event.metaKey;
+    if (modifier && !event.altKey) {
+      const key = event.key.toLowerCase();
+      const history =
+        key === "z"
+          ? event.shiftKey
+            ? "redo"
+            : "undo"
+          : key === "y"
+            ? "redo"
+            : null;
+      if (history && onHistoryCommand?.(history)) {
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
+    }
+    if (event.shiftKey || event.ctrlKey || event.metaKey || event.altKey)
       return;
     if (bodyEditor.selectionStart !== bodyEditor.selectionEnd) return;
     const direction =
