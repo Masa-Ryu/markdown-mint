@@ -1668,6 +1668,14 @@ const documentMetadata = new WeakMap<
   { footnotes: FootnoteDefinition[]; source?: string }
 >();
 
+/**
+ * Rendering and compatibility inspection commonly consume the same source in
+ * one turn. Keep only the most recent parse so those adjacent calls can share
+ * the immutable snapshot without retaining documents across the application.
+ */
+let latestParse:
+  { source: string; profile: Profile; snapshot: MarkdownSnapshot } | undefined;
+
 interface DetailsRange {
   start: number;
   end: number;
@@ -1958,8 +1966,15 @@ export function parseMarkdown(
   source: string,
   profile: Profile = "github",
 ): MarkdownSnapshot {
+  if (latestParse?.source === source && latestParse.profile === profile)
+    return latestParse.snapshot;
+
   const frontmatter = detectFrontmatter(source);
-  if (!frontmatter) return parseInternal(source, profile);
+  if (!frontmatter) {
+    const snapshot = parseInternal(source, profile);
+    latestParse = { source, profile, snapshot };
+    return snapshot;
+  }
 
   const frontSource = source.slice(frontmatter.start, frontmatter.end);
   const restSource = source.slice(frontmatter.end);
@@ -1995,6 +2010,7 @@ export function parseMarkdown(
     profile,
   };
   documentMetadata.set(doc, { footnotes: snapshot.footnotes ?? [], source });
+  latestParse = { source, profile, snapshot };
   return snapshot;
 }
 

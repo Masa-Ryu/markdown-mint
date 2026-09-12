@@ -2,7 +2,7 @@
   "name": "markdown-mint",
   "displayName": "Markdown Mint",
   "description": "A structured Markdown editor for VS Code with safe, synchronized previews.",
-  "version": "0.0.22",
+  "version": "0.0.23",
   "publisher": "masa-ryu",
   "icon": "images/icon.png",
   "license": "MIT",

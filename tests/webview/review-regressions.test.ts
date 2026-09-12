@@ -1,5 +1,6 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CellSelection, TableMap } from "prosemirror-tables";
+import * as visualRendering from "../../src/core/visualRendering";
 import {
   parseMarkdown,
   renderMarkdown,
@@ -159,6 +160,96 @@ afterEach(() => {
 });
 
 describe("reviewed webview synchronization races", () => {
+  it("serializes an edit once and defers hidden preview work until after sync", async () => {
+    const serialize = vi.fn(serializeMarkdown);
+    const render = vi.fn(renderMarkdown);
+    const inspectCompatibility = vi.fn(() => []);
+    const { app, messages } = makeApp({
+      core: {
+        serializeMarkdown: serialize,
+        renderMarkdown: render,
+        inspectCompatibility,
+      },
+    });
+    serialize.mockClear();
+    render.mockClear();
+    inspectCompatibility.mockClear();
+
+    app.view.dispatch(app.view.state.tr.insertText("!"));
+
+    expect(serialize).toHaveBeenCalledTimes(1);
+    expect(edits(messages)).toHaveLength(1);
+    expect(render).not.toHaveBeenCalled();
+    expect(inspectCompatibility).not.toHaveBeenCalled();
+
+    await flush();
+    expect(inspectCompatibility).toHaveBeenCalledTimes(1);
+  });
+
+  it("cancels deferred derived work when the editor is destroyed", async () => {
+    const inspectCompatibility = vi.fn(() => []);
+    const { app } = makeApp({ core: { inspectCompatibility } });
+    inspectCompatibility.mockClear();
+    app.view.dispatch(app.view.state.tr.insertText("!"));
+    const index = apps.indexOf(app);
+    if (index >= 0) apps.splice(index, 1);
+    app.destroy();
+
+    await flush();
+    expect(inspectCompatibility).not.toHaveBeenCalled();
+  });
+
+  it("renders a preview snapshot once when document and preview notifications agree", () => {
+    const render = vi.fn((source: string) => `<h1>${source}</h1>`);
+    const { app, root } = makeApp({
+      core: { renderMarkdown: render },
+    });
+    render.mockClear();
+
+    app.receiveDocument(
+      hostDocument("latest", 2, {
+        mode: "preview",
+        reason: "external",
+      }),
+    );
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        data: {
+          protocolVersion: PROTOCOL_VERSION,
+          type: "preview",
+          markdown: "latest",
+          html: "<h1>host snapshot</h1>",
+          version: 2,
+          profile: "github",
+        },
+      }),
+    );
+
+    expect(render).toHaveBeenCalledTimes(1);
+    expect(
+      root.querySelector("[data-testid=preview-content] h1")?.textContent,
+    ).toBe("latest");
+  });
+
+  it("reuses syntax highlighting when an edit only moves an unchanged code block", () => {
+    const highlight = vi.spyOn(visualRendering, "highlightCodeSpans");
+    try {
+      const { app, root } = makeApp({
+        markdown: "before\n\n```ts\nconst value = 1;\n```",
+      });
+      highlight.mockClear();
+
+      app.view.dispatch(app.view.state.tr.insertText("prefix ", 1));
+
+      expect(highlight).not.toHaveBeenCalled();
+      expect(root.querySelector(".mm-code-block-pre")?.textContent).toContain(
+        "const value = 1;",
+      );
+    } finally {
+      highlight.mockRestore();
+    }
+  });
+
   it("keeps an external conflict and never sends a queued edit after an old ack", () => {
     const { app, root, messages, persisted } = makeApp({ markdown: "base" });
 
