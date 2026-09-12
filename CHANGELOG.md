@@ -8,6 +8,11 @@
   reduced-motion-aware animation; table selection, targeting, serialization,
   and existing profile/mode restrictions are unchanged.
 
+- Added a Rich Editor authoring aid that displays validated six-digit
+  hexadecimal RGB literals in their own color. The display-only decoration
+  updates while editing without changing Markdown source, previews, links,
+  inline code, fenced code blocks, or raw nodes.
+
 - Fixed block spacing across the rich editor, dedicated preview, and native
   Markdown preview. Rich NodeView wrappers now own outer margins while their
   inner display blocks stay margin-free; GitLab TOC and description lists use

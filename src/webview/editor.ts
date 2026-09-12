@@ -2201,7 +2201,9 @@ export class MarkdownEditorApp {
     this.installTooltipHandlers();
 
     this.view = new EditorView(editorMount, {
-      state: this.createState(initial.markdown),
+      state: this.createState(initial.markdown, {
+        prepareStarter: this.initialized,
+      }),
       dispatchTransaction: (tr) => this.dispatchTransaction(tr),
       attributes: {
         class: "ProseMirror mm-document-content",
@@ -2395,7 +2397,10 @@ export class MarkdownEditorApp {
     this.view.destroy();
   }
 
-  private createState(markdown: string): EditorState {
+  private createState(
+    markdown: string,
+    options: { prepareStarter?: boolean } = {},
+  ): EditorState {
     let doc: PMNode;
     let starterState: StarterPluginState = {
       active: false,
@@ -2404,13 +2409,21 @@ export class MarkdownEditorApp {
     this.starterOriginalSource = markdown;
     try {
       const parsed = this.core.parseMarkdown(markdown, this.profile);
-      const prepared = prepareStarterDocument(
-        markdown,
-        parsed.doc,
-        this.schema,
-      );
-      doc = prepared.doc;
-      starterState = prepared.state;
+      if (options.prepareStarter === false) {
+        // The fallback state only keeps ProseMirror structurally valid while
+        // the host's first document message is still outstanding. It is not
+        // an authoritative blank source, so the blank-document starter must
+        // remain inactive until a real document is received.
+        doc = parsed.doc;
+      } else {
+        const prepared = prepareStarterDocument(
+          markdown,
+          parsed.doc,
+          this.schema,
+        );
+        doc = prepared.doc;
+        starterState = prepared.state;
+      }
       this.previousSnapshot = parsed.snapshot ?? parsed;
     } catch (error) {
       this.parseError =
@@ -7560,6 +7573,7 @@ export class MarkdownEditorApp {
     this.derivedViewsRevision += 1;
     this.pendingDerivedViews = null;
 
+    const wasInitialized = this.initialized;
     const previousState = this.view.state;
     const previousDoc = previousState.doc;
     const forceReparse =
@@ -7588,6 +7602,7 @@ export class MarkdownEditorApp {
       }
     }
     let preserveState =
+      wasInitialized &&
       !forceReparse &&
       currentMarkdown !== null &&
       previousProfile === message.profile &&
@@ -7652,7 +7667,6 @@ export class MarkdownEditorApp {
       message.version,
     );
     this.previewOnly = message.mode === "preview";
-    this.setInitialized(true);
     this.applyTypography(message.typography);
     this.version = Math.max(this.version, message.version);
     this.operationId = message.operationId;
@@ -7676,6 +7690,7 @@ export class MarkdownEditorApp {
       this.pendingExternal = null;
       this.sync.setVersion(this.version);
       this.sync.clear();
+      this.setInitialized(true);
       this.refreshDerivedViews(message.markdown, undefined, {
         // Entering the preview panel is a display event, so make its first
         // snapshot visible immediately. Rich editing never takes this path;
@@ -7718,6 +7733,7 @@ export class MarkdownEditorApp {
       this.sourceEl.value = message.markdown;
       if (message.mode !== "preview")
         this.previewEl.textContent = message.markdown;
+      this.setInitialized(true);
       this.setNotice("Read-only: " + this.parseError, "error");
       if (abortedAlertEdit)
         this.setNotice(
@@ -7757,6 +7773,9 @@ export class MarkdownEditorApp {
         previousState.apply(setStarterMeta(previousState.tr, prepared.state)),
       );
     }
+    // Remove the loading veil only after the authoritative document and its
+    // starter state have both been reflected in ProseMirror.
+    this.setInitialized(true);
     this.dirty = false;
     this.conflict = false;
     this.syncPaused = false;
