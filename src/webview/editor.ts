@@ -65,6 +65,7 @@ import {
   createAlertNodeView,
   createRenderedNodeView,
   createRenderingPlugin,
+  setAlertBodyReadOnly,
   enhanceRenderedContent,
   ALERT_LOCAL_INPUT_META,
   type AlertBoundaryDirection,
@@ -2295,6 +2296,14 @@ export class MarkdownEditorApp {
                 {
                   canEdit: () => this.canEditBlock(),
                   composition: (active) => this.handleBlockComposition(active),
+                  canPreserveLocalInput: () =>
+                    this.initialized &&
+                    !this.previewOnly &&
+                    this.mode === "rich" &&
+                    !this.parseError &&
+                    !this.pendingProfile &&
+                    this.syncPaused &&
+                    this.conflict,
                 },
               )
             : createRenderedNodeView(
@@ -3334,7 +3343,7 @@ export class MarkdownEditorApp {
         | HTMLInputElement
         | HTMLTextAreaElement
       >(
-        ".mm-tool-button, .mm-emoji-button, .mm-heading-select, .mm-floating-button, .mm-alert-body-editor",
+        ".mm-tool-button, .mm-emoji-button, .mm-heading-select, .mm-floating-button",
       ),
     )) {
       element.disabled =
@@ -3348,9 +3357,13 @@ export class MarkdownEditorApp {
       | HTMLSelectElement
       | HTMLTextAreaElement
     >(
-      ".mm-alert-body-editor, .mm-alert-type-trigger, .mm-alert-type-select, .mm-alert-details-action, .mm-block-source-trigger, .mm-code-language-trigger, .mm-code-language-inline, .mm-details-summary",
+      ".mm-alert-type-trigger, .mm-alert-type-select, .mm-alert-details-action, .mm-block-source-trigger, .mm-code-language-trigger, .mm-code-language-inline, .mm-details-summary",
     ))
       control.disabled = blockEditingDisabled;
+    for (const body of this.root.querySelectorAll<HTMLTextAreaElement>(
+      ".mm-alert-body-editor",
+    ))
+      setAlertBodyReadOnly(body, blockEditingDisabled);
     for (const body of this.root.querySelectorAll<HTMLElement>(
       ".mm-details-body",
     )) {
@@ -3400,16 +3413,17 @@ export class MarkdownEditorApp {
   }
 
   private setConflict(message: string): void {
+    this.conflict = true;
+    this.syncPaused = true;
     if (this.tableDialogOpen) this.closeTableDialog(message);
     this.closeWritingPopups();
     this.closeEmojiPicker();
     this.invalidateProfileFeatureDialog();
-    this.conflict = true;
-    this.syncPaused = true;
     this.statusEl.title = message;
     this.statusEl.dataset.state = "conflict";
     this.statusEl.textContent = message;
     this.persistRecovery(this.currentMarkdown());
+    this.updateEditingControlState();
     this.recoverButton.hidden = false;
   }
 
@@ -7172,7 +7186,6 @@ export class MarkdownEditorApp {
     } else if (message.type === "edit-rejected") {
       this.sync.reject(message.operationId, message.currentVersion);
       this.version = Math.max(this.version, message.currentVersion);
-      this.persistRecovery(message.draftMarkdown ?? this.currentMarkdown());
       this.setConflict(message.message);
       this.pendingExternal = {
         protocolVersion: PROTOCOL_VERSION,

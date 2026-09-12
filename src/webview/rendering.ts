@@ -111,6 +111,21 @@ function baseRenderingDecorations(
 ): { profile: Profile; decorations: Decoration[] } {
   const profile = getProfile?.() ?? "github";
   const decorations: Decoration[] = headingDecorations(state, profile);
+  state.doc.descendants((node, position) => {
+    if (dependsOnDocumentContext(node)) {
+      // An unchanged atom otherwise skips NodeView.update(), even when an
+      // earlier heading changes every TOC target. The immutable document in
+      // the decoration spec makes context changes visible to ProseMirror.
+      decorations.push(
+        Decoration.node(
+          position,
+          position + node.nodeSize,
+          {},
+          { renderDocument: state.doc },
+        ),
+      );
+    }
+  });
   const footnotes = footnoteDecoration(state, profile);
   if (footnotes) decorations.push(footnotes);
   return { profile, decorations };
@@ -333,6 +348,23 @@ export const ALERT_LOCAL_INPUT_META = "markdown-mint-alert-local-input";
 export interface BlockEditingOptions {
   canEdit?: () => boolean;
   composition?: (active: boolean) => void;
+  /** Retain native input already accepted when host synchronization stopped. */
+  canPreserveLocalInput?: () => boolean;
+}
+
+const alertEditingState = new WeakMap<
+  HTMLTextAreaElement,
+  (readOnly: boolean) => void
+>();
+
+/** Lock the native input and flush any text accepted before that transition. */
+export function setAlertBodyReadOnly(
+  editor: HTMLTextAreaElement,
+  readOnly: boolean,
+): void {
+  const update = alertEditingState.get(editor);
+  if (update) update(readOnly);
+  else editor.readOnly = readOnly;
 }
 
 function dependsOnDocumentContext(node: PMNode): boolean {
@@ -615,12 +647,13 @@ export function createAlertNodeView(
   };
 
   const updateSource = (): void => {
-    if (!canEdit()) return;
+    if (disposed || (!canEdit() && !options.canPreserveLocalInput?.())) return;
     const position = positionOf();
     if (position === undefined) return;
     const currentNode = view.state.doc.nodeAt(position);
     if (
       !currentNode ||
+      currentNode !== current ||
       currentNode.type.name !== "raw_block" ||
       String(currentNode.attrs.kind ?? "") !== "alert"
     )
@@ -649,6 +682,14 @@ export function createAlertNodeView(
       throw error;
     }
   };
+
+  alertEditingState.set(bodyEditor, (readOnly) => {
+    const changed = bodyEditor.readOnly !== readOnly;
+    // Keep focus/selection for copying. Setting disabled would blur the IME
+    // input; readonly stops subsequent typing without hiding its current draft.
+    bodyEditor.readOnly = readOnly;
+    if (changed && readOnly) updateSource();
+  });
 
   const render = (): void => {
     if (disposed) return;
@@ -814,6 +855,7 @@ export function createAlertNodeView(
   });
   bodyEditor.addEventListener("compositionend", () => {
     bodyComposing = false;
+    updateSource();
     options.composition?.(false);
   });
   // The editor's global keymap handles Enter for ProseMirror blocks. Keep the
@@ -899,6 +941,7 @@ export function createAlertNodeView(
       }
       lastLocalSource = null;
       if (nextNode.eq(current) && !contextChanged && !profileChanged) {
+        current = nextNode;
         lastDocument = view.state.doc;
         return true;
       }
@@ -925,6 +968,7 @@ export function createAlertNodeView(
     ignoreMutation: () => true,
     destroy: () => {
       disposed = true;
+      alertEditingState.delete(bodyEditor);
       resizeObserver?.disconnect();
       if (resizeFrame !== undefined)
         bodyEditor.ownerDocument.defaultView?.cancelAnimationFrame(resizeFrame);

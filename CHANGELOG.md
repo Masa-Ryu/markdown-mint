@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.0.33
+
+- Make focused Alert bodies read-only immediately after a synchronization
+  conflict, retaining accepted text and delayed composition input in recovery.
+- Preserve movement between displayed rows inside expanded code blocks while
+  preventing vertical movement into the background document at their edges.
+- Recognize Details around literal HTML comment markers in inline and fenced
+  code, while excluding real comments in source order.
+- Allocate heading anchors by document position so cached identical Details
+  bodies have unique HTML, rich-editor, and TOC targets; refresh TOCs after edits.
+
 ## 0.0.32
 
 - Keep code and Alert bodies directly editable; use single-click language/type

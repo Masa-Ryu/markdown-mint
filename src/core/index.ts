@@ -113,7 +113,8 @@ export interface RenderContext {
   headingSlugs?: Map<string, number>;
   footnoteRefs?: Map<string, number>;
   footnoteNumbers?: Map<string, number>;
-  headingIds?: WeakMap<PMNode, string>;
+  /** Heading ids belong to positions within a rendering root, not node identity. */
+  headingIds?: WeakMap<PMNode, Map<number, string>>;
   /** Optional document position for detached NodeView render calls. */
   nodePosition?: number;
   /** Hosts may provide richer renderers without coupling core to a webview. */
@@ -2978,7 +2979,7 @@ interface RenderState extends RenderContext {
   headingSlugs: Map<string, number>;
   footnoteRefs: Map<string, number>;
   footnoteNumbers: Map<string, number>;
-  headingIds: WeakMap<PMNode, string>;
+  headingIds: WeakMap<PMNode, Map<number, string>>;
 }
 
 type RenderInput = RenderContext | MarkdownSnapshot | PMNode | undefined;
@@ -3047,7 +3048,8 @@ function createRenderState(profile: Profile, input?: RenderInput): RenderState {
     headingSlugs: context.headingSlugs ?? new Map<string, number>(),
     footnoteRefs: context.footnoteRefs ?? new Map<string, number>(),
     footnoteNumbers: context.footnoteNumbers ?? new Map<string, number>(),
-    headingIds: context.headingIds ?? new WeakMap<PMNode, string>(),
+    headingIds:
+      context.headingIds ?? new WeakMap<PMNode, Map<number, string>>(),
   };
   if (document) state.document = document;
   if (snapshot) state.snapshot = snapshot;
@@ -3085,20 +3087,37 @@ function slugBase(value: string): string {
   return normalized || "section";
 }
 
-function headingId(node: PMNode, state: RenderState): string {
-  const existing = state.headingIds.get(node);
+function headingId(
+  node: PMNode,
+  state: RenderState,
+  root: PMNode,
+  position: number,
+): string {
+  // Details body snapshots deliberately share immutable nodes. The rendering
+  // root and position identify an occurrence, including inside nested Details;
+  // separate source fragments get their own root without reusing these slots.
+  let positions = state.headingIds.get(root);
+  if (!positions) {
+    positions = new Map<number, string>();
+    state.headingIds.set(root, positions);
+  }
+  const existing = positions.get(position);
   if (existing) return existing;
   const base = slugBase(headingText(node));
   const count = state.headingSlugs.get(base) ?? 0;
   state.headingSlugs.set(base, count + 1);
   const id = count === 0 ? base : `${base}-${count}`;
-  state.headingIds.set(node, id);
+  positions.set(position, id);
   return id;
 }
 
 function prepareHeadingIds(node: PMNode, state: RenderState): void {
-  if (node.type.name === "heading") headingId(node, state);
-  node.forEach((child) => prepareHeadingIds(child, state));
+  if (node.type.name === "heading") headingId(node, state, node, 0);
+  const contentStart = node.type.name === "doc" ? 0 : 1;
+  node.descendants((child, position) => {
+    if (child.type.name === "heading")
+      headingId(child, state, node, position + contentStart);
+  });
 }
 
 function footnoteLabelFromSource(source: string): string {
@@ -3337,22 +3356,18 @@ function renderDescriptionList(source: string, state: RenderState): string {
   return parts.join("");
 }
 
-function collectHeadings(node: PMNode, result: PMNode[] = []): PMNode[] {
-  if (node.type.name === "heading") result.push(node);
-  node.forEach((child) => collectHeadings(child, result));
-  return result;
-}
-
 function renderToc(state: RenderState): string {
-  const headings = state.document ? collectHeadings(state.document) : [];
-  if (headings.length === 0) return "";
-  const items = headings
-    .map(
-      (heading) =>
-        `<li class="toc-level-${Number(heading.attrs.level) || 1}"><a href="#${escapeHtml(headingId(heading, state))}">${renderInline(heading, state)}</a></li>`,
-    )
-    .join("");
-  return `<nav class="table-of-contents" aria-label="Table of contents"><ul>${items}</ul></nav>`;
+  const root = state.document;
+  if (!root) return "";
+  const items: string[] = [];
+  root.descendants((heading, position) => {
+    if (heading.type.name === "heading")
+      items.push(
+        `<li class="toc-level-${Number(heading.attrs.level) || 1}"><a href="#${escapeHtml(headingId(heading, state, root, position))}">${renderInline(heading, state)}</a></li>`,
+      );
+  });
+  if (items.length === 0) return "";
+  return `<nav class="table-of-contents" aria-label="Table of contents"><ul>${items.join("")}</ul></nav>`;
 }
 
 function collectFootnoteReferences(node: PMNode, state: RenderState): void {
@@ -3393,18 +3408,45 @@ function renderFootnotes(state: RenderState): string {
   return `<section class="footnotes" aria-label="Footnotes"><ol>${items}</ol></section>`;
 }
 
-function renderNode(node: PMNode, state: RenderState): string {
+function childrenWithPositions(
+  node: PMNode,
+  position: number,
+): Array<{ node: PMNode; position: number }> {
+  const children: Array<{ node: PMNode; position: number }> = [];
+  const contentStart = position + (node.type.name === "doc" ? 0 : 1);
+  node.forEach((child, offset) => {
+    children.push({ node: child, position: contentStart + offset });
+  });
+  return children;
+}
+
+function renderChildren(
+  node: PMNode,
+  state: RenderState,
+  root: PMNode,
+  position: number,
+  separator = "",
+): string {
+  return childrenWithPositions(node, position)
+    .map((child) => renderNode(child.node, state, root, child.position))
+    .join(separator);
+}
+
+function renderNode(
+  node: PMNode,
+  state: RenderState,
+  root: PMNode,
+  position: number,
+): string {
   switch (node.type.name) {
     case "paragraph":
       return `<p>${renderInline(node, state)}</p>`;
     case "heading": {
       const level = Math.max(1, Math.min(6, Number(node.attrs.level) || 1));
-      return `<h${level} id="${escapeHtml(headingId(node, state))}">${renderInline(node, state)}</h${level}>`;
+      return `<h${level} id="${escapeHtml(headingId(node, state, root, position))}">${renderInline(node, state)}</h${level}>`;
     }
     case "blockquote":
-      return `<blockquote>${childrenOf(node)
-        .map((child) => renderNode(child, state))
-        .join("\n")}</blockquote>`;
+      return `<blockquote>${renderChildren(node, state, root, position, "\n")}</blockquote>`;
     case "horizontal_rule":
       return "<hr>";
     case "code_block":
@@ -3416,11 +3458,7 @@ function renderNode(node: PMNode, state: RenderState): string {
         state.profile,
         state,
       );
-      return `<details${parts?.open ? " open" : ""}><summary>${summary}</summary>${childrenOf(
-        node,
-      )
-        .map((child) => renderNode(child, state))
-        .join("\n")}</details>`;
+      return `<details${parts?.open ? " open" : ""}><summary>${summary}</summary>${renderChildren(node, state, root, position, "\n")}</details>`;
     }
     case "raw_inline":
       return renderRawInline(node, state);
@@ -3467,9 +3505,7 @@ function renderNode(node: PMNode, state: RenderState): string {
         (item) => item.attrs.checked != null,
       );
       const className = taskList ? ` class="contains-task-list"` : "";
-      return `<${ordered ? "ol" : "ul"}${start}${className}>${childrenOf(node)
-        .map((child) => renderNode(child, state))
-        .join("")}</${ordered ? "ol" : "ul"}>`;
+      return `<${ordered ? "ol" : "ul"}${start}${className}>${renderChildren(node, state, root, position)}</${ordered ? "ol" : "ul"}>`;
     }
     case "list_item": {
       const task = node.attrs.checked as TaskState;
@@ -3478,46 +3514,36 @@ function renderNode(node: PMNode, state: RenderState): string {
           ? ""
           : `<input type="checkbox" disabled${task === true ? " checked" : ""}${task === "mixed" ? ' data-task-state="mixed" aria-checked="mixed"' : ""}> `;
       const className = task == null ? "" : ` class="task-list-item"`;
-      return `<li${className}>${checkbox}${childrenOf(node)
-        .map((child) => renderNode(child, state))
-        .join("")}</li>`;
+      return `<li${className}>${checkbox}${renderChildren(node, state, root, position)}</li>`;
     }
     case "table": {
-      const rows = childrenOf(node);
+      const rows = childrenWithPositions(node, position);
       if (rows.length === 0) return "<table></table>";
-      const renderRow = (row: PMNode): string =>
-        `<tr>${childrenOf(row)
+      const renderRow = (row: { node: PMNode; position: number }): string =>
+        `<tr>${childrenWithPositions(row.node, row.position)
           .map((cell) => {
-            const tag = cell.type.name === "table_header" ? "th" : "td";
-            const alignment = cell.attrs.alignment;
+            const tag = cell.node.type.name === "table_header" ? "th" : "td";
+            const alignment = cell.node.attrs.alignment;
             const style = alignment
               ? ` style="text-align:${escapeHtml(alignment)}"`
               : "";
-            return `<${tag}${style}>${childrenOf(cell)
-              .map((child) => renderNode(child, state))
-              .join("")}</${tag}>`;
+            return `<${tag}${style}>${renderChildren(cell.node, state, root, cell.position)}</${tag}>`;
           })
           .join("")}</tr>`;
       const head = rows.filter(
-        (row) => row.child(0)?.type.name === "table_header",
+        (row) => row.node.child(0)?.type.name === "table_header",
       );
       const body = rows.filter(
-        (row) => row.child(0)?.type.name !== "table_header",
+        (row) => row.node.child(0)?.type.name !== "table_header",
       );
       return `<table>${head.length ? `<thead>${head.map(renderRow).join("")}</thead>` : ""}${body.length ? `<tbody>${body.map(renderRow).join("")}</tbody>` : ""}</table>`;
     }
     case "table_row":
-      return `<tr>${childrenOf(node)
-        .map((child) => renderNode(child, state))
-        .join("")}</tr>`;
+      return `<tr>${renderChildren(node, state, root, position)}</tr>`;
     case "table_cell":
-      return `<td>${childrenOf(node)
-        .map((child) => renderNode(child, state))
-        .join("")}</td>`;
+      return `<td>${renderChildren(node, state, root, position)}</td>`;
     case "table_header":
-      return `<th>${childrenOf(node)
-        .map((child) => renderNode(child, state))
-        .join("")}</th>`;
+      return `<th>${renderChildren(node, state, root, position)}</th>`;
     default:
       return escapeHtml(node.textContent);
   }
@@ -3575,7 +3601,7 @@ export function headingAnchorIds(
   const anchors: HeadingAnchor[] = [];
   doc.descendants((node, position) => {
     if (node.type.name === "heading")
-      anchors.push({ position, id: headingId(node, state) });
+      anchors.push({ position, id: headingId(node, state, doc, position) });
     return true;
   });
   return anchors;
@@ -3591,14 +3617,39 @@ export function renderNodeHtml(
   if (node.type.name === "doc") {
     state.document = node;
     prepareHeadingIds(node, state);
-    return (
-      childrenOf(node)
-        .map((child) => renderNode(child, state))
-        .join("\n") + renderFootnotes(state)
-    );
+    return renderChildren(node, state, node, 0, "\n") + renderFootnotes(state);
   }
+  let root = node;
+  let position = 0;
+  if (state.document) {
+    const suppliedPosition = state.nodePosition;
+    if (
+      suppliedPosition !== undefined &&
+      Number.isInteger(suppliedPosition) &&
+      suppliedPosition >= 0 &&
+      suppliedPosition < state.document.content.size &&
+      state.document.nodeAt(suppliedPosition) === node
+    ) {
+      root = state.document;
+      position = suppliedPosition;
+    } else if (suppliedPosition === undefined) {
+      // Without an explicit position the first occurrence is the only one an
+      // individual render call can identify. NodeViews supply getPos().
+      state.document.descendants((child, childPosition) => {
+        if (root === state.document) return false;
+        if (child === node) {
+          root = state.document!;
+          position = childPosition;
+          return false;
+        }
+        return true;
+      });
+    }
+    prepareHeadingIds(state.document, state);
+  }
+  if (root !== state.document) prepareHeadingIds(root, state);
   registerFootnoteReferencesBeforeNode(state.document, node, state);
-  return renderNode(node, state);
+  return renderNode(node, state, root, position);
 }
 
 /** Render a PM document with profile-aware anchors, atoms, and footnotes. */
@@ -3610,11 +3661,7 @@ export function renderMarkdownDocument(
   const state = createRenderState(profile, input ?? doc);
   state.document = doc;
   prepareHeadingIds(doc, state);
-  return (
-    childrenOf(doc)
-      .map((child) => renderNode(child, state))
-      .join("\n") + renderFootnotes(state)
-  );
+  return renderChildren(doc, state, doc, 0, "\n") + renderFootnotes(state);
 }
 
 /** Render an arbitrary Markdown source fragment using the shared renderer. */
@@ -3630,9 +3677,8 @@ export function renderSourceFragment(
   const document = snapshot.doc;
   prepareHeadingIds(document, state);
   return (
-    childrenOf(document)
-      .map((child) => renderNode(child, state))
-      .join("\n") + (input ? "" : renderFootnotes(state))
+    renderChildren(document, state, document, 0, "\n") +
+    (input ? "" : renderFootnotes(state))
   );
 }
 

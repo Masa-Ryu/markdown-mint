@@ -16,36 +16,30 @@ export interface DetailsTagRange {
 
 /** Ignore literal tags in fenced code, inline code, and HTML comments. */
 export function detailsTagRanges(source: string): DetailsTagRange[] {
-  const excluded: Array<{ start: number; end: number }> = [];
-  const lines = /[^\r\n]*(?:\r\n|\r|\n|$)/g;
-  let fence: { marker: string; start: number } | undefined;
-  let line: RegExpExecArray | null;
-  while ((line = lines.exec(source)) && line[0]) {
-    const marker = line[0].match(/^ {0,3}(`{3,}|~{3,})/)?.[1];
-    if (!marker) continue;
-    if (!fence) fence = { marker, start: line.index };
-    else if (
-      marker[0] === fence.marker[0] &&
-      marker.length >= fence.marker.length &&
-      /^ {0,3}(?:`+|~+)[\t ]*(?:\r\n|\r|\n)?$/.test(line[0])
-    ) {
-      excluded.push({ start: fence.start, end: lines.lastIndex });
-      fence = undefined;
-    }
-  }
-  if (fence) excluded.push({ start: fence.start, end: source.length });
-  for (const comment of source.matchAll(/<!--[\s\S]*?(?:-->|$)/g))
-    excluded.push({
-      start: comment.index,
-      end: comment.index + comment[0].length,
-    });
-  const insideExcluded = (position: number): boolean =>
-    excluded.some(({ start, end }) => position >= start && position < end);
-  const tags = /`+|<\/?details\b(?:"[^"]*"|'[^']*'|[^'">])*>/gi;
+  // Consume each code/comment region before scanning the following source.
+  // A comment marker inside code is literal, as is a fence inside a comment.
+  const tags =
+    /(^ {0,3}(?:`{3,}[^`\r\n]*|~{3,}[^\r\n]*)(?:\r\n|\r|\n|$))|`+|<!--|<\/?details\b(?:"[^"]*"|'[^']*'|[^'">])*>/gim;
   const ranges: DetailsTagRange[] = [];
   let match: RegExpExecArray | null;
   while ((match = tags.exec(source))) {
-    if (insideExcluded(match.index)) continue;
+    if (match[1]) {
+      const marker = match[1].trimStart().match(/^`+|^~+/)![0];
+      const closingFence = new RegExp(
+        `^ {0,3}${marker[0]}{${marker.length},}[\\t ]*(?:\\r\\n|\\r|\\n|$)`,
+        "gm",
+      );
+      closingFence.lastIndex = tags.lastIndex;
+      tags.lastIndex = closingFence.exec(source)
+        ? closingFence.lastIndex
+        : source.length;
+      continue;
+    }
+    if (match[0] === "<!--") {
+      const end = source.indexOf("-->", tags.lastIndex);
+      tags.lastIndex = end >= 0 ? end + 3 : source.length;
+      continue;
+    }
     if (match[0].startsWith("`")) {
       const marker = match[0];
       let end = source.indexOf(marker, tags.lastIndex);

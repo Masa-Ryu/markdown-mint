@@ -263,4 +263,37 @@ describe("body navigation selection handoff", () => {
     expect(boundary).toHaveBeenCalledWith("down");
     expect(boundary).toHaveBeenCalledWith("up");
   });
+
+  it("guards only displayed-row boundaries while code is expanded", () => {
+    const body = "first\nsecond\nthird";
+    const { app, root, messages, select, key } = setup(
+      ["Before", "", "```text", body, "```", "", "After"].join("\n"),
+    );
+    root
+      .querySelector<HTMLButtonElement>('[data-mm-code-action="expand"]')!
+      .click();
+    select(body, "start");
+    const original = app.view.state.doc;
+    const boundary = vi.spyOn(app.view, "endOfTextblock");
+    for (const direction of ["ArrowUp", "ArrowDown"]) {
+      boundary.mockReturnValue(false);
+      // Without layout, an interior arrow remains available to the browser.
+      expect(key(direction).defaultPrevented).toBe(false);
+      boundary.mockReturnValue(true);
+      const previous = app.view.state.selection;
+      expect(key(direction).defaultPrevented).toBe(true);
+      expect(app.view.state.selection.eq(previous)).toBe(true);
+      expect(app.view.state.selection.$from.parent.type.name).toBe(
+        "code_block",
+      );
+    }
+    expect(boundary).toHaveBeenCalledWith("up");
+    expect(boundary).toHaveBeenCalledWith("down");
+    expect(app.view.state.doc).toBe(original);
+    expect(
+      messages.filter(
+        (message) => (message as { type?: unknown }).type === "edit",
+      ),
+    ).toEqual([]);
+  });
 });

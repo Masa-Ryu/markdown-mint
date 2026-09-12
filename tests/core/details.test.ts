@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { EditorState } from "prosemirror-state";
+import { detailsTagRanges } from "../../src/core/details";
 import {
   parseDetailsSource,
   parseMarkdown,
@@ -136,6 +137,37 @@ describe("structured source-preserving Details", () => {
         '<details data-note=" open "><summary>T</summary>Body</details>',
       )?.open,
     ).toBe(false);
+  });
+
+  it.each([
+    ["inline code", "`<!--` starts a comment. `</details>` ends Details."],
+    ["long inline code", "``<!-- ` </details>``"],
+    ["backtick fence", "```html\n<!--\n</details>\n```"],
+    ["tilde fence", "~~~~html\n<!--\n</details>\n~~~~~"],
+  ])("keeps comment syntax inside %s literal", (_name, literal) => {
+    const body = `\n\n<!-- Actual comment: </details> -->\n\n${literal}\n\nAfter the literal.\n\n`;
+    const original = `<details>\n<summary>HTML comments</summary>${body}</details>\n`;
+    expect(
+      detailsTagRanges(original).map(({ start, end }) =>
+        original.slice(start, end),
+      ),
+    ).toEqual(["<details>", "</details>"]);
+    expect(parseDetailsSource(original)?.body).toBe(body);
+    const snapshot = parseMarkdown(original);
+    expect(snapshot.doc.firstChild!.type.name).toBe("details");
+    expect(snapshot.doc.childCount).toBe(1);
+    expect(serializeMarkdown(snapshot.doc, snapshot)).toBe(original);
+  });
+
+  it("keeps code delimiters inside real comments from masking later Details tags", () => {
+    const body =
+      "\n\n<!-- Actual comment with an unmatched fence:\n```\n</details>\n-->\n\n`<!--` remains literal.\n\n";
+    const original = `<details>\n<summary>T</summary>${body}</details>\n`;
+    expect(detailsTagRanges(original)).toHaveLength(2);
+    expect(parseDetailsSource(original)?.body).toBe(body);
+    const snapshot = parseMarkdown(original);
+    expect(snapshot.doc.firstChild!.type.name).toBe("details");
+    expect(serializeMarkdown(snapshot.doc, snapshot)).toBe(original);
   });
 
   it("changes code language without rewriting a tilde fence, metadata, indentation or line endings", () => {

@@ -195,17 +195,6 @@ export class BodyNavigation {
       const block = selection.$from.parent;
       if (!block.isTextblock) return false;
       const position = selection.$from.before();
-      const nodeDOM = this.view.nodeDOM(position);
-      if (
-        vertical &&
-        block.type.name === "code_block" &&
-        nodeDOM instanceof Element &&
-        (nodeDOM.classList.contains("mm-code-block-expanded") ||
-          Boolean(nodeDOM.querySelector(".mm-code-block-expanded")))
-      ) {
-        event.preventDefault();
-        return true;
-      }
       let atBoundary: boolean;
       if (vertical) {
         this.captureGoal(selection.head);
@@ -219,9 +208,22 @@ export class BodyNavigation {
           selection.$from.parentOffset ===
           (direction < 0 ? 0 : block.content.size);
       }
-      if (atBoundary)
+      if (atBoundary) {
+        const nodeDOM = this.view.nodeDOM(position);
+        // Expanded code shares the existing editor DOM: only prevent an exit
+        // to the obscured document, retaining normal displayed-row movement.
+        if (
+          vertical &&
+          block.type.name === "code_block" &&
+          nodeDOM instanceof Element &&
+          (nodeDOM.classList.contains("mm-code-block-expanded") ||
+            Boolean(nodeDOM.querySelector(".mm-code-block-expanded")))
+        ) {
+          event.preventDefault();
+          return true;
+        }
         moved = this.moveFromBlock(position, block, direction, vertical);
-      else if (vertical) moved = this.moveWithinTextblock(direction);
+      } else if (vertical) moved = this.moveWithinTextblock(direction);
     }
     if (moved) event.preventDefault();
     return moved;

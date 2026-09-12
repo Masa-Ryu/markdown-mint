@@ -5,6 +5,7 @@ import { mkdir, readFile, rm } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
+import { testAlertConflict } from "./alert-conflict.test.mjs";
 
 const repository = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const port = Number(process.env.MM_BLOCK_BROWSER_TEST_PORT ?? "4175");
@@ -362,6 +363,56 @@ async function testWrappedVerticalNavigation(page) {
   );
   assert.match((await saved(page)).markdown, /```ts\n[^`]*Z/);
   await page.setViewportSize({ width: 960, height: 900 });
+}
+
+async function testExpandedCodeVerticalNavigation(page) {
+  const body = "0123456789\nabcdefghij\nABCDEFGHIJ";
+  const source = blocks("Before", fence("text", body), "After");
+  await load(page, source);
+  const before = await saved(page);
+  await page.locator('[data-mm-code-action="expand"]').click();
+  await page.locator(".mm-code-block-expanded").waitFor();
+  await caret(page, ".mm-code-block-pre code", 14);
+  const nativeCaret = async () => {
+    await settle(page);
+    return page.locator(".mm-code-block-pre code").evaluate((code) => {
+      const selected = window.getSelection();
+      const range = selected.getRangeAt(0);
+      const prefix = code.ownerDocument.createRange();
+      prefix.setStart(code, 0);
+      prefix.setEnd(selected.focusNode, selected.focusOffset);
+      const rect = range.getBoundingClientRect();
+      return {
+        inside: code.contains(selected.focusNode),
+        collapsed: selected.isCollapsed,
+        offset: prefix.toString().length,
+        left: rect.left,
+        top: rect.top,
+      };
+    });
+  };
+  const middle = await nativeCaret();
+  assert.equal(middle.offset, 14);
+  for (const [key, expected, relativeRow] of [
+    ["ArrowDown", 25, 1],
+    ["ArrowDown", 25, 1],
+    ["ArrowUp", 14, 0],
+    ["ArrowUp", 3, -1],
+    ["ArrowUp", 3, -1],
+    ["ArrowDown", 14, 0],
+  ]) {
+    await page.keyboard.press(key);
+    const actual = await nativeCaret();
+    assert.equal(actual.inside, true, `${key} escaped expanded code`);
+    assert.equal(actual.collapsed, true);
+    assert.equal(actual.offset, expected, `${key}: native caret offset`);
+    assert.equal((await selection(page)).offset, expected);
+    assert.equal(Math.sign(actual.top - middle.top), relativeRow);
+    assert.ok(Math.abs(actual.left - middle.left) <= 1, `${key}: column lost`);
+  }
+  await page.screenshot({ path: resolve(output, "expanded-code-caret.png") });
+  await noEdits(page, before, "expanded code row navigation and boundaries");
+  await page.keyboard.press("Escape");
 }
 
 async function testSelectionAndModifiers(page) {
@@ -869,8 +920,10 @@ async function main() {
     for (const test of [
       testCodeHeader,
       testAlertHeaderAndSelection,
+      testAlertConflict,
       testHorizontalNavigation,
       testWrappedVerticalNavigation,
+      testExpandedCodeVerticalNavigation,
       testSelectionAndModifiers,
       testVerticalGoalAndEmptyEdges,
       testNestedDetailsAndComposition,

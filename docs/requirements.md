@@ -62,7 +62,7 @@ picker opens the existing Profile Feature dialog in Edit mode. Insertion
 continues to use the toolbar dialog. External changes invalidate an active
 source edit while keeping the draft available to copy.
 
-## Direct block editing and navigation (0.0.32)
+## Direct block editing and navigation (0.0.32–0.0.33)
 
 Code keeps its editable ProseMirror contentDOM, language search/custom names,
 metadata-removal confirmation, copy, line numbers, highlight, wrap, and expand
@@ -129,6 +129,40 @@ The browser block suite passed 11 interaction groups including 15 fixture/surfac
 checks; the spacing suite passed 37 cases on each of three surfaces. The run
 saved 89 block screenshots, including focused views of the affected blocks in
 all five required documents. The artifact is `markdown-mint-0.0.32.vsix`.
+
+The 0.0.33 conflict transition immediately makes Alert textareas read-only
+without blurring their selection. Text already accepted by the native input,
+including a delayed composition commit, is flushed into the local Markdown and
+recovery draft while host synchronization stays paused. A rejected older edit
+cannot overwrite that newer recovery draft. Expanded code retains vertical
+movement within displayed rows and traps only an attempted exit at the edges.
+Details scanning consumes code and real HTML comments in source order, so a
+literal `<!--` inside code cannot hide its closing tag. Heading IDs use document
+root and position, preserving the body parse cache while keeping repeated and
+nested Details headings, rendered HTML, rich attributes, and TOC links unique.
+TOCs also refresh when an edit changes the document's headings.
+
+Regression coverage includes a focused Alert receiving `edit-rejected` and
+subsequent real keyboard input, Chromium protocol composition around rejection,
+native caret positions across the middle and edges of expanded code, literal
+comment markers mixed with real comments in inline/fenced code, and identical
+Details bodies with nested headings and live TOC updates. Chromium protocol
+composition checks supplement synthetic unit events; they do not verify an
+operating-system IME candidate window.
+
+The final 0.0.33 verification on 2026-09-12 passed `npm run compile`, `npm test`
+(402 tests in 32 files), `npm run lint` (zero errors; 33 existing warnings),
+`npm run format:check`, `npm run test:extension` (installed VS Code, exit 0),
+and `npm run package` (bundled formatter verified). The browser block suite
+passed 13 groups, including the five required documents on three surfaces,
+and saved 92 screenshots. The spacing suite passed 37 cases per surface.
+The artifact is `markdown-mint-0.0.33.vsix`.
+
+The initial native run exposed an unrelated test-fixture race: an unsaved
+plaintext CodeLens fixture appeared as a new tab during a later profile check.
+Using a saved `.txt` fixture in the isolated workspace removes that asynchronous
+tab while retaining strict tab-count, index, active-source, and plaintext
+CodeLens assertions. Fresh native runs passed after that harness correction.
 
 Manual checks still required: actual Japanese OS IME candidate windows and
 compositionend key ordering in VS Code; browser zoom/font scaling across
