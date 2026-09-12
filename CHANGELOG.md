@@ -2,10 +2,12 @@
 
 ## Unreleased
 
-- Improved inline Alert editing without changing its visual design. Quoted
-  blank lines and line endings round-trip correctly, input keeps the existing
-  textarea and focus, and ArrowLeft/ArrowRight move between Alert bodies and
-  adjacent paragraphs at their boundaries.
+- Improved inline Alert editing without changing its visual design. Lazy
+  blockquote continuation lines, quoted blank lines, separators, and line
+  endings round-trip correctly; input keeps the existing textarea and focus;
+  ArrowLeft/ArrowRight move between consecutive Alert bodies and adjacent
+  paragraphs at their boundaries; native textarea composition and host history
+  commands remain protected.
 
 ## 0.0.23
 

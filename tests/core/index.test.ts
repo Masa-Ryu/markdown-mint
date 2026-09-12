@@ -8,6 +8,8 @@ import {
   schema,
   serializeCodeBlockMarkdown,
   serializeMarkdown,
+  alertSourceParts,
+  alertSourceWithBody,
 } from "../../src/core/index";
 
 function replaceTopLevel(
@@ -171,6 +173,60 @@ describe("Markdown core", () => {
     expect(nestedHtml).toContain("Outer before");
     expect(nestedHtml).toContain("Inner body");
     expect(nestedHtml).toContain("Outer after");
+  });
+
+  it("preserves lazy alert continuations, quoted blanks, separators, and CRLF", () => {
+    const cases = [
+      {
+        source: "> [!TIP]\n> First\ncontinued\n> Last",
+        body: "First\ncontinued\nLast",
+        lineEnding: "\n",
+      },
+      {
+        source: "> [!TIP]\n> First\n>\n> Last\n\nNext",
+        body: "First\n\nLast",
+        lineEnding: "\n",
+      },
+      {
+        source: "> [!TIP]\n> First\n\nNext",
+        body: "First",
+        lineEnding: "\n",
+      },
+      {
+        source: "> [!TIP]\r\n> First\r\ncontinued\r\n> Last\r\n\r\nNext",
+        body: "First\ncontinued\nLast",
+        lineEnding: "\r\n",
+      },
+    ] as const;
+
+    for (const testCase of cases) {
+      const snapshot = parseMarkdown(testCase.source, "github");
+      const alert = snapshot.doc.firstChild!;
+      expect(alert.type.name).toBe("raw_block");
+      expect(alert.attrs.kind).toBe("alert");
+      const parts = alertSourceParts(String(alert.attrs.source));
+      expect(parts.body).toBe(testCase.body);
+
+      const editedSource = alertSourceWithBody(
+        String(alert.attrs.source),
+        `${testCase.body}\nEdited`,
+      );
+      const edited = alert.type.create({
+        ...alert.attrs,
+        source: editedSource,
+      });
+      const serialized = serializeMarkdown(
+        replaceTopLevel(snapshot, 0, edited),
+        snapshot,
+      );
+      expect(serialized).toContain("Edited");
+      if (testCase.source.includes("Next"))
+        expect(serialized).toContain("Next");
+      expect(serialized).toContain(testCase.lineEnding);
+      if (testCase.lineEnding === "\r\n")
+        expect(serialized).not.toMatch(/(?<!\r)\n/);
+      expect(renderMarkdown(serialized, "github")).toContain("Edited");
+    }
   });
 
   it("keeps display math together when a line resembles a Setext underline", () => {
