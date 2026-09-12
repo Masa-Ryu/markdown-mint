@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.0.36
+
+- Use markdown-it inline tokens when finding Details tags. Details-like text in
+  general HTML attributes, link destinations/titles, image alt text, comments,
+  code spans, and escaped text no longer changes Details ranges or nesting.
+- Keep real `html_inline` Details wrappers, nested Details, source attributes,
+  inline HTML, summary markup, and profile-aware serialization intact.
+
 ## 0.0.35
 
 - Detect Details within markdown-it block contexts so unmatched backticks cannot

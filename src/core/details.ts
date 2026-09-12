@@ -18,56 +18,59 @@ export interface DetailsTagRange {
   closing: boolean;
 }
 
-function isBackslashEscaped(source: string, index: number): boolean {
-  let count = 0;
-  while (index > 0 && source[--index] === "\\") count += 1;
-  return count % 2 === 1;
-}
-
-/** Scan only one inline/header context supplied by the Markdown block parser. */
-function tagsInContext(source: string, offset = 0): DetailsTagRange[] {
-  const candidates = /`+|<!--|<\/?details\b(?:"[^"]*"|'[^']*'|[^'">])*>/gi;
-  const ranges: DetailsTagRange[] = [];
-  let match: RegExpExecArray | null;
-  while ((match = candidates.exec(source))) {
-    if (isBackslashEscaped(source, match.index)) {
-      // Only the first character is escaped; the remaining delimiter run may
-      // still begin code. Backslashes inside accepted code/comments are literal.
-      candidates.lastIndex = match.index + 1;
-      continue;
-    }
-    if (match[0] === "<!--") {
-      const end = source.indexOf("-->", candidates.lastIndex);
-      candidates.lastIndex = end >= 0 ? end + 3 : source.length;
-      continue;
-    }
-    if (match[0].startsWith("`")) {
-      const closers = /`+/g;
-      closers.lastIndex = candidates.lastIndex;
-      let closer: RegExpExecArray | null;
-      while ((closer = closers.exec(source))) {
-        if (closer[0] === match[0]) {
-          candidates.lastIndex = closers.lastIndex;
-          break;
-        }
-      }
-      continue;
-    }
-    ranges.push({
-      start: offset + match.index,
-      end: offset + candidates.lastIndex,
-      closing: /^<\//.test(match[0]),
-    });
-  }
-  return ranges;
-}
+const detailsTagPattern = /^<\/?details\b(?:"[^"]*"|'[^']*'|[^'">])*>$/i;
+const boundaryTagPattern =
+  /^<\/?(?:details|summary)\b(?:"[^"]*"|'[^']*'|[^'">])*>$/i;
 
 const scannerContext = Symbol("markdown-mint-details-blocks");
 interface ScannerEnvironment {
   [scannerContext]?: { depth: number };
 }
 const configuredParsers = new WeakSet<MarkdownIt>();
-const defaultParser = new MarkdownIt("commonmark");
+const defaultParser = new MarkdownIt("commonmark", { html: true });
+
+/**
+ * Return only html_inline tokens which are themselves Details tags. The
+ * inline parser already makes code spans, link destinations/titles and image
+ * labels opaque, and its HTML rule consumes a complete quoted attribute. A
+ * small push wrapper records the source position without re-parsing any tag.
+ */
+function detailsTagsInInlineContext(
+  source: string,
+  parser: MarkdownIt,
+  offset = 0,
+  pattern = detailsTagPattern,
+): DetailsTagRange[] {
+  const tokens: Token[] = [];
+  const ranges: DetailsTagRange[] = [];
+  const htmlTokens: Array<{ token: Token; start: number }> = [];
+  const state = new parser.inline.State(source, parser, {}, tokens);
+  const push = state.push.bind(state);
+  state.push = ((type, tag, nesting) => {
+    const start = state.pos;
+    const token = push(type, tag, nesting);
+    if (type === "html_inline") htmlTokens.push({ token, start });
+    return token;
+  }) as typeof state.push;
+  // Post-processing only combines emphasis fragments; it cannot create or
+  // remove html_inline tokens, so the first tokenization pass is sufficient.
+  const html = parser.options.html;
+  parser.options.html = true;
+  try {
+    parser.inline.tokenize(state);
+  } finally {
+    parser.options.html = html;
+  }
+  for (const { token, start } of htmlTokens) {
+    if (!pattern.test(token.content)) continue;
+    ranges.push({
+      start: offset + start,
+      end: offset + start + token.content.length,
+      closing: /^<\//.test(token.content),
+    });
+  }
+  return ranges;
+}
 
 /**
  * Details/summary wrappers are transparent only in this block-analysis pass.
@@ -99,7 +102,7 @@ function detailsBoundary(
   const token = state.push("markdown_mint_details_boundary", "", 0);
   token.map = [startLine, nextLine];
   token.content = state.getLines(startLine, nextLine, state.blkIndent, true);
-  for (const tag of tagsInContext(token.content))
+  for (const tag of detailsTagsInInlineContext(token.content, state.md))
     context.depth = Math.max(0, context.depth + (tag.closing ? -1 : 1));
   state.line = nextLine;
   return true;
@@ -152,12 +155,18 @@ export function detailsTagRanges(
     })
     .replace(/\0/g, "\uFFFD");
   const tokens: Token[] = [];
-  parser.block.parse(
-    normalized,
-    parser,
-    { [scannerContext]: { depth: 0 } },
-    tokens,
-  );
+  const html = parser.options.html;
+  parser.options.html = true;
+  try {
+    parser.block.parse(
+      normalized,
+      parser,
+      { [scannerContext]: { depth: 0 } },
+      tokens,
+    );
+  } finally {
+    parser.options.html = html;
+  }
   const ranges: DetailsTagRange[] = [];
   for (const token of tokens) {
     // The fine scanner consumes a whole comment atomically, retaining genuine
@@ -172,7 +181,9 @@ export function detailsTagRanges(
       continue;
     const start = lineStarts[token.map[0]] ?? source.length;
     const end = lineStarts[token.map[1]] ?? source.length;
-    ranges.push(...tagsInContext(source.slice(start, end), start));
+    const contextSource = source.slice(start, end);
+    if (!/<\/?details\b/i.test(contextSource)) continue;
+    ranges.push(...detailsTagsInInlineContext(contextSource, parser, start));
   }
   return ranges;
 }
@@ -180,14 +191,16 @@ export function detailsTagRanges(
 /** Unsupported/malformed headers remain source-preserving raw nodes. */
 export function parseDetailsSource(
   source: string,
-  tags: readonly DetailsTagRange[] = detailsTagRanges(source),
+  tags?: readonly DetailsTagRange[],
+  parser: MarkdownIt = defaultParser,
 ): DetailsSourceParts | null {
-  const first = tags[0];
+  const ranges = tags ?? detailsTagRanges(source, parser);
+  const first = ranges[0];
   if (!first || first.closing || source.slice(0, first.start).trim())
     return null;
   let depth = 0;
   let closing: DetailsTagRange | undefined;
-  for (const tag of tags) {
+  for (const tag of ranges) {
     depth += tag.closing ? -1 : 1;
     if (depth === 0) {
       closing = tag;
@@ -196,16 +209,37 @@ export function parseDetailsSource(
   }
   if (!closing || source.slice(closing.end).trim()) return null;
   const interior = source.slice(first.end, closing.start);
-  const summary = interior.match(
-    /^(?:\s|<!--[\s\S]*?-->)*<summary\b(?:"[^"]*"|'[^']*'|[^'">])*>([\s\S]*?)<\/summary\s*>/i,
+  const summaryTags = detailsTagsInInlineContext(
+    interior,
+    parser,
+    0,
+    boundaryTagPattern,
   );
-  if (!summary) return null;
-  // Locate using the closing tag, so an empty or repeated summary is exact.
-  const summaryClose = summary[0].match(/<\/summary\s*>$/i)!;
-  const summaryEnd = first.end + summary[0].length - summaryClose[0].length;
-  const summaryStart = summaryEnd - summary[1]!.length;
-  if (/<\/?(?:details|summary)\b/i.test(summary[1]!)) return null;
-  const bodyStart = first.end + summary[0].length;
+  const summaryOpen = summaryTags.find((tag) => {
+    if (tag.closing || !/^<summary\b/i.test(interior.slice(tag.start, tag.end)))
+      return false;
+    return /^(?:\s|<!--[\s\S]*?-->)*$/i.test(interior.slice(0, tag.start));
+  });
+  if (!summaryOpen) return null;
+  const summaryClose = summaryTags.find(
+    (tag) =>
+      tag.closing &&
+      tag.start >= summaryOpen.end &&
+      /^<\/summary\b/i.test(interior.slice(tag.start, tag.end)),
+  );
+  if (!summaryClose) return null;
+  // A real Details/summary token inside the summary makes the header
+  // unsupported. Attribute values, code spans, comments, links and images do
+  // not produce such tokens and therefore remain valid source text.
+  if (
+    summaryTags.some(
+      (tag) => tag.start >= summaryOpen.end && tag.start < summaryClose.start,
+    )
+  )
+    return null;
+  const summaryStart = first.end + summaryOpen.end;
+  const summaryEnd = first.end + summaryClose.start;
+  const bodyStart = first.end + summaryClose.end;
   const opening = source.slice(first.start, first.end);
   return {
     beforeSummary: source.slice(0, summaryStart),

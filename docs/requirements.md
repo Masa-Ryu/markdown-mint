@@ -101,6 +101,57 @@ picker opens the existing Profile Feature dialog in Edit mode. Insertion
 continues to use the toolbar dialog. External changes invalidate an active
 source edit while keeping the draft available to copy.
 
+## Details scanner inline token boundaries (0.0.36)
+
+Details range discovery now asks markdown-it's inline tokenizer which source
+fragments are actual `html_inline` tokens. It accepts a candidate only when the
+complete token is a `<details>` or `</details>` tag. A `<span>` token therefore
+consumes its quoted attributes as one unit; strings such as `title="</details>"`
+or `data-open="<details>"` cannot close or nest the surrounding block. The same
+token boundary keeps link destinations and titles, image alt labels, entities,
+and escaped punctuation out of the Details stack. `code_inline` tokens are
+opaque. HTML comments remain atomic, while a real Details token after a comment
+terminator on the same line remains discoverable.
+
+The position wrapper records `state.pos` when markdown-it emits each inline HTML
+token; it does not rebuild or normalize the HTML. Image-label child tokenization
+is intentionally outside the enclosing state, so an alt label containing
+`</details>` is not promoted to a candidate. The existing block analysis still
+provides the paragraph, fence, raw HTML, quote, list, heading, and math ranges,
+and the configured GitHub, GitLab, and CommonMark parser is used for every
+inline context. The caller's `html` option is restored after the temporary scan.
+
+Summary splitting uses the same actual boundary tokens to locate `</summary>`.
+Consequently an inline attribute containing `</summary>` cannot truncate a
+summary source, while a real Details/summary token inside a summary still marks
+that header unsupported. Profile-aware cached ranges and immutable-node WeakMap
+entries continue to serve rendering, serialization, and direct heading edits.
+All source bytes, tag spelling, attribute order, quote style, entities, unknown
+HTML, separators, and LF/CRLF/CR endings remain source-preserving.
+
+Core regressions cover double and single quoted attributes, `>` and `&quot;`,
+opening/closing strings together, inline summary attributes, link titles,
+image alt text, all three profiles, and a caller parser whose HTML option starts
+disabled. The earlier block-context, raw HTML type 1–7, nested Details, escape
+parity, Math/table, 80+ Details cache, heading-ID/TOC, Alert, Code, and cursor
+regressions remain in the suite. The browser regression opens a structured
+Details containing Details-like strings in summary and body HTML attributes,
+toggles it without edits, single-click edits the summary, types in the body,
+and compares every saved source byte. The inline HTML is rendered safely and no
+dialog is opened.
+
+Final 0.0.36 verification includes the latest main integration from 0.0.35.
+The core suite has 566 tests across 33 files; 31 new cases cover this inline
+boundary fix and all earlier Details regressions remain enabled. `npm run
+compile`, `npm test`, `npm run lint` (zero errors, 49 warnings), `npm run
+format:check`, `npm run test:browser:blocks` (16 groups plus the five required
+fixtures on Rich, Dedicated Preview and native-preview surfaces), `npm run
+test:browser:spacing` (37 cases on each surface), `npm run test:extension`
+(isolated installed VS Code, exit 0), `npm run package` (96-file 0.0.36 VSIX,
+4.76 MB, bundled formatter verification), and `git diff --check` passed. Real
+OS Japanese IME candidate UI, cross-region selection/copy/cut, zoom, and
+visible native Undo/Redo remain manual checks.
+
 ## Details scanner block contexts (0.0.35)
 
 Details discovery uses the configured profile's markdown-it block parser before

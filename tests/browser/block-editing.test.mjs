@@ -861,6 +861,72 @@ async function testDetailsWithUnmatchedBacktickAndRawScript(page) {
   });
 }
 
+async function testDetailsWithInlineHtmlAttributeTags(page) {
+  const source = [
+    '<details data-test="keep" open>',
+    '<summary><span title="</details>">Summary</span></summary>',
+    "",
+    'Text <span data-open="<details>" data-close="</details>">Example</span>',
+    "",
+    "Editable body",
+    "",
+    "</details>",
+  ].join("\n");
+  await load(page, source);
+  const before = await saved(page);
+  const container = page.locator(`${rich} > .mm-details-node`);
+  assert.equal(await container.count(), 1);
+  assert.equal(await container.getAttribute("data-mm-details-open"), "true");
+  assert.equal(
+    await container
+      .locator('[title="</details>"], [data-open="<details>"]')
+      .count(),
+    0,
+    "inline HTML attributes must be rendered without executable attributes",
+  );
+
+  const toggle = container.locator(detailsToggle);
+  await toggle.click();
+  assert.equal(await container.getAttribute("data-mm-details-open"), "false");
+  await toggle.click();
+  assert.equal(await container.getAttribute("data-mm-details-open"), "true");
+  await noEdits(page, before, "toggle Details with inline attribute tags");
+
+  await container.locator(detailsTitle).click();
+  const input = container.locator(detailsInput);
+  await input.waitFor({ state: "visible" });
+  assert.equal((await selection(page)).dialogs, 0);
+  await page.keyboard.press("End");
+  await page.keyboard.type(" edited");
+  await page.keyboard.press("Enter");
+  const renamed = source.replace(
+    "</span></summary>",
+    "</span> edited</summary>",
+  );
+  await expectSource(page, renamed);
+
+  await caret(page, ".mm-details-body > p:last-of-type", -1);
+  await page.keyboard.type(" updated");
+  const edited = renamed.replace("Editable body", "Editable body updated");
+  await expectSource(page, edited);
+  assert.equal(
+    await container.locator(".mm-details-body > p:last-of-type").textContent(),
+    "Editable body updated",
+  );
+  assert.equal((await saved(page)).markdown, edited);
+  assert.equal((await selection(page)).dialogs, 0);
+  assert.equal(await container.locator("script").count(), 0);
+  assert.equal(
+    await container
+      .locator('[title="</details>"], [data-open="<details>"]')
+      .count(),
+    0,
+  );
+  await page.screenshot({
+    path: resolve(output, "details-inline-html-attribute-tags.png"),
+  });
+}
+
 async function testMathAndMermaidHeaders(page) {
   for (const [kind, source, replacement] of [
     ["math", "$$\nx^2\n$$", "y^3"],
@@ -1059,6 +1125,7 @@ async function main() {
       testDetailsHeader,
       testDetailsBetweenEscapedBackticks,
       testDetailsWithUnmatchedBacktickAndRawScript,
+      testDetailsWithInlineHtmlAttributeTags,
       testMathAndMermaidHeaders,
       testDocumentFixtures,
     ]) {

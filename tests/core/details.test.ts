@@ -780,6 +780,140 @@ describe.each<Profile>(["github", "gitlab"])(
   },
 );
 
+describe.each<Profile>(["commonmark", "github", "gitlab"])(
+  "Details scanner inline token boundaries with the %s profile",
+  (profile) => {
+    const cases = [
+      [
+        "closing-looking attribute value",
+        '<span title="</details>">example</span>',
+      ],
+      [
+        "opening-looking attribute value",
+        '<span title="<details>">example</span>',
+      ],
+      [
+        "both-looking attribute values",
+        '<span data-open="<details>" data-close="</details>">Example</span>',
+      ],
+      [
+        "single quoted attributes",
+        "<span title='</details>' data-x='<details>'>Example</span>",
+      ],
+      [
+        "entity-escaped quote attribute",
+        '<span title="a &quot; </details>">Example</span>',
+      ],
+      ["link title", '[link](https://example.com "</details>")'],
+      ["link opening title", '[link](https://example.com "<details>")'],
+      ["image alt text", "![</details>](image.png)"],
+    ] as const;
+
+    it.each(cases)(
+      "keeps %s outside Details nesting",
+      (_name, inlineSource) => {
+        const source = `<details data-test="keep" open>\n<summary>Summary</summary>\n\nText ${inlineSource}\n\nBody\n\n</details>\n`;
+        const inlineTokens =
+          new MarkdownIt("commonmark", { html: true }).parseInline(
+            `Text ${inlineSource}`,
+            {},
+          )[0]!.children ?? [];
+        expect(
+          inlineTokens
+            .filter(
+              (token) =>
+                token.type === "html_inline" &&
+                /^<\/?details\b/i.test(token.content),
+            )
+            .map((token) => token.content),
+        ).toEqual([]);
+        const tags = detailsTagRanges(source).map(({ start, end }) =>
+          source.slice(start, end),
+        );
+        expect(tags).toEqual(['<details data-test="keep" open>', "</details>"]);
+        const snapshot = parseMarkdown(source, profile);
+        expect(snapshot.doc.childCount).toBe(1);
+        const details = snapshot.doc.firstChild!;
+        expect(details.type.name).toBe("details");
+        expect(details.attrs.summarySource).toBe("Summary");
+        expect(serializeMarkdown(snapshot.doc, snapshot)).toBe(source);
+
+        const state = EditorState.create({ schema, doc: snapshot.doc });
+        const renamed = state.tr.setNodeMarkup(0, undefined, {
+          ...details.attrs,
+          summarySource: "Changed",
+        });
+        const expected = source.replace(
+          "<summary>Summary</summary>",
+          "<summary>Changed</summary>",
+        );
+        expect(serializeMarkdown(renamed.doc, snapshot)).toBe(expected);
+
+        let bodyPosition = -1;
+        snapshot.doc.descendants((node, position) => {
+          if (node.type.name === "paragraph" && node.textContent === "Body")
+            bodyPosition = position;
+        });
+        expect(bodyPosition).toBeGreaterThan(0);
+        const bodyEdited = renamed.insertText("Edited ", bodyPosition + 1);
+        expect(serializeMarkdown(bodyEdited.doc, snapshot)).toBe(
+          expected.replace("Body", "Edited Body"),
+        );
+      },
+    );
+
+    it("preserves Details-like text in an inline summary attribute", () => {
+      const source =
+        '<details data-test="keep" open>\n<summary><span title="</details>">Summary</span></summary>\n\nBody\n\n</details>\n';
+      expect(
+        detailsTagRanges(source).map(({ start, end }) =>
+          source.slice(start, end),
+        ),
+      ).toEqual(['<details data-test="keep" open>', "</details>"]);
+      const snapshot = parseMarkdown(source, profile);
+      expect(snapshot.doc.firstChild!.type.name).toBe("details");
+      expect(snapshot.doc.firstChild!.attrs.summarySource).toBe(
+        '<span title="</details>">Summary</span>',
+      );
+      expect(serializeMarkdown(snapshot.doc, snapshot)).toBe(source);
+      const state = EditorState.create({ schema, doc: snapshot.doc });
+      const changed = state.tr.setNodeMarkup(0, undefined, {
+        ...snapshot.doc.firstChild!.attrs,
+        summarySource: '<span title="</details>">Changed</span>',
+      });
+      expect(serializeMarkdown(changed.doc, snapshot)).toBe(
+        source.replace("Summary</span>", "Changed</span>"),
+      );
+    });
+
+    it("does not truncate a summary at an attribute's closing-looking text", () => {
+      const source =
+        '<details data-test="keep" open>\n<summary><span title="</summary>">Summary</span></summary>\n\nBody\n\n</details>\n';
+      const snapshot = parseMarkdown(source, profile);
+      expect(snapshot.doc.childCount).toBe(1);
+      expect(snapshot.doc.firstChild!.type.name).toBe("details");
+      expect(snapshot.doc.firstChild!.attrs.summarySource).toBe(
+        '<span title="</summary>">Summary</span>',
+      );
+      expect(serializeMarkdown(snapshot.doc, snapshot)).toBe(source);
+    });
+  },
+);
+
+it("uses inline HTML tokenization without changing a caller parser", () => {
+  const parser = new MarkdownIt("commonmark");
+  parser.options.html = false;
+  const source =
+    '<details open>\n<summary>Summary</summary>\n\n<span title="</details>">Body</span>\n\n</details>';
+  expect(parser.options.html).toBe(false);
+  expect(
+    detailsTagRanges(source, parser).map(({ start, end }) =>
+      source.slice(start, end),
+    ),
+  ).toEqual(["<details open>", "</details>"]);
+  expect(parser.options.html).toBe(false);
+});
+
 it("keeps edits and open rendering exact when revisiting a large Details document", () => {
   const panels = Array.from(
     { length: 80 },
