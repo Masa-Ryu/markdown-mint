@@ -375,6 +375,29 @@ describe("local Mermaid rendering lifecycle", () => {
     enhancer.dispose();
   });
 
+  it("keeps flowchart node alignment scoped away from explicit edge alignment", async () => {
+    const runtime: MermaidRuntime = {
+      render: () =>
+        '<svg aria-roledescription="flowchart-v2">' +
+        '<g class="node"><rect class="label-container" />' +
+        '<g class="label"><text x="0">Node</text></g></g>' +
+        '<g class="edgeLabel"><text text-anchor="middle">Yes</text></g>' +
+        "</svg>",
+    };
+    (globalThis as Record<string, unknown>).markdownMintMermaid = runtime;
+    const element = diagram();
+    const enhancer = enhanceRenderedContent(document.body);
+    await flush();
+
+    const svg = element.querySelector("svg");
+    const nodeText = svg?.querySelector<SVGTextElement>(".node .label text");
+    const edgeText = svg?.querySelector<SVGTextElement>(".edgeLabel text");
+    expect(svg?.getAttribute("aria-roledescription")).toBe("flowchart-v2");
+    expect(nodeText?.hasAttribute("text-anchor")).toBe(false);
+    expect(edgeText?.getAttribute("text-anchor")).toBe("middle");
+    enhancer.dispose();
+  });
+
   it("uses strict local rendering and rejects active or external SVG payloads", async () => {
     const calls: Array<Record<string, unknown>> = [];
     const runtime: MermaidRuntime = {

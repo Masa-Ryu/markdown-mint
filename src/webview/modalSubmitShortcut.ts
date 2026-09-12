@@ -10,8 +10,7 @@ function usesMacPrimaryModifier(platform: string): boolean {
 }
 
 function hasSubmitModifier(event: KeyboardEvent, platform: string): boolean {
-  if (usesMacPrimaryModifier(platform))
-    return event.metaKey && !event.ctrlKey;
+  if (usesMacPrimaryModifier(platform)) return event.metaKey && !event.ctrlKey;
   return event.ctrlKey && !event.metaKey;
 }
 
@@ -62,7 +61,8 @@ export function installModalSubmitShortcut(
     queueMicrotask(() => {
       if (!dialog.open || !dialog.isConnected || !form.isConnected) return;
       if (submitter.disabled || !submitter.isConnected) return;
-      if (typeof form.requestSubmit === "function") form.requestSubmit(submitter);
+      if (typeof form.requestSubmit === "function")
+        form.requestSubmit(submitter);
       else submitter.click();
     });
   };

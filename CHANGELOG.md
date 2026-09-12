@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Fixed Mermaid flowchart node labels that drifted right when Mermaid's inline
+  stylesheet was blocked by the strict Webview CSP. Shared external CSS now
+  restores centering only for `flowchart-v2` node labels; edge labels, other
+  diagram types, CSP, sanitization, and Markdown source preservation remain
+  unchanged.
+
 - Simplified the code-language picker to show language labels only while
   retaining searchable identifiers, aliases, and highlighting metadata.
 
