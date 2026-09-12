@@ -73,7 +73,7 @@ function makeStarterState(source = ""):
 
 function makeApp(
   markdown = "",
-  options: { withHost?: boolean } = {},
+  options: { withHost?: boolean; withInitialDocument?: boolean } = {},
 ): { app: MarkdownEditorApp; root: HTMLElement; messages: unknown[] } {
   const root = document.createElement("div");
   document.body.append(root);
@@ -95,11 +95,15 @@ function makeApp(
       serializeMarkdown,
       renderMarkdown,
     },
-    initialDocument: {
-      markdown,
-      version: 1,
-      profile: "github",
-    },
+    ...(options.withInitialDocument === false
+      ? {}
+      : {
+          initialDocument: {
+            markdown,
+            version: 1,
+            profile: "github" as const,
+          },
+        }),
   });
   apps.push(app);
   return { app, root, messages };
@@ -299,6 +303,82 @@ describe("blank-document starter", () => {
     );
     expect(app.view.state.doc.child(0).type.name).toBe("heading");
     expect(app.view.state.doc.child(1).type.name).toBe("paragraph");
+  });
+
+  it("keeps the starter inactive while the initial document is loading", () => {
+    const { app, root } = makeApp("", { withInitialDocument: false });
+
+    expect(root.hasAttribute("data-loading")).toBe(true);
+    expect(root.querySelector("h1.mm-starter-title")).toBeNull();
+    expect(root.querySelector('[data-placeholder="Title"]')).toBeNull();
+    expect(app.view.editable).toBe(false);
+    expect(getStarterState(app.view.state)).toEqual({
+      active: false,
+      untouched: false,
+    });
+  });
+
+  it("loads a nonempty document before showing the rich editor", () => {
+    const { app, root } = makeApp("", { withInitialDocument: false });
+    app.receiveDocument(hostDocument("# Existing title\n\nBody", 2, "initial"));
+
+    expect(root.hasAttribute("data-loading")).toBe(false);
+    expect(root.querySelector("h1")?.textContent).toBe("Existing title");
+    expect(root.querySelector('[data-placeholder="Title"]')).toBeNull();
+    expect(app.view.editable).toBe(true);
+    expect(getStarterState(app.view.state)).toEqual({
+      active: false,
+      untouched: false,
+    });
+  });
+
+  it("activates the starter only after an empty document is received", () => {
+    const { app, root } = makeApp("", { withInitialDocument: false });
+    expect(root.querySelector('[data-placeholder="Title"]')).toBeNull();
+
+    app.receiveDocument(hostDocument("", 2, "initial"));
+
+    expect(root.hasAttribute("data-loading")).toBe(false);
+    expect(root.querySelector("h1.mm-starter-title")).not.toBeNull();
+    expect(getStarterState(app.view.state)).toEqual({
+      active: true,
+      untouched: true,
+    });
+  });
+
+  it("preserves whitespace-only source after loading the blank starter", () => {
+    const source = " \r\n\t";
+    const { app, root } = makeApp("", { withInitialDocument: false });
+    app.receiveDocument(hostDocument(source, 2, "initial"));
+
+    expect(root.querySelector("h1.mm-starter-title")).not.toBeNull();
+    expect(
+      serializeStarterSource(
+        app.view.state,
+        source,
+        serializeMarkdown(app.view.state.doc),
+      ),
+    ).toBe(source);
+    expect(serializeStarterSource(app.view.state, source, "# Title")).not.toBe(
+      "# Title",
+    );
+  });
+
+  it("does not re-enter loading or the starter during a nonempty reload", () => {
+    const { app, root } = makeApp("# Initial title\n\nBody");
+    expect(root.hasAttribute("data-loading")).toBe(false);
+
+    app.receiveDocument(
+      hostDocument("# Reloaded title\n\nBody", 2, "external"),
+    );
+
+    expect(root.hasAttribute("data-loading")).toBe(false);
+    expect(root.querySelector("h1")?.textContent).toBe("Reloaded title");
+    expect(root.querySelector('[data-placeholder="Title"]')).toBeNull();
+    expect(getStarterState(app.view.state)).toEqual({
+      active: false,
+      untouched: false,
+    });
   });
 
   it("lets a blank editor choose Text and then type a plain paragraph", () => {
