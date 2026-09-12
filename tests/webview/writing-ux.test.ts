@@ -764,9 +764,8 @@ describe("bounded writing controls", () => {
 
     root.querySelector<HTMLButtonElement>('[data-mode="source"]')!.click();
     expect(messagesOfType(messages, "source")).toHaveLength(0);
-    expect(root.querySelector(".mm-status")?.textContent).toContain(
-      "Waiting to open source",
-    );
+    expect(root.querySelector(".mm-statusbar")).toBeNull();
+    expect(root.querySelector(".mm-status")).toBeNull();
 
     app.receiveDocument({
       protocolVersion: PROTOCOL_VERSION,

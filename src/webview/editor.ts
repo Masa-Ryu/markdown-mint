@@ -107,6 +107,7 @@ import {
   isValidCodeLanguageIdentifier,
   replaceCodeLanguageIdentifier,
 } from "../core/visualRendering";
+import { mergeMarkdownSnapshots } from "../shared/threeWayMerge";
 
 export type DocumentProfile = "github" | "gitlab" | "commonmark";
 export type EditorMode = "rich" | "preview" | "source";
@@ -153,6 +154,7 @@ export interface EditorInitialDocument {
   markdown: string;
   version: number;
   profile: DocumentProfile;
+  documentId?: string;
   operationId?: string;
   reason?: string;
   resourceBaseUrl?: string;
@@ -186,10 +188,14 @@ export interface EditorAppOptions {
 }
 
 interface RecoveryState {
+  documentId?: string;
   recoveryDraft?: string;
+  recoveryBaseMarkdown?: string;
+  recoveryBaseVersion?: number;
   recoveryVersion?: number;
   recoveryProfile?: DocumentProfile;
   recoveryTimestamp?: number;
+  recoveryDocument?: unknown;
 }
 
 interface DerivedViewsOptions {
@@ -208,6 +214,7 @@ interface PendingDerivedViews {
 export interface PendingEdit {
   operationId: string;
   baseVersion: number;
+  baseMarkdown: string;
   markdown: string;
 }
 
@@ -1753,23 +1760,33 @@ function safeImageSource(source: string): boolean {
 }
 
 export class SyncController {
+  private static readonly maxRebaseAttempts = 3;
+  private static readonly maxRebaseWindowMs = 30_000;
   private baseVersion: number;
+  private authoritativeVersion: number;
+  private authoritativeMarkdown: string;
   private pending: PendingEdit | null = null;
   private queued: PendingEdit | null = null;
+  private blockedConflict: {
+    baseMarkdown: string;
+    localMarkdown: string;
+    externalMarkdown: string;
+    externalVersion: number;
+  } | null = null;
+  private lastAcknowledged: PendingEdit | null = null;
+  private rebaseAttempts = 0;
+  private rebaseStartedAt = 0;
   private readonly vscode: VSCodeApiLike | undefined;
-  private readonly onStatus: (status: "saved" | "pending" | "conflict") => void;
-  private readonly onConflict: (message: string) => void;
 
   constructor(
     version: number,
     vscode: VSCodeApiLike | undefined,
-    onStatus: SyncController["onStatus"],
-    onConflict: SyncController["onConflict"],
+    initialMarkdown = "",
   ) {
     this.baseVersion = version;
+    this.authoritativeVersion = version;
+    this.authoritativeMarkdown = initialMarkdown;
     this.vscode = vscode;
-    this.onStatus = onStatus;
-    this.onConflict = onConflict;
   }
 
   get version(): number {
@@ -1788,19 +1805,71 @@ export class SyncController {
     return this.pending !== null || this.queued !== null;
   }
 
+  get hasBlockedConflict(): boolean {
+    return this.blockedConflict !== null;
+  }
+
+  get draftBaseMarkdown(): string {
+    return (
+      this.pending?.baseMarkdown ??
+      this.queued?.baseMarkdown ??
+      this.lastAcknowledged?.baseMarkdown ??
+      this.blockedConflict?.baseMarkdown ??
+      this.authoritativeMarkdown
+    );
+  }
+
+  get blockedDraft(): string | null {
+    return this.blockedConflict?.localMarkdown ?? null;
+  }
+
+  isPendingOperation(operationId: string): boolean {
+    return (
+      this.pending?.operationId === operationId ||
+      this.queued?.operationId === operationId
+    );
+  }
+
+  private resetRebaseBudget(): void {
+    this.rebaseAttempts = 0;
+    this.rebaseStartedAt = 0;
+  }
+
   setVersion(version: number): void {
-    this.baseVersion = version;
+    this.baseVersion = Math.max(this.baseVersion, version);
+  }
+
+  noteAuthoritative(version: number, markdown: string): void {
+    if (version < this.authoritativeVersion) return;
+    this.authoritativeVersion = version;
+    this.baseVersion = Math.max(this.baseVersion, version);
+    this.authoritativeMarkdown = markdown;
   }
 
   enqueue(markdown: string): PendingEdit {
+    this.lastAcknowledged = null;
+    const baseMarkdown =
+      this.pending?.baseMarkdown ??
+      this.queued?.baseMarkdown ??
+      this.blockedConflict?.baseMarkdown ??
+      this.authoritativeMarkdown;
+    const baseVersion =
+      this.pending?.baseVersion ??
+      this.queued?.baseVersion ??
+      this.blockedConflict?.externalVersion ??
+      this.baseVersion;
     const edit: PendingEdit = {
       markdown,
-      baseVersion: this.baseVersion,
+      baseVersion,
+      baseMarkdown,
       operationId: newOperationId(),
     };
+    if (this.blockedConflict) {
+      this.blockedConflict.localMarkdown = markdown;
+      return edit;
+    }
     if (this.pending) {
       this.queued = edit;
-      this.onStatus("pending");
       return edit;
     }
     this.pending = edit;
@@ -1817,16 +1886,36 @@ export class SyncController {
       markdown: edit.markdown,
     };
     this.vscode?.postMessage(message);
-    this.onStatus("pending");
   }
 
   reject(operationId: string, version?: number): boolean {
     if (!this.pending || this.pending.operationId !== operationId) return false;
     this.pending = null;
-    this.queued = null;
     if (typeof version === "number")
       this.baseVersion = Math.max(this.baseVersion, version);
-    this.onStatus("conflict");
+    return true;
+  }
+
+  fail(
+    operationId: string,
+    version: number,
+    currentMarkdown: string,
+    localMarkdown?: string,
+  ): boolean {
+    if (!this.pending || this.pending.operationId !== operationId) return false;
+    const pending = this.pending;
+    const local = localMarkdown ?? this.queued?.markdown ?? pending.markdown;
+    this.pending = null;
+    this.queued = null;
+    this.lastAcknowledged = null;
+    this.noteAuthoritative(version, currentMarkdown);
+    this.resetRebaseBudget();
+    this.blockedConflict = {
+      baseMarkdown: pending.baseMarkdown,
+      localMarkdown: local,
+      externalMarkdown: currentMarkdown,
+      externalVersion: version,
+    };
     return true;
   }
 
@@ -1842,34 +1931,164 @@ export class SyncController {
       operationId !== this.pending.operationId
     )
       return false;
+    this.lastAcknowledged = this.pending;
     this.pending = null;
-    if (typeof version === "number")
+    this.resetRebaseBudget();
+    if (typeof version === "number") {
       this.baseVersion = Math.max(this.baseVersion, version);
-    if (this.queued && !options.pauseQueue) {
-      const queued = this.queued;
-      this.queued = null;
-      queued.baseVersion = this.baseVersion;
-      this.pending = queued;
-      this.post(queued);
-    } else if (this.queued && options.pauseQueue) {
-      this.onStatus("conflict");
-    } else {
-      this.onStatus("saved");
+      if (markdown !== undefined) this.noteAuthoritative(version, markdown);
     }
-    void markdown;
+    if (this.queued && !options.pauseQueue && !this.blockedConflict) {
+      this.flushQueued();
+    }
     return true;
   }
 
-  markExternalConflict(message: string): void {
-    if (!this.pending && !this.queued) return;
-    this.onStatus("conflict");
-    this.onConflict(message);
+  acknowledgeSnapshot(
+    version: number,
+    markdown: string,
+    options: { pauseQueue?: boolean } = {},
+  ): boolean {
+    if (
+      !this.pending ||
+      version <= this.pending.baseVersion ||
+      markdown !== this.pending.markdown
+    )
+      return false;
+    return this.acknowledge(
+      this.pending.operationId,
+      version,
+      markdown,
+      options,
+    );
+  }
+
+  flushQueued(): PendingEdit | null {
+    if (this.pending || !this.queued || this.blockedConflict) return null;
+    const queued = this.queued;
+    this.queued = null;
+    queued.baseVersion = this.baseVersion;
+    queued.baseMarkdown = this.authoritativeMarkdown;
+    this.pending = queued;
+    this.post(queued);
+    return queued;
+  }
+
+  rebaseRejected(
+    operationId: string,
+    externalVersion: number,
+    externalMarkdown: string,
+    latestLocalMarkdown?: string,
+  ): {
+    kind: "merged" | "accepted" | "conflict" | "ignored";
+    markdown: string;
+  } {
+    if (!this.pending || this.pending.operationId !== operationId)
+      return { kind: "ignored", markdown: externalMarkdown };
+    const pending = this.pending;
+    const localMarkdown =
+      latestLocalMarkdown ?? this.queued?.markdown ?? pending.markdown;
+    const now = Date.now();
+    if (this.rebaseStartedAt === 0) this.rebaseStartedAt = now;
+    if (
+      this.rebaseAttempts >= SyncController.maxRebaseAttempts ||
+      now - this.rebaseStartedAt > SyncController.maxRebaseWindowMs
+    ) {
+      this.pending = null;
+      this.queued = null;
+      this.lastAcknowledged = null;
+      this.noteAuthoritative(externalVersion, externalMarkdown);
+      this.blockedConflict = {
+        baseMarkdown: pending.baseMarkdown,
+        localMarkdown,
+        externalMarkdown,
+        externalVersion,
+      };
+      return { kind: "conflict", markdown: localMarkdown };
+    }
+    this.rebaseAttempts += 1;
+    return this.reconcile(
+      pending.baseMarkdown,
+      localMarkdown,
+      externalVersion,
+      externalMarkdown,
+    );
+  }
+
+  reconcileExternal(
+    externalVersion: number,
+    externalMarkdown: string,
+    localMarkdown?: string,
+  ): {
+    kind: "merged" | "accepted" | "conflict" | "ignored";
+    markdown: string;
+  } {
+    if (externalVersion < this.authoritativeVersion)
+      return { kind: "ignored", markdown: externalMarkdown };
+    const baseMarkdown =
+      this.lastAcknowledged?.baseMarkdown ??
+      this.pending?.baseMarkdown ??
+      this.queued?.baseMarkdown ??
+      this.blockedConflict?.baseMarkdown ??
+      this.authoritativeMarkdown;
+    const local =
+      localMarkdown ??
+      this.queued?.markdown ??
+      this.lastAcknowledged?.markdown ??
+      this.pending?.markdown ??
+      this.blockedConflict?.localMarkdown ??
+      this.authoritativeMarkdown;
+    return this.reconcile(
+      baseMarkdown,
+      local,
+      externalVersion,
+      externalMarkdown,
+    );
+  }
+
+  private reconcile(
+    baseMarkdown: string,
+    localMarkdown: string,
+    externalVersion: number,
+    externalMarkdown: string,
+  ): {
+    kind: "merged" | "accepted" | "conflict" | "ignored";
+    markdown: string;
+  } {
+    if (externalVersion < this.authoritativeVersion)
+      return { kind: "ignored", markdown: externalMarkdown };
+    const merged = mergeMarkdownSnapshots(
+      baseMarkdown,
+      localMarkdown,
+      externalMarkdown,
+    );
+    this.pending = null;
+    this.queued = null;
+    this.lastAcknowledged = null;
+    this.noteAuthoritative(externalVersion, externalMarkdown);
+    if (merged === undefined) {
+      this.blockedConflict = {
+        baseMarkdown,
+        localMarkdown,
+        externalMarkdown,
+        externalVersion,
+      };
+      return { kind: "conflict", markdown: localMarkdown };
+    }
+    this.blockedConflict = null;
+    if (merged === externalMarkdown) {
+      this.resetRebaseBudget();
+      return { kind: "accepted", markdown: merged };
+    }
+    return { kind: "merged", markdown: merged };
   }
 
   clear(): void {
     this.pending = null;
     this.queued = null;
-    this.onStatus("saved");
+    this.lastAcknowledged = null;
+    this.blockedConflict = null;
+    this.resetRebaseBudget();
   }
 }
 
@@ -1897,6 +2116,8 @@ export class MarkdownEditorApp {
   private initialized: boolean;
   private previewOnly = false;
   private syncPaused = false;
+  private serializationError: string | null = null;
+  private lastNotificationKey: string | null = null;
   private reloadRequested = false;
   private formatting = false;
   private pendingSaveOperationId: string | undefined;
@@ -1904,8 +2125,8 @@ export class MarkdownEditorApp {
   private authoritativeMarkdown: string;
   private authoritativeProfile: DocumentProfile;
   private authoritativeVersion: number;
+  private documentId: string | undefined;
   private readonly compatibilityEl: HTMLElement;
-  private readonly statusEl: HTMLElement;
   private readonly previewEl: HTMLElement;
   private clipboardAvailable = false;
   private readonly pendingClipboard = new Map<
@@ -1930,7 +2151,6 @@ export class MarkdownEditorApp {
   private derivedViewsTimer: ReturnType<typeof setTimeout> | undefined;
   private derivedViewsRevision = 0;
   private readonly sourceEl: HTMLTextAreaElement;
-  private readonly recoverButton: HTMLButtonElement;
   private profileSelect!: HTMLSelectElement;
   private pendingProfile: {
     profile: DocumentProfile;
@@ -1956,9 +2176,6 @@ export class MarkdownEditorApp {
   private emojiProfile: DocumentProfile | null = null;
   private emojiInvokingButton: HTMLButtonElement | null = null;
   private emojiDialogOpen = false;
-  private recoveryDialog!: HTMLDialogElement;
-  private recoveryText!: HTMLTextAreaElement;
-  private pendingRecoveryOperationId: string | undefined;
   private stage!: HTMLElement;
   private tableToolbar!: HTMLElement;
   private profileToolbar!: HTMLElement;
@@ -2115,6 +2332,7 @@ export class MarkdownEditorApp {
     this.authoritativeMarkdown = initial.markdown;
     this.authoritativeProfile = initial.profile;
     this.authoritativeVersion = initial.version;
+    this.documentId = initial.documentId;
     this.version = initial.version;
     this.operationId = initial.operationId;
     this.resourceBaseUrl = initial.resourceBaseUrl;
@@ -2163,29 +2381,18 @@ export class MarkdownEditorApp {
     this.emptyLineButton = this.buildEmptyLineButton();
     this.stage.append(this.selectionToolbar, this.emptyLineButton);
     this.root.append(this.stage);
-    const footer = makeElement("footer", { class: "mm-statusbar" });
-    this.statusEl = makeElement("span", {
-      class: "mm-status",
-      role: "status",
-      "data-testid": "status",
-    });
     this.compatibilityEl = makeElement("span", {
       class: "mm-compatibility",
       role: "status",
       "data-testid": "compatibility",
     });
-    this.recoverButton = makeElement("button", {
-      type: "button",
-      class: "mm-recover",
-      hidden: "true",
-    }) as HTMLButtonElement;
-    this.recoverButton.textContent = "Recover draft";
-    this.recoverButton.addEventListener("click", () =>
-      this.openRecoveryDialog(),
+    const primaryToolbar = toolbar.querySelector<HTMLElement>(
+      ".mm-toolbar-primary",
     );
-    footer.append(this.statusEl, this.compatibilityEl, this.recoverButton);
-    this.root.append(footer);
-    this.buildRecoveryDialog();
+    const sourceButton = primaryToolbar?.querySelector(".mm-source-button");
+    if (sourceButton)
+      primaryToolbar?.insertBefore(this.compatibilityEl, sourceButton);
+    else primaryToolbar?.append(this.compatibilityEl);
     this.tooltip = makeElement("div", {
       class: "mm-tooltip",
       role: "tooltip",
@@ -2294,16 +2501,8 @@ export class MarkdownEditorApp {
     this.serializedDocument = this.view.state.doc;
     if (this.parseError || !this.initialized) {
       this.view.setProps({ editable: () => false });
-      this.statusEl.textContent = this.parseError
-        ? `Read-only: ${this.parseError}`
-        : "Loading document…";
     }
-    this.sync = new SyncController(
-      this.version,
-      this.vscode,
-      (status) => this.setSyncStatus(status),
-      (message) => this.setConflict(message),
-    );
+    this.sync = new SyncController(this.version, this.vscode, initial.markdown);
     this.messageHandler = (event) => this.handleMessage(event.data);
     window.addEventListener("message", this.messageHandler);
     this.sourceEl.addEventListener("input", () => {
@@ -3071,7 +3270,14 @@ export class MarkdownEditorApp {
       this.closeWritingPopups();
       this.dirty = true;
       const markdown = this.serializeCurrent();
-      this.persistRecovery(markdown ?? this.lastValidMarkdown);
+      if (markdown !== null) this.persistRecovery(markdown);
+      else
+        this.persistRecovery(
+          this.lastValidMarkdown,
+          this.authoritativeMarkdown,
+          this.authoritativeVersion,
+          true,
+        );
       if (markdown !== null) {
         if (alertLocalInput) {
           // Keep source integrity, recovery, and host sync synchronous. Preview
@@ -3200,19 +3406,31 @@ export class MarkdownEditorApp {
         this.starterOriginalSource,
         serialized,
       );
+      this.serializationError = null;
+      this.lastNotificationKey = null;
       this.lastValidMarkdown = markdown;
       this.serializedDocument = this.view.state.doc;
       return markdown;
     } catch (error) {
-      this.parseError =
+      this.serializationError =
         error instanceof Error
           ? error.message
           : "Markdown could not be serialized.";
       this.preservedSource = this.lastValidMarkdown;
-      this.syncPaused = true;
-      this.view?.setProps({ editable: () => false });
-      this.statusEl.textContent = `Read-only: ${this.parseError}`;
-      this.persistRecovery(this.lastValidMarkdown);
+      // The ProseMirror document is still a valid local editing state. A
+      // serializer failure must not turn it into a read-only view or replace
+      // it with the last successful Markdown snapshot. Keep the structured
+      // state in recovery storage and retry serialization on the next edit.
+      this.persistRecovery(
+        this.lastValidMarkdown,
+        this.authoritativeMarkdown,
+        this.authoritativeVersion,
+        true,
+      );
+      this.notifyHost(
+        "error",
+        `Markdown could not be synchronized: ${this.serializationError}`,
+      );
       return null;
     }
   }
@@ -3373,6 +3591,7 @@ export class MarkdownEditorApp {
     this.compatibilityEl.replaceChildren();
     if (!issues.length) {
       this.compatibilityEl.textContent = "";
+      this.compatibilityEl.removeAttribute("title");
       this.root.removeAttribute("data-compatibility-level");
       return;
     }
@@ -3420,16 +3639,6 @@ export class MarkdownEditorApp {
         "--markdown-line-height",
         String(typography.lineHeight),
       );
-  }
-
-  private setSyncStatus(status: "saved" | "pending" | "conflict"): void {
-    this.statusEl.dataset.state = status;
-    this.statusEl.textContent =
-      status === "saved"
-        ? "Synced"
-        : status === "pending"
-          ? "Syncing…"
-          : "Conflict — local draft preserved";
   }
 
   private setInitialized(value: boolean): void {
@@ -3507,18 +3716,40 @@ export class MarkdownEditorApp {
     this.closeProfileFeatureDialog();
     this.conflict = true;
     this.syncPaused = true;
-    this.statusEl.title = message;
-    this.statusEl.dataset.state = "conflict";
-    this.statusEl.textContent = message;
-    this.persistRecovery(this.currentMarkdown());
-    this.recoverButton.hidden = false;
+    const localMarkdown = this.currentMarkdown();
+    this.persistRecovery(
+      localMarkdown,
+      this.sync.draftBaseMarkdown,
+      this.sync.version,
+      this.serializationError !== null || this.parseError !== null,
+    );
+    this.notifyHost("error", message);
   }
 
-  /** Report an actionable editor hint without freezing local synchronization. */
-  private setNotice(message: string, state: "info" | "error" = "info"): void {
-    this.statusEl.title = message;
-    this.statusEl.dataset.state = state;
-    this.statusEl.textContent = message;
+  /**
+   * Action hints are deliberately not rendered in a persistent editor footer
+   * or moved to a toast. Dedicated synchronization and serialization failures
+   * call notifyHost directly; ordinary waiting and command-state hints stay
+   * silent while the queue drains.
+   */
+  private setNotice(
+    _message: string,
+    _state: "info" | "error" = "info",
+  ): void {}
+
+  private notifyHost(
+    level: "info" | "warning" | "error",
+    message: string,
+  ): void {
+    const key = `${level}:${message}`;
+    if (key === this.lastNotificationKey) return;
+    this.lastNotificationKey = key;
+    this.vscode?.postMessage({
+      protocolVersion: PROTOCOL_VERSION,
+      type: "notify",
+      level,
+      message: message.slice(0, 1_024),
+    });
   }
 
   private installTooltipHandlers(): void {
@@ -3617,61 +3848,6 @@ export class MarkdownEditorApp {
     top = Math.max(6, Math.min(top, Math.max(6, viewportHeight - height - 6)));
     this.tooltip.style.left = `${Math.round(left)}px`;
     this.tooltip.style.top = `${Math.round(top)}px`;
-  }
-
-  private buildRecoveryDialog(): void {
-    const dialog = document.createElement("dialog");
-    dialog.className = "mm-input-dialog mm-recovery-dialog";
-    const form = document.createElement("form");
-    form.className = "mm-dialog-form";
-    const title = document.createElement("h2");
-    title.textContent = "Review recovered draft";
-    const help = document.createElement("p");
-    help.textContent =
-      "The draft is kept separately until you choose an action.";
-    this.recoveryText = document.createElement("textarea");
-    this.recoveryText.readOnly = true;
-    this.recoveryText.className = "mm-recovery-text";
-    this.recoveryText.setAttribute("aria-label", "Recovered Markdown draft");
-    const actions = document.createElement("div");
-    actions.className = "mm-dialog-actions";
-    const close = document.createElement("button");
-    close.type = "button";
-    close.textContent = "Close";
-    close.addEventListener("click", () => this.closeDialog(dialog));
-    const reload = document.createElement("button");
-    reload.type = "button";
-    reload.textContent = "Reload authoritative";
-    reload.addEventListener("click", () => {
-      this.closeDialog(dialog);
-      this.reloadRequested = true;
-      this.pendingExternal = null;
-      this.statusEl.textContent = "Reloading authoritative document…";
-      this.vscode?.postMessage({
-        protocolVersion: PROTOCOL_VERSION,
-        type: "ready",
-        requestId: newOperationId(),
-      });
-    });
-    const apply = document.createElement("button");
-    apply.type = "button";
-    apply.textContent = "Apply draft";
-    apply.addEventListener("click", () => {
-      this.closeDialog(dialog);
-      this.applyRecoveryDraft();
-    });
-    actions.append(close, reload, apply);
-    form.append(title, help, this.recoveryText, actions);
-    dialog.append(form);
-    this.root.append(dialog);
-    this.recoveryDialog = dialog;
-  }
-
-  private openRecoveryDialog(): void {
-    const saved = this.vscode?.getState?.() as RecoveryState | undefined;
-    const draft = saved?.recoveryDraft ?? this.currentMarkdown();
-    this.recoveryText.value = draft;
-    this.openDialog(this.recoveryDialog);
   }
 
   private buildToolbar(): HTMLElement {
@@ -6982,7 +7158,12 @@ export class MarkdownEditorApp {
 
   private requestSource(): void {
     if (!this.initialized) return;
-    if (this.composing || this.hasPendingHostSync()) {
+    if (
+      this.composing ||
+      (this.hasPendingHostSync() &&
+        !this.sync.hasBlockedConflict &&
+        !this.syncPaused)
+    ) {
       this.deferredHostCommand = "source";
       this.setNotice("Waiting to open source until the latest edit is synced.");
       return;
@@ -7106,6 +7287,13 @@ export class MarkdownEditorApp {
       this.setNotice("Resolve the document conflict before saving.", "error");
       return false;
     }
+    if (this.pendingSaveOperationId) {
+      // Save is serialized by the host. Coalesce repeated Cmd/Ctrl+S presses
+      // into one follow-up request instead of running two save pipelines over
+      // different snapshots.
+      this.deferredHostCommand = "save";
+      return true;
+    }
     if (this.composing || this.hasPendingHostSync()) {
       this.deferredHostCommand = "save";
       this.setNotice("Waiting to save until the latest edit is synced.");
@@ -7177,28 +7365,44 @@ export class MarkdownEditorApp {
       this.clipboardAvailable = message.clipboardAvailable === true;
       this.receivePreview(message);
     } else if (message.type === "edit-rejected") {
-      this.sync.reject(message.operationId, message.currentVersion);
-      this.version = Math.max(this.version, message.currentVersion);
-      this.persistRecovery(message.draftMarkdown ?? this.currentMarkdown());
-      this.setConflict(message.message);
-      this.pendingExternal = {
+      const external: DocumentMessage = {
         protocolVersion: PROTOCOL_VERSION,
         type: "document",
         markdown: message.currentMarkdown,
         version: message.currentVersion,
         profile: this.profile,
         reason: "external",
+        ...(this.documentId === undefined
+          ? {}
+          : { documentId: this.documentId }),
+        ...(this.resourceBaseUrl === undefined
+          ? {}
+          : { resourceBaseUrl: this.resourceBaseUrl }),
       };
+      const localMarkdown = this.currentMarkdown();
+      if (message.reason === "stale" || message.reason === "busy") {
+        const result = this.sync.rebaseRejected(
+          message.operationId,
+          message.currentVersion,
+          message.currentMarkdown,
+          localMarkdown,
+        );
+        this.applyReconciliation(external, result, localMarkdown);
+      } else if (
+        this.sync.fail(
+          message.operationId,
+          message.currentVersion,
+          message.currentMarkdown,
+          localMarkdown,
+        )
+      ) {
+        this.version = Math.max(this.version, message.currentVersion);
+        this.setConflict(message.message);
+      }
     } else if (message.type === "format-rejected") {
       this.setNotice(message.message, "error");
     } else if (message.type === "save-result") {
       this.handleSaveResult(message);
-    } else if (message.type === "recovery-opened") {
-      if (message.operationId === this.pendingRecoveryOperationId) {
-        this.reloadRequested = true;
-        this.statusEl.textContent =
-          "Draft opened separately; reloading the authoritative document…";
-      }
     } else if (message.type === "clipboard-result") {
       this.resolveClipboard(message);
     } else if (message.type === "error") {
@@ -7300,38 +7504,32 @@ export class MarkdownEditorApp {
 
   private handleSaveResult(message: SaveResultMessage): void {
     if (
-      this.pendingSaveOperationId &&
+      !this.pendingSaveOperationId ||
       message.operationId !== this.pendingSaveOperationId
     )
       return;
     this.pendingSaveOperationId = undefined;
-    if (message.saved) {
-      this.statusEl.dataset.state = "saved";
-      this.statusEl.textContent = message.isDirty
-        ? "Synced (unsaved)"
-        : "Saved";
-      this.version = Math.max(this.version, message.version);
-    } else {
-      this.setNotice(
-        message.message ?? "The document could not be saved.",
-        "error",
-      );
+    this.version = Math.max(this.version, message.version);
+    if (!message.saved) {
+      // The host already reports the concrete failure through VS Code's
+      // notification surface. Do not retry a failed save implicitly; a later
+      // explicit save request is the only way to try again.
+      if (this.deferredHostCommand === "save") this.deferredHostCommand = null;
+      return;
     }
+    // `saved` describes the save operation that was requested. A later edit
+    // may leave the current document dirty, which is a separate state and
+    // must not turn a successful save into a failure or clear its recovery.
+    if (!message.isDirty && !this.dirty && !this.sync.hasPending)
+      this.clearRecoveryIfSaved();
+    this.flushDeferredHostCommand();
   }
 
   receiveDocument(message: DocumentMessage): void {
     this.clipboardAvailable = message.clipboardAvailable === true;
-    // A host acknowledgement must be processed even during IME composition;
-    // otherwise it would be mistaken for an external edit and leave the local
-    // draft in a permanent conflict state.
-    if (
-      this.pendingRecoveryOperationId &&
-      (message.operationId === this.pendingRecoveryOperationId ||
-        message.reason === "recovery")
-    ) {
-      this.pendingRecoveryOperationId = undefined;
-      this.reloadRequested = true;
-      this.applyDocument(message, { force: true });
+    if (message.documentId) this.documentId = message.documentId;
+    if (message.reason === "save") {
+      this.receiveSaveSnapshot(message);
       return;
     }
     if (
@@ -7340,6 +7538,26 @@ export class MarkdownEditorApp {
       !this.reloadRequested
     )
       return;
+    // A delayed acknowledgement for an already completed operation is not a
+    // new external edit. Ignore it unless it carries a newer, meaningful
+    // history/configuration snapshot.
+    if (
+      message.operationId &&
+      message.reason === "ack" &&
+      !this.sync.isPendingOperation(message.operationId) &&
+      this.pendingProfile?.operationId !== message.operationId
+    ) {
+      // ACKs are broadcast to every panel. An operation unknown to this
+      // panel may therefore be another panel's successful edit, not a stale
+      // notification. Ignore only an already-observed snapshot; a newer ACK
+      // is an ordinary authoritative external update for this panel.
+      if (
+        message.version < this.authoritativeVersion ||
+        (message.version === this.authoritativeVersion &&
+          message.markdown === this.authoritativeMarkdown)
+      )
+        return;
+    }
     const profileAck = Boolean(
       this.pendingProfile?.operationId &&
       this.pendingProfile.operationId === message.operationId,
@@ -7373,15 +7591,15 @@ export class MarkdownEditorApp {
       );
       this.operationId = message.operationId;
       if (hadPendingExternal) {
-        this.conflict = true;
-        this.syncPaused = true;
-        this.setConflict(
-          "A newer external update is waiting; the local draft was preserved.",
-        );
+        const external = this.pendingExternal;
+        if (!external) return;
+        this.pendingExternal = null;
+        this.reconcileExternalDocument(external);
         return;
       }
       this.conflict = false;
-      this.dirty = Boolean(this.sync.inflight || this.sync.queuedEdit);
+      this.syncPaused = false;
+      this.dirty = this.sync.hasPending;
       this.updateProfileSelect();
       this.updateEditingControlState();
       if (!this.sync.hasPending && message.markdown === this.currentMarkdown())
@@ -7389,18 +7607,48 @@ export class MarkdownEditorApp {
       this.flushDeferredHostCommand();
       return;
     }
+
+    const hadImplicitAck =
+      !message.operationId &&
+      this.sync.acknowledgeSnapshot(message.version, message.markdown, {
+        pauseQueue: hadPendingExternal,
+      });
+    if (hadImplicitAck) {
+      this.version = Math.max(this.version, message.version);
+      this.authoritativeMarkdown = message.markdown;
+      this.authoritativeProfile = message.profile;
+      this.authoritativeVersion = Math.max(
+        this.authoritativeVersion,
+        message.version,
+      );
+      if (this.pendingExternal) {
+        const external = this.pendingExternal;
+        this.pendingExternal = null;
+        this.reconcileExternalDocument(external);
+      } else {
+        this.dirty = this.sync.hasPending;
+        this.conflict = false;
+        this.syncPaused = false;
+        this.updateEditingControlState();
+        this.flushDeferredHostCommand();
+      }
+      return;
+    }
     if (this.isDuplicateAuthoritativeSnapshot(message)) {
       this.acceptDuplicateAuthoritativeSnapshot(message);
       return;
     }
     if (this.composing) {
-      this.pendingExternal = message;
-      this.statusEl.textContent = "External update waiting for IME composition";
+      this.rememberPendingExternal(message);
       return;
     }
     if (this.reloadRequested) {
       this.reloadRequested = false;
       this.applyDocument(message, { force: true });
+      return;
+    }
+    if (this.sync.hasBlockedConflict || this.conflict || this.syncPaused) {
+      this.reconcileExternalDocument(message);
       return;
     }
     if (this.sync.inflight || this.sync.queuedEdit || this.dirty) {
@@ -7410,27 +7658,159 @@ export class MarkdownEditorApp {
           ? "The document changed while this Alert dialog was open; nothing was updated."
           : undefined,
       );
-      this.pendingExternal = message;
-      // A profile/configuration broadcast can arrive with the same text while
-      // a local edit is in flight. Keep the local document, but retain the
-      // newer parsing metadata so the eventual conflict/reload does not
-      // silently revert the profile.
-      this.profile = message.profile;
-      this.resourceBaseUrl = message.resourceBaseUrl;
-      this.applyTypography(message.typography);
-      this.version = Math.max(this.version, message.version);
-      this.sync.setVersion(Math.max(this.sync.version, message.version));
-      this.refreshDerivedViews(this.lastValidMarkdown, undefined, {
-        renderPreview: false,
-        refreshCompatibility: false,
-      });
-      this.scheduleDerivedViews(this.lastValidMarkdown);
-      this.sync.markExternalConflict(
-        "A document changed externally while this draft was being edited.",
-      );
+      this.rememberPendingExternal(message);
       return;
     }
     this.applyDocument(message);
+  }
+
+  private receiveSaveSnapshot(message: DocumentMessage): void {
+    if (message.version < this.authoritativeVersion) return;
+    const localMarkdown = this.currentMarkdown();
+    const keepLocalDraft =
+      this.composing ||
+      this.sync.hasPending ||
+      this.dirty ||
+      localMarkdown !== message.markdown;
+    this.version = Math.max(this.version, message.version);
+    this.authoritativeMarkdown = message.markdown;
+    this.authoritativeProfile = message.profile;
+    this.authoritativeVersion = Math.max(
+      this.authoritativeVersion,
+      message.version,
+    );
+    this.profile = message.profile;
+    this.resourceBaseUrl = message.resourceBaseUrl;
+    this.applyTypography(message.typography);
+    this.sync.noteAuthoritative(message.version, message.markdown);
+    this.updateProfileSelect();
+    this.updateEditingControlState();
+    if (!keepLocalDraft) this.applyDocument(message);
+  }
+
+  private rememberPendingExternal(message: DocumentMessage): void {
+    if (
+      !this.pendingExternal ||
+      message.version >= this.pendingExternal.version
+    )
+      this.pendingExternal = message;
+  }
+
+  private reconcileExternalDocument(message: DocumentMessage): void {
+    if (this.serializationError || this.parseError) {
+      // There is no trustworthy Markdown snapshot to diff while serialization
+      // or parsing is failing. Keep the structured PM document and the incoming
+      // native snapshot separate until the representation recovers; guessing
+      // from the previous source could silently discard local input.
+      this.pendingExternal = message;
+      this.dirty = true;
+      this.setConflict(
+        this.serializationError
+          ? `The local draft could not be synchronized: ${this.serializationError}`
+          : "The external Markdown snapshot could not be opened in the rich editor.",
+      );
+      this.persistRecovery(
+        this.currentMarkdown(),
+        this.sync.draftBaseMarkdown,
+        this.sync.version,
+        true,
+      );
+      return;
+    }
+    // The profile is part of the authoritative TextDocument context. Preserve
+    // it even when the Markdown body can be merged without rebuilding the PM
+    // document, otherwise a delayed edit ACK can roll a profile change back.
+    if (message.profile !== this.profile) {
+      this.profile = message.profile;
+      this.updateProfileSelect();
+      this.updateEditingControlState();
+    }
+    const localMarkdown = this.currentMarkdown();
+    const result = this.sync.reconcileExternal(
+      message.version,
+      message.markdown,
+      localMarkdown,
+    );
+    this.applyReconciliation(message, result, localMarkdown);
+  }
+
+  private applyReconciliation(
+    message: DocumentMessage,
+    result: {
+      kind: "merged" | "accepted" | "conflict" | "ignored";
+      markdown: string;
+    },
+    localMarkdown: string,
+  ): void {
+    if (result.kind === "ignored") return;
+
+    if (result.kind === "conflict") {
+      this.pendingExternal = message;
+      this.dirty = true;
+      this.conflict = true;
+      this.syncPaused = true;
+      this.setConflict(
+        "The document changed externally and the local draft could not be merged automatically.",
+      );
+      return;
+    }
+
+    this.pendingExternal = null;
+    const localMatches = localMarkdown === result.markdown;
+    if (!localMatches) {
+      const { operationId: _operationId, ...withoutOperation } = message;
+      this.applyDocument(
+        {
+          ...withoutOperation,
+          markdown: result.markdown,
+          reason: "external",
+        },
+        { force: true },
+      );
+      if (this.parseError) {
+        // The merge itself is only a line-level safety check. If the resulting
+        // source cannot be represented by the rich parser, keep the local PM
+        // document and leave the native source snapshot pending rather than
+        // treating a failed display conversion as a successful sync.
+        this.pendingExternal = message;
+        this.dirty = true;
+        this.conflict = true;
+        this.syncPaused = true;
+        this.persistRecovery(
+          localMarkdown,
+          this.sync.draftBaseMarkdown,
+          this.sync.version,
+          true,
+        );
+        return;
+      }
+    }
+    this.authoritativeMarkdown = message.markdown;
+    this.authoritativeProfile = message.profile;
+    this.authoritativeVersion = Math.max(
+      this.authoritativeVersion,
+      message.version,
+    );
+    this.version = Math.max(this.version, message.version);
+    this.profile = message.profile;
+    this.resourceBaseUrl = message.resourceBaseUrl;
+    this.applyTypography(message.typography);
+    this.sync.noteAuthoritative(message.version, message.markdown);
+    this.conflict = false;
+    this.syncPaused = false;
+    this.dirty = result.kind === "merged";
+    this.updateProfileSelect();
+    this.updateEditingControlState();
+    if (result.kind === "merged") {
+      this.lastValidMarkdown = result.markdown;
+      this.serializedDocument = this.view.state.doc;
+      this.persistRecovery(result.markdown, message.markdown, message.version);
+      if (this.vscode && this.initialized && !this.previewOnly)
+        this.sync.enqueue(result.markdown);
+    } else {
+      this.clearRecoveryIfSaved();
+    }
+    this.flushDeferredHostCommand();
   }
 
   private isDuplicateAuthoritativeSnapshot(message: DocumentMessage): boolean {
@@ -7606,6 +7986,8 @@ export class MarkdownEditorApp {
           normalizedSnapshot.snapshot ?? normalizedSnapshot;
       this.view.setProps({ editable: () => !this.previewOnly });
       this.parseError = null;
+      this.serializationError = null;
+      this.lastNotificationKey = null;
       this.preservedSource = null;
       this.dirty = false;
       this.conflict = false;
@@ -7615,6 +7997,7 @@ export class MarkdownEditorApp {
       this.serializedDocument = this.view.state.doc;
       this.pendingExternal = null;
       this.sync.setVersion(this.version);
+      this.sync.noteAuthoritative(this.version, message.markdown);
       this.sync.clear();
       this.refreshDerivedViews(message.markdown, undefined, {
         // Entering the preview panel is a display event, so make its first
@@ -7646,6 +8029,7 @@ export class MarkdownEditorApp {
     try {
       parsed = this.core.parseMarkdown(message.markdown, this.profile);
       this.parseError = null;
+      this.lastNotificationKey = null;
       this.preservedSource = null;
     } catch (error) {
       this.parseError =
@@ -7655,10 +8039,25 @@ export class MarkdownEditorApp {
       this.preservedSource = message.markdown;
       this.view.setProps({ editable: () => false });
       this.syncPaused = true;
+      this.sync.noteAuthoritative(message.version, message.markdown);
       this.sourceEl.value = message.markdown;
       if (message.mode !== "preview")
         this.previewEl.textContent = message.markdown;
-      this.setNotice("Read-only: " + this.parseError, "error");
+      if (message.mode !== "preview") {
+        this.setMode("source", false);
+        // A parser exception only disables the rich representation. Keep the
+        // raw source visible and hand editing to VS Code's native source
+        // editor, where the unsupported document remains fully editable.
+        this.vscode?.postMessage({
+          protocolVersion: PROTOCOL_VERSION,
+          type: "source",
+          operationId: newOperationId(),
+        });
+      }
+      this.notifyHost(
+        "error",
+        `Markdown could not be opened in the rich editor: ${this.parseError}`,
+      );
       if (abortedAlertEdit)
         this.setNotice(
           "The document changed while this Alert dialog was open; nothing was updated.",
@@ -7702,9 +8101,12 @@ export class MarkdownEditorApp {
     this.syncPaused = false;
     this.reloadRequested = false;
     this.lastValidMarkdown = message.markdown;
+    this.serializationError = null;
+    this.lastNotificationKey = null;
     this.serializedDocument = this.view.state.doc;
     this.pendingExternal = null;
     this.sync.setVersion(this.version);
+    this.sync.noteAuthoritative(this.version, message.markdown);
     this.sync.clear();
     this.refreshDerivedViews(message.markdown, undefined, {
       renderPreview: message.mode === "preview" || this.mode === "preview",
@@ -7732,102 +8134,170 @@ export class MarkdownEditorApp {
     if (!this.pendingExternal) return;
     const external = this.pendingExternal;
     this.pendingExternal = null;
-    if (this.sync.inflight || this.sync.queuedEdit || this.dirty) {
-      this.sync.markExternalConflict(
-        "External update was kept pending so local IME input is not lost.",
-      );
+    // An edit acknowledgement may still be in flight after composition ends.
+    // Keep the external snapshot until that acknowledgement gives us the
+    // original base and the latest local draft for a three-way merge.
+    if (this.sync.hasPending) {
       this.pendingExternal = external;
+      return;
+    }
+    if (this.dirty) {
+      this.pendingExternal = external;
+      this.reconcileExternalDocument(external);
       return;
     }
     this.applyDocument(external);
   }
 
-  private persistRecovery(markdown: string): void {
-    this.vscode?.setState?.({
+  private persistRecovery(
+    markdown: string,
+    baseMarkdown = this.authoritativeMarkdown,
+    baseVersion = this.authoritativeVersion,
+    includeDocument = false,
+  ): void {
+    if (!this.vscode?.setState) return;
+    const state: RecoveryState = {
       recoveryDraft: markdown,
+      recoveryBaseMarkdown: baseMarkdown,
+      recoveryBaseVersion: baseVersion,
       recoveryVersion: this.version,
       recoveryProfile: this.profile,
       recoveryTimestamp: Date.now(),
-    } satisfies RecoveryState);
+      ...(this.documentId ? { documentId: this.documentId } : {}),
+    };
+    if (includeDocument) {
+      try {
+        state.recoveryDocument = this.view.state.doc.toJSON();
+      } catch {
+        // Markdown and provenance remain useful even if a future node type is
+        // not JSON serializable.
+      }
+    }
+    this.vscode.setState(state satisfies RecoveryState);
+  }
+
+  private recoveryBelongsToCurrentDocument(saved: RecoveryState): boolean {
+    if (this.documentId !== undefined)
+      return saved.documentId === this.documentId;
+    return saved.documentId === undefined;
+  }
+
+  private recoveryBaseMatchesCurrent(saved: RecoveryState): boolean {
+    if (saved.recoveryBaseMarkdown !== undefined)
+      return (
+        saved.recoveryBaseMarkdown === this.authoritativeMarkdown &&
+        (saved.recoveryBaseVersion === undefined ||
+          saved.recoveryBaseVersion <= this.authoritativeVersion)
+      );
+    return saved.recoveryVersion === this.version;
   }
 
   private restoreRecoveryState(): void {
     const saved = this.vscode?.getState?.() as RecoveryState | undefined;
-    if (!saved?.recoveryDraft || saved.recoveryDraft === this.currentMarkdown())
-      return;
-    this.recoverButton.hidden = false;
-    this.setTooltip(
-      this.recoverButton,
-      `Draft from ${saved.recoveryTimestamp ? new Date(saved.recoveryTimestamp).toLocaleString() : "an earlier session"}`,
-    );
-    this.statusEl.textContent = "A recoverable local draft is available";
-  }
-
-  private applyRecoveryDraft(): void {
-    const saved = this.vscode?.getState?.() as RecoveryState | undefined;
-    if (!saved?.recoveryDraft) return;
-    const profile = saved.recoveryProfile ?? this.profile;
-    let parsed: ParseResult;
-    try {
-      parsed = this.core.parseMarkdown(saved.recoveryDraft, profile);
-    } catch (error) {
-      this.setConflict(
-        error instanceof Error
-          ? error.message
-          : "Recovered draft could not be parsed.",
-      );
+    if (!saved || typeof saved.recoveryDraft !== "string") return;
+    if (!this.recoveryBelongsToCurrentDocument(saved)) return;
+    if (saved.recoveryDraft === this.currentMarkdown()) {
+      this.clearRecoveryIfSaved();
       return;
     }
-    this.profile = profile;
-    this.previousSnapshot = parsed.snapshot ?? parsed;
-    const prepared = prepareStarterDocument(
-      saved.recoveryDraft,
-      parsed.doc,
-      this.schema,
-    );
-    this.starterOriginalSource = saved.recoveryDraft;
+    // Recovery is automatic only when the draft records the exact
+    // authoritative document it was based on. A changed document is left in
+    // storage for diagnostics/host-side recovery, never silently overwritten.
+    if (
+      (saved.recoveryProfile ?? this.profile) !== this.profile ||
+      !this.recoveryBaseMatchesCurrent(saved)
+    )
+      return;
+    this.restoreRecoveryDraft(saved);
+  }
+
+  private restoreRecoveryDraft(saved: RecoveryState): void {
+    const draft = saved.recoveryDraft;
+    if (draft === undefined) return;
+    const profile = saved.recoveryProfile ?? this.profile;
+    let editorDoc: PMNode | undefined;
+    let snapshot: unknown;
+    let starterState: StarterPluginState | undefined;
+    if (saved.recoveryDocument !== undefined) {
+      try {
+        editorDoc = PMNode.fromJSON(this.schema, saved.recoveryDocument);
+      } catch {
+        editorDoc = undefined;
+      }
+    }
+    if (!editorDoc) {
+      try {
+        const parsed = this.core.parseMarkdown(draft, profile);
+        const prepared = prepareStarterDocument(draft, parsed.doc, this.schema);
+        editorDoc = prepared.doc;
+        starterState = prepared.state;
+        snapshot = parsed.snapshot ?? parsed;
+      } catch (error) {
+        this.notifyHost(
+          "error",
+          error instanceof Error
+            ? `The saved Markdown draft could not be restored: ${error.message}`
+            : "The saved Markdown draft could not be restored.",
+        );
+        return;
+      }
+    }
+
     let recoveryState = EditorState.create({
       schema: this.schema,
-      doc: prepared.doc,
+      doc: editorDoc,
       plugins: this.view.state.plugins,
     });
-    recoveryState = recoveryState.apply(
-      setStarterMeta(recoveryState.tr, prepared.state),
-    );
+    if (starterState)
+      recoveryState = recoveryState.apply(
+        setStarterMeta(recoveryState.tr, starterState),
+      );
     this.view.updateState(recoveryState);
+    this.profile = profile;
+    this.previousSnapshot = snapshot;
+    this.starterOriginalSource = draft;
     this.parseError = null;
+    this.serializationError = null;
     this.preservedSource = null;
-    this.lastValidMarkdown = saved.recoveryDraft;
+    this.lastValidMarkdown = draft;
     this.serializedDocument = this.view.state.doc;
-    this.syncPaused = true;
-    this.conflict = true;
+    this.dirty = true;
+    this.conflict = false;
+    this.syncPaused = false;
+    this.documentGeneration += 1;
+    this.sync.clear();
+    this.sync.noteAuthoritative(
+      this.authoritativeVersion,
+      this.authoritativeMarkdown,
+    );
     this.view.setProps({ editable: () => !this.previewOnly });
-    const operationId = newOperationId();
-    this.pendingRecoveryOperationId = operationId;
-    this.vscode?.postMessage({
-      protocolVersion: PROTOCOL_VERSION,
-      type: "recoverDraft",
-      baseVersion: this.version,
-      operationId,
-      markdown: saved.recoveryDraft,
-    });
-    this.recoverButton.hidden = true;
-    this.statusEl.textContent = this.vscode
-      ? "Applying recovered draft…"
-      : "Recovered draft loaded locally.";
-    this.refreshDerivedViews(saved.recoveryDraft, undefined, {
+    this.refreshDerivedViews(draft, undefined, {
       renderPreview: this.mode === "preview",
       refreshCompatibility: false,
     });
-    this.scheduleDerivedViews(saved.recoveryDraft);
+    this.scheduleDerivedViews(draft);
+    this.updateProfileSelect();
+    this.updateEditingControlState();
+    this.persistRecovery(
+      draft,
+      this.authoritativeMarkdown,
+      this.authoritativeVersion,
+    );
+    if (this.vscode && this.initialized && !this.previewOnly)
+      this.sync.enqueue(draft);
   }
 
   private clearRecoveryIfSaved(): void {
+    if (this.serializationError) return;
     const saved = this.vscode?.getState?.() as RecoveryState | undefined;
-    if (!saved?.recoveryDraft || saved.recoveryDraft !== this.currentMarkdown())
+    if (
+      !saved ||
+      typeof saved.recoveryDraft !== "string" ||
+      !this.recoveryBelongsToCurrentDocument(saved) ||
+      saved.recoveryDraft !== this.currentMarkdown()
+    )
       return;
     this.vscode?.setState?.({});
-    this.recoverButton.hidden = true;
   }
 
   private handleCopy(view: EditorView, event: ClipboardEvent): boolean {

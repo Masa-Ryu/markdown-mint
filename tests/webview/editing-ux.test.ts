@@ -357,9 +357,7 @@ describe("emoji picker", () => {
     second.app.view.dispatch(second.app.view.state.tr.insertText("!"));
     secondDialog.querySelector<HTMLButtonElement>('[data-emoji="🚀"]')!.click();
     expect(edits(second.messages)).toHaveLength(1);
-    expect(second.root.querySelector(".mm-status")?.textContent).toContain(
-      "document changed",
-    );
+    expect(second.root.querySelector(".mm-status")).toBeNull();
     expect(document.activeElement).toBe(secondButton);
   });
 });

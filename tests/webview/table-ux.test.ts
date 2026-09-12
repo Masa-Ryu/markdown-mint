@@ -261,9 +261,7 @@ describe("table insertion dialog", () => {
     const before = messageType(messages, "edit").length;
     root.querySelector<HTMLButtonElement>(".mm-dialog-primary")!.click();
     expect(messageType(messages, "edit")).toHaveLength(before);
-    expect(root.querySelector(".mm-status")?.textContent).toContain(
-      "document changed",
-    );
+    expect(root.querySelector(".mm-status")).toBeNull();
   });
 
   it("grows and shrinks one preview rectangle without leaving a selected corner or restoring through a grid gap", () => {
@@ -369,9 +367,7 @@ describe("table insertion dialog", () => {
     const before = messageType(messages, "edit").length;
     target.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
     expect(messageType(messages, "edit")).toHaveLength(before);
-    expect(root.querySelector(".mm-status")?.textContent).toContain(
-      "document changed",
-    );
+    expect(root.querySelector(".mm-status")).toBeNull();
   });
 
   it("keeps numeric dimensions at 20×50 while the visual grid remains 8×6", () => {

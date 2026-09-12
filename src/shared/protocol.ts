@@ -7,6 +7,7 @@ export const PROTOCOL_VERSION = 1 as const;
 export const MAX_MARKDOWN_LENGTH = 2_000_000;
 export const MAX_OPERATION_ID_LENGTH = 160;
 export const MAX_RESOURCE_URL_LENGTH = 8_192;
+export const MAX_DOCUMENT_ID_LENGTH = 2_048;
 export const MAX_CLIPBOARD_TEXT_LENGTH = MAX_MARKDOWN_LENGTH;
 
 export const MARKDOWN_PROFILES = ["github", "gitlab", "commonmark"] as const;
@@ -42,6 +43,8 @@ export interface DocumentMessage {
   /** VS Code's monotonically increasing TextDocument version. */
   readonly version: number;
   readonly profile: MarkdownProfile;
+  /** Stable resource identity used to scope persisted recovery data. */
+  readonly documentId?: string;
   readonly operationId?: string;
   readonly reason?: HostDocumentReason;
   /** A webview URI for the document directory, when the document is local. */
@@ -50,7 +53,7 @@ export interface DocumentMessage {
   /** Whether the host can provide the authoritative VS Code clipboard route. */
   readonly clipboardAvailable?: boolean;
   readonly typography?: PreviewTypography;
-  /** A rejected, unsaved draft may be displayed for recovery, never applied implicitly. */
+  /** A rejected, unsaved draft may be retained for provenance-aware recovery. */
   readonly draftMarkdown?: string;
 }
 
@@ -74,7 +77,7 @@ export interface EditRejectedMessage {
   readonly message: string;
   readonly currentMarkdown: string;
   readonly currentVersion: number;
-  /** The submitted draft is retained only for explicit recovery UI. */
+  /** The submitted draft is retained so the webview can protect local input. */
   readonly draftMarkdown?: string;
   readonly diagnostics?: readonly string[];
 }
@@ -184,6 +187,10 @@ export interface SaveResultMessage {
   readonly type: "save-result";
   readonly operationId: string;
   readonly saved: boolean;
+  /** Version observed when the save request was accepted. */
+  readonly requestedVersion: number;
+  /** Version known to have reached disk, when it can be identified safely. */
+  readonly savedVersion?: number;
   readonly version: number;
   readonly isDirty: boolean;
   readonly message?: string;
@@ -204,6 +211,14 @@ export interface RecoverDraftMessage {
   readonly markdown: string;
 }
 
+export interface UserNotificationMessage {
+  readonly protocolVersion: typeof PROTOCOL_VERSION;
+  readonly type: "notify";
+  readonly level: "info" | "warning" | "error";
+  readonly message: string;
+  readonly operationId?: string;
+}
+
 export type WebviewMessage =
   | ReadyMessage
   | EditMessage
@@ -215,7 +230,8 @@ export type WebviewMessage =
   | SaveMessage
   | PreviewRequestMessage
   | RecoverDraftMessage
-  | ClipboardWriteMessage;
+  | ClipboardWriteMessage
+  | UserNotificationMessage;
 
 export type HostMessage =
   | DocumentMessage
@@ -263,6 +279,7 @@ export function isDocumentMessage(value: unknown): value is DocumentMessage {
     isVersion(value.version) &&
     isMarkdownProfile(value.profile) &&
     optionalString(value.operationId) &&
+    optionalDocumentId(value.documentId) &&
     optionalReason(value.reason) &&
     optionalResourceUrl(value.resourceBaseUrl) &&
     optionalMode(value.mode) &&
@@ -316,6 +333,8 @@ export function isHostMessage(value: unknown): value is HostMessage {
     return (
       isOperationId(value.operationId) &&
       typeof value.saved === "boolean" &&
+      isVersion(value.requestedVersion) &&
+      optionalVersion(value.savedVersion) &&
       isVersion(value.version) &&
       typeof value.isDirty === "boolean" &&
       optionalString(value.message)
@@ -480,6 +499,23 @@ export function parseWebviewMessage(
             text: value.text,
           }
         : undefined;
+    case "notify":
+      return (value.level === "info" ||
+        value.level === "warning" ||
+        value.level === "error") &&
+        typeof value.message === "string" &&
+        value.message.length <= 1_024 &&
+        optionalString(value.operationId)
+        ? {
+            protocolVersion: PROTOCOL_VERSION,
+            type: "notify",
+            level: value.level,
+            message: value.message,
+            ...(value.operationId === undefined
+              ? {}
+              : { operationId: value.operationId }),
+          }
+        : undefined;
     default:
       return undefined;
   }
@@ -522,6 +558,15 @@ function optionalResourceUrl(value: unknown): value is string | undefined {
   return (
     value === undefined ||
     (typeof value === "string" && value.length <= MAX_RESOURCE_URL_LENGTH)
+  );
+}
+
+function optionalDocumentId(value: unknown): value is string | undefined {
+  return (
+    value === undefined ||
+    (typeof value === "string" &&
+      value.length > 0 &&
+      value.length <= MAX_DOCUMENT_ID_LENGTH)
   );
 }
 

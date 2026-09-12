@@ -1251,47 +1251,23 @@ body.vscode-high-contrast-light .mm-empty-line-insert {
   line-height: 1.5;
 }
 
-.mm-statusbar {
-  display: flex;
-  flex-shrink: 0;
-  min-height: 29px;
-  align-items: center;
-  gap: 14px;
-  padding: 4px 12px;
-  border-top: 1px solid var(--vscode-panel-border, rgba(127, 127, 127, 0.25));
-  color: var(
-    --vscode-statusBar-foreground,
-    var(--vscode-descriptionForeground, #9da5b4)
-  );
-  background: var(--vscode-statusBar-background, rgba(127, 127, 127, 0.08));
-}
-.mm-status {
-  white-space: nowrap;
-}
-.mm-status[data-state="pending"] {
-  color: var(--vscode-charts-yellow, #cca700);
-}
-.mm-status[data-state="conflict"],
-.mm-compatibility {
-  color: var(--vscode-editorWarning-foreground, #cca700);
-}
-.mm-compatibility {
-  display: inline-flex;
+.mm-toolbar-primary > .mm-compatibility {
+  display: none;
   min-width: 0;
+  max-width: min(46vw, 520px);
+  margin-left: auto;
   align-items: center;
   gap: 5px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  color: var(--vscode-editorWarning-foreground, #cca700);
+}
+.mm-toolbar-primary > .mm-compatibility:not(:empty) {
+  display: inline-flex;
 }
 .mm-compatibility-icon {
   flex: 0 0 auto;
-}
-.mm-recover {
-  margin-left: auto;
-  padding: 3px 8px;
-  color: var(--vscode-textLink-foreground, #3794ff);
-  cursor: pointer;
 }
 
 @media (max-width: 760px) {
@@ -1304,10 +1280,7 @@ body.vscode-high-contrast-light .mm-empty-line-insert {
   .mm-toolbar-separator {
     margin-inline: 1px;
   }
-  .mm-statusbar {
-    gap: 8px;
-  }
-  .mm-compatibility {
+  .mm-toolbar-primary > .mm-compatibility {
     max-width: 46vw;
   }
 }

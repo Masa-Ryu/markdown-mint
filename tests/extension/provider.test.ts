@@ -184,6 +184,10 @@ const vscode = vi.hoisted(() => {
   const redoTexts: string[] = [];
   const panel = new WebviewPanel();
   const outputLines: string[] = [];
+  const userNotifications: Array<{
+    level: "info" | "warning" | "error";
+    message: string;
+  }> = [];
   const configurationUpdates: Array<{
     section: string;
     key: string;
@@ -210,7 +214,18 @@ const vscode = vi.hoisted(() => {
     createWebviewPanel(): WebviewPanel {
       return new WebviewPanel();
     },
-    async showInformationMessage(): Promise<string | undefined> {
+    async showInformationMessage(
+      message?: string,
+    ): Promise<string | undefined> {
+      if (message) userNotifications.push({ level: "info", message });
+      return undefined;
+    },
+    async showWarningMessage(message: string): Promise<string | undefined> {
+      userNotifications.push({ level: "warning", message });
+      return undefined;
+    },
+    async showErrorMessage(message: string): Promise<string | undefined> {
+      userNotifications.push({ level: "error", message });
       return undefined;
     },
     createOutputChannel(name: string): {
@@ -441,6 +456,7 @@ const vscode = vi.hoisted(() => {
   };
   const reset = (): void => {
     document.reset("# Original");
+    document.save = TextDocument.prototype.save.bind(document);
     document.eol = 1;
     previousTexts.length = 0;
     redoTexts.length = 0;
@@ -450,6 +466,7 @@ const vscode = vi.hoisted(() => {
     workspaceState.profile = "github";
     workspaceState.prettierOptions = {};
     outputLines.length = 0;
+    userNotifications.length = 0;
     configurationUpdates.length = 0;
     commandCalls.length = 0;
     openWithError = undefined;
@@ -484,6 +501,7 @@ const vscode = vi.hoisted(() => {
       reset,
       workspaceState,
       outputLines,
+      userNotifications,
       configurationUpdates,
       commandCalls,
       get openWithError(): Error | undefined {
@@ -824,13 +842,6 @@ describe("MarkdownMintEditorProvider", () => {
         draftMarkdown: "# Lost",
       }),
     );
-    expect(vscode.__state.panel.webview.messages).toContainEqual(
-      expect.objectContaining({
-        type: "document",
-        reason: "recovery",
-        draftMarkdown: "# Lost",
-      }),
-    );
     provider.dispose();
   });
 
@@ -965,6 +976,111 @@ describe("MarkdownMintEditorProvider", () => {
         operationId: "save:test",
       }),
     );
+    provider.dispose();
+  });
+
+  it("keeps a successful save distinct from input that lands while it is running", async () => {
+    vscode.__state.reset();
+    const provider = new MarkdownMintEditorProvider(context() as never);
+    const document = vscode.__state.document;
+    await provider.resolveCustomTextEditor(
+      document as never,
+      vscode.__state.panel as never,
+      {} as never,
+    );
+    vscode.__state.panel.webview.receive({ protocolVersion: 1, type: "ready" });
+    await flush();
+
+    let markStarted!: () => void;
+    let releaseSave!: () => void;
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+    const saveGate = new Promise<void>((resolve) => {
+      releaseSave = resolve;
+    });
+    document.save = async (): Promise<boolean> => {
+      document.isDirty = false;
+      markStarted();
+      await saveGate;
+      return true;
+    };
+    const requestedVersion = document.version;
+    vscode.__state.panel.webview.receive({
+      protocolVersion: 1,
+      type: "save",
+      baseVersion: requestedVersion,
+      operationId: "save:during-edit",
+    });
+    await started;
+
+    vscode.__state.emitTextChangeWithoutChanges("# Typed during save");
+    releaseSave();
+    await flush();
+    await flush();
+
+    const result = vscode.__state.panel.webview.messages.find(
+      (message: any) =>
+        message.type === "save-result" &&
+        message.operationId === "save:during-edit",
+    ) as any;
+    expect(document.getText()).toBe("# Typed during save");
+    expect(result).toMatchObject({
+      type: "save-result",
+      operationId: "save:during-edit",
+      saved: true,
+      requestedVersion,
+      version: document.version,
+      isDirty: true,
+    });
+    expect(result.savedVersion).toBeUndefined();
+    expect(vscode.__state.userNotifications).toHaveLength(0);
+    provider.dispose();
+  });
+
+  it("reports a real save failure without claiming that the source was saved", async () => {
+    vscode.__state.reset();
+    const provider = new MarkdownMintEditorProvider(context() as never);
+    const document = vscode.__state.document;
+    await provider.resolveCustomTextEditor(
+      document as never,
+      vscode.__state.panel as never,
+      {} as never,
+    );
+    vscode.__state.panel.webview.receive({ protocolVersion: 1, type: "ready" });
+    await flush();
+    document.replaceText("# Still unsaved");
+    const requestedVersion = document.version;
+    document.save = async (): Promise<boolean> => false;
+    vscode.__state.panel.webview.receive({
+      protocolVersion: 1,
+      type: "save",
+      baseVersion: requestedVersion,
+      operationId: "save:failed",
+    });
+    await flush();
+
+    expect(document.getText()).toBe("# Still unsaved");
+    expect(vscode.__state.panel.webview.messages).toContainEqual(
+      expect.objectContaining({
+        type: "save-result",
+        operationId: "save:failed",
+        saved: false,
+        requestedVersion,
+        isDirty: true,
+      }),
+    );
+    expect(
+      vscode.__state.userNotifications.some(
+        (entry: { level: string; message: string }) =>
+          entry.level === "error" && entry.message.includes("did not save"),
+      ),
+    ).toBe(true);
+    expect(
+      vscode.__state.outputLines.some((line: string) =>
+        line.startsWith("[save]"),
+      ),
+    ).toBe(true);
     provider.dispose();
   });
 

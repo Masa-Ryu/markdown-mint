@@ -159,6 +159,7 @@
           case 'format': return versionValue(value.baseVersion) && safeOperation(value.operationId);
           case 'preview': return optionalVersion(value.baseVersion) && optionalString(value.operationId);
           case 'recoverDraft': return versionValue(value.baseVersion) && safeOperation(value.operationId) && safeMarkdown(value.markdown);
+          case 'notify': return (value.level === 'info' || value.level === 'warning' || value.level === 'error') && typeof value.message === 'string' && value.message.length <= 1024 && optionalString(value.operationId);
           default: return false;
         }
       };
