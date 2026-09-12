@@ -10,6 +10,7 @@ import {
   highlightCodeSpans,
   renderAdvancedBlock,
 } from "../core/visualRendering";
+import type { HighlightSpan } from "../core/visualRendering";
 import type { Profile } from "../core/index";
 import {
   enhanceRenderedContent,
@@ -19,7 +20,21 @@ import {
 export { enhanceRenderedContent };
 export type { RenderingEnhancer };
 
-const renderingPluginKey = new PluginKey<DecorationSet>(
+interface CodeHighlightState {
+  node: PMNode;
+  position: number;
+  source: string;
+  language: string;
+  spans: HighlightSpan[];
+}
+
+interface RenderingPluginState {
+  decorations: DecorationSet;
+  codeBlocks: CodeHighlightState[];
+  profile: Profile;
+}
+
+const renderingPluginKey = new PluginKey<RenderingPluginState>(
   "markdown-mint-rendering",
 );
 
@@ -83,49 +98,201 @@ function footnoteDecoration(
   return widget;
 }
 
-function renderingDecorations(
+function baseRenderingDecorations(
   state: EditorState,
   getProfile?: () => Profile,
-): DecorationSet {
+): { profile: Profile; decorations: Decoration[] } {
   const profile = getProfile?.() ?? "github";
   const decorations: Decoration[] = headingDecorations(state, profile);
   const footnotes = footnoteDecoration(state, profile);
   if (footnotes) decorations.push(footnotes);
+  return { profile, decorations };
+}
+
+function collectCodeBlocks(state: EditorState): Array<{
+  node: PMNode;
+  position: number;
+  source: string;
+  language: string;
+}> {
+  const codeBlocks: Array<{
+    node: PMNode;
+    position: number;
+    source: string;
+    language: string;
+  }> = [];
   state.doc.descendants((node, position) => {
     if (node.type.name !== "code_block") return true;
-    const source = node.textContent;
-    const language = String(node.attrs.params ?? "");
-    for (const span of highlightCodeSpans(source, language)) {
-      const from = position + 1 + Math.max(0, span.from);
-      const to = Math.min(position + node.nodeSize - 1, position + 1 + span.to);
-      if (to > from)
-        decorations.push(
-          Decoration.inline(from, to, {
-            class: span.className,
-            "data-mm-syntax": "true",
-          }),
-        );
-    }
+    codeBlocks.push({
+      node,
+      position,
+      source: node.textContent,
+      language: String(node.attrs.params ?? ""),
+    });
     return false;
   });
-  return DecorationSet.create(state.doc, decorations);
+  return codeBlocks;
+}
+
+function sameCodeBlockInputs(
+  left: CodeHighlightState[],
+  right: Array<{
+    node: PMNode;
+    position: number;
+    source: string;
+    language: string;
+  }>,
+): boolean {
+  return (
+    left.length === right.length &&
+    left.every(
+      (previous, index) =>
+        previous.node === right[index]!.node &&
+        previous.source === right[index]!.source &&
+        previous.language === right[index]!.language,
+    )
+  );
+}
+
+function takeReusableCodeBlock(
+  block: {
+    node: PMNode;
+    position: number;
+    source: string;
+    language: string;
+  },
+  previous: CodeHighlightState[] | undefined,
+  used: Set<CodeHighlightState>,
+): CodeHighlightState | undefined {
+  if (!previous) return undefined;
+  const byNode = previous.find(
+    (candidate) =>
+      !used.has(candidate) &&
+      candidate.node === block.node &&
+      candidate.source === block.source &&
+      candidate.language === block.language,
+  );
+  if (byNode) return byNode;
+  return previous.find(
+    (candidate) =>
+      !used.has(candidate) &&
+      candidate.source === block.source &&
+      candidate.language === block.language,
+  );
+}
+
+function codeDecorations(block: CodeHighlightState): Decoration[] {
+  return block.spans.flatMap((span) => {
+    const from = block.position + 1 + Math.max(0, span.from);
+    const to = Math.min(
+      block.position + block.node.nodeSize - 1,
+      block.position + 1 + span.to,
+    );
+    return to > from
+      ? [
+          Decoration.inline(
+            from,
+            to,
+            {
+              class: span.className,
+              "data-mm-syntax": "true",
+            },
+            { "data-mm-syntax": "true" },
+          ),
+        ]
+      : [];
+  });
+}
+
+function renderingDecorations(
+  state: EditorState,
+  getProfile?: () => Profile,
+  previous?: CodeHighlightState[],
+): RenderingPluginState {
+  const base = baseRenderingDecorations(state, getProfile);
+  const codeBlocks: CodeHighlightState[] = [];
+  const used = new Set<CodeHighlightState>();
+  for (const block of collectCodeBlocks(state)) {
+    const reusable = takeReusableCodeBlock(block, previous, used);
+    if (reusable) used.add(reusable);
+    const spans =
+      reusable?.spans ?? highlightCodeSpans(block.source, block.language);
+    const current = { ...block, spans };
+    codeBlocks.push(current);
+    base.decorations.push(...codeDecorations(current));
+  }
+  return {
+    profile: base.profile,
+    decorations: DecorationSet.create(state.doc, base.decorations),
+    codeBlocks,
+  };
 }
 
 export function createRenderingPlugin(
   getProfile?: () => Profile,
-): Plugin<DecorationSet> {
-  return new Plugin<DecorationSet>({
+): Plugin<RenderingPluginState> {
+  return new Plugin<RenderingPluginState>({
     key: renderingPluginKey,
     state: {
       init: (_config, state) => renderingDecorations(state, getProfile),
-      apply: (transaction, decorations, _oldState, newState) =>
-        transaction.docChanged
-          ? renderingDecorations(newState, getProfile)
-          : decorations.map(transaction.mapping, newState.doc),
+      apply: (transaction, renderingState, oldState, newState) => {
+        if (!transaction.docChanged)
+          return {
+            ...renderingState,
+            decorations: renderingState.decorations.map(
+              transaction.mapping,
+              newState.doc,
+            ),
+            codeBlocks: renderingState.codeBlocks.map((block) => ({
+              ...block,
+              position: transaction.mapping.map(block.position, 1),
+            })),
+          };
+
+        const profile = getProfile?.() ?? "github";
+        const nextCodeBlocks = collectCodeBlocks(newState);
+        if (
+          profile === renderingState.profile &&
+          sameCodeBlockInputs(renderingState.codeBlocks, nextCodeBlocks)
+        ) {
+          // Heading anchors and footnote widgets depend on the full document,
+          // so rebuild those decorations. Code spans are independent of that
+          // context and can be moved by ProseMirror's mapping instead.
+          const mapped = renderingState.decorations.map(
+            transaction.mapping,
+            newState.doc,
+          );
+          const base = baseRenderingDecorations(newState, getProfile);
+          const codeBlocks = nextCodeBlocks.map((block, index) => ({
+            ...block,
+            spans: renderingState.codeBlocks[index]!.spans,
+          }));
+          base.decorations.push(
+            ...mapped
+              .find()
+              .filter(
+                (decoration) =>
+                  (decoration.spec as Record<string, unknown>)[
+                    "data-mm-syntax"
+                  ] === "true",
+              ),
+          );
+          return {
+            profile,
+            decorations: DecorationSet.create(newState.doc, base.decorations),
+            codeBlocks,
+          };
+        }
+        return renderingDecorations(
+          newState,
+          getProfile,
+          renderingState.codeBlocks,
+        );
+      },
     },
     props: {
       decorations: (state) =>
-        renderingPluginKey.getState(state) ?? DecorationSet.empty,
+        renderingPluginKey.getState(state)?.decorations ?? DecorationSet.empty,
     },
   });
 }
@@ -144,10 +311,12 @@ interface CoreWithNodeRenderer {
 }
 
 export type AlertBoundaryDirection = "before" | "after";
+export type AlertHistoryCommand = "undo" | "redo";
 export type AlertBoundaryExit = (
   direction: AlertBoundaryDirection,
   position: number,
 ) => boolean;
+export const ALERT_LOCAL_INPUT_META = "markdown-mint-alert-local-input";
 
 function dependsOnDocumentContext(node: PMNode): boolean {
   if (node.type.name !== "raw_block" && node.type.name !== "raw_inline")
@@ -275,6 +444,7 @@ export function createAlertNodeView(
   getPos: (() => number | undefined) | undefined,
   getProfile?: () => Profile,
   onBoundaryExit?: AlertBoundaryExit,
+  onHistoryCommand?: (command: AlertHistoryCommand) => boolean,
 ): NodeView {
   let current = node;
   let lastDocument = view.state.doc;
@@ -340,10 +510,12 @@ export function createAlertNodeView(
     lastLocalSource = source;
     try {
       view.dispatch(
-        view.state.tr.setNodeMarkup(position, undefined, {
-          ...currentNode.attrs,
-          source,
-        }),
+        view.state.tr
+          .setNodeMarkup(position, undefined, {
+            ...currentNode.attrs,
+            source,
+          })
+          .setMeta(ALERT_LOCAL_INPUT_META, true),
       );
     } catch (error) {
       // A failed dispatch must not make a later external update look local.
@@ -393,6 +565,9 @@ export function createAlertNodeView(
   };
 
   bodyEditor.addEventListener("mousedown", (event) => event.stopPropagation());
+  // NodeView stopEvent handling can keep the editor-level composition state
+  // from seeing events from this native textarea. Track the textarea itself so
+  // a synthetic/native IME event cannot trigger alert boundary navigation.
   bodyEditor.addEventListener("compositionstart", () => {
     bodyComposing = true;
   });
@@ -407,14 +582,25 @@ export function createAlertNodeView(
       event.stopPropagation();
       return;
     }
-    if (
-      bodyComposing ||
-      event.isComposing ||
-      event.shiftKey ||
-      event.ctrlKey ||
-      event.metaKey ||
-      event.altKey
-    )
+    if (event.isComposing || bodyComposing) return;
+    const modifier = event.ctrlKey || event.metaKey;
+    if (modifier && !event.altKey) {
+      const key = event.key.toLowerCase();
+      const history =
+        key === "z"
+          ? event.shiftKey
+            ? "redo"
+            : "undo"
+          : key === "y"
+            ? "redo"
+            : null;
+      if (history && onHistoryCommand?.(history)) {
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
+    }
+    if (event.shiftKey || event.ctrlKey || event.metaKey || event.altKey)
       return;
     if (bodyEditor.selectionStart !== bodyEditor.selectionEnd) return;
     const direction =

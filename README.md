@@ -1,140 +1,122 @@
 # Markdown Mint
 
-Markdown Mint is a development VS Code extension for editing Markdown as a
-structured document while keeping the Markdown text document authoritative. It
-provides a ProseMirror-based editor surface, a dedicated preview, and a shared
-typography/media stylesheet contribution for the built-in VS Code Markdown
-preview.
+**Write visually. Stay in Markdown.**
 
-The extension is currently a development build. `markdown-mint-local` is a
-placeholder publisher id for local packaging; it does not claim a Marketplace
-listing.
+Markdown Mint is a visual Markdown editor for VS Code. Format text with a toolbar, edit tables directly, and work with GitHub and GitLab Markdown features without switching to a separate writing app.
 
-## Development
+Select a rectangle of table cells, copy it, and paste it into another part of the table. Your document stays a Markdown file, with the source editor always one click away.
 
-Use Node.js 20 or newer, then run:
+## Features
 
-```sh
-npm install
-npm run build
-npm test
+| Feature | What you can do |
+| --- | --- |
+| Visual editing | Edit headings, paragraphs, bold, italic, strikethrough, inline code, quotes, lists, and task checkboxes. Available features follow the selected Markdown profile. |
+| Table editing | Select multiple cells, copy and paste cell ranges, add or remove rows and columns, change alignment, and toggle a numbered column. |
+| Links and images | Insert links and images, including images referenced by relative paths in local documents. |
+| Code and diagrams | Work with fenced code blocks, choose a code language, and insert and preview Mermaid diagrams. |
+| Platform-specific content | Insert alerts, collapsible sections, and math. GitLab mode also offers a table of contents, description lists, and inline diff markers. |
+| Markdown formatting | Format on demand or enable format-on-save, with validation before formatted text is applied. |
+
+## Get started
+
+Requires **VS Code 1.90.0 or later**. The current release targets local files in desktop VS Code.
+
+1. Install **Markdown Mint** by **masa-ryu** from the Extensions view. The extension ID is `masa-ryu.markdown-mint`.
+2. Open a Markdown file.
+3. Run **Markdown Mint: Open in Markdown Mint** from the Command Palette.
+4. Edit with the toolbar, mouse, or keyboard. Select **Source** to return to VS Code's text editor.
+
+You can also click **Open in Markdown Mint** above the first line of a Markdown file in the text editor, or choose Markdown Mint from the tab's **Reopen Editor With** menu.
+
+Markdown Mint is an optional editor: installing it does not automatically make it the default editor for every Markdown file. Its custom editor is available for `.md`, `.markdown`, and `.mdown` files.
+
+## Edit tables directly
+
+Choose a table size with the grid picker or enter the row and column counts. Table controls appear when you are editing a table.
+
+Drag across cells to select a rectangular range. Use **Ctrl+C / Cmd+C**, select a destination cell, and use **Ctrl+V / Cmd+V** to paste. The destination cell is the top-left corner of the pasted range; the table expands when more rows or columns are needed.
+
+You can also paste tab-separated data into a table. This is useful for transferring rows from spreadsheet tools; it does not reproduce a spreadsheet's merged cells or arbitrary formatting.
+
+Use **Tab** and **Shift+Tab** to move between cells. Press **Escape** while editing a table to move to a paragraph after it.
+
+## Choose a Markdown profile
+
+Select a profile from the editor's dropdown or set `markdownMint.profile` in VS Code settings.
+
+| Profile | Intended use |
+| --- | --- |
+| **GitHub** — default | GitHub-oriented Markdown, including GFM tables and task lists, alerts, collapsible sections, Mermaid, and math. |
+| **GitLab** | GitLab-oriented Markdown, with additional insertion controls for a generated table of contents, description lists, and inline diff markers. |
+| **CommonMark** | Core Markdown features without the GitHub/GitLab feature toolbar. |
+
+Profiles support selected platform syntax locally. They are not complete replicas of GitHub or GitLab, and they do not guarantee pixel-identical rendering on those websites.
+
+Some content, including raw HTML and front matter, is represented as source-backed blocks rather than fully editable rich text. Use **Source** when you need to edit its exact syntax.
+
+## Preview and source
+
+Run **Markdown Mint: Open Dedicated Preview** to open Mint's separate preview.
+
+The dedicated preview and Mint's integration with VS Code's built-in Markdown preview use a shared profile-aware rendering pipeline. The rich editor shares document styles and follows VS Code's Markdown preview font settings.
+
+Markdown Mint also contributes styles and rendering support to the built-in Markdown preview. Other preview extensions, custom styles, and differences in viewport size can affect the result.
+
+Your Markdown text document remains the source of truth. Undo and redo use VS Code's document history. When an edit conflicts with a newer document version, Mint offers draft recovery rather than silently replacing the newer content.
+
+## Formatting
+
+Select the **Format** toolbar button or run **Markdown Mint: Format Document** to format the current document.
+
+Format-on-save is **off by default**. To enable it for a workspace, add this to its VS Code settings:
+
+```json
+{
+  "markdownMint.profile": "github",
+  "markdownMint.formatOnSave": true
+}
 ```
 
-Open this folder in VS Code and press `F5` to launch an Extension Development
-Host. The custom editor is offered through **Reopen With**, so installing a
-development build does not silently take over every Markdown file. The command
-palette includes commands for opening the dedicated preview, opening the text
-source, and formatting the active Markdown document.
+The formatter uses Prettier, reads supported project configuration such as `.prettierrc`, `.editorconfig`, and `.prettierignore`, and validates the result before applying it. Executable formatter configuration is only evaluated in a trusted workspace. A rejected formatting result leaves the document unchanged.
 
-When a Markdown file is open in the normal Text Editor, the **🌿 Open in
-Markdown Mint** CodeLens appears above the first line. Selecting it reuses the
-current tab for the Markdown Mint editor and leaves the source document
-untouched.
+Document formatting may update source layout outside the text you just edited. It is a separate operation from normal visual editing.
 
-To install a locally built VSIX, run `npm run package`, then use **Extensions:
-Install from VSIX...** in VS Code and choose the generated
-`markdown-mint-0.0.13.vsix`. Reopen a Markdown file with **Markdown Mint**
-when you want the rich editor.
+| Setting | Default | Purpose |
+| --- | --- | --- |
+| `markdownMint.profile` | `"github"` | Select `github`, `gitlab`, or `commonmark`. |
+| `markdownMint.formatOnSave` | `false` | Enable Markdown Mint's format-on-save behavior. |
+| `markdownMint.prettierOptions` | `{ "printWidth": 80, "proseWrap": "preserve" }` | Supply additional options to the Markdown formatter. |
 
-The profile dropdown selects **GitHub** (the default), **GitLab**, or
-**CommonMark** through `markdownMint.profile`. `markdownMint.formatOnSave`
-enables the safe formatter for Markdown documents; a formatted result is parsed
-and validated before it is offered as a save edit.
+## Keyboard shortcuts
 
-The 0.0.13 package keeps the Markdown Mint extension identity introduced in
-0.0.4 and adds profile-specific GitHub and GitLab feature insertion alongside
-contextual table editing. Existing Markdown Mint
-0.0.4 and later installations can update in place. When migrating from an
-older Markdown Weaver development build, uninstall that older package first,
-choose **Markdown Mint** with **Reopen With**, and migrate the Markdown Mint
-settings as needed.
+These shortcuts apply while the rich editing surface is focused. Use **Ctrl** on Windows/Linux and **Cmd** on macOS where shown.
 
-The table picker now lets a grid click select and preview a size before insertion;
-double-clicking inserts that size immediately, while numeric row and column
-fields below the grid support direct sizing. When a table is active, its row,
-column, alignment, numbering, and delete actions appear as compact groups in
-the main top toolbar; they are hidden outside a table. The **Source** button
-returns to the raw Markdown editor and stays at the right edge of the normal
-writing controls. The dedicated preview remains available through the
-**Markdown Mint: Open Dedicated Preview** command. At the end of the last cell,
-**Arrow Down** or **Escape** opens a writable paragraph after the table; that
-empty paragraph is omitted until text is entered. Clicking below the document
-places the caret at that height with temporary blank paragraphs, which are
-discarded when unused and committed when typing begins. The toolbar's **Emoji**
-button opens a searchable common emoji picker and inserts at the saved
-selection. Image and table insertion use distinct SVG icons.
+| Action | Shortcut |
+| --- | --- |
+| Bold | Ctrl/Cmd+B |
+| Italic | Ctrl/Cmd+I |
+| Strikethrough in GitHub/GitLab mode | Ctrl/Cmd+Shift+X |
+| Save | Ctrl/Cmd+S |
+| Undo | Ctrl/Cmd+Z |
+| Redo | Ctrl/Cmd+Shift+Z |
+| Next / previous table cell | Tab / Shift+Tab |
+| Indent / outdent a list item | Tab / Shift+Tab |
+| Focus the formatting popover after selecting text | Alt+F10 |
 
-GitHub and GitLab editing modes show a second feature row below the main
-controls; it moves below the table row while a table is active and is hidden
-for CommonMark and dedicated preview. GitHub offers Alert, Details, Math, and
-Mermaid insertion. GitLab also offers a generated table of contents,
-description lists, and added or removed diff text. Dialogs use the current
-selection as a starting value, preserve focus on cancel, and discard stale
-submissions safely.
+To find extension commands, open the Command Palette and search for **Markdown Mint**.
 
-Fenced GeoJSON, TopoJSON, and ASCII STL blocks receive bounded local SVG
-previews with point labels or projected triangles. The previews do not load map
-tiles or network resources; invalid or oversized data remains available as
-escaped source.
+## Current limitations
 
-## Design
+Markdown Mint is in early development. Keep important documents under version control, especially when trying new syntax or formatting options.
 
-The extension host owns each `TextDocument` version and serializes requests per
-document. Webview edits carry the base document version and an operation id.
-Stale or invalid edits are rejected with the submitted draft preserved for
-explicit recovery, so a concurrent external edit is never silently replaced.
-Undo and redo are sent to VS Code's native resource history; the webview does
-not maintain a second undo stack.
+Not every GitHub or GitLab feature has a rich editing control. Some content requires source editing. Local GeoJSON, TopoJSON, and ASCII STL previews are simplified static representations, not the interactive viewers hosted by GitHub.
 
-The built-in Markdown preview receives `media/document.css` through VS Code's
-`markdown.previewStyles` contribution. The dedicated preview uses the same
-stylesheet and the same profile-aware rendering pipeline when both surfaces are
-available.
+Remote and Web workspaces are outside the currently supported scope. Real operating-system IME candidate-window behavior also remains a manual validation area.
 
-The writing flow opens directly in the structured editor; **Source** returns
-to VS Code's standard raw Markdown text editor and stays at the toolbar's right
-edge. The profile dropdown selects **GitHub** (the default), **GitLab**, or
-**CommonMark**. The toolbar keeps heading, **B**, **I**, **S**, inline code,
-link, image, list, and table controls directly visible alongside the other
-editing actions. Table numbering adds a `#` header and sequential body
-numbers, and a second activation removes that column. Undo and redo remain
-available through the standard keyboard/native history commands. It has no
-**Preview** button; use the
-command palette's **Markdown Mint: Open Dedicated Preview** command when you
-need the separate preview. A blank document starts from an H1 `Title` starter
-and keeps an untouched blank H1 out of the emitted Markdown; pressing Enter
-moves into a normal paragraph. At a paragraph start, typing `#` through
-`######`, `>`, `-`/`+`/`*`, or a positive `N.` followed by a space applies the
-matching heading, quote, or list block. An empty paragraph shows a `+` button
-that opens the **Insert** menu. A non-empty text selection shows the formatting
-popover automatically; `Alt+F10` moves keyboard focus into it. The surface
-follows the active VS Code theme and Markdown preview font settings.
-Toolbar and menu controls expose one shared tooltip on hover or focus, including
-disabled menu actions, and close it on leave, blur, Escape, click, or scroll.
-Bullet, ordered, and task-list buttons act as toggles and expose their active
-state through `aria-pressed`. Final interaction validation is tracked in
-`docs/requirements.md`.
+## Feedback
 
-The initial editor schema supports headings, paragraphs, emphasis, strong and
-strike marks, inline and fenced code, block quotes, ordered and unordered
-lists, task checkboxes, links, images, hard breaks, and GitHub/GitLab tables.
-Raw HTML, front matter, custom Markdown-it extensions, and syntax that cannot be
-represented by that schema are preserved as rendered atoms in Mint. Use **Source**
-to edit their exact Markdown; Mint keeps their source content intact while
-showing the available rendered form.
+Use the **Q & A** tab on the Markdown Mint Marketplace page for questions and feedback. For a reproducible problem, include the extension version, VS Code version, operating system, selected Markdown profile, a small Markdown example, and the steps that triggered it. Remove sensitive content before sharing an example.
 
-Markdown source messages are limited to two million UTF-16 code units,
-operation ids to 160 characters, and local resource URLs to 8,192 characters.
+## License
 
-## Validation
-
-`npm run compile` runs TypeScript in strict mode, `npm run lint` checks source
-and tests, `npm test` runs unit tests, and `npm run package` builds a VSIX using
-the local placeholder publisher id. `npm run test:extension` bundles and runs
-the native acceptance suite against the installed VS Code executable when
-available (or the test-electron download fallback), using an isolated
-temporary workspace. Project `.prettierrc` JSON/YAML, `.editorconfig`, and
-`.prettierignore` are read safely; executable formatter config is evaluated
-only in a trusted workspace. Project-file resolution targets local `file:`
-documents in the desktop Extension Host; Remote and Web workspace URI schemes
-are outside this development scaffold.
+MIT. See the `LICENSE` file included with the extension.

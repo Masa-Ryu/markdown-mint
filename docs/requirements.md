@@ -38,12 +38,16 @@ from the browser evidence.
 Alerts keep their existing visual design and raw Markdown representation while
 their inline textarea becomes more responsive. Alert input updates the source
 without rebuilding the textarea on every keystroke, resizes before dispatching
-the source update, and preserves quoted blank lines and the source line ending
-style. An ArrowRight at the body end or ArrowLeft at the body start moves to an
-adjacent text block; the reverse boundary moves from a paragraph into the
+the source update, preserves lazy blockquote continuation lines and quoted
+blank lines, and keeps the source line-ending style. Preview and compatibility
+updates are coalesced for a burst of native textarea input while source,
+recovery, and host synchronization remain immediate. An ArrowRight at the body
+end or ArrowLeft at the body start moves directly to a consecutive Alert body
+or adjacent text block; the reverse boundary moves from a paragraph into the
 Alert body. A final Alert receives a transient paragraph so moving out with an
-arrow does not change Markdown until text is entered. Composition events and
-non-collapsed selections keep their native behavior.
+arrow does not change Markdown until text is entered. Textarea composition
+events, non-collapsed selections, and native host Undo/Redo commands keep their
+native behavior.
 
 The webview regression suite covers these flows, including CRLF and
 save/reload round trips. Live VS Code and operating-system IME behavior remain

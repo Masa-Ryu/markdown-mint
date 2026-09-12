@@ -1,7 +1,7 @@
 {
   "name": "markdown-mint",
   "displayName": "Markdown Mint",
-  "description": "A structured Markdown editor for VS Code with safe, synchronized previews.",
+  "description": "A visual Markdown editor for VS Code with rich table editing, GitHub/GitLab profiles, Mermaid, math, and auto-formatting.",
   "version": "0.0.23",
   "publisher": "masa-ryu",
   "icon": "images/icon.png",
@@ -14,13 +14,24 @@
     "vscode": "^1.90.0"
   },
   "categories": [
-    "Other"
+    "Other",
+    "Formatters"
   ],
   "keywords": [
     "markdown",
-    "editor",
-    "prosemirror",
-    "preview"
+    "markdown editor",
+    "wysiwyg",
+    "visual editor",
+    "rich text",
+    "markdown preview",
+    "markdown table",
+    "markdown formatter",
+    "github",
+    "gitlab",
+    "gfm",
+    "commonmark",
+    "mermaid",
+    "latex"
   ],
   "activationEvents": [
     "onLanguage:markdown",
