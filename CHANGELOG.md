@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Simplified the code-language picker to show language labels only while
+  retaining searchable identifiers, aliases, and highlighting metadata.
+
 - Fixed Block quote toolbar toggling to unwrap blockquotes with ProseMirror's
   lift transform while preserving Markdown, block structure, and cursor
   position.
