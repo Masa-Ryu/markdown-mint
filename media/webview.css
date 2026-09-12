@@ -809,11 +809,11 @@ textarea:focus-visible {
 }
 .mm-code-block-view .mm-code-language-option {
   display: grid;
-  grid-template-columns: 42px minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr);
   align-items: center;
   gap: 7px;
   min-height: 32px;
-  padding: 5px 7px;
+  padding: 5px 0;
   border: 1px solid transparent;
   border-radius: 4px;
   color: var(--vscode-quickInput-foreground, var(--mm-control-foreground));
@@ -833,27 +833,17 @@ textarea:focus-visible {
   color: var(--vscode-list-activeSelectionForeground, var(--mm-control-foreground));
   background: var(--vscode-list-activeSelectionBackground, var(--mm-control-hover-background));
 }
-.mm-code-block-view .mm-code-language-option-badge {
-  overflow: hidden;
-  color: var(--vscode-descriptionForeground, var(--mm-muted));
-  font-size: 0.72em;
-  font-weight: 700;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
 .mm-code-block-view .mm-code-language-option-text {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.mm-code-block-view .mm-code-language-option-id,
 .mm-code-block-view .mm-code-language-option-help {
   color: var(--vscode-descriptionForeground, var(--mm-muted));
   font-size: 0.78em;
 }
 .mm-code-block-view .mm-code-language-custom {
-  grid-template-columns: minmax(0, 1fr);
   border-top-color: var(--vscode-panel-border, var(--mm-border));
   border-radius: 0 0 4px 4px;
 }

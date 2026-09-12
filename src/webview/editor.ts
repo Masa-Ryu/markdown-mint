@@ -1410,19 +1410,14 @@ class CodeBlockNodeView {
           : option.kind === "custom"
             ? `Use “${option.identifier}”`
             : option.label;
-      const identifier = document.createElement("small");
       if (option.kind === "custom") {
-        identifier.className = "mm-code-language-option-help";
-        identifier.textContent =
+        const help = document.createElement("small");
+        help.className = "mm-code-language-option-help";
+        help.textContent =
           "Highlighting is unavailable; the language name will be preserved.";
-        button.append(text, identifier);
+        button.append(text, help);
       } else {
-        const badge = document.createElement("span");
-        badge.className = "mm-code-language-option-badge";
-        badge.textContent = option.badge;
-        identifier.className = "mm-code-language-option-id";
-        identifier.textContent = option.identifier || "(none)";
-        button.append(badge, text, identifier);
+        button.append(text);
       }
       list.append(button);
     }

@@ -263,6 +263,57 @@ describe("rich editor rendering", () => {
     app.destroy();
   });
 
+  it("shows labels only while retaining searchable language identifiers", () => {
+    const { app, root } = makeApp("```ts\nvalue\n```");
+    root.querySelector<HTMLButtonElement>(".mm-code-language-trigger")?.click();
+    const input = root.querySelector<HTMLInputElement>(
+      ".mm-code-language-inline",
+    )!;
+
+    const findOption = (identifier: string): HTMLButtonElement | undefined =>
+      Array.from(
+        root.querySelectorAll<HTMLButtonElement>("[data-mm-language-option]"),
+      ).find((option) => option.dataset.mmLanguageOption === identifier);
+
+    const expectLabel = (
+      query: string,
+      identifier: string,
+      label: string,
+    ): void => {
+      input.value = query;
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      const option = findOption(identifier);
+      expect(option?.textContent).toBe(label);
+      expect(
+        option?.querySelector(".mm-code-language-option-badge"),
+      ).toBeNull();
+      expect(option?.querySelector(".mm-code-language-option-id")).toBeNull();
+      expect(option?.querySelector(".mm-code-language-option-help")).toBeNull();
+    };
+
+    expectLabel("", "", "Language not specified");
+    expectLabel("", "plaintext", "Plain Text");
+    expectLabel("ts", "ts", "TypeScript");
+    expectLabel("py", "py", "Python");
+    expectLabel("bash", "bash", "Shell");
+    expectLabel("sh", "sh", "Shell");
+    expectLabel("csharp", "csharp", "C#");
+    expectLabel("cpp", "cpp", "C++");
+
+    input.value = "acme-dsl";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    const custom = findOption("acme-dsl");
+    expect(
+      custom?.querySelector(".mm-code-language-option-text")?.textContent,
+    ).toBe("Use “acme-dsl”");
+    expect(
+      custom?.querySelector(".mm-code-language-option-help")?.textContent,
+    ).toBe("Highlighting is unavailable; the language name will be preserved.");
+    expect(custom?.querySelector(".mm-code-language-option-badge")).toBeNull();
+    expect(custom?.querySelector(".mm-code-language-option-id")).toBeNull();
+    app.destroy();
+  });
+
   it("preserves info-string suffixes and custom language identifiers", () => {
     const source = '```ts title="example.ts"\nconst value = 1;\n```';
     const { app, root, messages } = makeApp(source);
