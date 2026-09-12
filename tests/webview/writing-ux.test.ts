@@ -165,6 +165,21 @@ function dispatchTextInput(app: MarkdownEditorApp, text: string): boolean {
   return handled === true;
 }
 
+function dispatchEditorKey(
+  app: MarkdownEditorApp,
+  key: string,
+  options: KeyboardEventInit = {},
+): KeyboardEvent {
+  const event = new KeyboardEvent("keydown", {
+    key,
+    ...options,
+    bubbles: true,
+    cancelable: true,
+  });
+  app.view.dom.dispatchEvent(event);
+  return event;
+}
+
 function hostDocument(
   markdown: string,
   version: number,
@@ -714,6 +729,21 @@ describe("bounded writing controls", () => {
       bold.querySelector<SVGSVGElement>(".mm-toolbar-icon")?.dataset.icon,
     ).toBe("bold");
     expect(bold.getAttribute("aria-pressed")).toBe("false");
+    const selectionButtons = Array.from(
+      floating.querySelectorAll<HTMLButtonElement>("button[data-mark]"),
+    );
+    expect(
+      selectionButtons.every((button) => !button.hasAttribute("data-tooltip")),
+    ).toBe(true);
+    expect(
+      selectionButtons.map((button) => button.getAttribute("aria-label")),
+    ).toEqual([
+      "Bold selection",
+      "Italic selection",
+      "Strike selection",
+      "Inline code selection",
+      "Link selection",
+    ]);
 
     const down = new MouseEvent("mousedown", {
       bubbles: true,
@@ -729,6 +759,139 @@ describe("bounded writing controls", () => {
     ).toContain("**hello**");
     expect(app.view.state.selection.from).toBe(selection.from);
     expect(app.view.state.selection.to).toBe(selection.to);
+  });
+
+  it("moves focus to the visible selection toolbar with Tab without editing", () => {
+    const { app, root, messages } = makeApp("hello world");
+    const selection = TextSelection.create(app.view.state.doc, 1, 6);
+    app.view.dispatch(app.view.state.tr.setSelection(selection));
+    const floating = root.querySelector<HTMLElement>(".mm-selection-toolbar")!;
+    const bold = root.querySelector<HTMLButtonElement>(
+      '[data-testid="selection-bold"]',
+    )!;
+    expect(floating.hidden).toBe(false);
+
+    app.view.focus();
+    const tab = dispatchEditorKey(app, "Tab");
+
+    expect(tab.defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(bold);
+    expect(app.view.state.selection.from).toBe(selection.from);
+    expect(app.view.state.selection.to).toBe(selection.to);
+    expect(editMessages(messages)).toHaveLength(0);
+  });
+
+  it("applies Bold to the saved text selection after Tab focus", () => {
+    const { app, root, messages } = makeApp("hello world");
+    const selection = TextSelection.create(app.view.state.doc, 1, 6);
+    app.view.dispatch(app.view.state.tr.setSelection(selection));
+    app.view.focus();
+    dispatchEditorKey(app, "Tab");
+
+    root
+      .querySelector<HTMLButtonElement>('[data-testid="selection-bold"]')!
+      .click();
+
+    expect(editMessages(messages)).toHaveLength(1);
+    expect(editMessages(messages)[0]?.markdown).toMatch(
+      /^\*\*hello\*\*(?: |&#32;)world$/,
+    );
+    expect(app.view.state.selection.from).toBe(selection.from);
+    expect(app.view.state.selection.to).toBe(selection.to);
+  });
+
+  it("returns focus to the editor with Escape while preserving the selection", () => {
+    const { app, root, messages } = makeApp("hello world");
+    const selection = TextSelection.create(app.view.state.doc, 1, 6);
+    app.view.dispatch(app.view.state.tr.setSelection(selection));
+    app.view.focus();
+    dispatchEditorKey(app, "Tab");
+    const floating = root.querySelector<HTMLElement>(".mm-selection-toolbar")!;
+
+    const escape = new KeyboardEvent("keydown", {
+      key: "Escape",
+      bubbles: true,
+      cancelable: true,
+    });
+    floating.dispatchEvent(escape);
+
+    expect(escape.defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(app.view.dom);
+    expect(app.view.state.selection.from).toBe(selection.from);
+    expect(app.view.state.selection.to).toBe(selection.to);
+    expect(editMessages(messages)).toHaveLength(0);
+  });
+
+  it("skips disabled Strike when Tab enters the CommonMark selection toolbar", () => {
+    const { app, root, messages } = makeApp("hello world", "commonmark");
+    const selection = TextSelection.create(app.view.state.doc, 1, 6);
+    app.view.dispatch(app.view.state.tr.setSelection(selection));
+    const floating = root.querySelector<HTMLElement>(".mm-selection-toolbar")!;
+    const strike = root.querySelector<HTMLButtonElement>(
+      '[data-testid="selection-strike"]',
+    )!;
+    const bold = root.querySelector<HTMLButtonElement>(
+      '[data-testid="selection-bold"]',
+    )!;
+    expect(strike.disabled).toBe(true);
+    expect(floating.hidden).toBe(false);
+
+    app.view.focus();
+    dispatchEditorKey(app, "Tab");
+
+    expect(document.activeElement).toBe(bold);
+    expect(document.activeElement).not.toBe(strike);
+    expect(editMessages(messages)).toHaveLength(0);
+    strike.click();
+    expect(editMessages(messages)).toHaveLength(0);
+  });
+
+  it("keeps Tab list indentation when the selection toolbar is hidden", () => {
+    const { app, root, messages } = makeApp("- one\n- two");
+    const secondItemParagraph = root.querySelectorAll("li p")[1]!;
+    const position = app.view.posAtDOM(secondItemParagraph, 0) + 1;
+    app.view.dispatch(
+      app.view.state.tr.setSelection(
+        TextSelection.create(app.view.state.doc, position),
+      ),
+    );
+    const floating = root.querySelector<HTMLElement>(".mm-selection-toolbar")!;
+    expect(floating.hidden).toBe(true);
+    app.view.focus();
+    const before = editMessages(messages).length;
+
+    const tab = dispatchEditorKey(app, "Tab");
+
+    expect(tab.defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(app.view.dom);
+    expect(
+      app.view.state.doc.firstChild?.firstChild?.childCount,
+    ).toBeGreaterThan(1);
+    expect(editMessages(messages)).toHaveLength(before + 1);
+  });
+
+  it("keeps Tab table navigation when the selection toolbar is hidden", () => {
+    const { app, root, messages } = makeApp(
+      "| A | B |\n| --- | --- |\n| C | D |",
+    );
+    const firstCell = root.querySelector<HTMLTableCellElement>("thead th")!;
+    const cellPosition = app.view.posAtDOM(firstCell, 0);
+    app.view.dispatch(
+      app.view.state.tr.setSelection(
+        TextSelection.near(app.view.state.doc.resolve(cellPosition + 1)),
+      ),
+    );
+    const floating = root.querySelector<HTMLElement>(".mm-selection-toolbar")!;
+    expect(floating.hidden).toBe(true);
+    app.view.focus();
+    const before = editMessages(messages).length;
+
+    const tab = dispatchEditorKey(app, "Tab");
+
+    expect(tab.defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(app.view.dom);
+    expect(app.view.state.selection.$from.parent.textContent).toBe("B");
+    expect(editMessages(messages)).toHaveLength(before);
   });
 
   it("opens the selection toolbar with Alt+F10 and keeps GFM-only strike disabled in CommonMark", () => {
