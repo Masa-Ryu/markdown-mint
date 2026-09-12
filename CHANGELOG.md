@@ -5,6 +5,10 @@
 - Simplified the code-language picker to show language labels only while
   retaining searchable identifiers, aliases, and highlighting metadata.
 
+- Added Ctrl+Enter submission for link, image, profile-feature, and table
+  insertion/editing modals while preserving IME composition and excluding
+  destructive confirmation dialogs.
+
 - Fixed image insertion to accept relative paths while preserving the original
   Markdown source and existing absolute URL support.
 

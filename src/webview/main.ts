@@ -8,6 +8,7 @@ import {
   type MarkdownEditorApp,
   type VSCodeApiLike,
 } from "./editor";
+import { installModalSubmitShortcut } from "./modalSubmitShortcut";
 
 declare global {
   interface Window {
@@ -99,6 +100,7 @@ export function startWebview(
       : undefined);
   if (initialMode) appOptions.initialMode = initialMode;
   const app = createEditorApp(appOptions);
+  installModalSubmitShortcut(root);
   window.markdownMint = app;
   return app;
 }
