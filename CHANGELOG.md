@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Fixed block spacing across the rich editor, dedicated preview, and native
+  Markdown preview. Rich NodeView wrappers now own outer margins while their
+  inner display blocks stay margin-free; GitLab TOC and description lists use
+  the ordinary block rhythm; terminal details, alert, quote, and list content
+  no longer adds an extra bottom gap; and empty rendered nodes stay hidden
+  without changing preserved Markdown comments or source structure.
+
 - Fixed Mermaid flowchart node labels that drifted right when Mermaid's inline
   stylesheet was blocked by the strict Webview CSP. Shared external CSS now
   restores centering only for `flowchart-v2` node labels; edge labels, other

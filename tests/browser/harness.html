@@ -129,7 +129,10 @@
             ? mermaidCoverageFixture
             : markdownFixture;
       let version = 1;
-      let profile = 'github';
+      const requestedProfile = new URLSearchParams(location.search).get('profile');
+      let profile = requestedProfile === 'gitlab' || requestedProfile === 'commonmark'
+        ? requestedProfile
+        : 'github';
       const history = [];
       const future = [];
       const messages = [];
@@ -316,7 +319,12 @@
       window.__markdownMintHarness = {
         get messages() { return messages; },
         get document() { return { markdown, version, profile }; },
-        deliverExternal(nextMarkdown) { markdown = nextMarkdown; version += 1; accept(undefined, 'external'); },
+        deliverExternal(nextMarkdown, nextProfile = profile) {
+          markdown = nextMarkdown;
+          if (nextProfile === 'github' || nextProfile === 'gitlab' || nextProfile === 'commonmark') profile = nextProfile;
+          version += 1;
+          accept(undefined, 'external');
+        },
         get state() { return clone(state); },
         metrics() {
           const rich = document.querySelector('.mm-rich-panel .ProseMirror');

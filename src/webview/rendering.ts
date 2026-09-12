@@ -347,6 +347,30 @@ function rawNodeFallback(node: PMNode): string {
   );
 }
 
+type RenderedBlockMargin = "flow" | "code" | "fallback" | "math" | "visual";
+
+function renderedBlockMargin(
+  node: PMNode,
+  dom: HTMLElement,
+): RenderedBlockMargin | undefined {
+  if (node.type.name !== "raw_block") return undefined;
+  const element = dom.firstElementChild;
+  if (!element) return undefined;
+  if (element.matches(".mm-math-block")) return "math";
+  if (element.matches(".mm-diagram, .mm-static-asset")) return "visual";
+  if (element.matches(".mm-code-block")) return "code";
+  if (element.matches("pre[data-markdown-raw]")) return "fallback";
+  if (element.matches(".table-of-contents, dl")) return "flow";
+  if (element.matches("details")) return "flow";
+  return undefined;
+}
+
+function updateRenderedBlockLayout(node: PMNode, dom: HTMLElement): void {
+  const margin = renderedBlockMargin(node, dom);
+  if (margin) dom.dataset.mmBlockMargin = margin;
+  else delete dom.dataset.mmBlockMargin;
+}
+
 function appendGeneratedHtml(element: HTMLElement, html: string): void {
   const ownerDocument = element.ownerDocument;
   const template = ownerDocument.createElement("template");
@@ -365,6 +389,26 @@ export function createRenderedNodeView(
   let disposed = false;
   let enhancer: RenderingEnhancer | undefined;
   const inline = current.type.name === "raw_inline";
+  const renderer = (core as unknown as CoreWithNodeRenderer).renderNodeHtml;
+  const positionOf = (): number | undefined => {
+    try {
+      return getPos?.();
+    } catch {
+      return undefined;
+    }
+  };
+  const renderHtml = (node: PMNode): string => {
+    const nodePosition = positionOf();
+    const renderInput: PMNode | CoreRenderInput =
+      nodePosition === undefined
+        ? view.state.doc
+        : { document: view.state.doc, nodePosition };
+    return renderer
+      ? renderer(node, getProfile?.() ?? "github", renderInput)
+      : rawNodeFallback(node);
+  };
+  const initialHtml = renderHtml(current);
+  const initiallyEmpty = initialHtml.trim() === "";
   const dom = document.createElement(inline ? "span" : "div");
   dom.className = inline
     ? "mm-rendered-node mm-rendered-inline"
@@ -372,29 +416,40 @@ export function createRenderedNodeView(
   dom.dataset.mmRenderedNode = current.type.name;
   dom.contentEditable = "false";
   dom.setAttribute("aria-live", "polite");
+  dom.hidden = initiallyEmpty;
 
-  const render = (): void => {
-    if (disposed) return;
-    const renderer = (core as unknown as CoreWithNodeRenderer).renderNodeHtml;
-    let nodePosition: number | undefined;
-    try {
-      nodePosition = getPos?.();
-    } catch {
-      nodePosition = undefined;
+  const updateEmptyBoundaryMarkers = (): void => {
+    delete dom.dataset.mmDocumentFirst;
+    delete dom.dataset.mmDocumentLast;
+    if (!dom.hidden) {
+      delete dom.dataset.mmRenderedEmpty;
+      return;
     }
-    const renderInput: PMNode | CoreRenderInput =
-      nodePosition === undefined
-        ? view.state.doc
-        : { document: view.state.doc, nodePosition };
-    const html = renderer
-      ? renderer(current, getProfile?.() ?? "github", renderInput)
-      : rawNodeFallback(current);
+    dom.dataset.mmRenderedEmpty = "true";
+    const position = positionOf();
+    if (position === undefined) return;
+    try {
+      if (view.state.doc.resolve(position).depth !== 0) return;
+    } catch {
+      return;
+    }
+    if (position === 0) dom.dataset.mmDocumentFirst = "true";
+    if (position + current.nodeSize === view.state.doc.content.size)
+      dom.dataset.mmDocumentLast = "true";
+  };
+  updateEmptyBoundaryMarkers();
+
+  const render = (html: string): void => {
+    if (disposed) return;
     enhancer?.dispose();
     appendGeneratedHtml(dom, html);
+    dom.hidden = false;
+    updateRenderedBlockLayout(current, dom);
+    updateEmptyBoundaryMarkers();
     enhancer = enhanceRenderedContent(dom);
   };
 
-  render();
+  if (!initiallyEmpty) render(initialHtml);
 
   return {
     dom,
@@ -404,14 +459,26 @@ export function createRenderedNodeView(
         view.state.doc !== lastDocument &&
         (dependsOnDocumentContext(current) ||
           dependsOnDocumentContext(nextNode));
+      const nextHtml = renderHtml(nextNode);
+      const nextEmpty = nextHtml.trim() === "";
       if (nextNode.eq(current) && !contextChanged) {
+        updateEmptyBoundaryMarkers();
         lastDocument = view.state.doc;
         return true;
       }
       current = nextNode;
       lastDocument = view.state.doc;
       dom.dataset.mmRenderedNode = current.type.name;
-      render();
+      if (nextEmpty) {
+        enhancer?.dispose();
+        enhancer = undefined;
+        dom.replaceChildren();
+        delete dom.dataset.mmBlockMargin;
+        dom.hidden = true;
+        updateEmptyBoundaryMarkers();
+      } else {
+        render(nextHtml);
+      }
       return true;
     },
     selectNode: () => {
