@@ -42,4 +42,5 @@ validation performed, and update documentation when user-facing behavior or
 setup changes. Reviewers should be able to understand the change from the PR
 description without reconstructing intent from the diff alone.
 
+作業が完了したらPushしてPullrequestの内容を書き上げること。
 作業終了後にバージョンを適切なバージョンを上げて、VSIXを作成すること。
