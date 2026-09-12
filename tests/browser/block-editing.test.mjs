@@ -787,6 +787,80 @@ async function testDetailsBetweenEscapedBackticks(page) {
   });
 }
 
+async function testDetailsWithUnmatchedBacktickAndRawScript(page) {
+  const source = [
+    "`unmatched",
+    '<details data-test="keep">',
+    "<summary>Summary</summary>",
+    "<script>",
+    'const value = "</details>";',
+    "</script>",
+    "Editable body",
+    "</details>",
+  ].join("\n");
+  await load(page, source);
+  const before = await saved(page);
+  const container = page.locator(`${rich} > .mm-details-node`);
+  assert.equal(
+    await container.count(),
+    1,
+    "unmatched paragraph backtick or script text hid structured Details",
+  );
+  assert.equal(
+    await page.evaluate(
+      () => window.markdownMint.view.state.doc.child(1).type.name,
+    ),
+    "details",
+  );
+  const toggle = container.locator(detailsToggle);
+  assert.equal(await container.getAttribute("data-mm-details-open"), "false");
+  for (const open of [true, false, true]) {
+    await toggle.click();
+    assert.equal(
+      await container.getAttribute("data-mm-details-open"),
+      String(open),
+    );
+  }
+  await noEdits(page, before, "toggle Details containing raw script text");
+  assert.equal(await container.locator("script").count(), 0);
+  assert.equal(await page.evaluate("typeof value"), "undefined");
+
+  await container.locator(detailsTitle).click();
+  await container.locator(detailsInput).waitFor({ state: "visible" });
+  assert.equal((await selection(page)).dialogs, 0);
+  await page.keyboard.press("End");
+  await page.keyboard.type(" edited");
+  await page.keyboard.press("Enter");
+  const renamed = source.replace(
+    "<summary>Summary</summary>",
+    "<summary>Summary edited</summary>",
+  );
+  assert.equal(
+    (await saved(page)).markdown,
+    renamed,
+    "summary editing must preserve the raw script source and Details bounds",
+  );
+
+  await caret(page, ".mm-details-body > p", -1);
+  await page.keyboard.type(" updated");
+  const edited = renamed.replace("Editable body", "Editable body updated");
+  assert.equal(
+    (await saved(page)).markdown,
+    edited,
+    "body editing must preserve the raw script source and Details bounds",
+  );
+  assert.equal(
+    await container.locator(".mm-details-body > p").textContent(),
+    "Editable body updated",
+  );
+  assert.equal(await container.locator("script").count(), 0);
+  assert.equal(await page.evaluate("typeof value"), "undefined");
+  assert.equal((await selection(page)).dialogs, 0);
+  await page.screenshot({
+    path: resolve(output, "details-unmatched-backtick-raw-script.png"),
+  });
+}
+
 async function testMathAndMermaidHeaders(page) {
   for (const [kind, source, replacement] of [
     ["math", "$$\nx^2\n$$", "y^3"],
@@ -984,6 +1058,7 @@ async function main() {
       testRenderedTraversal,
       testDetailsHeader,
       testDetailsBetweenEscapedBackticks,
+      testDetailsWithUnmatchedBacktickAndRawScript,
       testMathAndMermaidHeaders,
       testDocumentFixtures,
     ]) {

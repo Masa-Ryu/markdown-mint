@@ -28,8 +28,12 @@ import warningTriangleAsset from "../../assets/warning-triangle.svg?raw";
 import alertOctagonAsset from "../../assets/alert-octagon.svg?raw";
 import alertCommentAsset from "../../assets/alert-comment.svg?raw";
 import { parseAlertSource } from "./alerts";
-import { detailsTagRanges, parseDetailsSource } from "./details";
-export { parseDetailsSource } from "./details";
+import {
+  detailsTagRanges,
+  parseDetailsSource as splitDetailsSource,
+  type DetailsSourceParts,
+  type DetailsTagRange,
+} from "./details";
 export {
   alertSourceWithBody,
   alertSourceWithType,
@@ -358,12 +362,14 @@ const baseNodes: Record<string, NodeSpec> = {
         getAttrs: (dom) => {
           const source =
             (dom as HTMLElement).getAttribute("data-mm-details-source") ?? "";
+          const sourceProfile = ((dom as HTMLElement).getAttribute(
+            "data-mm-details-profile",
+          ) ?? "github") as Profile;
           return {
             source,
-            summarySource: parseDetailsSource(source)?.summary ?? "",
-            sourceProfile:
-              (dom as HTMLElement).getAttribute("data-mm-details-profile") ??
-              "github",
+            summarySource:
+              parseDetailsSource(source, sourceProfile)?.summary ?? "",
+            sourceProfile,
           };
         },
       },
@@ -1734,6 +1740,10 @@ interface DetailsRange {
   end: number;
 }
 
+interface DetectedDetails extends DetailsRange {
+  tags: DetailsTagRange[];
+}
+
 function detailsFenceRanges(source: string): DetailsRange[] {
   const lines = sourceLines(source);
   const ranges: DetailsRange[] = [];
@@ -1755,10 +1765,13 @@ function detailsFenceRanges(source: string): DetailsRange[] {
   return ranges;
 }
 
-function detectDetails(source: string): DetailsRange[] {
-  const ranges: DetailsRange[] = [];
+function detectDetails(source: string, parser: MarkdownIt): DetectedDetails[] {
+  const ranges: DetectedDetails[] = [];
   const stack: number[] = [];
-  for (const tag of detailsTagRanges(source)) {
+  const tags = detailsTagRanges(source, parser);
+  let firstTag = 0;
+  for (let tagIndex = 0; tagIndex < tags.length; tagIndex += 1) {
+    const tag = tags[tagIndex]!;
     const offset = tag.start;
     const lineStart =
       Math.max(
@@ -1766,16 +1779,25 @@ function detectDetails(source: string): DetailsRange[] {
         source.lastIndexOf("\r", offset),
       ) + 1;
     const prefix = source.slice(lineStart, offset);
-    if (!tag.closing && prefix.trim() !== "") continue;
+    if (!tag.closing && stack.length === 0 && prefix.trim() !== "") continue;
     if (tag.closing) {
       if (stack.length === 0) continue;
       const start = stack.pop()!;
       if (stack.length === 0) {
         let end = tag.end;
         end += source.slice(end).match(/^(?:\r\n|\n|\r)/)?.[0].length ?? 0;
-        ranges.push({ start, end });
+        ranges.push({
+          start,
+          end,
+          tags: tags.slice(firstTag, tagIndex + 1).map((candidate) => ({
+            start: candidate.start - start,
+            end: candidate.end - start,
+            closing: candidate.closing,
+          })),
+        });
       }
     } else {
+      if (stack.length === 0) firstTag = tagIndex;
       stack.push(offset);
     }
   }
@@ -1826,14 +1848,14 @@ function isFootnoteDefinitionBlock(value: string): boolean {
 
 function parseInternal(source: string, profile: Profile): MarkdownSnapshot {
   const footnoteScan = scanFootnotes(source);
-  const details = detectDetails(source);
+  const md = createMarkdownIt(profile);
+  const details = detectDetails(source, md);
   // Keep footnote definition lines visible to markdown-it so its reference
   // tokens can be converted to source-preserving footnote atoms. The parser
   // already treats ordinary definition lines as non-rendering; only details
   // need masking to prevent their interior from becoming separate blocks.
   const maskedSource = maskRanges(source, details);
   const parserSource = maskEscapedDollars(maskedSource);
-  const md = createMarkdownIt(profile);
   const tokens = md.parse(parserSource, {}) as unknown as MarkdownToken[];
   const offsets = lineOffsets(parserSource);
   const roots = tokens
@@ -1843,7 +1865,7 @@ function parseInternal(source: string, profile: Profile): MarkdownSnapshot {
     tokenIndex?: number;
     token?: MarkdownToken;
     start: number;
-    detail?: DetailsRange;
+    detail?: DetectedDetails;
   }> = roots.map((tokenIndex) => {
     const token = tokens[tokenIndex]!;
     return {
@@ -1868,7 +1890,7 @@ function parseInternal(source: string, profile: Profile): MarkdownSnapshot {
       const detail = event.detail;
       const body = source.slice(detail.start, detail.end);
       const separator = source.slice(detail.end, nextStart);
-      const parts = parseDetailsSource(body);
+      const parts = cachedDetailsParts(body, profile, detail.tags);
       const node = parts
         ? nodeTypes.details.create(
             {
@@ -1879,6 +1901,7 @@ function parseInternal(source: string, profile: Profile): MarkdownSnapshot {
             detailsBodySnapshot(parts.body, profile).doc.content,
           )
         : nodeTypes.raw_block.create({ source: body, kind: "details" });
+      if (parts) detailsPartsByAttrs.set(node.attrs, parts);
       nodes.push(node);
       blocks.push({
         node,
@@ -2278,6 +2301,48 @@ function serializeTableCell(node: PMNode): string {
 // Details keep a nested snapshot so an edited paragraph does not regenerate
 // untouched code, unknown HTML, nested Details, or their original separators.
 const detailsBodySnapshots = new Map<string, MarkdownSnapshot>();
+const detailsPartsCache = new Map<string, DetailsSourceParts | null>();
+const detailsPartsByAttrs = new WeakMap<
+  PMNode["attrs"],
+  DetailsSourceParts | null
+>();
+
+function cachedDetailsParts(
+  source: string,
+  profile: Profile,
+  tags?: readonly DetailsTagRange[],
+): DetailsSourceParts | null {
+  const key = `${profile}\u0000${source}`;
+  if (detailsPartsCache.has(key)) return detailsPartsCache.get(key)!;
+  const parts = splitDetailsSource(
+    source,
+    tags ?? detailsTagRanges(source, createMarkdownIt(profile)),
+  );
+  if (detailsPartsCache.size >= 64)
+    detailsPartsCache.delete(detailsPartsCache.keys().next().value!);
+  detailsPartsCache.set(key, parts);
+  return parts;
+}
+
+/** Reuse the same block contexts during parsing, display and direct edits. */
+export function parseDetailsSource(
+  source: string,
+  profile: Profile = "github",
+): DetailsSourceParts | null {
+  return cachedDetailsParts(source, profile);
+}
+
+/** Immutable attributes retain parsed ranges even in documents above cache size. */
+export function detailsSourceParts(node: PMNode): DetailsSourceParts | null {
+  if (detailsPartsByAttrs.has(node.attrs))
+    return detailsPartsByAttrs.get(node.attrs)!;
+  const parts = parseDetailsSource(
+    String(node.attrs.source ?? ""),
+    node.attrs.sourceProfile as Profile,
+  );
+  detailsPartsByAttrs.set(node.attrs, parts);
+  return parts;
+}
 
 function detailsBodySnapshot(
   source: string,
@@ -2296,7 +2361,7 @@ function detailsBodySnapshot(
 
 function serializeDetails(node: PMNode): string {
   const source = String(node.attrs.source ?? "");
-  const parts = parseDetailsSource(source);
+  const parts = detailsSourceParts(node);
   if (!parts) return source;
   const snapshot = detailsBodySnapshot(
     parts.body,
@@ -2834,7 +2899,26 @@ export function serializeMarkdown(
       output += codeInfoSource;
       continue;
     }
-    if (index > 0 && !output.endsWith(`${ending}${ending}`)) {
+    // Details can interrupt paragraphs, and a raw HTML block can end directly
+    // before a paragraph. Preserve those existing adjacent source boundaries
+    // when their preceding block is unchanged. Existing blank separators can
+    // also use CR or mixed endings, independently of the generated line ending.
+    const previousNode = blocks[index - 1]?.node;
+    const preservedSourceBoundary =
+      !insertion &&
+      matches.get(index - 1) === index - 1 &&
+      ((node.type.name === "details" &&
+        samePosition?.node.type.name === "details") ||
+        (node.type.name === "paragraph" &&
+          samePosition?.node.type.name === "paragraph" &&
+          previousNode?.type.name === "raw_block" &&
+          previousNode.attrs.kind === "html") ||
+        /(?:\r\n|\r(?!\n)|\n)[\t ]*(?:\r\n?|\n)$/.test(output));
+    if (
+      index > 0 &&
+      !preservedSourceBoundary &&
+      !output.endsWith(`${ending}${ending}`)
+    ) {
       output += output.endsWith(ending) ? ending : `${ending}${ending}`;
     }
     const generated =
@@ -3452,7 +3536,7 @@ function renderNode(
     case "code_block":
       return renderCodeBlock(node, state);
     case "details": {
-      const parts = parseDetailsSource(String(node.attrs.source ?? ""));
+      const parts = detailsSourceParts(node);
       const summary = renderInlineSource(
         String(node.attrs.summarySource ?? ""),
         state.profile,

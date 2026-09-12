@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.0.35
+
+- Detect Details within markdown-it block contexts so unmatched backticks cannot
+  consume later blocks and raw HTML, including script, style, pre and textarea,
+  cannot supply false closing or nested Details tags.
+- Reuse profile-aware Details ranges during rendering and direct edits. Retain
+  original attributes, raw HTML, nesting, LF/CRLF/CR and adjacent source
+  separators when changing a summary or body.
+- Integrate the latest synchronization/recovery changes from main while retaining
+  accepted Alert input during rejected edits and deferred composition rebases.
+
 ## 0.0.34
 
 - Keep Details directly editable when surrounding Markdown contains escaped

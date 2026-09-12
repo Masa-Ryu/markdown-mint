@@ -2,7 +2,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { history, redo, undo } from "prosemirror-history";
 import { EditorState, NodeSelection, TextSelection } from "prosemirror-state";
 import { EditorView } from "prosemirror-view";
-import { parseMarkdown, schema, serializeMarkdown } from "../../src/core/index";
+import {
+  parseMarkdown,
+  schema,
+  serializeMarkdown,
+  type Profile,
+} from "../../src/core/index";
 import { createDetailsNodeView } from "../../src/webview/detailsNodeView";
 
 const views: EditorView[] = [];
@@ -13,10 +18,11 @@ afterEach(() => {
 
 function fixture(
   source = '<details data-x="keep">\n<summary><strong>More</strong></summary>\n\nBody\n\n</details>\n',
+  profile: Profile = "github",
 ) {
   const root = document.createElement("div");
   document.body.append(root);
-  const snapshot = parseMarkdown(source);
+  const snapshot = parseMarkdown(source, profile);
   const preserveDraft = vi.fn();
   const composition = vi.fn();
   let allowed = true;
@@ -30,7 +36,7 @@ function fixture(
     nodeViews: {
       details: (node, editor, getPos) =>
         createDetailsNodeView(node, editor, getPos, {
-          getProfile: () => "github",
+          getProfile: () => profile,
           canEdit: () => allowed,
           preserveDraft,
           composition,
@@ -254,3 +260,46 @@ describe("Details header and structured content NodeView", () => {
     expect(f.markdown()).toBe(f.source);
   });
 });
+
+describe.each<Profile>(["commonmark", "github", "gitlab"])(
+  "Details title input with the %s block profile",
+  (profile) => {
+    it.each(["<details>", "</details>", "<details>\n</details>"])(
+      "commits the visible title edit when display math contains %j",
+      (literal) => {
+        const source = `<details data-preserve="a > b" open>\n<summary>Original</summary>\n\n$$\n${literal}\n$$\n\nBody\n\n</details>\n`;
+        const f = fixture(source, profile);
+        const mathBefore = f.view.state.doc.firstChild!.firstChild!;
+        expect(mathBefore.attrs.kind).toBe("math-block");
+        f.title().click();
+        expect(f.input().hidden).toBe(false);
+        expect(f.input().value).toBe("Original");
+        f.input().value = "Changed through input";
+        f.input().dispatchEvent(new InputEvent("input", { bubbles: true }));
+        f.key("Enter");
+        expect(f.view.state.doc.firstChild!.attrs.summarySource).toBe(
+          "Changed through input",
+        );
+        expect(f.markdown()).toBe(
+          source.replace(
+            "<summary>Original</summary>",
+            "<summary>Changed through input</summary>",
+          ),
+        );
+        expect(f.input().hidden).toBe(true);
+        expect(f.title().textContent).toBe("Changed through input");
+        expect(f.body().hidden).toBe(false);
+        expect(f.toggle().getAttribute("aria-expanded")).toBe("true");
+        expect(f.body().textContent).toContain("Body");
+        expect(f.view.state.doc.firstChild!.firstChild).toBe(mathBefore);
+        expect(f.preserveDraft).not.toHaveBeenCalled();
+        expect(undo(f.view.state, f.view.dispatch)).toBe(true);
+        expect(f.markdown()).toBe(source);
+        expect(redo(f.view.state, f.view.dispatch)).toBe(true);
+        expect(f.markdown()).toContain(
+          "<summary>Changed through input</summary>",
+        );
+      },
+    );
+  },
+);

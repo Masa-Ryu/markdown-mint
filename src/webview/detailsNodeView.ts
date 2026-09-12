@@ -3,6 +3,7 @@ import { closeHistory } from "prosemirror-history";
 import { NodeSelection, TextSelection } from "prosemirror-state";
 import type { EditorView, NodeView } from "prosemirror-view";
 import {
+  detailsSourceParts,
   parseDetailsSource,
   renderDetailsSummaryHtml,
   type Profile,
@@ -27,7 +28,7 @@ export function createDetailsNodeView(
 ): NodeView {
   let current = node;
   let disposed = false;
-  let open = parseDetailsSource(String(node.attrs.source ?? ""))?.open ?? false;
+  let open = detailsSourceParts(node)?.open ?? false;
   let editing:
     | {
         summary: string;
@@ -145,7 +146,7 @@ export function createDetailsNodeView(
     const value = input.value;
     const position = positionOf();
     const changed = value !== session.initialInput;
-    const parts = parseDetailsSource(String(current.attrs.source ?? ""));
+    const parts = detailsSourceParts(current);
     const candidate =
       parts &&
       parseDetailsSource(
@@ -154,6 +155,7 @@ export function createDetailsNodeView(
           parts.afterSummary +
           parts.body +
           parts.closing,
+        current.attrs.sourceProfile as Profile,
       );
     const canCommit =
       editable() &&

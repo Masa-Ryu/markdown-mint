@@ -8,6 +8,7 @@ import {
   renderMarkdownDocument,
   schema,
   serializeMarkdown,
+  type Profile,
 } from "../../src/core/index";
 
 describe("structured source-preserving Details", () => {
@@ -369,5 +370,468 @@ describe("Details scanner backslash escapes", () => {
         .flatMap((token) => token.children ?? []);
       expect(tokens.map((token) => token.type)).toEqual(["code_inline"]);
     },
+  );
+});
+
+describe("Details scanner Markdown block contexts", () => {
+  const markdownIt = new MarkdownIt("commonmark");
+  const scannedTags = (source: string) =>
+    detailsTagRanges(source).map(({ start, end }) => source.slice(start, end));
+  const realDetails =
+    "<details>\n<summary>Real</summary>\n\nBody\n\n</details>";
+
+  function expectSourcePreservingEdits(
+    source: string,
+    summary: string,
+    bodyText = "Body",
+    detailsCount = 1,
+  ): void {
+    const tags = detailsTagRanges(source);
+    const start = tags[0]!.start;
+    const end = tags.at(-1)!.end;
+    const block = source.slice(start, end);
+    const parts = parseDetailsSource(block)!;
+    expect(parts).not.toBeNull();
+    expect(parts.summary).toBe(summary);
+    expect(
+      parts.beforeSummary +
+        parts.summary +
+        parts.afterSummary +
+        parts.body +
+        parts.closing,
+    ).toBe(block);
+    expect(parts.body).toBe(
+      block.slice(
+        parts.beforeSummary.length + summary.length + parts.afterSummary.length,
+        block.lastIndexOf("</details>"),
+      ),
+    );
+    const snapshot = parseMarkdown(source);
+    let outerPosition = -1;
+    let count = 0;
+    let paragraphPosition = -1;
+    snapshot.doc.descendants((node, position) => {
+      if (node.type.name === "details") {
+        count += 1;
+        if (outerPosition < 0) outerPosition = position;
+      }
+      if (node.type.name === "paragraph" && node.textContent === bodyText)
+        paragraphPosition = position;
+    });
+    expect(count).toBe(detailsCount);
+    expect(outerPosition).toBeGreaterThanOrEqual(0);
+    expect(paragraphPosition).toBeGreaterThanOrEqual(0);
+    expect(serializeMarkdown(snapshot.doc, snapshot)).toBe(source);
+    const state = EditorState.create({ schema, doc: snapshot.doc });
+    const outer = state.doc.nodeAt(outerPosition)!;
+    const headingChange = state.tr.setNodeMarkup(outerPosition, undefined, {
+      ...outer.attrs,
+      summarySource: "Changed title",
+    });
+    const summaryStart = start + parts.beforeSummary.length;
+    expect(serializeMarkdown(headingChange.doc, snapshot)).toBe(
+      source.slice(0, summaryStart) +
+        "Changed title" +
+        source.slice(summaryStart + summary.length),
+    );
+    const bodyChange = state.tr.insertText("Edited ", paragraphPosition + 1);
+    const bodyStart = source.lastIndexOf(bodyText);
+    expect(serializeMarkdown(bodyChange.doc, snapshot)).toBe(
+      source.slice(0, bodyStart) + "Edited " + source.slice(bodyStart),
+    );
+  }
+
+  it.each([
+    [
+      "A: summary code after an unmatched backtick",
+      "`unmatched\n<details>\n<summary>`heading code`</summary>\nBody\n</details>",
+      "`heading code`",
+    ],
+    [
+      "B: quoted attributes after an unmatched backtick",
+      '`unmatched\n<details data-test="a > b" open>\n<summary>Summary</summary>\nBody\n</details>',
+      "Summary",
+    ],
+    [
+      "C: script body",
+      '<details>\n<summary>Summary</summary>\n<script>\nconst value = "</details>";\n</script>\nBody\n</details>',
+      "Summary",
+    ],
+    [
+      "D: style body",
+      '<details>\n<summary>Summary</summary>\n<style>\n.example::after { content: "</details>"; }\n</style>\nBody\n</details>',
+      "Summary",
+    ],
+    [
+      "E: pre body",
+      "<details>\n<summary>Summary</summary>\n<pre>\n</details>\n</pre>\nBody\n</details>",
+      "Summary",
+    ],
+    [
+      "F: textarea body",
+      "<details>\n<summary>Summary</summary>\n<textarea>\n</details>\n</textarea>\nBody\n</details>",
+      "Summary",
+    ],
+    [
+      "G: fake nested Details in script",
+      '<details>\n<summary>Summary</summary>\n<script>\nconst value = "<details><summary>fake</summary></details>";\n</script>\nBody\n</details>',
+      "Summary",
+    ],
+  ])(
+    "preserves structured parse and exact edits for %s",
+    (_name, source, summary) => {
+      expect(scannedTags(source)).toEqual([
+        source.startsWith("`unmatched\n<details data")
+          ? '<details data-test="a > b" open>'
+          : "<details>",
+        "</details>",
+      ]);
+      if (source.startsWith("`unmatched")) {
+        const tokens = markdownIt.parse(source, {});
+        expect(tokens.find((token) => token.type === "inline")?.map).toEqual([
+          0, 1,
+        ]);
+        expect(
+          tokens.find((token) => token.type === "html_block")?.map,
+        ).toEqual([1, 5]);
+      }
+      expectSourcePreservingEdits(source, summary);
+    },
+  );
+
+  it("H: retains real nested Details without requiring blank lines", () => {
+    const source =
+      "<details>\n<summary>Outer</summary>\n<details>\n<summary>Inner</summary>\nInside\n</details>\n</details>";
+    expect(scannedTags(source)).toEqual([
+      "<details>",
+      "<details>",
+      "</details>",
+      "</details>",
+    ]);
+    expectSourcePreservingEdits(source, "Outer", "Inside", 2);
+    const snapshot = parseMarkdown(source);
+    expect(snapshot.doc.firstChild!.firstChild!.type.name).toBe("details");
+    expect(snapshot.doc.firstChild!.firstChild!.attrs.summarySource).toBe(
+      "Inner",
+    );
+  });
+
+  it.each([
+    ["ATX heading", "# Heading", "heading_open", [1, 2]],
+    ["blockquote", "> Quoted", "blockquote_open", [1, 3]],
+    ["bullet list", "- Item", "bullet_list_open", [1, 3]],
+    ["ordered list starting at one", "1. Item", "ordered_list_open", [1, 3]],
+    ["thematic break", "***", "hr", [1, 2]],
+    ["fenced code", "```text\n<details></details>\n```", "fence", [1, 4]],
+    [
+      "script block",
+      "<script>\n<details></details>\n</script>",
+      "html_block",
+      [1, 4],
+    ],
+  ] as const)(
+    "ends unmatched code at the actual %s boundary",
+    (_name, boundary, type, map) => {
+      const source = `\`before\n${boundary}\nliteral <details></details>\``;
+      const tokens = markdownIt.parse(source, {});
+      expect(tokens.find((token) => token.type === "inline")?.map).toEqual([
+        0, 1,
+      ]);
+      expect(tokens.find((token) => token.type === type)?.map).toEqual(map);
+      expect(
+        tokens
+          .flatMap((token) => token.children ?? [])
+          .filter((token) => token.type === "html_inline")
+          .map((token) => token.content),
+      ).toEqual(["<details>", "</details>"]);
+      expect(scannedTags(source)).toEqual(["<details>", "</details>"]);
+      const expectedStart = source.lastIndexOf("<details>");
+      expect(detailsTagRanges(source)[0]?.start).toBe(expectedStart);
+    },
+  );
+
+  it("keeps an ordered marker starting at two inside the existing paragraph", () => {
+    const source = "`before\n2. Item\nliteral <details></details>`";
+    const tokens = markdownIt.parse(source, {});
+    expect(tokens.find((token) => token.type === "inline")?.map).toEqual([
+      0, 3,
+    ]);
+    expect(tokens.some((token) => token.type === "ordered_list_open")).toBe(
+      false,
+    );
+    expect(
+      tokens
+        .flatMap((token) => token.children ?? [])
+        .map((token) => token.type),
+    ).toEqual(["code_inline"]);
+    expect(scannedTags(source)).toEqual([]);
+  });
+
+  it("keeps a type 7 HTML opener inside an existing paragraph and code span", () => {
+    const source = "`before\n<custom-widget>\nliteral <details></details>`";
+    const tokens = markdownIt.parse(source, {});
+    expect(tokens.find((token) => token.type === "inline")?.map).toEqual([
+      0, 3,
+    ]);
+    expect(tokens.some((token) => token.type === "html_block")).toBe(false);
+    expect(
+      tokens
+        .flatMap((token) => token.children ?? [])
+        .map((token) => token.type),
+    ).toEqual(["code_inline"]);
+    expect(scannedTags(source)).toEqual([]);
+  });
+
+  it("uses setext heading boundaries without consuming the following paragraph", () => {
+    const source = "`before\n---\nliteral <details></details>`";
+    const tokens = markdownIt.parse(source, {});
+    expect(tokens.find((token) => token.type === "heading_open")?.map).toEqual([
+      0, 2,
+    ]);
+    expect(scannedTags(source)).toEqual(["<details>", "</details>"]);
+  });
+
+  const rawHtmlBlocks = [
+    ["type 1 script", '<script>\n"<details></details>"\n</script>'],
+    ["type 1 style", '<style>\n"<details></details>"\n</style>'],
+    ["type 1 pre", "<pre>\n<details></details>\n</pre>"],
+    ["type 1 textarea", "<textarea>\n<details></details>\n</textarea>"],
+    ["type 2 comment", "<!-- unmatched ```\n\n<details></details>\n-->"],
+    ["type 3 processing instruction", "<?process\n<details></details>\n?>"],
+    ["type 4 declaration", "<!DOCTYPE\n<details></details>>"],
+    ["type 5 CDATA", "<![CDATA[\n<details></details>\n]]>"],
+    [
+      "type 6 div",
+      "<div>\n<details>\n<summary>Fake</summary>\n</details>\n</div>",
+    ],
+    ["type 6 standalone summary", "<summary>\n<details></details>\n</summary>"],
+    [
+      "type 7 custom element",
+      '<custom-widget data-x="a > b">\n<details></details>\n</custom-widget>',
+    ],
+  ];
+
+  it.each(rawHtmlBlocks)(
+    "keeps %s opaque before an actual Details block",
+    (_name, raw) => {
+      const source = `${raw}\n\n${realDetails}`;
+      const token = markdownIt.parse(source, {})[0]!;
+      expect(token.type).toBe("html_block");
+      expect(token.map).toEqual([0, raw.split("\n").length]);
+      expect(scannedTags(source)).toEqual(["<details>", "</details>"]);
+      expect(detailsTagRanges(source)[0]?.start).toBe(raw.length + 2);
+      const snapshot = parseMarkdown(source);
+      expect(
+        snapshot.doc.content.content.filter(
+          (node) => node.type.name === "details",
+        ),
+      ).toHaveLength(1);
+      expect(snapshot.doc.lastChild!.attrs.summarySource).toBe("Real");
+      expect(serializeMarkdown(snapshot.doc, snapshot)).toBe(source);
+    },
+  );
+
+  it.each(["> <details>", "- <details>"])(
+    "does not let unmatched Details in %j expose an unrelated summary HTML block",
+    (prefix) => {
+      const raw =
+        "<summary>\n<details>\n<summary>Fake</summary>\nBody\n</details>\n</summary>";
+      const source = `${prefix}\n\n${raw}\n\n${realDetails}`;
+      const rawStart = prefix.split("\n").length + 1;
+      expect(
+        markdownIt
+          .parse(source, {})
+          .find(
+            (token) =>
+              token.type === "html_block" && token.map?.[0] === rawStart,
+          )?.content,
+      ).toBe(raw + "\n");
+      const fakeStart = source.indexOf("<details>", prefix.length);
+      const fakeEnd = source.indexOf("</summary>\n\n", fakeStart);
+      expect(
+        detailsTagRanges(source).filter(
+          (tag) => tag.start >= fakeStart && tag.start < fakeEnd,
+        ),
+      ).toEqual([]);
+      const snapshot = parseMarkdown(source);
+      const summaries: string[] = [];
+      snapshot.doc.descendants((node) => {
+        if (node.type.name === "details")
+          summaries.push(String(node.attrs.summarySource));
+      });
+      expect(summaries).toEqual(["Real"]);
+      expect(serializeMarkdown(snapshot.doc, snapshot)).toBe(source);
+    },
+  );
+
+  it.each(["\n", "\r\n", "\r"])(
+    "keeps %j source offsets, unknown HTML, and quoted attributes during both edits",
+    (ending) => {
+      const source =
+        '<details data-unknown="a > b" open="open">\n<summary class="title"><strong>Summary</strong></summary>\n<script data-x="&copy;">\nconst value = "</details>";\n</script>\n\n<custom-widget keep="  spaced  ">raw &amp; text</custom-widget>\n\nBody\n</details>\n'.replace(
+          /\n/g,
+          ending,
+        );
+      expect(scannedTags(source)).toEqual([
+        '<details data-unknown="a > b" open="open">',
+        "</details>",
+      ]);
+      expect(detailsTagRanges(source).at(-1)?.start).toBe(
+        source.lastIndexOf("</details>"),
+      );
+      expectSourcePreservingEdits(source, "<strong>Summary</strong>");
+    },
+  );
+});
+
+describe.each<Profile>(["commonmark", "github", "gitlab"])(
+  "Details source parsing with the %s block profile",
+  (profile) => {
+    it.each(["<details>", "</details>", "<details>\n</details>"])(
+      "preserves display math containing %j through summary/body edits and rendering",
+      (literal) => {
+        const math = `$$\n${literal}\n$$`;
+        const source = `<details data-preserve="a > b" open>\n<summary>Original</summary>\n\n${math}\n\nBody\n\n</details>\n`;
+        const snapshot = parseMarkdown(source, profile);
+        const outer = snapshot.doc.firstChild!;
+        expect(snapshot.doc.childCount).toBe(1);
+        expect(outer.type.name).toBe("details");
+        expect(outer.childCount).toBe(2);
+        expect(outer.firstChild!.attrs.kind).toBe("math-block");
+        expect(outer.firstChild!.attrs.source).toContain(math);
+        const state = EditorState.create({ schema, doc: snapshot.doc });
+        const changed = state.tr.setNodeMarkup(0, undefined, {
+          ...outer.attrs,
+          summarySource: "Changed",
+        });
+        const expected = source.replace(
+          "<summary>Original</summary>",
+          "<summary>Changed</summary>",
+        );
+        expect(serializeMarkdown(changed.doc, snapshot)).toBe(expected);
+        expect(serializeMarkdown(snapshot.doc, snapshot)).toBe(source);
+        const root = document.createElement("div");
+        root.innerHTML = renderMarkdownDocument(changed.doc, profile, snapshot);
+        expect(root.querySelectorAll("details")).toHaveLength(1);
+        expect(root.querySelector("details")?.open).toBe(true);
+        expect(root.querySelector("details > summary")?.textContent).toBe(
+          "Changed",
+        );
+        expect(root.querySelector("details")?.textContent).toContain("Body");
+        let bodyPosition = -1;
+        snapshot.doc.descendants((node, position) => {
+          if (node.type.name === "paragraph" && node.textContent === "Body")
+            bodyPosition = position;
+        });
+        expect(bodyPosition).toBeGreaterThan(0);
+        const bodyChange = state.tr.insertText("Edited ", bodyPosition + 1);
+        expect(serializeMarkdown(bodyChange.doc, snapshot)).toBe(
+          source.replace("\nBody\n", "\nEdited Body\n"),
+        );
+        const reparsed = parseMarkdown(expected, profile).doc.firstChild!;
+        expect(reparsed.attrs.summarySource).toBe("Changed");
+        expect(reparsed.firstChild!.attrs.source).toBe(
+          outer.firstChild!.attrs.source,
+        );
+      },
+    );
+  },
+);
+
+describe.each<Profile>(["github", "gitlab"])(
+  "Details source parsing with %s tables",
+  (profile) => {
+    it.each(["<details>", "</details>"])(
+      "saves summary edits when a table contains a backtick cell and literal %s",
+      (literal) => {
+        const table = `| A | B |\n| - | - |\n| \` | ${literal} |`;
+        const source = `<details open>\n<summary>Summary</summary>\n\n${table}\n\nBody\n\n</details>`;
+        const snapshot = parseMarkdown(source, profile);
+        const outer = snapshot.doc.firstChild!;
+        expect(snapshot.doc.childCount).toBe(1);
+        expect(outer.type.name).toBe("details");
+        expect(outer.childCount).toBe(2);
+        expect(outer.firstChild!.type.name).toBe("table");
+        expect(parseDetailsSource(source, profile)?.body).toBe(
+          `\n\n${table}\n\nBody\n\n`,
+        );
+        const state = EditorState.create({ schema, doc: snapshot.doc });
+        const changed = state.tr.setNodeMarkup(0, undefined, {
+          ...outer.attrs,
+          summarySource: "Changed",
+        });
+        expect(serializeMarkdown(changed.doc, snapshot)).toBe(
+          source.replace(
+            "<summary>Summary</summary>",
+            "<summary>Changed</summary>",
+          ),
+        );
+        expect(serializeMarkdown(snapshot.doc, snapshot)).toBe(source);
+        const root = document.createElement("div");
+        root.innerHTML = renderMarkdownDocument(changed.doc, profile, snapshot);
+        expect(root.querySelector("details")?.open).toBe(true);
+        expect(root.querySelector("details > summary")?.textContent).toBe(
+          "Changed",
+        );
+        expect(root.querySelectorAll("table")).toHaveLength(1);
+        expect(changed.doc.firstChild!.firstChild).toBe(outer.firstChild);
+      },
+    );
+  },
+);
+
+it("keeps edits and open rendering exact when revisiting a large Details document", () => {
+  const panels = Array.from(
+    { length: 80 },
+    (_, index) =>
+      `<details data-panel="${index}" open>\n<summary>Panel ${index}</summary>\n\n$$\n</details>\n$$\n\nBody ${index}\n\n</details>`,
+  );
+  const source = panels.join("\n\n");
+  const snapshot = parseMarkdown(source, "gitlab");
+  expect(snapshot.doc.childCount).toBe(panels.length);
+  const initial = document.createElement("div");
+  initial.innerHTML = renderMarkdownDocument(snapshot.doc, "gitlab", snapshot);
+  expect(initial.querySelectorAll("details[open]")).toHaveLength(panels.length);
+
+  // Visit another large document, then return to the immutable original state.
+  const otherSource = source.replace(/Panel /g, "Other panel ");
+  const other = parseMarkdown(otherSource, "github");
+  expect(serializeMarkdown(other.doc, other)).toBe(otherSource);
+  renderMarkdownDocument(other.doc, "github", other);
+
+  const state = EditorState.create({ schema, doc: snapshot.doc });
+  const lastPosition = state.doc.content.size - state.doc.lastChild!.nodeSize;
+  const changed = state.tr
+    .setNodeMarkup(0, undefined, {
+      ...state.doc.firstChild!.attrs,
+      summarySource: "First changed",
+    })
+    .setNodeMarkup(lastPosition, undefined, {
+      ...state.doc.lastChild!.attrs,
+      summarySource: "Last changed",
+    });
+  let firstBodyPosition = -1;
+  state.doc.descendants((node, position) => {
+    if (node.type.name === "paragraph" && node.textContent === "Body 0")
+      firstBodyPosition = position;
+  });
+  expect(firstBodyPosition).toBeGreaterThan(0);
+  changed.insertText("Edited ", firstBodyPosition + 1);
+  const expected = source
+    .replace("<summary>Panel 0</summary>", "<summary>First changed</summary>")
+    .replace("<summary>Panel 79</summary>", "<summary>Last changed</summary>")
+    .replace("\nBody 0\n", "\nEdited Body 0\n");
+  expect(serializeMarkdown(changed.doc, snapshot)).toBe(expected);
+  expect(serializeMarkdown(snapshot.doc, snapshot)).toBe(source);
+  const rendered = document.createElement("div");
+  rendered.innerHTML = renderMarkdownDocument(changed.doc, "gitlab", snapshot);
+  expect(rendered.querySelectorAll("details[open]")).toHaveLength(
+    panels.length,
+  );
+  const summaries = rendered.querySelectorAll("details > summary");
+  expect(summaries[0]!.textContent).toBe("First changed");
+  expect(summaries[summaries.length - 1]!.textContent).toBe("Last changed");
+  expect(rendered.querySelector("details")?.textContent).toContain(
+    "Edited Body 0",
   );
 });

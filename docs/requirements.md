@@ -101,6 +101,76 @@ picker opens the existing Profile Feature dialog in Edit mode. Insertion
 continues to use the toolbar dialog. External changes invalidate an active
 source edit while keeping the draft available to copy.
 
+## Details scanner block contexts (0.0.35)
+
+Details discovery uses the configured profile's markdown-it block parser before
+examining inline syntax. Each inline token supplies a bounded source range:
+unmatched backticks cannot reach a later heading, list, quote, fence or HTML
+block. The scanner no longer approximates paragraph boundaries with blank lines.
+The rule that exposes Details wrappers and their summaries runs only during this
+analysis pass; normal Markdown parsing retains its existing rules. Real nested
+Details remain transparent, including when wrappers have no intervening blank
+lines. Original offsets are mapped across LF, CRLF and CR without rewriting source.
+
+This follows [CommonMark block-before-inline precedence](https://spec.commonmark.org/0.31.2/#precedence)
+and the [seven HTML block types](https://spec.commonmark.org/0.31.2/#html-blocks).
+Types 1 (script/pre/style/textarea), 3 (processing instructions), 4 (declarations),
+5 (CDATA), and ordinary type 6/7 HTML blocks are opaque to Details discovery.
+Type 2 comments are consumed atomically; the existing supported case of real
+Details markup after a comment terminator on the same line remains supported.
+Only Details wrappers and summaries within an open Details are exposed instead
+of treating the complete wrapper as a type 6 HTML block. Type 6/7 content stays
+opaque until the blank-line boundary supplied by markdown-it; an outer closer
+inside that region cannot close a structured Details and remains preserved raw.
+Raw HTML is never rebuilt as an HTML tree for serialization.
+
+Tests compare the installed markdown-it 14.3.1 token maps, including ordered
+lists starting at one versus two, setext headings, and type 7 HTML that cannot
+interrupt a paragraph. Existing escape parity, remaining delimiter runs, comments,
+code spans, fenced code and all source-preservation regressions remain intact.
+The core reuses its profile-configured parser and passes detected tag ranges
+directly to the Details splitter. A bounded source/profile cache shares these
+parts with rendering, serialization and header editing, including profile math
+blocks. Immutable node attributes also retain parts through a WeakMap, so a
+document exceeding the bounded cache does not rescan each Details during redraw.
+Wrapper depth is local to markdown-it's recursive quote/list tokenization.
+A source boundary before an edited Details or after unchanged raw HTML
+is retained rather than supplemented with a blank line; existing CR and mixed
+blank separators are recognized independently of generated line endings.
+
+The real-browser regression opens an unmatched-backtick paragraph followed by a
+Details containing a script string with `</details>`. It opens/closes the Details
+without an edit message, single-clicks and types into the summary, and types
+directly into the body. Each save is compared with exact expected Markdown,
+including `data-test="keep"`, the complete inert script, and unchanged separators.
+The script is not executed. The screenshot is
+`output/playwright/block-editing/details-unmatched-backtick-raw-script.png`.
+
+An instrumented local check found zero additional scanner calls on two renders
+of documents containing 100/300 sibling Details or 60/100/140 nested Details.
+The 100/140-level renders took about 28/35 ms, comparable with 27/34 ms before
+this change. The five required fixtures took about 1.1–6.2 ms for an uncached
+parse plus unchanged serialization; these are local observations, not timing
+thresholds in the regression suite.
+
+Final 0.0.35 verification includes latest main `a8afcdd` and its save/recovery
+changes. Alert composition/rebase integration retains accepted input and is
+covered by three additional synchronization tests. The Details change adds 48
+core cases (all previous 44 remain unchanged), nine profile-aware NodeView
+cases, and one real-browser workflow. An 80-Details fixture checks exact edits
+after visiting another large document, without relying on implementation details
+or timing assertions. `npm run compile`, `npm test` (535 tests in 33 files),
+`npm run lint` (zero errors, 49 existing warnings), `npm run format:check`,
+`npm run test:browser:blocks` (15 groups plus five required fixtures on three
+surfaces), `npm run test:browser:spacing` (37 cases on each of three surfaces),
+and `npm run test:extension` (installed VS Code, exit 0) passed.
+`npm run package` produced `markdown-mint-0.0.35.vsix` (96 files, 4.76 MB) and
+passed bundled formatter verification. `git diff --check` passed.
+
+Real OS Japanese IME candidate UI, cross-region selection/copy/cut, zoom and
+visible native Undo/Redo remain manual checks. Synthetic composition and browser
+keyboard checks do not establish those results. PR #23 remains a draft.
+
 ## Details scanner escaped syntax (0.0.34)
 
 The scanner checks consecutive backslashes immediately before a candidate
