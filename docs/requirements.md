@@ -351,10 +351,13 @@ The 0.0.5 and earlier evidence above remains historical.
 - `npm run test:extension` was attempted after the build but terminated with
   `SIGABRT` before completing the native assertions, so no native automated
   pass is claimed for this version.
-- Real OS IME candidate UI and pixel measurements at 100%, 150%, and 200%
-  zoom remain manual checks. The five Markdown fixture paths remain part of
-  the repository's existing fixture coverage; this turn's direct VS Code
-  inspection used `common-test.md`.
+- The five required fixtures (`common-test.md`, `github-test.md`,
+  `github-test-class-B.md`, `gitlab-test.md`, and `gitlab-test-class-B.md`)
+  were opened in real VS Code through Markdown Mint without editing their
+  source. Code-block controls were confirmed in the common, GitHub, and
+  GitLab class-B fixtures; the common fixture was used for the interaction
+  screenshots above. Real OS IME candidate UI and pixel measurements at
+  100%, 150%, and 200% zoom remain manual checks.
 
 ## Explicit limits
 
