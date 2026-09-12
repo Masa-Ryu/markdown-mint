@@ -206,6 +206,19 @@ flushing, Cancel/Update focus restoration, and absence of the picker controls.
 Final 0.0.38 verification adds physical versus synthetic header activation,
 Enter/Space keyboard activation, and duplicate-dialog suppression assertions.
 
+Final 0.0.39 verification adds rendered Math/Mermaid double-click and
+Enter/Space dialog activation, source-label absence, interactive-child guards,
+and Details/Code padding, header, line-number, nested-selection, deletion, and
+host-Undo checks. The unit suite has 591 tests across 33 files. `npm run
+compile`, `npm test`, `npm run lint` (zero errors, 48 existing warnings),
+`npm run format:check`, `npm run test:browser:blocks` (17 interaction groups
+plus the five required fixtures on Rich, Dedicated Preview and native-preview
+surfaces), `npm run test:browser:spacing` (37 cases on each surface),
+`npm run test:extension` (isolated installed VS Code, exit 0), `npm run
+package` (96-file 0.0.39 VSIX, 4.76 MB, bundled formatter verification), and
+`git diff --check` passed. Real OS Japanese IME candidate UI and cross-region
+selection/copy/cut remain manual checks.
+
 ## Details scanner block contexts (0.0.35)
 
 Details discovery uses the configured profile's markdown-it block parser before
