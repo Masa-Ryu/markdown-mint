@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Fixed plain `ArrowUp` at the first visual row of a code block so it moves to
+  the previous editable block, including wrapped lines and nested containers,
+  while preserving normal in-code movement, controls, modifiers, IME, and
+  expanded-code focus trapping.
+
 - Simplified the code-language picker to show language labels only while
   retaining searchable identifiers, aliases, and highlighting metadata.
 

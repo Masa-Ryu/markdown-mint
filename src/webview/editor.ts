@@ -2577,6 +2577,7 @@ export class MarkdownEditorApp {
       first?.focus();
       return true;
     }
+    if (this.handleCodeBlockBoundaryKeyDown(event)) return true;
     if (this.handleAdjacentAlertKeyDown(event)) return true;
     // ProseMirror's `Mod` keymap covers the normal path. Keep an explicit
     // platform-aware fallback for hosts that stop the keymap event while a
@@ -2597,6 +2598,95 @@ export class MarkdownEditorApp {
       return this.sendSaveCommand();
     }
     return false;
+  }
+
+  private handleCodeBlockBoundaryKeyDown(event: KeyboardEvent): boolean {
+    if (
+      event.key !== "ArrowUp" ||
+      event.isComposing ||
+      event.keyCode === 229 ||
+      this.composing ||
+      event.shiftKey ||
+      event.ctrlKey ||
+      event.metaKey ||
+      event.altKey
+    )
+      return false;
+
+    const selection = this.view.state.selection;
+    if (!(selection instanceof TextSelection) || !selection.empty) return false;
+    const position = this.codeBlockPosition(selection);
+    if (position === null || !this.isCodeBlockTextEvent(event, position))
+      return false;
+    if (this.isCodeBlockExpanded(position)) {
+      // Expanded code is a modal surface. Do not let ProseMirror's fallback
+      // vertical motion carry the selection into the background document.
+      event.preventDefault();
+      return true;
+    }
+
+    // DOM geometry, rather than a document offset, distinguishes the first
+    // visual row from a wrapped continuation of the same logical line.
+    let atVisualStart = false;
+    try {
+      atVisualStart = this.view.endOfTextblock("up");
+    } catch {
+      // A host without usable layout must keep the browser's normal behavior.
+      return false;
+    }
+    if (!atVisualStart || !this.moveSelectionBeforeBlock(position))
+      return false;
+
+    event.preventDefault();
+    return true;
+  }
+
+  private codeBlockPosition(selection: TextSelection): number | null {
+    for (let depth = selection.$from.depth; depth > 0; depth -= 1) {
+      if (selection.$from.node(depth).type.name === "code_block")
+        return selection.$from.before(depth);
+    }
+    return null;
+  }
+
+  private isCodeBlockTextEvent(
+    event: KeyboardEvent,
+    position: number,
+  ): boolean {
+    const nodeDOM = this.view.nodeDOM(position);
+    if (!(nodeDOM instanceof Element)) return false;
+
+    // CodeBlockNodeView.stopEvent() normally keeps controls out of the
+    // ProseMirror keymap. Keep the check here as well for delegated and
+    // synthetic events, especially while a menu or picker owns focus.
+    const active = this.view.dom.ownerDocument.activeElement;
+    if (
+      active instanceof Element &&
+      nodeDOM.contains(active) &&
+      active.closest("input,select,textarea,button")
+    )
+      return false;
+
+    const target = event.target;
+    // A keyboard event delivered directly to the contenteditable root still
+    // represents the current ProseMirror selection, so allow that form for
+    // embedded hosts and tests. Events from a concrete control are rejected
+    // above or by the code-content check below.
+    if (target === this.view.dom) return true;
+    if (!(target instanceof Node) || !nodeDOM.contains(target)) return false;
+    const element = target instanceof Element ? target : target.parentNode;
+    if (!(element instanceof Element)) return false;
+    if (element.closest("input,select,textarea,button")) return false;
+    return Boolean(element.closest(".mm-code-block-pre code"));
+  }
+
+  private isCodeBlockExpanded(position: number): boolean {
+    const nodeDOM = this.view.nodeDOM(position);
+    if (!(nodeDOM instanceof Element)) return false;
+    const block = nodeDOM.matches(".mm-code-block")
+      ? nodeDOM
+      : nodeDOM.querySelector<HTMLElement>(".mm-code-block");
+    return block?.classList.contains("mm-code-block-expanded") ?? false;
   }
 
   private handleAdjacentAlertKeyDown(event: KeyboardEvent): boolean {
@@ -2651,6 +2741,50 @@ export class MarkdownEditorApp {
     );
     if (!focused) return false;
     event.preventDefault();
+    return true;
+  }
+
+  private moveSelectionBeforeBlock(position: number): boolean {
+    const state = this.view.state;
+    if (position <= 0) return false;
+
+    let nearest: Selection | null;
+    try {
+      nearest = Selection.findFrom(state.doc.resolve(position), -1);
+    } catch {
+      return false;
+    }
+
+    // Alerts are selectable raw atoms in the document, but their usable caret
+    // lives in the NodeView textarea. Focus it directly instead of trapping
+    // the user in a NodeSelection between an Alert and the code block.
+    if (
+      nearest &&
+      nearest.from < position &&
+      !nearest.$from.parent.isTextblock &&
+      isAlertBlock(state.doc.nodeAt(nearest.from)) &&
+      this.focusAlertBody(nearest.from, "end")
+    )
+      return true;
+
+    let target: Selection | null;
+    try {
+      // `textOnly` guarantees that images, raw atoms, and other leaf nodes do
+      // not become the destination of a code-block boundary move.
+      target = Selection.findFrom(state.doc.resolve(position), -1, true);
+    } catch {
+      return false;
+    }
+    if (
+      !target ||
+      !target.empty ||
+      target.from >= position ||
+      !target.$from.parent.isTextblock
+    )
+      return false;
+
+    this.view.dispatch(state.tr.setSelection(target).scrollIntoView());
+    this.view.focus();
     return true;
   }
 
