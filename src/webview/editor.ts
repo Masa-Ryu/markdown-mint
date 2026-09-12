@@ -5227,7 +5227,6 @@ export class MarkdownEditorApp {
         type: "button",
         class: "mm-tool-button",
         role: "menuitem",
-        "data-tooltip": title,
         "aria-label": title,
         ...(testId ? { "data-testid": testId } : {}),
       }) as HTMLButtonElement;

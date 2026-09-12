@@ -351,10 +351,23 @@ describe("bounded writing controls", () => {
       "table",
       "divider",
     ]);
+    const menuItems = Array.from(
+      popup.querySelectorAll<HTMLButtonElement>('button[role="menuitem"]'),
+    );
+    expect(menuItems.every((item) => !item.hasAttribute("data-tooltip"))).toBe(
+      true,
+    );
+    expect(menuItems.map((item) => item.getAttribute("aria-label"))).toEqual([
+      "Bullet list",
+      "Ordered list",
+      "Task list",
+      "Block quote",
+      "Code block",
+      "Insert table",
+      "Horizontal rule",
+    ]);
     expect(
-      Array.from(
-        popup.querySelectorAll<HTMLButtonElement>('button[role="menuitem"]'),
-      ).map(
+      menuItems.map(
         (item) =>
           item
             .querySelector<HTMLElement>(".mm-toolbar-button-label")
