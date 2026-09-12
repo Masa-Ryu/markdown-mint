@@ -53,6 +53,16 @@ The webview regression suite covers these flows, including CRLF and
 save/reload round trips. Live VS Code and operating-system IME behavior remain
 manual checks.
 
+Double-clicking an Alert card in the Rich Editor opens the existing Profile
+Feature dialog in Edit mode. The dialog initializes the Alert type and body
+from the current source, uses **Update** to change the same raw Alert block,
+and returns focus to the Alert body textarea. Toolbar insertion continues to
+use the same dialog in Insert mode with its existing defaults. Type-only edits
+replace only the `[!TYPE]` marker, preserving lazy continuation lines and
+other source bytes; body edits use the existing Alert body writer. An Alert
+edit is rejected if the document, profile, or editing state changed while the
+dialog was open.
+
 - Toolbar buttons and selects use the editor or widget foreground paired with
   their surface background. Primary and secondary dialog actions use their
   corresponding VS Code button colors, and disabled, focus, hover, and

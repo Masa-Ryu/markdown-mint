@@ -316,6 +316,10 @@ export type AlertBoundaryExit = (
   direction: AlertBoundaryDirection,
   position: number,
 ) => boolean;
+export type AlertEditRequest = (
+  position: number,
+  returnFocus?: HTMLElement,
+) => void;
 export const ALERT_LOCAL_INPUT_META = "markdown-mint-alert-local-input";
 
 function dependsOnDocumentContext(node: PMNode): boolean {
@@ -445,6 +449,7 @@ export function createAlertNodeView(
   getProfile?: () => Profile,
   onBoundaryExit?: AlertBoundaryExit,
   onHistoryCommand?: (command: AlertHistoryCommand) => boolean,
+  onEditRequest?: AlertEditRequest,
 ): NodeView {
   let current = node;
   let lastDocument = view.state.doc;
@@ -565,6 +570,14 @@ export function createAlertNodeView(
   };
 
   bodyEditor.addEventListener("mousedown", (event) => event.stopPropagation());
+  dom.addEventListener("dblclick", (event) => {
+    if (!onEditRequest || bodyComposing) return;
+    const position = positionOf();
+    if (position === undefined) return;
+    event.preventDefault();
+    event.stopPropagation();
+    onEditRequest(position, bodyEditor);
+  });
   // NodeView stopEvent handling can keep the editor-level composition state
   // from seeing events from this native textarea. Track the textarea itself so
   // a synthetic/native IME event cannot trigger alert boundary navigation.
