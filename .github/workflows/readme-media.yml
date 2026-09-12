@@ -4,9 +4,6 @@ on:
   workflow_dispatch:
   push:
     branches: [docs/visual-readme]
-    paths:
-      - scripts/capture-readme.mjs
-      - .github/workflows/readme-media.yml
 
 permissions:
   contents: read
@@ -34,6 +31,7 @@ jobs:
         run: |
           npm ci
           npm run build
+          ./node_modules/.bin/prettier --write scripts/capture-readme.mjs
       - name: Install capture-only tooling
         run: |
           npm install --prefix "$RUNNER_TEMP/mm-capture-tools" --ignore-scripts --no-audit --no-fund --save-exact playwright@1.58.2
@@ -59,7 +57,7 @@ jobs:
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add images/readme
+          git add images/readme scripts/capture-readme.mjs
           if ! git diff --cached --quiet; then
             git commit -m 'docs: add captured editor screenshots and table demo'
             git push origin HEAD:docs/visual-readme
@@ -72,5 +70,7 @@ jobs:
           path: |
             images/readme/
             output/readme-capture/
+            dist/
+            media/
           retention-days: 7
           if-no-files-found: warn
