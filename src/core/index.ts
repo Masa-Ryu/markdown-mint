@@ -21,11 +21,14 @@ import {
   renderCodeBlock as renderCodeBlockHtml,
   renderMath as renderMathHtml,
 } from "./visualRendering";
+import { codeFenceFor } from "./codeBlockSerialization";
 import infoIconAsset from "../../assets/info-icon.svg?raw";
 import lightbulbAsset from "../../assets/lightbulb.svg?raw";
 import warningTriangleAsset from "../../assets/warning-triangle.svg?raw";
 import alertOctagonAsset from "../../assets/alert-octagon.svg?raw";
 import alertCommentAsset from "../../assets/alert-comment.svg?raw";
+
+export { serializeCodeBlockMarkdown } from "./codeBlockSerialization";
 
 /** The Markdown dialect used by the editor and preview. */
 export type Profile = "github" | "gitlab" | "commonmark";
@@ -2029,13 +2032,6 @@ function escapeMarkdownText(value: string, table = false): string {
   return result.replace(/\n/g, "\n");
 }
 
-function codeFenceFor(value: string, preferred = "```"): string {
-  const runs = value.match(/`+/g) ?? [];
-  const longest = Math.max(0, ...runs.map((run) => run.length));
-  const count = Math.max(preferred.length, longest + 1);
-  return "`".repeat(Math.max(preferred.length, count));
-}
-
 function serializeCodeSpan(value: string, table = false): string {
   const content = value.replace(/\r\n|\r|\n/g, " ");
   const fence = codeFenceFor(content, "`");
@@ -3082,10 +3078,7 @@ function renderInline(node: PMNode, state: RenderState): string {
 }
 
 function renderCodeBlock(node: PMNode, state: RenderState): string {
-  const language =
-    String(node.attrs.params ?? "")
-      .trim()
-      .split(/\s+/, 1)[0] ?? "";
+  const language = String(node.attrs.params ?? "");
   const source = node.textContent;
   const rendered = state.renderCodeBlock?.(source, language) ?? null;
   return rendered ?? renderCodeFallback(source, language);

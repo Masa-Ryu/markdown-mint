@@ -1,4 +1,7 @@
-import { enhanceCodeBlockControls } from "./codeBlockControls";
+import {
+  enhanceCodeBlockControls,
+  type CodeBlockControlOptions,
+} from "./codeBlockControls";
 
 export interface MermaidRuntime {
   initialize?: (options: Record<string, unknown>) => void;
@@ -483,12 +486,15 @@ function documentForRoot(root: ParentNode): Document | undefined {
   return candidate.ownerDocument ?? document;
 }
 
-export function enhanceRenderedContent(root: ParentNode): RenderingEnhancer {
+export function enhanceRenderedContent(
+  root: ParentNode,
+  codeBlockOptions: CodeBlockControlOptions = {},
+): RenderingEnhancer {
   const ownerDocument = documentForRoot(root);
   const releaseFragmentDelegation = ownerDocument
     ? retainFragmentDelegation(ownerDocument)
     : undefined;
-  const codeBlockControls = enhanceCodeBlockControls(root);
+  const codeBlockControls = enhanceCodeBlockControls(root, codeBlockOptions);
   let disposed = false;
   let scanQueued = false;
   const jobs = new WeakMap<

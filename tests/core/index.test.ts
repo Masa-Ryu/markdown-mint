@@ -6,6 +6,7 @@ import {
   parseMarkdown,
   renderMarkdown,
   schema,
+  serializeCodeBlockMarkdown,
   serializeMarkdown,
 } from "../../src/core/index";
 
@@ -371,6 +372,16 @@ $$
         expectedText,
       );
     }
+  });
+
+  it("serializes copied code with preserved info and a safe fence", () => {
+    const source = "line with ```\n\nfinal";
+    expect(serializeCodeBlockMarkdown(source, 'ts title="example.ts"')).toBe(
+      '````ts title="example.ts"\nline with ```\n\nfinal\n````',
+    );
+    expect(serializeCodeBlockMarkdown("a\r\nb", "ts")).toBe(
+      "```ts\r\na\r\nb\r\n```",
+    );
   });
 
   it("edits an empty fenced block while preserving surrounding Markdown", () => {

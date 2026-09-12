@@ -15,8 +15,14 @@ import {
 
 function documentFixture(
   markdown = "# Title\n\nParagraph",
+  clipboardAvailable = false,
 ): EditorInitialDocument {
-  return { markdown, version: 1, profile: "github" };
+  return {
+    markdown,
+    version: 1,
+    profile: "github",
+    ...(clipboardAvailable ? { clipboardAvailable: true } : {}),
+  };
 }
 
 function isEditMessage(
@@ -31,7 +37,16 @@ function lastEditMarkdown(messages: unknown[]): string {
   return messages.filter(isEditMessage).at(-1)?.markdown ?? "";
 }
 
-function makeApp(markdown?: string, api?: VSCodeApiLike) {
+async function flush(): Promise<void> {
+  await new Promise<void>((resolve) => setTimeout(resolve, 0));
+  await Promise.resolve();
+}
+
+function makeApp(
+  markdown?: string,
+  api?: VSCodeApiLike,
+  clipboardAvailable = false,
+) {
   const root = document.createElement("div");
   document.body.append(root);
   const messages: unknown[] = [];
@@ -44,7 +59,7 @@ function makeApp(markdown?: string, api?: VSCodeApiLike) {
     root,
     vscode,
     core: { schema, parseMarkdown, serializeMarkdown, renderMarkdown },
-    initialDocument: documentFixture(markdown),
+    initialDocument: documentFixture(markdown, clipboardAvailable),
   });
   return { app, root, messages, vscode };
 }
@@ -186,21 +201,229 @@ describe("rich editor rendering", () => {
       operationId: firstEdit.operationId,
       reason: "ack",
     });
+    const trigger = root.querySelector<HTMLButtonElement>(
+      ".mm-code-block-view .mm-code-language-trigger",
+    )!;
+    trigger.click();
     const language = root.querySelector<HTMLInputElement>(
       ".mm-code-block-view .mm-code-language",
     )!;
-    const down = new MouseEvent("mousedown", {
-      bubbles: true,
-      cancelable: true,
-    });
-    language.dispatchEvent(down);
-    expect(down.defaultPrevented).toBe(false);
+    expect(
+      language.closest<HTMLElement>(".mm-code-language-menu")?.hidden,
+    ).toBe(false);
     language.value = "ts";
-    language.dispatchEvent(new Event("change", { bubbles: true }));
+    language.dispatchEvent(new Event("input", { bubbles: true }));
+    language.dispatchEvent(
+      new KeyboardEvent("keydown", { bubbles: true, key: "Enter" }),
+    );
     expect(
       messages.filter((message: any) => message.type === "edit"),
     ).toHaveLength(2);
     expect((messages.at(-1) as any).markdown).toContain("```ts");
+    app.destroy();
+  });
+
+  it("preserves info-string suffixes and custom language identifiers", () => {
+    const source = '```ts title="example.ts"\nconst value = 1;\n```';
+    const { app, root, messages } = makeApp(source);
+    const trigger = root.querySelector<HTMLButtonElement>(
+      ".mm-code-language-trigger",
+    )!;
+    const input = root.querySelector<HTMLInputElement>(
+      ".mm-code-language-inline",
+    )!;
+    const originalParams = app.view.state.doc.firstChild?.attrs.params;
+
+    trigger.click();
+    input.value = "acme-dsl";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(
+      root.querySelector<HTMLButtonElement>(
+        '[data-mm-language-option="acme-dsl"]',
+      )?.textContent,
+    ).toContain("Use");
+    input.dispatchEvent(
+      new KeyboardEvent("keydown", { bubbles: true, key: "Escape" }),
+    );
+    expect(app.view.state.doc.firstChild?.attrs.params).toBe(originalParams);
+    expect(
+      messages.filter((message: any) => message.type === "edit"),
+    ).toHaveLength(0);
+
+    trigger.click();
+    input.value = "acme-dsl";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    root
+      .querySelector<HTMLButtonElement>('[data-mm-language-option="acme-dsl"]')
+      ?.click();
+    expect(app.view.state.doc.firstChild?.attrs.params).toBe(
+      'acme-dsl title="example.ts"',
+    );
+    expect(lastEditMarkdown(messages)).toContain(
+      '```acme-dsl title="example.ts"',
+    );
+    expect(root.querySelector(".mm-code-language-label")?.textContent).toBe(
+      "acme-dsl",
+    );
+    app.destroy();
+  });
+
+  it("keeps no-language and explicit plaintext selections distinct", () => {
+    const { app, root, messages } = makeApp("```ts\nvalue\n```");
+    const trigger = root.querySelector<HTMLButtonElement>(
+      ".mm-code-language-trigger",
+    )!;
+    trigger.click();
+    root
+      .querySelector<HTMLButtonElement>('[data-mm-language-option=""]')
+      ?.click();
+    expect(app.view.state.doc.firstChild?.attrs.params).toBe("");
+    expect(
+      root.querySelector<HTMLElement>(".mm-code-block")?.dataset,
+    ).toMatchObject({ mmCodeLanguageKind: "unspecified" });
+    const firstEdit = messages.find(
+      (message: any) => message.type === "edit",
+    ) as any;
+    app.receiveDocument({
+      protocolVersion: PROTOCOL_VERSION,
+      type: "document",
+      markdown: firstEdit.markdown,
+      version: 2,
+      profile: "github",
+      operationId: firstEdit.operationId,
+      reason: "ack",
+    });
+
+    trigger.click();
+    root
+      .querySelector<HTMLButtonElement>('[data-mm-language-option="plaintext"]')
+      ?.click();
+    expect(app.view.state.doc.firstChild?.attrs.params).toBe("plaintext");
+    expect(
+      root.querySelector<HTMLElement>(".mm-code-block")?.dataset,
+    ).toMatchObject({ mmCodeLanguageKind: "plain" });
+    expect(
+      messages.filter((message: any) => message.type === "edit"),
+    ).toHaveLength(2);
+    app.destroy();
+  });
+
+  it("cancels language input on outside click and keeps display settings out of edits", () => {
+    const source = "```ts\nfirst\nsecond\n```";
+    const { app, root, messages } = makeApp(source);
+    const trigger = root.querySelector<HTMLButtonElement>(
+      ".mm-code-language-trigger",
+    )!;
+    const input = root.querySelector<HTMLInputElement>(
+      ".mm-code-language-inline",
+    )!;
+    trigger.click();
+    input.value = "python";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    document.body.dispatchEvent(
+      new MouseEvent("pointerdown", { bubbles: true }),
+    );
+    expect(app.view.state.doc.firstChild?.attrs.params).toBe("ts");
+    expect(
+      messages.filter((message: any) => message.type === "edit"),
+    ).toHaveLength(0);
+
+    const card = root.querySelector<HTMLElement>(".mm-code-block")!;
+    card
+      .querySelector<HTMLButtonElement>('[data-mm-code-action="more"]')
+      ?.click();
+    const editsBeforeMenu = messages.filter(
+      (message: any) => message.type === "edit",
+    ).length;
+    card
+      .querySelector<HTMLButtonElement>('[data-mm-code-menu-option="wrap"]')
+      ?.click();
+    card
+      .querySelector<HTMLButtonElement>(
+        '[data-mm-code-menu-option="line-numbers"]',
+      )
+      ?.click();
+    expect(card.classList.contains("mm-code-wrap-lines")).toBe(true);
+    expect(card.classList.contains("mm-code-hide-line-numbers")).toBe(true);
+    expect(
+      messages.filter((message: any) => message.type === "edit"),
+    ).toHaveLength(editsBeforeMenu);
+    app.destroy();
+  });
+
+  it("does not treat IME Enter as a language commit and cancels on Tab", () => {
+    const { app, root, messages } = makeApp("```ts\ncode\n```");
+    const trigger = root.querySelector<HTMLButtonElement>(
+      ".mm-code-language-trigger",
+    )!;
+    const input = root.querySelector<HTMLInputElement>(
+      ".mm-code-language-inline",
+    )!;
+    trigger.click();
+    input.value = "python";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    const composingEnter = new KeyboardEvent("keydown", {
+      bubbles: true,
+      cancelable: true,
+      key: "Enter",
+    });
+    Object.defineProperty(composingEnter, "isComposing", { value: true });
+    input.dispatchEvent(composingEnter);
+    expect(app.view.state.doc.firstChild?.attrs.params).toBe("ts");
+    expect(composingEnter.defaultPrevented).toBe(false);
+
+    input.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        bubbles: true,
+        cancelable: true,
+        key: "Tab",
+      }),
+    );
+    expect(app.view.state.doc.firstChild?.attrs.params).toBe("ts");
+    expect(
+      messages.filter((message: any) => message.type === "edit"),
+    ).toHaveLength(0);
+    app.destroy();
+  });
+
+  it("uses the host clipboard route for a dedicated editor copy", async () => {
+    const messages: unknown[] = [];
+    const api: VSCodeApiLike = {
+      postMessage: (message: unknown) => messages.push(message),
+      getState: () => undefined,
+      setState: () => undefined,
+    };
+    const { app, root } = makeApp("```ts\nlatest\n```", api);
+    app.receiveDocument({
+      protocolVersion: PROTOCOL_VERSION,
+      type: "document",
+      markdown: "```ts\nlatest\n```",
+      version: 2,
+      profile: "github",
+      reason: "external",
+      clipboardAvailable: true,
+    });
+    const copy = root.querySelector<HTMLButtonElement>(
+      '[data-mm-code-action="copy"]',
+    )!;
+    copy.click();
+    await flush();
+    const request = messages.find(
+      (message: any) => message.type === "clipboard-write",
+    ) as any;
+    expect(request?.text).toBe("latest");
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        data: {
+          protocolVersion: PROTOCOL_VERSION,
+          type: "clipboard-result",
+          requestId: request.requestId,
+          success: true,
+        },
+      }),
+    );
+    await flush();
+    expect(copy.dataset.mmCopyState).toBe("success");
     app.destroy();
   });
   it("provides code card actions and keeps line numbers outside editable content", () => {

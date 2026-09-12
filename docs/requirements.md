@@ -333,6 +333,29 @@ The 0.0.5 and earlier evidence above remains historical.
   defaults, cancel and Escape focus restoration, IME/read-only/conflict guards,
   and stale document/profile checks before insertion.
 
+## 0.0.23 code-block UI and interaction verification
+
+- Code blocks now share one card/header model across the rich editor, native
+  preview, and dedicated preview. The shared metadata keeps the original
+  info-string language and suffix while separating display labels, aliases,
+  highlight state, and custom-language fallback behavior.
+- The full unit suite passed 266 tests across 23 files. TypeScript compilation
+  and the format check passed. Lint reported zero errors with 30 existing
+  `any` warnings in the test suite.
+- The local 0.0.23 VSIX was installed in real VS Code and
+  `md/common-test.md` was opened in Markdown Mint without changing the source.
+  Normal cards, the searchable language picker, an `acme-dsl` custom-language
+  fallback, the three-dot menu, and Webview-internal expansion were exercised;
+  screenshots were captured for the normal card, picker, custom-language
+  fallback, menu, and expanded view.
+- `npm run test:extension` was attempted after the build but terminated with
+  `SIGABRT` before completing the native assertions, so no native automated
+  pass is claimed for this version.
+- Real OS IME candidate UI and pixel measurements at 100%, 150%, and 200%
+  zoom remain manual checks. The five Markdown fixture paths remain part of
+  the repository's existing fixture coverage; this turn's direct VS Code
+  inspection used `common-test.md`.
+
 ## Explicit limits
 
 Paste/drop image asset copying is optional follow-up work. Native IME and visual
