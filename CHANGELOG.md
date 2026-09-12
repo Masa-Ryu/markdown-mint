@@ -7,7 +7,8 @@
 - Remove the single-click Alert type picker and suppress the block selection
   outline while the native body editor or its dialog is active. Flush the
   latest textarea value before opening the dialog and restore body focus after
-  it closes.
+  it closes. Preserve physical mouse single-click inertness while supporting
+  keyboard and assistive-technology activation of the accessible header.
 
 ## 0.0.36
 

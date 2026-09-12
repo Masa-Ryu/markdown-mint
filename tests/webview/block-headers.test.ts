@@ -165,12 +165,51 @@ describe("block header actions", () => {
     const { root, app } = setup("> [!TIP]\n> body");
     const alertView = root.querySelector<HTMLElement>(".mm-alert-node-view")!;
     const title = root.querySelector<HTMLElement>(".markdown-alert-title")!;
-    const click = new MouseEvent("click", { bubbles: true, cancelable: true });
+    const click = new MouseEvent("click", {
+      bubbles: true,
+      cancelable: true,
+      detail: 1,
+    });
     title.dispatchEvent(click);
     expect(click.defaultPrevented).toBe(false);
     expect(root.querySelector(".mm-profile-feature-dialog[open]")).toBeNull();
     expect(root.querySelector(".mm-alert-type-picker")).toBeNull();
     expect(root.querySelector(".mm-alert-type-select")).toBeNull();
+
+    const syntheticClick = new MouseEvent("click", {
+      bubbles: true,
+      cancelable: true,
+      detail: 0,
+    });
+    title.dispatchEvent(syntheticClick);
+    const syntheticDialog = root.querySelector<HTMLDialogElement>(
+      ".mm-profile-feature-dialog",
+    )!;
+    expect(syntheticClick.defaultPrevented).toBe(true);
+    expect(syntheticDialog.hasAttribute("open")).toBe(true);
+    expect(syntheticDialog.dataset.profileFeatureMode).toBe("edit");
+    expect(
+      syntheticDialog.querySelector<HTMLSelectElement>(
+        '[data-feature-field="alert-type"]',
+      )!.value,
+    ).toBe("TIP");
+    expect(
+      syntheticDialog.querySelector<HTMLTextAreaElement>(
+        '[data-feature-field="body"]',
+      )!.value,
+    ).toBe("body");
+    syntheticDialog
+      .querySelector<HTMLButtonElement>("button:not([type='submit'])")!
+      .click();
+
+    const secondPhysicalClick = new MouseEvent("click", {
+      bubbles: true,
+      cancelable: true,
+      detail: 2,
+    });
+    title.dispatchEvent(secondPhysicalClick);
+    expect(secondPhysicalClick.defaultPrevented).toBe(false);
+    expect(root.querySelector(".mm-profile-feature-dialog[open]")).toBeNull();
 
     title.dispatchEvent(
       new MouseEvent("dblclick", { bubbles: true, cancelable: true }),
@@ -193,25 +232,85 @@ describe("block header actions", () => {
     app.destroy();
   });
 
-  it("keeps keyboard access to the Alert editor on its header", () => {
-    const { root, app } = setup("> [!NOTE]\n> body");
-    const title = root.querySelector<HTMLElement>(".markdown-alert-title")!;
-    expect(title.tabIndex).toBe(0);
-    expect(title.getAttribute("role")).toBe("button");
-    title.focus();
-    const enter = new KeyboardEvent("keydown", {
-      key: "Enter",
-      bubbles: true,
-      cancelable: true,
-    });
-    title.dispatchEvent(enter);
-    expect(enter.defaultPrevented).toBe(true);
+  it.each([
+    ["Enter", "Enter"],
+    ["Space", " "],
+  ])(
+    "keeps keyboard %s access to the Alert editor on its header",
+    (_name, key) => {
+      const { root, app } = setup("> [!NOTE]\n> body");
+      const title = root.querySelector<HTMLElement>(".markdown-alert-title")!;
+      expect(title.tabIndex).toBe(0);
+      expect(title.getAttribute("role")).toBe("button");
+      title.focus();
+      const enter = new KeyboardEvent("keydown", {
+        key,
+        bubbles: true,
+        cancelable: true,
+      });
+      title.dispatchEvent(enter);
+      expect(enter.defaultPrevented).toBe(true);
+      title.dispatchEvent(
+        new MouseEvent("click", {
+          bubbles: true,
+          cancelable: true,
+          detail: 0,
+        }),
+      );
+      expect(
+        root.querySelectorAll<HTMLDialogElement>(
+          ".mm-profile-feature-dialog[open]",
+        ),
+      ).toHaveLength(1);
+      app.destroy();
+    },
+  );
+
+  it("rejects synthetic header activation during composition and preview", () => {
+    const composing = setup("> [!NOTE]\n> composing");
+    const composingTitle = composing.root.querySelector<HTMLElement>(
+      ".markdown-alert-title",
+    )!;
+    composing.root
+      .querySelector<HTMLElement>(".ProseMirror")!
+      .dispatchEvent(new Event("compositionstart", { bubbles: true }));
+    composingTitle.dispatchEvent(
+      new MouseEvent("click", {
+        bubbles: true,
+        cancelable: true,
+        detail: 0,
+      }),
+    );
     expect(
-      root
+      composing.root
         .querySelector<HTMLDialogElement>(".mm-profile-feature-dialog")!
         .hasAttribute("open"),
-    ).toBe(true);
-    app.destroy();
+    ).toBe(false);
+
+    const preview = setup("> [!NOTE]\n> preview");
+    preview.app.receiveDocument({
+      protocolVersion: 1,
+      type: "document",
+      markdown: "> [!NOTE]\n> preview",
+      version: 2,
+      profile: "github",
+      mode: "preview",
+      reason: "external",
+    });
+    preview.root
+      .querySelector<HTMLElement>(".markdown-alert-title")!
+      .dispatchEvent(
+        new MouseEvent("click", {
+          bubbles: true,
+          cancelable: true,
+          detail: 0,
+        }),
+      );
+    expect(
+      preview.root
+        .querySelector<HTMLDialogElement>(".mm-profile-feature-dialog")!
+        .hasAttribute("open"),
+    ).toBe(false);
   });
 
   it.each([

@@ -110,11 +110,13 @@ has focus; blur removes that state. Opening the edit dialog uses a separate
 outline while the dialog is active.
 
 The old single-click type picker, select, and **Edit source…** action are no
-longer rendered. Header clicks are inert, while a header or body double click
-flushes any latest native body value and reuses the existing Alert edit dialog.
-Cancel restores the original body selection without a host edit. Update changes
-the existing Alert in place, preserving marker/body source behavior and the
-existing stale-document, conflict, recovery, and composition protections.
+longer rendered. Physical header clicks are inert, while a zero-detail
+synthetic click from programmatic or assistive-technology activation, keyboard
+Enter/Space, or a header/body double click uses the existing Alert edit dialog.
+The physical clicks that precede a double click remain inert. Cancel restores
+the original body selection without a host edit. Update changes the existing
+Alert in place, preserving marker/body source behavior and the existing
+stale-document, conflict, recovery, and composition protections.
 
 ## Details scanner inline token boundaries (0.0.36)
 

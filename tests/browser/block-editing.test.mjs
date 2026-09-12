@@ -219,6 +219,34 @@ async function testAlertHeaderAndSelection(page) {
   assert.equal(await page.locator(".mm-alert-type-picker").count(), 0);
   assert.equal(await page.locator(".mm-alert-type-select").count(), 0);
 
+  await title.focus();
+  await page.keyboard.press("Enter");
+  const enterDialog = page.locator(".mm-profile-feature-dialog[open]");
+  await enterDialog.waitFor({ state: "visible" });
+  assert.equal(
+    await page.locator(".mm-profile-feature-dialog[open]").count(),
+    1,
+  );
+  const beforeEnterCancel = await saved(page);
+  await enterDialog
+    .getByRole("button", { name: "Cancel", exact: true })
+    .click();
+  await noEdits(page, beforeEnterCancel, "Alert Enter activation cancel");
+
+  await title.focus();
+  await page.keyboard.press("Space");
+  const spaceDialog = page.locator(".mm-profile-feature-dialog[open]");
+  await spaceDialog.waitFor({ state: "visible" });
+  assert.equal(
+    await page.locator(".mm-profile-feature-dialog[open]").count(),
+    1,
+  );
+  const beforeSpaceCancel = await saved(page);
+  await spaceDialog
+    .getByRole("button", { name: "Cancel", exact: true })
+    .click();
+  await noEdits(page, beforeSpaceCancel, "Alert Space activation cancel");
+
   // Simulate text accepted by the native textarea immediately before the
   // double-click. The NodeView must flush it even without a separate input
   // event before opening the existing edit dialog.

@@ -695,7 +695,13 @@ export function createAlertNodeView(
   });
 
   const openEditor = (event: Event): void => {
-    if (!onEditRequest || bodyComposing || !canEdit()) return;
+    if (
+      !onEditRequest ||
+      bodyComposing ||
+      dom.classList.contains("mm-alert-dialog-open") ||
+      !canEdit()
+    )
+      return;
     const position = positionOf();
     if (position === undefined) return;
     try {
@@ -750,6 +756,13 @@ export function createAlertNodeView(
       title.tabIndex = 0;
       title.setAttribute("role", "button");
       title.setAttribute("aria-label", "Edit Alert");
+      title.addEventListener("click", (event) => {
+        // A physical mouse click (including either click in a double click)
+        // remains inert. Programmatic and assistive-technology activation is
+        // delivered as a zero-detail click and uses the guarded editor path.
+        if (event.detail !== 0) return;
+        openEditor(event);
+      });
       title.addEventListener("keydown", (event) => {
         if (
           (event.key !== "Enter" && event.key !== " ") ||
