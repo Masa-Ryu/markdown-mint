@@ -61,7 +61,9 @@ import {
   createRenderedNodeView,
   createRenderingPlugin,
   enhanceRenderedContent,
+  ALERT_LOCAL_INPUT_META,
   type AlertBoundaryDirection,
+  type AlertHistoryCommand,
   type RenderingEnhancer,
 } from "./rendering";
 import { appendToolbarIcon, type ToolbarIconName } from "./icons";
@@ -1397,6 +1399,8 @@ export class MarkdownEditorApp {
   private readonly statusEl: HTMLElement;
   private readonly previewEl: HTMLElement;
   private previewEnhancer: RenderingEnhancer | undefined;
+  private derivedViewFrame: number | null = null;
+  private deferredDerivedMarkdown: string | null = null;
   private readonly sourceEl: HTMLTextAreaElement;
   private readonly recoverButton: HTMLButtonElement;
   private profileSelect!: HTMLSelectElement;
@@ -1684,6 +1688,7 @@ export class MarkdownEditorApp {
                 () => this.profile,
                 (direction, position) =>
                   this.moveSelectionAroundAlert(direction, position),
+                (command: AlertHistoryCommand) => this.sendHostCommand(command),
               )
             : createRenderedNodeView(node, view, getPos, () => this.profile),
         raw_inline: (node, view, getPos) =>
@@ -1762,6 +1767,7 @@ export class MarkdownEditorApp {
 
   destroy(): void {
     this.destroyed = true;
+    this.cancelScheduledDerivedViews();
     window.removeEventListener("message", this.messageHandler);
     window.removeEventListener("resize", this.writingToolbarResizeHandler);
     this.stage.removeEventListener("scroll", this.writingToolbarScrollHandler);
@@ -2088,6 +2094,39 @@ export class MarkdownEditorApp {
     const state = this.view.state;
     const node = state.doc.nodeAt(position);
     if (!isAlertBlock(node)) return false;
+
+    // Adjacent raw alert atoms have no text position for Selection.near() to
+    // find. Focus the neighbouring NodeView directly so the user never lands
+    // on a ProseMirror NodeSelection between two alert editors.
+    let index = -1;
+    let childPosition = 0;
+    for (
+      let childIndex = 0;
+      childIndex < state.doc.childCount;
+      childIndex += 1
+    ) {
+      if (childPosition === position) {
+        index = childIndex;
+        break;
+      }
+      childPosition += state.doc.child(childIndex).nodeSize;
+    }
+    const adjacentIndex = direction === "before" ? index - 1 : index + 1;
+    if (
+      index >= 0 &&
+      adjacentIndex >= 0 &&
+      adjacentIndex < state.doc.childCount &&
+      isAlertBlock(state.doc.child(adjacentIndex))
+    ) {
+      let adjacentPosition = 0;
+      for (let childIndex = 0; childIndex < adjacentIndex; childIndex += 1)
+        adjacentPosition += state.doc.child(childIndex).nodeSize;
+      return this.focusAlertBody(
+        adjacentPosition,
+        direction === "before" ? "end" : "start",
+      );
+    }
+
     const blockEnd = position + node.nodeSize;
     if (direction === "before") {
       if (position <= 0) return false;
@@ -2210,6 +2249,9 @@ export class MarkdownEditorApp {
     const docChanged = transactions.some(
       (transaction) => transaction.docChanged,
     );
+    const alertLocalInput = transactions.some(
+      (transaction) => transaction.getMeta(ALERT_LOCAL_INPUT_META) === true,
+    );
     const selectionSet = transactions.some(
       (transaction) => transaction.selectionSet,
     );
@@ -2219,7 +2261,13 @@ export class MarkdownEditorApp {
       const markdown = this.serializeCurrent();
       this.persistRecovery(markdown ?? this.lastValidMarkdown);
       if (markdown !== null) {
-        this.refreshDerivedViews(markdown);
+        if (alertLocalInput) {
+          // Keep source integrity, recovery, and host sync synchronous. Preview
+          // and compatibility are derived views and can share one frame across
+          // a burst of native textarea input events.
+          this.sourceEl.value = markdown;
+          this.scheduleDerivedViews(markdown);
+        } else this.refreshDerivedViews(markdown);
         if (
           this.vscode &&
           !this.syncPaused &&
@@ -2344,6 +2392,7 @@ export class MarkdownEditorApp {
   }
 
   private refreshDerivedViews(markdown: string, fallbackHtml?: string): void {
+    this.cancelScheduledDerivedViews();
     const freshMarkdown = (() => {
       if (this.parseError && this.preservedSource !== null)
         return this.preservedSource;
@@ -2361,18 +2410,22 @@ export class MarkdownEditorApp {
         return markdown;
       }
     })();
-    this.sourceEl.value = freshMarkdown;
+    this.renderDerivedViews(freshMarkdown, fallbackHtml);
+  }
+
+  private renderDerivedViews(markdown: string, fallbackHtml?: string): void {
+    this.sourceEl.value = markdown;
     try {
       // Rendering deliberately receives freshly serialized Markdown on every
       // update. This keeps dedicated preview behavior aligned with VS Code's
       // native Markdown preview after formatting and conflict resolution.
       this.previewEl.innerHTML = this.core.renderMarkdown(
-        freshMarkdown,
+        markdown,
         this.profile,
       );
     } catch {
       if (fallbackHtml !== undefined) this.previewEl.innerHTML = fallbackHtml;
-      else this.previewEl.textContent = freshMarkdown;
+      else this.previewEl.textContent = markdown;
     }
     this.resolveDisplayImages(this.previewEl);
     this.previewEnhancer?.dispose();
@@ -2383,7 +2436,39 @@ export class MarkdownEditorApp {
     // ImageNodeView ignores this display-only attribute mutation so the
     // absolute webview URI never leaks into the ProseMirror document.
     this.resolveDisplayImages(this.view.dom);
-    this.refreshCompatibility(freshMarkdown);
+    this.refreshCompatibility(markdown);
+  }
+
+  private scheduleDerivedViews(markdown: string): void {
+    this.deferredDerivedMarkdown = markdown;
+    if (this.derivedViewFrame !== null) return;
+    const run = (): void => {
+      this.derivedViewFrame = null;
+      const nextMarkdown = this.deferredDerivedMarkdown;
+      this.deferredDerivedMarkdown = null;
+      if (nextMarkdown !== null && !this.destroyed)
+        this.renderDerivedViews(nextMarkdown);
+    };
+    if (typeof requestAnimationFrame === "function")
+      this.derivedViewFrame = requestAnimationFrame(run);
+    else {
+      // Vitest and a few lightweight embedders do not expose rAF. A microtask
+      // still moves derived work off the input dispatch stack without delaying
+      // the source/sync path.
+      this.derivedViewFrame = -1;
+      queueMicrotask(run);
+    }
+  }
+
+  private cancelScheduledDerivedViews(): void {
+    if (
+      this.derivedViewFrame !== null &&
+      this.derivedViewFrame >= 0 &&
+      typeof cancelAnimationFrame === "function"
+    )
+      cancelAnimationFrame(this.derivedViewFrame);
+    this.derivedViewFrame = null;
+    this.deferredDerivedMarkdown = null;
   }
 
   /** Resolve local image references for the webview display only. */
