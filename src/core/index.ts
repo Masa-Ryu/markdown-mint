@@ -26,6 +26,10 @@ import lightbulbAsset from "../../assets/lightbulb.svg?raw";
 import warningTriangleAsset from "../../assets/warning-triangle.svg?raw";
 import alertOctagonAsset from "../../assets/alert-octagon.svg?raw";
 import alertCommentAsset from "../../assets/alert-comment.svg?raw";
+import { parseAlertSource } from "./alerts";
+export { alertSourceWithBody, parseAlertSource } from "./alerts";
+export type { AlertSourceParts } from "./alerts";
+export const alertSourceParts = parseAlertSource;
 
 /** The Markdown dialect used by the editor and preview. */
 export type Profile = "github" | "gitlab" | "commonmark";
@@ -111,15 +115,6 @@ export interface RenderContext {
     source: string,
     options?: Record<string, unknown>,
   ) => string | null;
-}
-
-/** The source shape needed to edit an alert body without losing its context. */
-export interface AlertSourceParts {
-  readonly body: string;
-  readonly header: string;
-  readonly bodyPrefix: string;
-  readonly lineEnding: string;
-  readonly trailingLineEnding: string;
 }
 
 type MarkdownToken = {
@@ -3116,80 +3111,6 @@ function renderCodeBlock(node: PMNode, state: RenderState): string {
   return rendered ?? renderCodeFallback(source, language);
 }
 
-function stripAlertPrefix(line: string): string {
-  return line.replace(/^\s*>[ \t]?/, "");
-}
-
-/**
- * Split an alert source into its editable body and the source framing around
- * it. Markdown blockquotes allow lazy paragraph continuation lines without a
- * `>` marker, so non-empty unquoted lines are body lines until an unquoted
- * blank line ends the blockquote. The parser already limits the raw atom to
- * the blockquote and its separator, which keeps an outside paragraph out of
- * this scan.
- */
-export function alertSourceParts(source: string): AlertSourceParts {
-  const lineEnding = source.includes("\r\n")
-    ? "\r\n"
-    : source.includes("\r")
-      ? "\r"
-      : "\n";
-  const normalized = source.replace(/\r\n|\r/g, "\n");
-  const lines = normalized.split("\n");
-  const markerIndex = Math.max(
-    0,
-    lines.findIndex((line) =>
-      /^\s*>?[ \t]*\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]/i.test(line),
-    ),
-  );
-  const markerLine = lines[markerIndex] ?? "";
-  const markerPrefix = markerLine.match(/^(\s*>[ \t]?)/)?.[1] ?? "";
-  const bodySourceLines: string[] = [];
-  for (let index = markerIndex + 1; index < lines.length; index += 1) {
-    const line = lines[index]!;
-    const quoted = /^\s*>[ \t]?/.test(line);
-    // An unquoted blank line is the separator after the blockquote. A
-    // non-empty unquoted line is a CommonMark lazy continuation line.
-    if (!quoted && line.trim() === "") break;
-    bodySourceLines.push(line);
-  }
-  const firstBodyPrefix = bodySourceLines
-    .map((line) => line.match(/^(\s*>[ \t]?)/)?.[1])
-    .find((prefix): prefix is string => prefix !== undefined);
-  const bodyPrefix = firstBodyPrefix ?? markerPrefix;
-  const body = bodySourceLines
-    .map((line) => (/^\s*>[ \t]?/.test(line) ? stripAlertPrefix(line) : line))
-    .join("\n");
-  const trailingMatch = normalized.match(/\n+$/);
-  const trailingLineEnding = trailingMatch
-    ? trailingMatch[0].replace(/\n/g, lineEnding)
-    : "";
-  return {
-    body,
-    header: lines.slice(0, markerIndex + 1).join("\n"),
-    bodyPrefix,
-    lineEnding,
-    trailingLineEnding,
-  };
-}
-
-/** Replace only an alert's editable body while preserving its source shape. */
-export function alertSourceWithBody(source: string, body: string): string {
-  const parts = alertSourceParts(source);
-  const normalizedBody = body.replace(/\r\n|\r/g, "\n");
-  const bodyLines = normalizedBody
-    ? normalizedBody
-        .split("\n")
-        .map((line) => parts.bodyPrefix + line)
-        .join(parts.lineEnding)
-    : "";
-  return (
-    parts.header.replace(/\n/g, parts.lineEnding) +
-    (bodyLines ? parts.lineEnding + bodyLines : "") +
-    parts.trailingLineEnding
-  );
-}
-
 const ALERT_ICON_SOURCES = {
   note: infoIconAsset,
   tip: lightbulbAsset,
@@ -3199,15 +3120,9 @@ const ALERT_ICON_SOURCES = {
 } as const;
 
 function renderAlert(source: string, state: RenderState): string {
-  const lines = source.replace(/\r\n|\r/g, "\n").split("\n");
-  let markerIndex = lines.findIndex((line) =>
-    /^\s*>?[ \t]*\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]/i.test(line),
-  );
-  if (markerIndex < 0) markerIndex = 0;
-  const markerLine = stripAlertPrefix(lines[markerIndex] ?? "");
-  const marker =
-    markerLine.match(/^\s*\[!([^\]]+)\]/i)?.[1]?.toLowerCase() ?? "note";
-  const body = alertSourceParts(source).body;
+  const parts = parseAlertSource(source);
+  const marker = parts.marker;
+  const body = parts.body;
   const title = marker.charAt(0).toUpperCase() + marker.slice(1);
   const bodyHtml = body ? renderSourceFragment(body, state.profile, state) : "";
   const icon =

@@ -307,6 +307,25 @@ describe("rich editor rendering", () => {
     );
     app.destroy();
   });
+  it("keeps lazy continuation lines in the alert editor when the body changes", () => {
+    const source = "> [!TIP]\r\n> First\r\ncontinued\r\n> Last\r\n\r\nNext\r\n";
+    const { app, root, messages } = makeApp(source);
+    const bodyEditor = root.querySelector<HTMLTextAreaElement>(
+      ".mm-alert-body-editor",
+    )!;
+    expect(bodyEditor.value).toBe("First\ncontinued\nLast");
+
+    bodyEditor.value = "First\ncontinued\nChanged";
+    bodyEditor.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(app.view.state.doc.firstChild?.attrs.source).toContain(
+      "> continued",
+    );
+    expect(app.view.state.doc.firstChild?.attrs.source).toContain("> Changed");
+    expect(lastEditMarkdown(messages)).toBe(
+      "> [!TIP]\r\n> First\r\n> continued\r\n> Changed\r\n\r\nNext\r\n",
+    );
+    app.destroy();
+  });
   it("keeps Enter as a native newline inside alert content", () => {
     const { app, root } = makeApp("> [!NOTE]\n> Before");
     const bodyEditor = root.querySelector<HTMLTextAreaElement>(
@@ -478,9 +497,9 @@ describe("rich editor rendering", () => {
     expect(document.activeElement).toBe(bodyEditor);
     app.destroy();
   });
-  it("moves directly between consecutive alert body editors", () => {
+  it("moves directly between consecutive alert bodies without a NodeSelection", () => {
     const { app, root } = makeApp(
-      "Before\n\n> [!NOTE]\n> Alert A\n\n> [!TIP]\n> Alert B\n\nAfter",
+      "Before\n\n> [!NOTE]\n> First\n\n> [!TIP]\n> Second\n\nAfter",
     );
     const editors = Array.from(
       root.querySelectorAll<HTMLTextAreaElement>(".mm-alert-body-editor"),
@@ -603,11 +622,46 @@ describe("rich editor rendering", () => {
     expect(document.activeElement).toBe(bodyEditor);
     app.destroy();
   });
-  it("routes alert textarea history shortcuts through host commands", () => {
+  it("keeps alert boundary keys inert for the textarea's composition lifecycle", () => {
+    const { app, root } = makeApp("> [!NOTE]\n> Alert");
+    const bodyEditor = root.querySelector<HTMLTextAreaElement>(
+      ".mm-alert-body-editor",
+    )!;
+    bodyEditor.focus();
+    bodyEditor.setSelectionRange(
+      bodyEditor.value.length,
+      bodyEditor.value.length,
+    );
+
+    bodyEditor.dispatchEvent(new Event("compositionstart", { bubbles: true }));
+    for (const key of ["ArrowRight", "ArrowLeft", "Enter"]) {
+      const event = new KeyboardEvent("keydown", {
+        bubbles: true,
+        cancelable: true,
+        key,
+      });
+      bodyEditor.dispatchEvent(event);
+      expect(event.defaultPrevented).toBe(false);
+      expect(document.activeElement).toBe(bodyEditor);
+    }
+    bodyEditor.dispatchEvent(new Event("compositionend", { bubbles: true }));
+
+    const exit = new KeyboardEvent("keydown", {
+      bubbles: true,
+      cancelable: true,
+      key: "ArrowRight",
+    });
+    bodyEditor.dispatchEvent(exit);
+    expect(exit.defaultPrevented).toBe(true);
+    expect(root.querySelector(".mm-alert-body-editor")).not.toBeNull();
+    app.destroy();
+  });
+  it("routes alert history shortcuts through the host undo service", () => {
     const { app, root, messages } = makeApp("> [!NOTE]\n> abc");
     const bodyEditor = root.querySelector<HTMLTextAreaElement>(
       ".mm-alert-body-editor",
     )!;
+    bodyEditor.focus();
 
     const undo = new KeyboardEvent("keydown", {
       bubbles: true,

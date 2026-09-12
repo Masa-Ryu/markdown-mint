@@ -4,6 +4,7 @@ import type { EditorState } from "prosemirror-state";
 import type { Node as PMNode } from "prosemirror-model";
 import type { EditorView, NodeView } from "prosemirror-view";
 import * as core from "../core/index";
+import { alertSourceWithBody, parseAlertSource } from "../core/alerts";
 import {
   escapeHtml,
   highlightCodeSpans,
@@ -498,7 +499,7 @@ export function createAlertNodeView(
       String(currentNode.attrs.kind ?? "") !== "alert"
     )
       return;
-    const source = core.alertSourceWithBody(
+    const source = alertSourceWithBody(
       String(currentNode.attrs.source ?? ""),
       bodyEditor.value,
     );
@@ -546,7 +547,7 @@ export function createAlertNodeView(
     const alert = preview.querySelector<HTMLElement>(".markdown-alert");
     const title = alert?.querySelector<HTMLElement>(".markdown-alert-title");
     if (alert && title) {
-      const parts = core.alertSourceParts(sourceFor(current));
+      const parts = parseAlertSource(sourceFor(current));
       if (bodyEditor.value !== parts.body) bodyEditor.value = parts.body;
       alert.replaceChildren(title, bodyEditor);
       resizeBodyEditor();
@@ -670,6 +671,13 @@ export function createAlertNodeView(
     stopEvent: (event) => {
       const target = event.target;
       if (!(target instanceof Element)) return false;
+      const keyboardEvent = event as KeyboardEvent;
+      if (
+        event.type === "keydown" &&
+        ["z", "y"].includes(keyboardEvent.key.toLowerCase()) &&
+        (keyboardEvent.ctrlKey || keyboardEvent.metaKey)
+      )
+        return false;
       return Boolean(target.closest("a,button,input,summary,select,textarea"));
     },
     ignoreMutation: () => true,
