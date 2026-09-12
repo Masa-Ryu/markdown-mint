@@ -247,6 +247,14 @@ interface TransientBlankTransactionMeta {
   meaningful?: boolean;
 }
 
+type WritingPopupCloseReason = "discard" | "consume" | "cancel";
+
+interface SlashTrigger {
+  selection: Selection;
+  documentGeneration: number;
+  profile: DocumentProfile;
+}
+
 interface TableDialogSelection {
   selection: Selection;
   doc: PMNode;
@@ -940,6 +948,22 @@ function makeElement(
   for (const [name, value] of Object.entries(attrs))
     element.setAttribute(name, value);
   return element;
+}
+
+function movePopupFocusIndex(
+  items: readonly HTMLButtonElement[],
+  currentIndex: number,
+  delta: number,
+): number {
+  if (!items.length || delta === 0) return -1;
+  const count = items.length;
+  const current = currentIndex >= 0 && currentIndex < count ? currentIndex : 0;
+  for (let attempt = 0; attempt < count; attempt += 1) {
+    const candidate =
+      (((current + delta * (attempt + 1)) % count) + count) % count;
+    if (!items[candidate]?.disabled) return candidate;
+  }
+  return -1;
 }
 
 function topLevelRangeNodes(
@@ -2223,6 +2247,8 @@ export class MarkdownEditorApp {
   private popupSelection: Selection | null = null;
   private popupDocumentGeneration = -1;
   private popupProfile: DocumentProfile | null = null;
+  private slashTrigger: SlashTrigger | null = null;
+  private materializingSlash = false;
   private selectionToolbarSelection: Selection | null = null;
   private selectionToolbarDocumentGeneration = -1;
   private selectionToolbarProfile: DocumentProfile | null = null;
@@ -2285,9 +2311,10 @@ export class MarkdownEditorApp {
       (active.contains(target) || this.activePopupToggle?.contains(target))
     )
       return;
-    this.closeWritingPopups();
+    this.closeWritingPopups("cancel");
   };
   private readonly writingFocusInHandler = (event: FocusEvent): void => {
+    if (this.materializingSlash) return;
     const active = this.activePopup;
     if (!active) return;
     const target = event.target;
@@ -2296,7 +2323,7 @@ export class MarkdownEditorApp {
       (active.contains(target) || this.activePopupToggle?.contains(target))
     )
       return;
-    this.closeWritingPopups();
+    this.closeWritingPopups("cancel");
   };
   private readonly stageBlankPointerDownHandler = (event: MouseEvent): void => {
     if (this.handleBlankDocumentPointer(event)) {
@@ -2313,8 +2340,10 @@ export class MarkdownEditorApp {
   private readonly writingKeyDownHandler = (event: KeyboardEvent): void => {
     if (event.key !== "Escape" || !this.activePopup) return;
     const returnFocus = this.popupReturnFocus ?? this.activePopupToggle;
-    this.closeWritingPopups();
-    returnFocus?.focus();
+    const returnToEditor = returnFocus === this.emptyLineButton;
+    this.closeWritingPopups("cancel");
+    if (returnToEditor) this.view.focus();
+    else returnFocus?.focus();
   };
 
   constructor(options: EditorAppOptions) {
@@ -2645,6 +2674,8 @@ export class MarkdownEditorApp {
         props: {
           decorations: () => null,
           handleKeyDown: (_view, event) => this.handleAppKeyDown(event),
+          handleTextInput: (view, from, to, text) =>
+            this.handleInsertBlockSlash(view, from, to, text),
         },
       }),
     ];
@@ -2785,6 +2816,52 @@ export class MarkdownEditorApp {
       this.view.dispatch(transaction),
     );
     return handled;
+  }
+
+  private handleInsertBlockSlash(
+    view: EditorView,
+    from: number,
+    to: number,
+    text: string,
+  ): boolean {
+    const selection = view.state.selection;
+    if (
+      text !== "/" ||
+      from !== to ||
+      !selection.empty ||
+      selection.from !== from ||
+      selection.to !== to ||
+      this.activePopup ||
+      !this.canUseEmptyLineInsert(selection)
+    )
+      return false;
+
+    // Keep the same affordance position and DOM anchor used by the + button.
+    // This also makes a missing or disconnected paragraph view a normal text
+    // input fallback instead of opening an unanchored popup.
+    this.updateEmptyLineInsert(selection);
+    if (this.emptyLineButton.hidden) return false;
+    if (!this.captureWritingPopupSelection()) return false;
+    const savedSelection = this.popupSelection;
+    if (!savedSelection) return false;
+
+    this.slashTrigger = {
+      selection: savedSelection,
+      documentGeneration: this.popupDocumentGeneration,
+      profile: this.profile,
+    };
+    if (
+      !this.openWritingPopup(
+        this.insertPopup,
+        this.insertPopupToggle,
+        this.emptyLineButton,
+      )
+    ) {
+      this.slashTrigger = null;
+      this.closeWritingPopups("discard");
+      return false;
+    }
+    return true;
   }
 
   private handleAppKeyDown(event: KeyboardEvent): boolean {
@@ -5160,6 +5237,10 @@ export class MarkdownEditorApp {
         event.preventDefault();
       });
       item.addEventListener("click", () => {
+        // Consuming before restoring is important: focusing the editor during
+        // restore fires the outside-focus guard, which must close the popup
+        // without materializing a slash that is already being committed.
+        this.consumeSlashTrigger();
         if (!this.restoreWritingPopupSelection()) {
           this.closeWritingPopups();
           this.setNotice(
@@ -5169,14 +5250,14 @@ export class MarkdownEditorApp {
           return;
         }
         command();
-        if (!this.tableDialogOpen) this.closeWritingPopups();
+        if (!this.tableDialogOpen) this.closeWritingPopups("consume");
       });
       panel.append(item);
       return item;
     };
 
     const bulletMenuButton = addMenuButton(
-      "List",
+      "Bullet list",
       "Bullet list",
       () => this.runListCommand("bullet_list"),
       undefined,
@@ -5184,7 +5265,7 @@ export class MarkdownEditorApp {
     );
     bulletMenuButton.dataset.listKind = "bullet";
     const orderedMenuButton = addMenuButton(
-      "List",
+      "Ordered list",
       "Ordered list",
       () => this.runListCommand("ordered_list"),
       undefined,
@@ -5233,15 +5314,19 @@ export class MarkdownEditorApp {
       if (event.key === "Escape") {
         event.preventDefault();
         const returnFocus = this.popupReturnFocus ?? button;
-        this.closeWritingPopups();
-        returnFocus.focus();
+        const returnToEditor = returnFocus === this.emptyLineButton;
+        this.closeWritingPopups("cancel");
+        if (returnToEditor) this.view.focus();
+        else returnFocus.focus();
         return;
       }
       if (event.key === "Tab") {
-        this.closeWritingPopups();
+        this.closeWritingPopups("cancel");
         return;
       }
       if (
+        event.key !== "ArrowRight" &&
+        event.key !== "ArrowLeft" &&
         event.key !== "ArrowDown" &&
         event.key !== "ArrowUp" &&
         event.key !== "Home" &&
@@ -5250,21 +5335,34 @@ export class MarkdownEditorApp {
         return;
       event.preventDefault();
       const items = Array.from(
-        panel.querySelectorAll<HTMLButtonElement>(
-          'button[role="menuitem"]:not(:disabled)',
-        ),
+        panel.querySelectorAll<HTMLButtonElement>('button[role="menuitem"]'),
       );
       if (!items.length) return;
       const current = items.indexOf(
         document.activeElement as HTMLButtonElement,
       );
-      let next = current < 0 ? 0 : current;
-      if (event.key === "ArrowDown") next = (next + 1) % items.length;
-      else if (event.key === "ArrowUp")
-        next = (next - 1 + items.length) % items.length;
-      else if (event.key === "Home") next = 0;
-      else next = items.length - 1;
-      items[next]?.focus();
+      let next = -1;
+      if (event.key === "Home")
+        next = items.findIndex((item) => !item.disabled);
+      else if (event.key === "End") {
+        for (let index = items.length - 1; index >= 0; index -= 1) {
+          if (!items[index]?.disabled) {
+            next = index;
+            break;
+          }
+        }
+      } else {
+        const delta =
+          event.key === "ArrowRight"
+            ? 1
+            : event.key === "ArrowLeft"
+              ? -1
+              : event.key === "ArrowDown"
+                ? 2
+                : -2;
+        next = movePopupFocusIndex(items, current, delta);
+      }
+      if (next >= 0) items[next]?.focus();
     });
 
     button.addEventListener("mousedown", (event) => {
@@ -5285,7 +5383,7 @@ export class MarkdownEditorApp {
     return button;
   }
 
-  private captureWritingPopupSelection(): void {
+  private captureWritingPopupSelection(): boolean {
     if (
       !this.view ||
       !this.initialized ||
@@ -5296,10 +5394,11 @@ export class MarkdownEditorApp {
       this.syncPaused ||
       this.composing
     )
-      return;
+      return false;
     this.popupSelection = this.view.state.selection;
     this.popupDocumentGeneration = this.documentGeneration;
     this.popupProfile = this.profile;
+    return true;
   }
 
   private captureSelectionToolbarSelection(): void {
@@ -5342,7 +5441,7 @@ export class MarkdownEditorApp {
     toggle: HTMLButtonElement,
   ): void {
     if (this.activePopup === popup) {
-      this.closeWritingPopups();
+      this.closeWritingPopups("cancel");
       return;
     }
     this.captureWritingPopupSelection();
@@ -5353,7 +5452,7 @@ export class MarkdownEditorApp {
     popup: HTMLElement,
     toggle: HTMLButtonElement,
     anchor: HTMLElement,
-  ): void {
+  ): boolean {
     if (
       !this.initialized ||
       this.previewOnly ||
@@ -5363,7 +5462,7 @@ export class MarkdownEditorApp {
       this.syncPaused ||
       this.composing
     )
-      return;
+      return false;
     const retainedSelection = this.popupSelection;
     const retainedGeneration = this.popupDocumentGeneration;
     const retainedProfile = this.popupProfile;
@@ -5392,9 +5491,21 @@ export class MarkdownEditorApp {
       anchor.setAttribute("aria-expanded", "true");
     this.positionWritingPopup();
     if (anchor === this.emptyLineButton) this.focusPopupItem(popup, 0);
+    return true;
   }
 
-  private closeWritingPopups(): void {
+  private closeWritingPopups(
+    reason: WritingPopupCloseReason = "discard",
+  ): void {
+    if (reason === "cancel" && this.slashTrigger) {
+      this.materializeSlashTrigger();
+      return;
+    }
+    this.slashTrigger = null;
+    this.clearWritingPopupState();
+  }
+
+  private clearWritingPopupState(): void {
     const active = this.activePopup;
     const anchor = this.popupAnchor;
     if (active) {
@@ -5415,6 +5526,35 @@ export class MarkdownEditorApp {
     this.popupSelection = null;
     this.popupProfile = null;
     this.popupDocumentGeneration = -1;
+  }
+
+  private consumeSlashTrigger(): void {
+    this.slashTrigger = null;
+  }
+
+  private materializeSlashTrigger(): void {
+    const trigger = this.slashTrigger;
+    this.slashTrigger = null;
+    if (!trigger) {
+      this.clearWritingPopupState();
+      return;
+    }
+
+    let restored = false;
+    this.materializingSlash = true;
+    try {
+      restored =
+        trigger.selection === this.popupSelection &&
+        trigger.documentGeneration === this.documentGeneration &&
+        trigger.profile === this.profile &&
+        this.restoreWritingPopupSelection();
+      this.clearWritingPopupState();
+    } finally {
+      this.materializingSlash = false;
+    }
+    if (!restored) return;
+    this.dispatchTransaction(this.view.state.tr.insertText("/"));
+    this.view.focus();
   }
 
   private positionWritingPopup(): void {
@@ -5726,11 +5866,10 @@ export class MarkdownEditorApp {
     return true;
   }
 
-  private updateEmptyLineInsert(selection = this.view.state.selection): void {
-    if (!this.emptyLineButton || !this.stage || !this.view) return;
+  private canUseEmptyLineInsert(selection: Selection): boolean {
     const parent = selection.$from.parent;
     const starter = getStarterState(this.view.state);
-    const canShow =
+    return (
       this.initialized &&
       !this.previewOnly &&
       !this.parseError &&
@@ -5742,8 +5881,13 @@ export class MarkdownEditorApp {
       selection.$from.depth === 1 &&
       parent.type.name === "paragraph" &&
       parent.content.size === 0 &&
-      !starter?.active;
-    if (!canShow) {
+      !starter?.active
+    );
+  }
+
+  private updateEmptyLineInsert(selection = this.view.state.selection): void {
+    if (!this.emptyLineButton || !this.stage || !this.view) return;
+    if (!this.canUseEmptyLineInsert(selection)) {
       this.emptyLineButton.hidden = true;
       return;
     }
