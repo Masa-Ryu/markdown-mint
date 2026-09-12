@@ -488,6 +488,12 @@ textarea:focus-visible {
   display: none;
 }
 
+/* Keep the provisional ProseMirror document out of the first paint. The
+ * toolbar and status bar remain available while the host sends the source. */
+.markdown-mint-app[data-loading] .mm-rich-panel {
+  visibility: hidden;
+}
+
 .mm-rich-panel .ProseMirror {
   min-height: 100%;
   cursor: text;
