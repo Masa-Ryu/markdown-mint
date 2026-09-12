@@ -60,6 +60,37 @@ another machine to the matching installed stylesheet. This makes the rich and
 dedicated preview layout checks exercise the same native cascade used by VS
 Code.
 
+## Block-spacing regression suite
+
+Run the cross-surface spacing checks with:
+
+```sh
+npm run test:browser:spacing
+```
+
+The suite launches the real bundled Webview, the dedicated preview, and a
+native-preview fixture at the same viewport. It measures actual DOM geometry
+for Alert, code, paragraph, table, GitLab TOC, description list, Details,
+math, Mermaid/static assets, raw fallback blocks, lists, quotes, comments, and
+inline math. It also exercises code-card expansion/menu controls, Mermaid
+fallback/source preservation, oversized-math fallback, narrow-width overflow,
+larger typography, three themes, and document-edge cases. Native fixture
+cases use the installed VS Code Markdown stylesheet in a standalone browser;
+they are a CSS-cascade regression surface, not a replacement for the real
+Extension Host. The run writes diagnostic screenshots under
+`output/playwright/spacing/`.
+
+The first run on a checkout may need the Playwright browser binary:
+
+```sh
+npx playwright install chromium
+```
+
+The harness keeps source comments and empty rendered atoms in the DOM model.
+It does not insert placeholder paragraphs, `<br>` elements, or zero-width
+content to manufacture spacing. Real OS IME candidate-window behavior still
+requires a manual VS Code check.
+
 The webview suite covers composition start/end and defers external snapshots
 without dropping local input. The browser fixture can dispatch composition DOM
 events but cannot create the native IME candidate window; Japanese IME behavior

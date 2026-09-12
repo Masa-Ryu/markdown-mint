@@ -432,6 +432,35 @@ The 0.0.5 and earlier evidence above remains historical.
   The before/after screenshots are captured under
   `output/playwright/mermaid-labels/` during local verification.
 
+## 0.0.31 block spacing verification
+
+- Block rhythm is now measured on the actual display surfaces rather than on
+  Markdown source combinations alone. Rich NodeView wrappers own their outer
+  margins, generated display elements have their inner margins cleared, and
+  ordinary native preview blocks retain the shared `1em` rhythm.
+- Alert-to-code, paragraph, and table transitions now retain the intended
+  gap; the rich Alert-to-code case changed from `0px` to `14px`. Consecutive
+  Alerts preserve their existing compact `10.5px` rhythm, while a preserved
+  empty comment between Alerts uses the ordinary `14px` gap.
+- GitLab TOC and description-list blocks receive ordinary flow margins. The
+  TOC no longer inherits the approximately `2.52px` native list offset as its
+  outer document spacing.
+- Document-edge resets target the rich wrapper or the adjacent visible block,
+  including when a hidden empty rendered NodeView represents an edge comment.
+  Details, Alert, blockquote, and list terminal-child margins are removed only
+  at their container edge, preserving Details padding, the summary/body gap,
+  and interior list density.
+- `npm run test:browser:spacing` covers the Rich Editor, Dedicated Preview,
+  and native-preview fixture with real browser geometry. It includes 37
+  representative spacing cases per surface plus code controls, Mermaid and
+  math fallback, preserved inline content, typography, themes, and narrow
+  viewport checks. The native fixture uses the installed VS Code Markdown
+  stylesheet and does not claim a real Extension Host/IME pass.
+- The browser harness intentionally preserves source comments and empty
+  rendered atoms without inserting empty paragraphs, `<br>`, or zero-width
+  placeholders. Manual OS IME candidate-window and zoom checks remain real
+  VS Code checks.
+
 ## Explicit limits
 
 Paste/drop image asset copying is optional follow-up work. Native IME and visual

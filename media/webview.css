@@ -731,7 +731,7 @@ textarea:focus-visible {
   overflow: visible;
 }
 .mm-code-block-view .mm-code-block {
-  margin-bottom: 1em;
+  margin: 0;
 }
 .mm-code-block-view .mm-code-language-control {
   position: relative;

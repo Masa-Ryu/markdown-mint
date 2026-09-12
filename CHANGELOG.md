@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Fixed block spacing across the rich editor, dedicated preview, and native
+  Markdown preview. Rich NodeView wrappers now own outer margins while their
+  inner display blocks stay margin-free; GitLab TOC and description lists use
+  the ordinary block rhythm; terminal details, alert, quote, and list content
+  no longer adds an extra bottom gap; and empty rendered nodes stay hidden
+  without changing preserved Markdown comments or source structure.
+
 - Fixed plain `ArrowUp` at the first visual row of a code block so it moves to
   the previous editable block, including wrapped lines and nested containers,
   while preserving normal in-code movement, controls, modifiers, IME, and

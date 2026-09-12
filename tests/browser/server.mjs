@@ -105,6 +105,99 @@ const nativeMathFixture = [
   "</section>",
 ].join("\n");
 
+function nativeCodeBlock(source = "const value = 1;", language = "ts") {
+  return `<div class="mm-code-block" data-mm-code-language="TypeScript"><div class="mm-code-block-header"><div class="mm-code-language-control" role="img" aria-label="Code language: TypeScript"><span class="mm-code-language-label">TypeScript</span></div><div class="mm-code-block-actions"></div></div><div class="mm-code-block-body"><pre class="mm-code-block-pre"><code class="language-${escapeHtml(language)}">${escapeHtml(source)}</code></pre></div></div>`;
+}
+
+const nativeTable =
+  "<table><thead><tr><th>A</th><th>B</th></tr></thead><tbody><tr><td>1</td><td>2</td></tr></tbody></table>";
+
+const nativeSpacingBlocks = {
+  alert:
+    '<div class="markdown-alert markdown-alert-note"><p class="markdown-alert-title">Note</p><p>Alert body.</p></div>',
+  code: nativeCodeBlock(),
+  paragraph: "<p>Paragraph body.</p>",
+  table: nativeTable,
+  toc: '<nav class="table-of-contents" aria-label="Table of contents"><ul><li><a href="#heading">Heading</a></li></ul></nav>',
+  description: "<dl><dt>Term</dt><dd>Definition</dd></dl><p>After</p>",
+  math: renderNativeMath("x^2", true),
+  visual:
+    '<div class="mm-static-asset mm-static-geojson"><p class="mm-asset-status">Static GEOJSON preview (offline).</p><pre class="mm-diagram-source">{\n  "type": "Point",\n  "coordinates": [0, 0]\n}</pre></div>',
+  fallback:
+    '<pre data-markdown-raw="true" data-kind="directive">:::custom\nbody\n:::</pre>',
+  fallbackAfter:
+    '<pre data-markdown-raw="true" data-kind="directive">:::custom\nbody\n:::</pre><p>After fallback.</p>',
+  image: '<p><img src="https://example.com/pixel.png" alt="pixel"></p>',
+  list: "<ul><li><p>one</p></li><li><p>two</p></li></ul>",
+  ordered: "<ol><li><p>one</p></li><li><p>two</p></li></ol>",
+  task: '<ul class="contains-task-list"><li class="task-list-item"><input type="checkbox" disabled><p>one</p></li><li class="task-list-item"><input type="checkbox" checked disabled><p>two</p></li></ul>',
+  quote: "<blockquote><p>Quoted body.</p></blockquote>",
+  heading: '<h1 id="heading">Heading</h1>',
+  inlineMath: `<p>Inline: ${renderNativeMath("E = mc^2", false)} text.</p>`,
+  detailsParagraph:
+    "<details open><summary>Details</summary><p>Body paragraph.</p></details>",
+  detailsCode:
+    "<details open><summary>Details</summary>" +
+    nativeCodeBlock() +
+    "</details>",
+  detailsTable:
+    "<details open><summary>Details</summary>" + nativeTable + "</details>",
+  detailsNested:
+    "<details open><summary>Outer</summary><p>Outer paragraph.</p><details open><summary>Inner</summary><p>Inner paragraph.</p></details></details>",
+};
+
+const nativeSpacingCases = {
+  "alert-code": ["alert", "code"],
+  "code-alert": ["code", "alert"],
+  "alert-paragraph": ["alert", "paragraph"],
+  "paragraph-alert": ["paragraph", "alert"],
+  "alert-table": ["alert", "table"],
+  "table-alert": ["table", "alert"],
+  "alert-alert": ["alert", "alert"],
+  "alert-comment-alert": ["alert", "comment", "alert"],
+  "toc-code": ["heading", "toc", "code"],
+  "code-toc": ["heading", "code", "toc"],
+  "toc-paragraph": ["heading", "toc", "paragraph"],
+  "paragraph-toc": ["heading", "paragraph", "toc"],
+  "toc-table": ["heading", "toc", "table"],
+  "table-toc": ["heading", "table", "toc"],
+  "code-code": ["code", "code"],
+  "details-code": ["detailsParagraph", "code"],
+  "math-code": ["math", "code"],
+  "visual-code": ["visual", "code"],
+  "table-code": ["table", "code"],
+  "fallback-paragraph": ["fallbackAfter"],
+  "image-code": ["image", "code"],
+  "details-paragraph": ["detailsParagraph"],
+  "details-code-terminal": ["detailsCode"],
+  "details-table-terminal": ["detailsTable"],
+  "details-nested-terminal": ["detailsNested"],
+  description: ["description"],
+  math: ["math"],
+  visual: ["visual"],
+  fallback: ["fallback"],
+  list: ["list"],
+  ordered: ["ordered"],
+  task: ["task"],
+  quote: ["quote"],
+  "inline-math": ["inlineMath"],
+  "comment-first": ["comment", "paragraph"],
+  "comment-last": ["paragraph", "comment"],
+  "empty-toc": ["comment"],
+};
+
+function nativeSpacingFixture(name) {
+  const names = nativeSpacingCases[name] ?? [name];
+  return names
+    .map((blockName) =>
+      blockName === "comment"
+        ? "<!-- markdown-mint-spacing-comment -->"
+        : (nativeSpacingBlocks[blockName] ?? ""),
+    )
+    .filter(Boolean)
+    .join("\n");
+}
+
 function fileFor(pathname) {
   if (pathname === "/")
     return resolve(repository, "tests/browser/harness.html");
@@ -147,6 +240,18 @@ const server = http.createServer(async (request, response) => {
           "<!-- markdown-mint-mermaid-fixture -->",
           nativeMermaidFixture,
         );
+      if (
+        pathname === "/native.html" &&
+        requestUrl.searchParams.get("fixture") === "spacing"
+      ) {
+        const spacing = nativeSpacingFixture(
+          requestUrl.searchParams.get("case") ?? "alert-code",
+        );
+        html = html.replace(
+          /<main class="markdown-body" data-testid="native-content">[\s\S]*?<\/main>/,
+          `<main class="markdown-body" data-testid="native-content">${spacing}</main>`,
+        );
+      }
       body = Buffer.from(html, "utf8");
     }
     response.writeHead(200, {

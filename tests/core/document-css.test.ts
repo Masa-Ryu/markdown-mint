@@ -53,4 +53,44 @@ describe("shared document styles", () => {
       /\.markdown-body \.mm-code-block-pre code,\s*\.mm-document-content \.mm-code-block-pre code\s*\{[\s\S]*?font-size:\s*inherit;[\s\S]*?line-height:\s*inherit;/,
     );
   });
+
+  it("assigns outer spacing to rich wrappers and clears their inner display margins", () => {
+    expect(documentCss).toMatch(
+      /\.mm-document-content \.mm-code-block-view\s*\{[\s\S]*?margin:\s*0 0 1em;/,
+    );
+    expect(documentCss).toMatch(
+      /\.mm-document-content \.mm-alert-node-view\s*\{[\s\S]*?margin:\s*1em 0;/,
+    );
+    expect(documentCss).toMatch(
+      /\.mm-document-content \.mm-rendered-node\[data-mm-block-margin="flow"\]\s*\{[\s\S]*?margin:\s*1em 0;/,
+    );
+    expect(documentCss).toContain(
+      `.mm-document-content .mm-rendered-node[data-mm-block-margin] > :first-child,
+.mm-document-content .mm-rendered-node[data-mm-block-margin] > :last-child {
+  margin-block-start: 0;
+  margin-block-end: 0;
+}`,
+    );
+  });
+
+  it("keeps TOC and description lists in the ordinary document flow", () => {
+    expect(documentCss).toMatch(
+      /\.markdown-body \.table-of-contents,[\s\S]*?\.mm-document-content dl\s*\{[\s\S]*?margin:\s*1em 0;/,
+    );
+    expect(documentCss).toContain(
+      ".mm-document-content > .mm-rendered-node:first-child",
+    );
+    expect(documentCss).toContain(
+      ".mm-document-content > .mm-rendered-node:last-child",
+    );
+  });
+
+  it("removes only terminal container and list-child margins", () => {
+    expect(documentCss).toMatch(
+      /details\s*>\s*:not\(\[hidden\]\):not\(:has\(~ :not\(\[hidden\]\)\)\)[\s\S]*?margin-block-end:\s*0;/,
+    );
+    expect(documentCss).toContain(
+      ".markdown-body :is(ul, ol) > li:first-child",
+    );
+  });
 });
