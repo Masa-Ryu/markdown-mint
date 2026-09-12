@@ -504,6 +504,17 @@ textarea:focus-visible {
 .mm-rich-panel .ProseMirror-selectednode {
   outline: 2px solid var(--vscode-focusBorder, #007fd4);
 }
+.mm-rich-panel
+  .mm-alert-node-view.ProseMirror-selectednode:is(
+    .mm-alert-body-focused,
+    .mm-alert-dialog-open
+  ) {
+  outline: none;
+}
+.mm-rich-panel .mm-alert-node-view .markdown-alert-title:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder, #007fd4);
+  outline-offset: 2px;
+}
 .mm-rich-panel .ProseMirror-hideselection ::selection {
   background: transparent;
 }
@@ -1332,7 +1343,6 @@ body.vscode-high-contrast-light .mm-empty-line-insert {
 }
 
 /* Rich-only controls live in NodeViews; shared/native preview CSS stays inert. */
-.mm-alert-type-trigger,
 .mm-block-source-trigger,
 .mm-details-summary,
 .mm-details-toggle {
@@ -1344,18 +1354,6 @@ body.vscode-high-contrast-light .mm-empty-line-insert {
   cursor: pointer;
   text-align: left;
 }
-.mm-alert-type-trigger {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.5em;
-}
-.mm-alert-type-picker {
-  display: flex;
-  align-items: center;
-  gap: 0.5em;
-  margin-bottom: 0.5em;
-}
-.mm-alert-type-picker[hidden],
 .mm-details-body[hidden],
 .mm-details-summary-input[hidden],
 .mm-details-summary[hidden] {
@@ -1367,7 +1365,6 @@ body.vscode-high-contrast-light .mm-empty-line-insert {
   color: var(--vscode-descriptionForeground);
   margin-bottom: 0.35em;
 }
-.mm-alert-type-trigger:focus-visible,
 .mm-block-source-trigger:focus-visible,
 .mm-details-toggle:focus-visible,
 .mm-details-summary:focus-visible,

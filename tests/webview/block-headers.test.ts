@@ -74,22 +74,144 @@ describe("block header actions", () => {
     ).toBe("typescript");
     expect(serializeMarkdown(app.view.state.doc)).toBe("external replacement");
   });
-  it("changes Alert type after directly typing its body", () => {
+  it("keeps Alert body focus separate from its internal NodeSelection", () => {
     const { root, app } = setup("> [!NOTE]\n> before");
     const body = root.querySelector<HTMLTextAreaElement>(
       ".mm-alert-body-editor",
     )!;
+    const alertView = root.querySelector<HTMLElement>(".mm-alert-node-view")!;
+
+    body.focus();
+
+    expect(app.view.state.selection.constructor.name).toBe("NodeSelection");
+    expect(alertView.classList.contains("ProseMirror-selectednode")).toBe(true);
+    expect(alertView.classList.contains("mm-alert-body-focused")).toBe(true);
+
+    body.blur();
+    expect(alertView.classList.contains("mm-alert-body-focused")).toBe(false);
+    app.destroy();
+  });
+
+  it("keeps a body single click directly editable without a picker or modal", () => {
+    const { root, app, messages } = setup("> [!NOTE]\n> before");
+    const body = root.querySelector<HTMLTextAreaElement>(
+      ".mm-alert-body-editor",
+    )!;
+    const click = new MouseEvent("click", {
+      bubbles: true,
+      cancelable: true,
+    });
+    body.dispatchEvent(click);
+    body.focus();
     body.value = "typed body";
     body.dispatchEvent(new Event("input", { bubbles: true }));
-    root.querySelector<HTMLButtonElement>(".mm-alert-type-trigger")!.click();
-    const select = root.querySelector<HTMLSelectElement>(
-      ".mm-alert-type-select",
-    )!;
-    select.value = "TIP";
-    select.dispatchEvent(new Event("change", { bubbles: true }));
+
+    expect(click.defaultPrevented).toBe(false);
+    expect(document.activeElement).toBe(body);
+    expect(root.querySelector(".mm-profile-feature-dialog[open]")).toBeNull();
+    expect(root.querySelector(".mm-alert-type-picker")).toBeNull();
+    expect(root.querySelector(".mm-alert-type-select")).toBeNull();
     expect(serializeMarkdown(app.view.state.doc)).toBe(
-      "> [!TIP]\n> typed body",
+      "> [!NOTE]\n> typed body",
     );
+    expect(
+      messages.filter(
+        (message) => (message as { type: string }).type === "edit",
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("opens the existing Alert dialog from a body double click after flushing native input", () => {
+    const { root, app } = setup("> [!WARNING]\n> before");
+    const body = root.querySelector<HTMLTextAreaElement>(
+      ".mm-alert-body-editor",
+    )!;
+    const alertView = root.querySelector<HTMLElement>(".mm-alert-node-view")!;
+    body.focus();
+    body.value = "latest native body";
+    const doubleClick = new MouseEvent("dblclick", {
+      bubbles: true,
+      cancelable: true,
+    });
+    body.dispatchEvent(doubleClick);
+
+    const dialog = root.querySelector<HTMLDialogElement>(
+      ".mm-profile-feature-dialog",
+    )!;
+    expect(dialog.hasAttribute("open")).toBe(true);
+    expect(dialog.dataset.profileFeatureMode).toBe("edit");
+    expect(
+      dialog.querySelector<HTMLSelectElement>(
+        '[data-feature-field="alert-type"]',
+      )!.value,
+    ).toBe("WARNING");
+    expect(
+      dialog.querySelector<HTMLTextAreaElement>('[data-feature-field="body"]')!
+        .value,
+    ).toBe("latest native body");
+    expect(serializeMarkdown(app.view.state.doc)).toBe(
+      "> [!WARNING]\n> latest native body",
+    );
+    expect(doubleClick.defaultPrevented).toBe(true);
+    expect(alertView.classList.contains("mm-alert-dialog-open")).toBe(true);
+    dialog
+      .querySelector<HTMLButtonElement>("button:not([type='submit'])")!
+      .click();
+    expect(alertView.classList.contains("mm-alert-dialog-open")).toBe(false);
+    expect(document.activeElement).toBe(body);
+  });
+
+  it("opens the same Alert dialog only on a header double click", () => {
+    const { root, app } = setup("> [!TIP]\n> body");
+    const alertView = root.querySelector<HTMLElement>(".mm-alert-node-view")!;
+    const title = root.querySelector<HTMLElement>(".markdown-alert-title")!;
+    const click = new MouseEvent("click", { bubbles: true, cancelable: true });
+    title.dispatchEvent(click);
+    expect(click.defaultPrevented).toBe(false);
+    expect(root.querySelector(".mm-profile-feature-dialog[open]")).toBeNull();
+    expect(root.querySelector(".mm-alert-type-picker")).toBeNull();
+    expect(root.querySelector(".mm-alert-type-select")).toBeNull();
+
+    title.dispatchEvent(
+      new MouseEvent("dblclick", { bubbles: true, cancelable: true }),
+    );
+    const dialog = root.querySelector<HTMLDialogElement>(
+      ".mm-profile-feature-dialog",
+    )!;
+    expect(dialog.hasAttribute("open")).toBe(true);
+    expect(dialog.dataset.profileFeatureMode).toBe("edit");
+    expect(
+      dialog.querySelector<HTMLSelectElement>(
+        '[data-feature-field="alert-type"]',
+      )!.value,
+    ).toBe("TIP");
+    expect(
+      dialog.querySelector<HTMLTextAreaElement>('[data-feature-field="body"]')!
+        .value,
+    ).toBe("body");
+    expect(alertView.classList.contains("mm-alert-dialog-open")).toBe(true);
+    app.destroy();
+  });
+
+  it("keeps keyboard access to the Alert editor on its header", () => {
+    const { root, app } = setup("> [!NOTE]\n> body");
+    const title = root.querySelector<HTMLElement>(".markdown-alert-title")!;
+    expect(title.tabIndex).toBe(0);
+    expect(title.getAttribute("role")).toBe("button");
+    title.focus();
+    const enter = new KeyboardEvent("keydown", {
+      key: "Enter",
+      bubbles: true,
+      cancelable: true,
+    });
+    title.dispatchEvent(enter);
+    expect(enter.defaultPrevented).toBe(true);
+    expect(
+      root
+        .querySelector<HTMLDialogElement>(".mm-profile-feature-dialog")!
+        .hasAttribute("open"),
+    ).toBe(true);
+    app.destroy();
   });
 
   it.each([
@@ -154,39 +276,6 @@ describe("block header actions", () => {
       expect(serializeMarkdown(app.view.state.doc)).toBe("$$\nx\n$$");
     },
   );
-
-  it("keeps Alert selection gestures independent and changes only its marker", () => {
-    const source = "> [!NOTE]\n> first  \nlazy continuation\n> last";
-    const { root, app, messages } = setup(source);
-    const body = root.querySelector<HTMLTextAreaElement>(
-      ".mm-alert-body-editor",
-    )!;
-    body.focus();
-    body.setSelectionRange(2, 9, "backward");
-    for (const type of ["click", "dblclick", "mousedown", "mouseup"])
-      body.dispatchEvent(new MouseEvent(type, { bubbles: true }));
-    expect(root.querySelector("dialog[open]")).toBeNull();
-    root.querySelector<HTMLButtonElement>(".mm-alert-type-trigger")!.click();
-    const select = root.querySelector<HTMLSelectElement>(
-      ".mm-alert-type-select",
-    )!;
-    select.value = "WARNING";
-    select.dispatchEvent(new Event("change", { bubbles: true }));
-    expect(serializeMarkdown(app.view.state.doc)).toBe(
-      source.replace("[!NOTE]", "[!WARNING]"),
-    );
-    expect(document.activeElement).toBe(body);
-    expect([
-      body.selectionStart,
-      body.selectionEnd,
-      body.selectionDirection,
-    ]).toEqual([2, 9, "backward"]);
-    expect(
-      messages.filter(
-        (message) => (message as { type: string }).type === "edit",
-      ),
-    ).toHaveLength(1);
-  });
 
   it.each([
     "$$\nx + y\n$$",

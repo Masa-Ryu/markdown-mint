@@ -93,13 +93,28 @@ The webview regression suite covers these flows, including CRLF and
 save/reload round trips. Live VS Code and operating-system IME behavior remain
 manual checks.
 
-The Alert type label opens an inline selector with a single click. Changing
-its type replaces only the `[!TYPE]` marker and restores the body's native
-selection range. Click, double-click, and drag in the body retain their native
-caret/selection meaning. An optional **Edit source…** action inside the type
-picker opens the existing Profile Feature dialog in Edit mode. Insertion
-continues to use the toolbar dialog. External changes invalidate an active
-source edit while keeping the draft available to copy.
+Alert bodies remain directly editable on a single click. The header and body
+both open the existing Profile Feature dialog on a double click; Alert type
+and detailed body changes are made there. A single click on the header does not
+open a picker or dialog. The dialog flushes the native textarea before taking
+its edit snapshot, retains stale-target and composition/conflict guards, and
+restores the body caret after Cancel or Update.
+
+## Alert body focus and modal editing (0.0.37)
+
+The Alert NodeView still uses a ProseMirror `NodeSelection` for block-boundary
+navigation. Focusing its native textarea adds the `mm-alert-body-focused`
+visual state, which suppresses only the selected-node outline while the body
+has focus; blur removes that state. Opening the edit dialog uses a separate
+`mm-alert-dialog-open` state so the background Alert does not show a blue block
+outline while the dialog is active.
+
+The old single-click type picker, select, and **Edit source…** action are no
+longer rendered. Header clicks are inert, while a header or body double click
+flushes any latest native body value and reuses the existing Alert edit dialog.
+Cancel restores the original body selection without a host edit. Update changes
+the existing Alert in place, preserving marker/body source behavior and the
+existing stale-document, conflict, recovery, and composition protections.
 
 ## Details scanner inline token boundaries (0.0.36)
 
@@ -151,6 +166,12 @@ test:browser:spacing` (37 cases on each surface), `npm run test:extension`
 4.76 MB, bundled formatter verification), and `git diff --check` passed. Real
 OS Japanese IME candidate UI, cross-region selection/copy/cut, zoom, and
 visible native Undo/Redo remain manual checks.
+
+Final 0.0.37 verification adds the Alert body/header click matrix and visual
+outline assertions to the existing suite. The targeted Alert webview tests and
+the full browser Alert flow cover single-click body editing, single-click
+header inertness, body/header double-click dialog reuse, latest textarea input
+flushing, Cancel/Update focus restoration, and absence of the picker controls.
 
 ## Details scanner block contexts (0.0.35)
 

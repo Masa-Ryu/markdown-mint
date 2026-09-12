@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.0.37
+
+- Keep Alert bodies directly editable on a single click while opening the
+  existing Alert editor dialog from a body or header double click.
+- Remove the single-click Alert type picker and suppress the block selection
+  outline while the native body editor or its dialog is active. Flush the
+  latest textarea value before opening the dialog and restore body focus after
+  it closes.
+
 ## 0.0.36
 
 - Use markdown-it inline tokens when finding Details tags. Details-like text in

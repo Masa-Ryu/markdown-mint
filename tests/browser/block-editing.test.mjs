@@ -190,14 +190,114 @@ async function testAlertHeaderAndSelection(page) {
   await load(page, source);
   const before = await saved(page);
   const textarea = page.locator(alertBody);
+
   await textarea.click();
+  await settle(page);
+  let state = await selection(page);
+  assert.equal(state.active, "mm-alert-body-editor");
+  assert.equal(state.dialogs, 0, "Alert body single click opened settings");
+  const focused = await page
+    .locator(".mm-alert-node-view")
+    .evaluate((element) => ({
+      bodyFocused: element.classList.contains("mm-alert-body-focused"),
+      selected: element.classList.contains("ProseMirror-selectednode"),
+      outline: getComputedStyle(element).outlineStyle,
+    }));
+  assert.equal(focused.bodyFocused, true, "body focus state was not set");
+  assert.equal(focused.selected, true, "Alert NodeSelection was not retained");
+  assert.equal(focused.outline, "none", "body focus still shows block outline");
+
+  await caret(page, alertBody, -1);
+  await page.keyboard.type("X");
+  const typedSource = blocks("Before", alert(`${body}X`), "After");
+  await expectSource(page, typedSource);
+
+  const title = page.locator(".markdown-alert-title");
+  await title.click();
+  state = await selection(page);
+  assert.equal(state.dialogs, 0, "Alert header single click opened settings");
+  assert.equal(await page.locator(".mm-alert-type-picker").count(), 0);
+  assert.equal(await page.locator(".mm-alert-type-select").count(), 0);
+
+  // Simulate text accepted by the native textarea immediately before the
+  // double-click. The NodeView must flush it even without a separate input
+  // event before opening the existing edit dialog.
+  await textarea.evaluate((element) => {
+    element.focus();
+    element.value = "latest native body";
+  });
   await textarea.dblclick({ position: { x: 50, y: 12 } });
+  const dialog = page.locator(".mm-profile-feature-dialog[open]");
+  await dialog.waitFor({ state: "visible" });
   assert.equal(
-    (await selection(page)).dialogs,
-    0,
-    "Alert body double click opened settings",
+    await dialog.locator('[data-feature-field="alert-type"]').inputValue(),
+    "NOTE",
   );
-  const box = await textarea.boundingBox();
+  assert.equal(
+    await dialog.locator('[data-feature-field="body"]').inputValue(),
+    "latest native body",
+  );
+  assert.equal(
+    await page
+      .locator(".mm-alert-node-view")
+      .evaluate((element) => getComputedStyle(element).outlineStyle),
+    "none",
+    "Alert dialog left a selection outline behind",
+  );
+  const syncedSource = blocks("Before", alert("latest native body"), "After");
+  await expectSource(page, syncedSource);
+
+  const beforeCancel = await saved(page);
+  await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+  await noEdits(page, beforeCancel, "Alert cancel");
+  state = await selection(page);
+  assert.equal(state.active, "mm-alert-body-editor");
+  assert.equal(state.dialogs, 0);
+  const afterCancel = await page
+    .locator(".mm-alert-node-view")
+    .evaluate((element) => ({
+      bodyFocused: element.classList.contains("mm-alert-body-focused"),
+      outline: getComputedStyle(element).outlineStyle,
+    }));
+  assert.equal(afterCancel.bodyFocused, true);
+  assert.equal(afterCancel.outline, "none");
+
+  await title.dblclick();
+  await dialog.waitFor({ state: "visible" });
+  assert.equal(
+    await dialog.locator('[data-feature-field="body"]').inputValue(),
+    "latest native body",
+  );
+  await dialog
+    .locator('[data-feature-field="alert-type"]')
+    .selectOption("WARNING");
+  await dialog.locator('[data-feature-field="body"]').fill("updated by dialog");
+  await dialog.getByRole("button", { name: "Update", exact: true }).click();
+  const updated = blocks(
+    "Before",
+    alert("updated by dialog", "WARNING"),
+    "After",
+  );
+  await expectSource(page, updated);
+  assert.equal(await page.locator(".mm-alert-node-view").count(), 1);
+  assert.equal(await page.locator(".mm-alert-type-picker").count(), 0);
+  assert.equal(await page.locator(".mm-alert-type-select").count(), 0);
+  state = await selection(page);
+  assert.equal(state.active, "mm-alert-body-editor");
+  assert.equal(state.dialogs, 0);
+  const afterUpdate = await page
+    .locator(".mm-alert-node-view")
+    .evaluate((element) => ({
+      bodyFocused: element.classList.contains("mm-alert-body-focused"),
+      outline: getComputedStyle(element).outlineStyle,
+    }));
+  assert.equal(afterUpdate.bodyFocused, true);
+  assert.equal(afterUpdate.outline, "none");
+
+  // Keep the drag selection check separate from the dialog behavior.
+  const finalTextarea = page.locator(alertBody);
+  const box = await finalTextarea.boundingBox();
+  assert.ok(box);
   await page.mouse.move(box.x + 10, box.y + 12);
   await page.mouse.down();
   await page.mouse.move(box.x + 100, box.y + 12, { steps: 8 });
@@ -207,38 +307,8 @@ async function testAlertHeaderAndSelection(page) {
     0,
     "Alert body drag opened settings",
   );
-  await caret(page, alertBody, 6, 10);
-  await page.locator(".mm-alert-type-trigger").click();
-  await page.locator(".mm-alert-type-select").selectOption("TIP");
-  await expectSource(page, source.replace("[!NOTE]", "[!TIP]"));
-  assert.equal(await textarea.inputValue(), body);
-  assert.deepEqual(
-    await textarea.evaluate((element) => [
-      element.selectionStart,
-      element.selectionEnd,
-    ]),
-    [6, 10],
-  );
   assert.equal((await selection(page)).dialogs, 0);
-  assert.equal(
-    (await saved(page)).edits,
-    before.edits + 1,
-    "kind change should be one edit",
-  );
-  await caret(page, alertBody, -1);
-  await page.keyboard.type("X");
-  await page.waitForFunction(() =>
-    window.__markdownMintHarness.document.markdown.includes("X"),
-  );
-  const typed = (await saved(page)).markdown;
-  await page.locator(".mm-alert-type-trigger").click();
-  await page.locator(".mm-alert-type-select").selectOption("WARNING");
-  await expectSource(page, typed.replace("[!TIP]", "[!WARNING]"));
-  assert.equal(
-    await textarea.inputValue(),
-    `${body}X`,
-    "kind change after body input lost local text",
-  );
+  assert.equal((await saved(page)).edits, before.edits + 3);
 }
 
 async function testHorizontalNavigation(page) {
@@ -1022,7 +1092,7 @@ async function testDocumentFixtures(page) {
           element.querySelectorAll('[data-mm-mermaid-state="error"]'),
         ).map((node) => node.textContent),
         editableHeaders: element.querySelectorAll(
-          ".mm-details-summary,.mm-alert-type-select,[data-mm-block-source]",
+          ".mm-details-summary,[data-mm-block-source]",
         ).length,
       }));
       assert.ok(result.width > 200, `${filename} ${mode}: invisible content`);

@@ -2251,6 +2251,7 @@ export class MarkdownEditorApp {
   private profileFeatureProfile: DocumentProfile | null = null;
   private profileFeatureInvokingButton: HTMLButtonElement | null = null;
   private profileFeatureEditTarget: ProfileFeatureEditTarget | null = null;
+  private profileFeatureAlertNodeView: HTMLElement | null = null;
   private profileFeatureId: ProfileFeatureId | null = null;
   private profileFeatureDialogOpen = false;
   private tableDialog!: HTMLDialogElement;
@@ -3613,7 +3614,7 @@ export class MarkdownEditorApp {
       | HTMLSelectElement
       | HTMLTextAreaElement
     >(
-      ".mm-alert-type-trigger, .mm-alert-type-select, .mm-alert-details-action, .mm-block-source-trigger, .mm-code-language-trigger, .mm-code-language-inline, .mm-details-summary",
+      ".mm-block-source-trigger, .mm-code-language-trigger, .mm-code-language-inline, .mm-details-summary",
     ))
       control.disabled = blockEditingDisabled;
     for (const body of this.root.querySelectorAll<HTMLTextAreaElement>(
@@ -4486,6 +4487,7 @@ export class MarkdownEditorApp {
     this.closeWritingPopups();
     this.closeEmojiPicker();
     this.profileFeatureEditTarget = null;
+    this.profileFeatureAlertNodeView = null;
     this.profileFeatureId = id;
     this.profileFeatureInvokingButton = invokingButton;
     this.profileFeatureDialogOpen = true;
@@ -4590,6 +4592,10 @@ export class MarkdownEditorApp {
             ]
           : undefined,
     };
+    const nodeView = this.view.nodeDOM(position);
+    this.profileFeatureAlertNodeView =
+      nodeView instanceof HTMLElement ? nodeView : null;
+    this.profileFeatureAlertNodeView?.classList.add("mm-alert-dialog-open");
     this.profileFeatureDialogOpen = true;
     this.profileFeatureDialog.dataset.profileFeature = "alert";
     this.profileFeatureDialog.dataset.profileFeatureMode = "edit";
@@ -4684,6 +4690,7 @@ export class MarkdownEditorApp {
     const editReturnFocus = this.profileFeatureEditTarget?.returnFocus;
     const bodySelection = this.profileFeatureEditTarget?.bodySelection;
     const editTarget = this.profileFeatureEditTarget;
+    const alertNodeView = this.profileFeatureAlertNodeView;
     const returnNode =
       editTarget &&
       editTarget.documentGeneration === this.documentGeneration &&
@@ -4699,10 +4706,12 @@ export class MarkdownEditorApp {
     this.profileFeatureDocumentGeneration = -1;
     this.profileFeatureProfile = null;
     this.profileFeatureEditTarget = null;
+    this.profileFeatureAlertNodeView = null;
     this.profileFeatureId = null;
     this.profileFeatureDialog.removeAttribute("data-profile-feature");
     this.profileFeatureDialog.removeAttribute("data-profile-feature-mode");
     this.closeDialog(this.profileFeatureDialog);
+    alertNodeView?.classList.remove("mm-alert-dialog-open");
     if (message) this.setNotice(message, "error");
     if (restoreFocus) {
       if (editReturnFocus?.isConnected) {

@@ -49,6 +49,14 @@ function editCount(messages: unknown[]): number {
   ).length;
 }
 
+function doubleClickAlert(root: HTMLElement, index = 0): void {
+  root
+    .querySelectorAll<HTMLElement>(".mm-alert-node-view")
+    [index]!.dispatchEvent(
+      new MouseEvent("dblclick", { bubbles: true, cancelable: true }),
+    );
+}
+
 function dispatchCellText(app: MarkdownEditorApp, root: HTMLElement): void {
   const cell = root.querySelector("tbody td")!;
   const position = app.view.posAtDOM(cell, 0);
@@ -200,14 +208,11 @@ describe("profile feature toolbar", () => {
 
   it("opens the existing Alert dialog in edit mode with the current values", () => {
     const { app, root } = makeApp("> [!WARNING]\n> Something happened");
-    const alertView = root.querySelector<HTMLElement>(".mm-alert-node-view")!;
     const dialog = root.querySelector<HTMLDialogElement>(
       ".mm-profile-feature-dialog",
     )!;
 
-    alertView
-      .querySelector<HTMLButtonElement>(".mm-alert-details-action")!
-      .click();
+    doubleClickAlert(root);
 
     expect(root.querySelectorAll(".mm-profile-feature-dialog")).toHaveLength(1);
     expect(dialog.dataset.profileFeatureMode).toBe("edit");
@@ -231,10 +236,7 @@ describe("profile feature toolbar", () => {
   it("updates only the selected Alert when changing its type", () => {
     const source = "> [!TIP]\n> first\n\n> [!NOTE]\n> second";
     const { app, root } = makeApp(source);
-    const alerts = root.querySelectorAll<HTMLElement>(".mm-alert-node-view");
-    alerts[1]!
-      .querySelector<HTMLButtonElement>(".mm-alert-details-action")!
-      .click();
+    doubleClickAlert(root, 1);
     const dialog = root.querySelector<HTMLDialogElement>(
       ".mm-profile-feature-dialog",
     )!;
@@ -253,7 +255,7 @@ describe("profile feature toolbar", () => {
   it("preserves lazy continuation source on a type-only Alert update", () => {
     const source = "> [!TIP]\n> First\ncontinued\n> Last";
     const { app, root } = makeApp(source);
-    root.querySelector<HTMLButtonElement>(".mm-alert-details-action")!.click();
+    doubleClickAlert(root);
     const dialog = root.querySelector<HTMLDialogElement>(
       ".mm-profile-feature-dialog",
     )!;
@@ -268,7 +270,7 @@ describe("profile feature toolbar", () => {
 
   it("updates Alert body and type in place without inserting another node", () => {
     const { app, root } = makeApp("> [!NOTE]\n> Server restarted");
-    root.querySelector<HTMLButtonElement>(".mm-alert-details-action")!.click();
+    doubleClickAlert(root);
     const dialog = root.querySelector<HTMLDialogElement>(
       ".mm-profile-feature-dialog",
     )!;
@@ -293,7 +295,7 @@ describe("profile feature toolbar", () => {
     )!;
     bodyEditor.focus();
     bodyEditor.setSelectionRange(2, 5);
-    root.querySelector<HTMLButtonElement>(".mm-alert-details-action")!.click();
+    doubleClickAlert(root);
     const dialog = root.querySelector<HTMLDialogElement>(
       ".mm-profile-feature-dialog",
     )!;
@@ -316,7 +318,7 @@ describe("profile feature toolbar", () => {
 
   it("rejects an Alert update after the authoritative document changes", () => {
     const { app, root } = makeApp("> [!TIP]\n> Original");
-    root.querySelector<HTMLButtonElement>(".mm-alert-details-action")!.click();
+    doubleClickAlert(root);
     const dialog = root.querySelector<HTMLDialogElement>(
       ".mm-profile-feature-dialog",
     )!;
@@ -343,9 +345,9 @@ describe("profile feature toolbar", () => {
     const editor = root.querySelector<HTMLElement>(".ProseMirror")!;
     const alertView = root.querySelector<HTMLElement>(".mm-alert-node-view")!;
     editor.dispatchEvent(new Event("compositionstart", { bubbles: true }));
-    alertView
-      .querySelector<HTMLButtonElement>(".mm-alert-details-action")!
-      .click();
+    alertView.dispatchEvent(
+      new MouseEvent("dblclick", { bubbles: true, cancelable: true }),
+    );
     expect(
       root
         .querySelector<HTMLDialogElement>(".mm-profile-feature-dialog")!

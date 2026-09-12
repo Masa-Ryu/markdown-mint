@@ -4,13 +4,7 @@ import type { EditorState } from "prosemirror-state";
 import type { Node as PMNode } from "prosemirror-model";
 import type { EditorView, NodeView } from "prosemirror-view";
 import * as core from "../core/index";
-import {
-  ALERT_TYPES,
-  alertSourceWithBody,
-  alertSourceWithType,
-  parseAlertSource,
-  type AlertType,
-} from "../core/alerts";
+import { alertSourceWithBody, parseAlertSource } from "../core/alerts";
 import { blockSourceEditor } from "./blockSourceEditing";
 import {
   escapeHtml,
@@ -598,8 +592,6 @@ export function createAlertNodeView(
   let bodyComposing = false;
   let disposed = false;
   let enhancer: RenderingEnhancer | undefined;
-  let savedBodySelection:
-    [number, number, "forward" | "backward" | "none"] | null = null;
   const canEdit = (): boolean =>
     !disposed && view.editable && (options.canEdit?.() ?? true);
 
@@ -639,6 +631,10 @@ export function createAlertNodeView(
   };
   resizeObserver?.observe(dom);
 
+  const setBodyFocused = (focused: boolean): void => {
+    dom.classList.toggle("mm-alert-body-focused", focused);
+  };
+
   const sourceFor = (value: PMNode): string =>
     String(value.attrs.source ?? value.textContent ?? "");
 
@@ -662,11 +658,14 @@ export function createAlertNodeView(
       String(currentNode.attrs.kind ?? "") !== "alert"
     )
       return;
-    const source = alertSourceWithBody(
-      String(currentNode.attrs.source ?? ""),
-      bodyEditor.value,
-    );
-    if (String(currentNode.attrs.source ?? "") === source) return;
+    const currentSource = String(currentNode.attrs.source ?? "");
+    // The textarea normalizes line endings and lazy blockquote continuation
+    // lines for editing. If its value still represents the current body, a
+    // dialog opening must not rewrite those source bytes just because it
+    // flushes the native control.
+    if (parseAlertSource(currentSource).body === bodyEditor.value) return;
+    const source = alertSourceWithBody(currentSource, bodyEditor.value);
+    if (currentSource === source) return;
     // EditorView.updateState() invokes this NodeView's update synchronously.
     // Mark the exact source before dispatch so that the update caused by this
     // textarea is allowed to keep the existing editor DOM intact.
@@ -695,6 +694,36 @@ export function createAlertNodeView(
     if (changed && readOnly) updateSource();
   });
 
+  const openEditor = (event: Event): void => {
+    if (!onEditRequest || bodyComposing || !canEdit()) return;
+    const position = positionOf();
+    if (position === undefined) return;
+    try {
+      // A native textarea can receive its last keystroke before the input
+      // event reaches this NodeView. Flush that value before taking the
+      // snapshot used by the existing Alert edit dialog.
+      updateSource();
+    } catch {
+      return;
+    }
+    const currentPosition = positionOf();
+    const currentNode =
+      currentPosition === undefined
+        ? null
+        : view.state.doc.nodeAt(currentPosition);
+    if (
+      currentPosition === undefined ||
+      !currentNode ||
+      currentNode !== current ||
+      currentNode.type.name !== "raw_block" ||
+      String(currentNode.attrs.kind ?? "") !== "alert"
+    )
+      return;
+    event.preventDefault();
+    event.stopPropagation();
+    onEditRequest(currentPosition, bodyEditor);
+  };
+
   const render = (): void => {
     if (disposed) return;
     const bodyEditorHadFocus =
@@ -718,107 +747,21 @@ export function createAlertNodeView(
     const alert = preview.querySelector<HTMLElement>(".markdown-alert");
     const title = alert?.querySelector<HTMLElement>(".markdown-alert-title");
     if (alert && title) {
-      const parts = parseAlertSource(sourceFor(current));
-      if (bodyEditor.value !== parts.body) bodyEditor.value = parts.body;
-      const trigger = document.createElement("button");
-      trigger.type = "button";
-      trigger.className = "mm-alert-type-trigger";
-      trigger.setAttribute("aria-label", "Change Alert type");
-      trigger.setAttribute("aria-expanded", "false");
-      trigger.append(...Array.from(title.childNodes));
-      title.append(trigger);
-      const picker = document.createElement("div");
-      picker.className = "mm-alert-type-picker";
-      picker.hidden = true;
-      const select = document.createElement("select");
-      select.className = "mm-alert-type-select";
-      select.setAttribute("aria-label", "Alert type");
-      for (const type of ALERT_TYPES) {
-        const option = document.createElement("option");
-        option.value = type;
-        option.textContent = type;
-        select.append(option);
-      }
-      select.value = parts.marker.toUpperCase();
-      let startSource = sourceFor(current);
-      let sessionNode: PMNode | null = null;
-      const restoreBody = (): void => {
-        if (!bodyEditor.isConnected) return;
-        bodyEditor.focus({ preventScroll: true });
-        if (savedBodySelection)
-          bodyEditor.setSelectionRange(...savedBodySelection);
-      };
-      const openPicker = (): void => {
-        if (!canEdit() || bodyComposing) return;
-        const position = positionOf();
-        sessionNode =
-          position === undefined ? null : view.state.doc.nodeAt(position);
-        if (sessionNode) startSource = sourceFor(sessionNode);
-        savedBodySelection = [
-          bodyEditor.selectionStart,
-          bodyEditor.selectionEnd,
-          bodyEditor.selectionDirection,
-        ];
-        picker.hidden = false;
-        trigger.setAttribute("aria-expanded", "true");
-        select.focus();
-      };
-      trigger.addEventListener("click", openPicker);
-      select.addEventListener("change", () => {
-        if (!canEdit() || !ALERT_TYPES.includes(select.value as AlertType))
-          return;
-        const position = positionOf();
-        const target =
-          position === undefined ? null : view.state.doc.nodeAt(position);
+      title.tabIndex = 0;
+      title.setAttribute("role", "button");
+      title.setAttribute("aria-label", "Edit Alert");
+      title.addEventListener("keydown", (event) => {
         if (
-          !target ||
-          target !== sessionNode ||
-          sourceFor(target) !== startSource
-        )
-          return;
-        const source = alertSourceWithType(
-          startSource,
-          select.value as AlertType,
-        );
-        if (source !== startSource)
-          view.dispatch(
-            view.state.tr.setNodeMarkup(position!, undefined, {
-              ...target.attrs,
-              source,
-            }),
-          );
-        picker.hidden = true;
-        trigger.setAttribute("aria-expanded", "false");
-        restoreBody();
-      });
-      picker.addEventListener("keydown", (event) => {
-        if (
-          event.key !== "Escape" ||
+          (event.key !== "Enter" && event.key !== " ") ||
           event.isComposing ||
           event.keyCode === 229
         )
           return;
-        event.preventDefault();
-        picker.hidden = true;
-        trigger.setAttribute("aria-expanded", "false");
-        restoreBody();
+        openEditor(event);
       });
-      picker.append(select);
-      if (onEditRequest) {
-        const advanced = document.createElement("button");
-        advanced.type = "button";
-        advanced.className = "mm-alert-details-action";
-        advanced.textContent = "Edit source…";
-        advanced.addEventListener("click", () => {
-          const position = positionOf();
-          if (position === undefined || !canEdit()) return;
-          picker.hidden = true;
-          trigger.setAttribute("aria-expanded", "false");
-          onEditRequest(position, bodyEditor);
-        });
-        picker.append(advanced);
-      }
-      alert.replaceChildren(title, picker, bodyEditor);
+      const parts = parseAlertSource(sourceFor(current));
+      if (bodyEditor.value !== parts.body) bodyEditor.value = parts.body;
+      alert.replaceChildren(title, bodyEditor);
       resizeBodyEditor();
       if (bodyEditorHadFocus) {
         bodyEditor.focus({ preventScroll: true });
@@ -829,12 +772,14 @@ export function createAlertNodeView(
         );
       }
     }
+    setBodyFocused(bodyEditorHadFocus);
     enhancer = enhanceRenderedContent(preview);
     lastProfile = profile;
   };
 
   bodyEditor.addEventListener("mousedown", (event) => event.stopPropagation());
   bodyEditor.addEventListener("focus", () => {
+    setBodyFocused(true);
     const position = positionOf();
     if (
       position !== undefined &&
@@ -850,6 +795,8 @@ export function createAlertNodeView(
         ),
       );
   });
+  bodyEditor.addEventListener("blur", () => setBodyFocused(false));
+  dom.addEventListener("dblclick", openEditor);
   // NodeView stopEvent handling can keep the editor-level composition state
   // from seeing events from this native textarea. Track the textarea itself so
   // a synthetic/native IME event cannot trigger alert boundary navigation.
@@ -972,6 +919,7 @@ export function createAlertNodeView(
     ignoreMutation: () => true,
     destroy: () => {
       disposed = true;
+      setBodyFocused(false);
       alertEditingState.delete(bodyEditor);
       resizeObserver?.disconnect();
       if (resizeFrame !== undefined)
