@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  MAX_CLIPBOARD_TEXT_LENGTH,
   PROTOCOL_VERSION,
   isHostMessage,
   parseWebviewMessage,
@@ -173,5 +174,46 @@ describe("Markdown Mint wire protocol", () => {
         operationId: "profile with spaces",
       }),
     ).toBeUndefined();
+  });
+
+  it("validates clipboard requests and correlated host results", () => {
+    expect(
+      parseWebviewMessage({
+        protocolVersion: PROTOCOL_VERSION,
+        type: "clipboard-write",
+        requestId: "copy:1:abc",
+        text: "\tcode\n",
+      }),
+    ).toEqual({
+      protocolVersion: PROTOCOL_VERSION,
+      type: "clipboard-write",
+      requestId: "copy:1:abc",
+      text: "\tcode\n",
+    });
+    expect(
+      parseWebviewMessage({
+        protocolVersion: PROTOCOL_VERSION,
+        type: "clipboard-write",
+        requestId: "copy:1:abc",
+        text: "x".repeat(MAX_CLIPBOARD_TEXT_LENGTH + 1),
+      }),
+    ).toBeUndefined();
+    expect(
+      isHostMessage({
+        protocolVersion: PROTOCOL_VERSION,
+        type: "clipboard-result",
+        requestId: "copy:1:abc",
+        success: false,
+        message: "Clipboard unavailable",
+      }),
+    ).toBe(true);
+    expect(
+      isHostMessage({
+        protocolVersion: PROTOCOL_VERSION,
+        type: "clipboard-result",
+        requestId: "copy with spaces",
+        success: true,
+      }),
+    ).toBe(false);
   });
 });

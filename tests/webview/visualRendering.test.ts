@@ -54,7 +54,7 @@ afterEach(() => {
 });
 
 describe("local Mermaid rendering lifecycle", () => {
-  it("wires copy and expand actions for a rendered code card", () => {
+  it("wires copy and expand actions for a rendered code card", async () => {
     const source = "const value = 1;\nreturn value;";
     const root = document.createElement("div");
     root.innerHTML = renderCodeBlock(source, "ts");
@@ -76,14 +76,21 @@ describe("local Mermaid rendering lifecycle", () => {
         .querySelector<HTMLButtonElement>('[data-mm-code-action="copy"]')
         ?.click();
       expect(copied).toBe(source);
+      await flush();
+      expect(
+        root.querySelector<HTMLButtonElement>('[data-mm-code-action="copy"]')
+          ?.dataset.mmCopyState,
+      ).toBe("success");
       const expand = root.querySelector<HTMLButtonElement>(
         '[data-mm-code-action="expand"]',
       )!;
       const card = root.querySelector<HTMLElement>(".mm-code-block")!;
       expand.click();
       expect(card.classList.contains("mm-code-block-expanded")).toBe(true);
+      expect(card.getAttribute("aria-modal")).toBe("true");
       expand.click();
       expect(card.classList.contains("mm-code-block-expanded")).toBe(false);
+      expect(card.hasAttribute("aria-modal")).toBe(false);
     } finally {
       binding.dispose();
       if (originalClipboard)
@@ -94,6 +101,155 @@ describe("local Mermaid rendering lifecycle", () => {
           value: undefined,
         });
     }
+  });
+
+  it("provides per-block display settings and copies valid Markdown", async () => {
+    const source = "line with ```\nlast";
+    const root = document.createElement("div");
+    root.innerHTML = renderCodeBlock(source, 'ts title="example.ts"');
+    document.body.append(root);
+    let copied = "";
+    const originalClipboard = Object.getOwnPropertyDescriptor(
+      navigator,
+      "clipboard",
+    );
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: {
+        writeText: (value: string) => Promise.resolve((copied = value)),
+      },
+    });
+    const binding = enhanceCodeBlockControls(root);
+    try {
+      const card = root.querySelector<HTMLElement>(".mm-code-block")!;
+      const more = root.querySelector<HTMLButtonElement>(
+        '[data-mm-code-action="more"]',
+      )!;
+      more.click();
+      const menu = card.querySelector<HTMLElement>(".mm-code-menu")!;
+      expect(menu.hidden).toBe(false);
+      const wrap = card.querySelector<HTMLButtonElement>(
+        '[data-mm-code-menu-option="wrap"]',
+      )!;
+      wrap.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          bubbles: true,
+          cancelable: true,
+          key: "ArrowDown",
+        }),
+      );
+      expect(document.activeElement).toBe(
+        card.querySelector('[data-mm-code-menu-option="line-numbers"]'),
+      );
+      document.activeElement?.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          bubbles: true,
+          cancelable: true,
+          key: "Escape",
+        }),
+      );
+      expect(menu.hidden).toBe(true);
+      expect(document.activeElement).toBe(more);
+      more.click();
+      wrap.click();
+      expect(card.classList.contains("mm-code-wrap-lines")).toBe(true);
+      expect(wrap.getAttribute("aria-checked")).toBe("true");
+      const lineNumbers = card.querySelector<HTMLButtonElement>(
+        '[data-mm-code-menu-option="line-numbers"]',
+      )!;
+      lineNumbers.click();
+      expect(card.classList.contains("mm-code-hide-line-numbers")).toBe(true);
+      expect(lineNumbers.getAttribute("aria-checked")).toBe("false");
+      card
+        .querySelector<HTMLButtonElement>(
+          '[data-mm-code-menu-option="markdown"]',
+        )!
+        .click();
+      await flush();
+      expect(copied).toBe(
+        '````ts title="example.ts"\nline with ```\nlast\n````',
+      );
+    } finally {
+      binding.dispose();
+      if (originalClipboard)
+        Object.defineProperty(navigator, "clipboard", originalClipboard);
+      else
+        Object.defineProperty(navigator, "clipboard", {
+          configurable: true,
+          value: undefined,
+        });
+    }
+  });
+
+  it("reports asynchronous copy failure and allows a retry", async () => {
+    const root = document.createElement("div");
+    root.innerHTML = renderCodeBlock("value", "ts");
+    document.body.append(root);
+    let shouldSucceed = false;
+    const originalClipboard = Object.getOwnPropertyDescriptor(
+      navigator,
+      "clipboard",
+    );
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: {
+        writeText: () =>
+          shouldSucceed
+            ? Promise.resolve()
+            : Promise.reject(new Error("denied")),
+      },
+    });
+    const binding = enhanceCodeBlockControls(root);
+    try {
+      const copy = root.querySelector<HTMLButtonElement>(
+        '[data-mm-code-action="copy"]',
+      )!;
+      copy.click();
+      await flush();
+      expect(copy.dataset.mmCopyState).toBe("failure");
+      expect(root.querySelector(".mm-code-status")?.textContent).toContain(
+        "Copy failed",
+      );
+      shouldSucceed = true;
+      copy.click();
+      await flush();
+      expect(copy.dataset.mmCopyState).toBe("success");
+    } finally {
+      binding.dispose();
+      if (originalClipboard)
+        Object.defineProperty(navigator, "clipboard", originalClipboard);
+      else
+        Object.defineProperty(navigator, "clipboard", {
+          configurable: true,
+          value: undefined,
+        });
+    }
+  });
+
+  it("controls a card passed as the root and cleans up expanded state", () => {
+    const root = document.createElement("div");
+    root.innerHTML = renderCodeBlock("value", "ts");
+    document.body.append(root);
+    const card = root.firstElementChild as HTMLElement;
+    const binding = enhanceCodeBlockControls(card);
+    const more = card.querySelector<HTMLButtonElement>(
+      '[data-mm-code-action="more"]',
+    )!;
+    more.click();
+    const menu = card.querySelector<HTMLElement>(".mm-code-menu")!;
+    expect(menu.hidden).toBe(false);
+    document.body.dispatchEvent(
+      new MouseEvent("pointerdown", { bubbles: true }),
+    );
+    expect(menu.hidden).toBe(true);
+
+    card
+      .querySelector<HTMLButtonElement>('[data-mm-code-action="expand"]')
+      ?.click();
+    expect(card.classList.contains("mm-code-block-expanded")).toBe(true);
+    binding.dispose();
+    expect(card.classList.contains("mm-code-block-expanded")).toBe(false);
+    expect(document.querySelector(".mm-code-focus-backdrop")).toBeNull();
   });
 
   it("sets the native indeterminate property from the safe task state", () => {

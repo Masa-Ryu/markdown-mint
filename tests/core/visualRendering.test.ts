@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  codeLanguageMetadata,
+  isValidCodeLanguageIdentifier,
   highlightCodeSpans,
+  replaceCodeLanguageIdentifier,
   renderAdvancedBlock,
   renderCodeBlock,
   renderMath,
@@ -25,7 +28,53 @@ describe("visual rendering helpers", () => {
     expect(html).not.toContain('<span class="hljs');
     expect(html).toContain("&lt;tag");
     expect(html).toContain("made-up-language");
+    expect(html).toContain('data-mm-highlight="unsupported"');
     expect(highlightCodeSpans(source, "made-up-language")).toEqual([]);
+  });
+
+  it("separates saved identifiers from display and highlight metadata", () => {
+    expect(codeLanguageMetadata("ts")).toMatchObject({
+      identifier: "ts",
+      label: "TypeScript",
+      badge: "TS",
+      highlightLanguage: "typescript",
+      kind: "known",
+    });
+    expect(codeLanguageMetadata("py")).toMatchObject({
+      identifier: "py",
+      label: "Python",
+      badge: "PY",
+      highlightLanguage: "python",
+      kind: "known",
+    });
+    expect(codeLanguageMetadata("html").label).toBe("HTML");
+    expect(codeLanguageMetadata("toml").label).toBe("TOML");
+    expect(codeLanguageMetadata("tsx").label).toBe("TSX");
+    expect(codeLanguageMetadata("C++")).toMatchObject({
+      label: "C++",
+      highlightLanguage: "cpp",
+      kind: "known",
+    });
+    expect(codeLanguageMetadata("C#")).toMatchObject({
+      label: "C#",
+      highlightLanguage: "csharp",
+      kind: "known",
+    });
+    expect(codeLanguageMetadata("acme-dsl")).toMatchObject({
+      identifier: "acme-dsl",
+      label: "acme-dsl",
+      badge: "CODE",
+      kind: "custom",
+    });
+    expect(replaceCodeLanguageIdentifier('ts title="example.ts"', "js")).toBe(
+      'js title="example.ts"',
+    );
+    expect(isValidCodeLanguageIdentifier("C++")).toBe(true);
+    expect(isValidCodeLanguageIdentifier("C#")).toBe(true);
+    expect(isValidCodeLanguageIdentifier("bad language")).toBe(false);
+    expect(isValidCodeLanguageIdentifier("bad\nlanguage")).toBe(false);
+    expect(isValidCodeLanguageIdentifier("bad\u0085language")).toBe(false);
+    expect(isValidCodeLanguageIdentifier("```js")).toBe(false);
   });
 
   it("renders a themed code card header and a line-number gutter", () => {
@@ -40,8 +89,25 @@ describe("visual rendering helpers", () => {
 
     const unknown = renderCodeBlock("plain", "made-up-language");
     expect(unknown).toContain('data-language="made-up-language"');
-    expect(unknown).toContain('data-mm-code-language="txt"');
-    expect(unknown).toContain('class="mm-code-language-label">txt</span>');
+    expect(unknown).not.toContain('class="language-made-up-language hljs"');
+    expect(unknown).toContain('data-mm-code-language="made-up-language"');
+    expect(unknown).toContain('data-mm-code-language-kind="custom"');
+    expect(unknown).toContain(
+      'class="mm-code-language-label">made-up-language</span>',
+    );
+    expect(unknown).toContain(
+      'class="mm-code-language-icon" aria-hidden="true">CODE</span>',
+    );
+    expect(unknown).not.toContain("mm-code-language-chevron");
+    expect(renderCodeBlock("print(1)", "py")).toContain(
+      'class="mm-code-language-icon" aria-hidden="true">PY</span>',
+    );
+    expect(renderCodeBlock("plain", "")).toContain(
+      'data-mm-code-language-kind="unspecified"',
+    );
+    expect(renderCodeBlock("plain", "plaintext")).toContain(
+      'data-mm-code-language-kind="plain"',
+    );
   });
 
   it("renders inline and display math without trusting commands", () => {

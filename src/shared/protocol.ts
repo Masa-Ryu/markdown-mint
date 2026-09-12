@@ -7,6 +7,7 @@ export const PROTOCOL_VERSION = 1 as const;
 export const MAX_MARKDOWN_LENGTH = 2_000_000;
 export const MAX_OPERATION_ID_LENGTH = 160;
 export const MAX_RESOURCE_URL_LENGTH = 8_192;
+export const MAX_CLIPBOARD_TEXT_LENGTH = MAX_MARKDOWN_LENGTH;
 
 export const MARKDOWN_PROFILES = ["github", "gitlab", "commonmark"] as const;
 export type MarkdownProfile = (typeof MARKDOWN_PROFILES)[number];
@@ -46,6 +47,8 @@ export interface DocumentMessage {
   /** A webview URI for the document directory, when the document is local. */
   readonly resourceBaseUrl?: string;
   readonly mode?: PanelMode;
+  /** Whether the host can provide the authoritative VS Code clipboard route. */
+  readonly clipboardAvailable?: boolean;
   readonly typography?: PreviewTypography;
   /** A rejected, unsaved draft may be displayed for recovery, never applied implicitly. */
   readonly draftMarkdown?: string;
@@ -59,6 +62,7 @@ export interface PreviewMessage {
   readonly version: number;
   readonly profile: MarkdownProfile;
   readonly resourceBaseUrl?: string;
+  readonly clipboardAvailable?: boolean;
   readonly typography?: PreviewTypography;
 }
 
@@ -101,6 +105,21 @@ export interface ErrorMessage {
   readonly type: "error";
   readonly message: string;
   readonly operationId?: string;
+}
+
+export interface ClipboardWriteMessage {
+  readonly protocolVersion: typeof PROTOCOL_VERSION;
+  readonly type: "clipboard-write";
+  readonly requestId: string;
+  readonly text: string;
+}
+
+export interface ClipboardResultMessage {
+  readonly protocolVersion: typeof PROTOCOL_VERSION;
+  readonly type: "clipboard-result";
+  readonly requestId: string;
+  readonly success: boolean;
+  readonly message?: string;
 }
 
 export interface ReadyMessage {
@@ -195,7 +214,8 @@ export type WebviewMessage =
   | FormatMessage
   | SaveMessage
   | PreviewRequestMessage
-  | RecoverDraftMessage;
+  | RecoverDraftMessage
+  | ClipboardWriteMessage;
 
 export type HostMessage =
   | DocumentMessage
@@ -204,6 +224,7 @@ export type HostMessage =
   | FormatRejectedMessage
   | SaveResultMessage
   | RecoveryOpenedMessage
+  | ClipboardResultMessage
   | ErrorMessage;
 
 export function isMarkdownProfile(value: unknown): value is MarkdownProfile {
@@ -245,6 +266,7 @@ export function isDocumentMessage(value: unknown): value is DocumentMessage {
     optionalReason(value.reason) &&
     optionalResourceUrl(value.resourceBaseUrl) &&
     optionalMode(value.mode) &&
+    optionalBoolean(value.clipboardAvailable) &&
     optionalTypography(value.typography) &&
     optionalSafeMarkdownSource(value.draftMarkdown)
   );
@@ -266,6 +288,7 @@ export function isHostMessage(value: unknown): value is HostMessage {
       isVersion(value.version) &&
       isMarkdownProfile(value.profile) &&
       optionalResourceUrl(value.resourceBaseUrl) &&
+      optionalBoolean(value.clipboardAvailable) &&
       optionalTypography(value.typography)
     );
   }
@@ -305,6 +328,13 @@ export function isHostMessage(value: unknown): value is HostMessage {
       isVersion(value.currentVersion) &&
       isMarkdownProfile(value.profile) &&
       optionalResourceUrl(value.draftUri)
+    );
+  }
+  if (value.type === "clipboard-result") {
+    return (
+      isOperationId(value.requestId) &&
+      typeof value.success === "boolean" &&
+      optionalMessage(value.message)
     );
   }
   if (value.type === "error") {
@@ -441,6 +471,15 @@ export function parseWebviewMessage(
             markdown: value.markdown,
           }
         : undefined;
+    case "clipboard-write":
+      return isOperationId(value.requestId) && isSafeClipboardText(value.text)
+        ? {
+            protocolVersion: PROTOCOL_VERSION,
+            type: "clipboard-write",
+            requestId: value.requestId,
+            text: value.text,
+          }
+        : undefined;
     default:
       return undefined;
   }
@@ -463,6 +502,20 @@ function optionalString(value: unknown): value is string | undefined {
     value === undefined ||
     (typeof value === "string" && value.length <= MAX_OPERATION_ID_LENGTH)
   );
+}
+
+function optionalMessage(value: unknown): value is string | undefined {
+  return (
+    value === undefined || (typeof value === "string" && value.length <= 1_024)
+  );
+}
+
+function optionalBoolean(value: unknown): value is boolean | undefined {
+  return value === undefined || typeof value === "boolean";
+}
+
+function isSafeClipboardText(value: unknown): value is string {
+  return typeof value === "string" && value.length <= MAX_CLIPBOARD_TEXT_LENGTH;
 }
 
 function optionalResourceUrl(value: unknown): value is string | undefined {

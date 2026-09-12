@@ -19,6 +19,8 @@ import {
   type DocumentMessage,
   type EditRejectedMessage,
   type ErrorMessage,
+  type ClipboardResultMessage,
+  type ClipboardWriteMessage,
   type FormatRejectedMessage,
   type HostDocumentReason,
   type HostMessage,
@@ -669,7 +671,8 @@ export class MarkdownMintEditorProvider
     if (
       session.mode === "preview" &&
       message.type !== "ready" &&
-      message.type !== "preview"
+      message.type !== "preview" &&
+      message.type !== "clipboard-write"
     ) {
       this.post(
         session,
@@ -687,6 +690,9 @@ export class MarkdownMintEditorProvider
         await this.enqueue(session.state, () =>
           this.handleEdit(session, message),
         );
+        return;
+      case "clipboard-write":
+        await this.handleClipboardWrite(session, message);
         return;
       case "recoverDraft":
         await this.enqueue(session.state, () =>
@@ -780,6 +786,30 @@ export class MarkdownMintEditorProvider
       "edit",
       message.baseVersion,
     );
+  }
+
+  private async handleClipboardWrite(
+    session: PanelSession,
+    message: ClipboardWriteMessage,
+  ): Promise<void> {
+    const result: ClipboardResultMessage = {
+      protocolVersion: PROTOCOL_VERSION,
+      type: "clipboard-result",
+      requestId: message.requestId,
+      success: false,
+    };
+    try {
+      await vscode.env.clipboard.writeText(message.text);
+      this.post(session, { ...result, success: true });
+    } catch (error) {
+      this.post(session, {
+        ...result,
+        message: errorMessage(
+          error,
+          "VS Code could not write to the clipboard.",
+        ).slice(0, 1_024),
+      });
+    }
   }
 
   private async handleRecoverDraft(
@@ -1356,6 +1386,7 @@ export class MarkdownMintEditorProvider
         html,
         version,
         profile,
+        clipboardAvailable: true,
         typography,
         ...(resource.baseUrl ? { resourceBaseUrl: resource.baseUrl } : {}),
       };
@@ -1404,6 +1435,7 @@ export class MarkdownMintEditorProvider
       profile: session.state.profile,
       reason,
       mode: session.mode,
+      clipboardAvailable: true,
       typography: this.typographyFor(document.uri),
       ...(operationId ? { operationId } : {}),
       ...(resource.baseUrl ? { resourceBaseUrl: resource.baseUrl } : {}),

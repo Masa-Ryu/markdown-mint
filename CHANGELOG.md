@@ -9,6 +9,13 @@
   paragraphs at their boundaries; native textarea composition and host history
   commands remain protected.
 
+## 0.0.23
+
+- Reworked code-block headers across the rich editor, dedicated preview, and
+  native Markdown preview with searchable language selection, preserved
+  info-string metadata, reliable copy feedback, in-Webview expansion, and
+  working display actions for wrapping, line numbers, and Markdown copying.
+
 ## 0.0.12
 
 - Added GitHub and GitLab feature controls for alerts, details, math, Mermaid,

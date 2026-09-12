@@ -16,12 +16,28 @@ export interface AdvancedRenderOptions {
   readonly maxSourceLength?: number;
 }
 
+export type CodeLanguageKind = "unspecified" | "plain" | "known" | "custom";
+
+export interface CodeLanguageMetadata {
+  /** The identifier as written by the user, without the rest of the info string. */
+  readonly identifier: string;
+  readonly label: string;
+  readonly aliases: readonly string[];
+  readonly badge: string;
+  readonly highlightLanguage?: string;
+  readonly kind: CodeLanguageKind;
+}
+
 export const MAX_RENDER_SOURCE_LENGTH = 250_000;
 const LANGUAGE_ALIASES: Record<string, string> = {
   c: "c",
   cc: "cpp",
   cpp: "cpp",
+  "c++": "cpp",
   cxx: "cpp",
+  csharp: "csharp",
+  cs: "csharp",
+  "c#": "csharp",
   css: "css",
   csv: "csv",
   go: "go",
@@ -63,6 +79,73 @@ const LANGUAGE_ALIASES: Record<string, string> = {
   zsh: "bash",
 };
 
+const LANGUAGE_LABELS: Record<string, string> = {
+  bash: "Shell",
+  c: "C",
+  cpp: "C++",
+  "c++": "C++",
+  csharp: "C#",
+  "c#": "C#",
+  css: "CSS",
+  csv: "CSV",
+  go: "Go",
+  html: "HTML",
+  http: "HTTP",
+  ini: "INI",
+  java: "Java",
+  javascript: "JavaScript",
+  json: "JSON",
+  kotlin: "Kotlin",
+  less: "Less",
+  markdown: "Markdown",
+  php: "PHP",
+  plaintext: "Plain Text",
+  python: "Python",
+  ruby: "Ruby",
+  rust: "Rust",
+  scss: "SCSS",
+  sql: "SQL",
+  swift: "Swift",
+  toml: "TOML",
+  text: "Plain Text",
+  ts: "TypeScript",
+  tsx: "TSX",
+  typescript: "TypeScript",
+  xml: "XML",
+  yaml: "YAML",
+};
+
+const LANGUAGE_BADGES: Record<string, string> = {
+  bash: "SH",
+  c: "C",
+  cpp: "C++",
+  "c++": "C++",
+  csharp: "C#",
+  "c#": "C#",
+  css: "CSS",
+  html: "HTML",
+  javascript: "JS",
+  json: "{}",
+  markdown: "MD",
+  plaintext: "TXT",
+  python: "PY",
+  ruby: "RB",
+  rust: "RS",
+  shell: "SH",
+  sql: "SQL",
+  swift: "SW",
+  toml: "TOML",
+  ts: "TS",
+  tsx: "TSX",
+  typescript: "TS",
+  xml: "XML",
+  yaml: "YML",
+};
+
+function languageIdentifier(language: string): string {
+  return language.trim().split(/\s+/, 1)[0] ?? "";
+}
+
 function normalizedLanguage(language: string): string {
   const first = language.trim().split(/\s+/, 1)[0] ?? "";
   const lower = first.toLowerCase();
@@ -75,6 +158,120 @@ function knownLanguage(language: string): string | undefined {
   return hljs.getLanguage(normalized) ? normalized : undefined;
 }
 
+/** Return the first info-string token without altering the original string. */
+export function codeLanguageIdentifier(language: string): string {
+  return languageIdentifier(language);
+}
+
+/** Resolve display metadata independently from the value saved in Markdown. */
+export function codeLanguageMetadata(language: string): CodeLanguageMetadata {
+  const identifier = languageIdentifier(language);
+  if (!identifier)
+    return {
+      identifier: "",
+      label: "Plain Text",
+      aliases: [],
+      badge: "TXT",
+      kind: "unspecified",
+    };
+
+  const lower = identifier.toLowerCase();
+  if (lower === "txt" || lower === "text" || lower === "plaintext")
+    return {
+      identifier,
+      label: "Plain Text",
+      aliases: ["txt", "text", "plaintext"],
+      badge: "TXT",
+      highlightLanguage: "plaintext",
+      kind: "plain",
+    };
+
+  const highlightLanguage = knownLanguage(identifier);
+  if (!highlightLanguage)
+    return {
+      identifier,
+      label: identifier,
+      aliases: [identifier],
+      badge: "CODE",
+      kind: "custom",
+    };
+
+  const aliases = Object.entries(LANGUAGE_ALIASES)
+    .filter(([, resolved]) => resolved === highlightLanguage)
+    .map(([alias]) => alias);
+  const label =
+    LANGUAGE_LABELS[lower] ?? LANGUAGE_LABELS[highlightLanguage] ?? identifier;
+  return {
+    identifier,
+    label,
+    aliases: Array.from(new Set([lower, ...aliases])),
+    badge:
+      LANGUAGE_BADGES[lower] ??
+      LANGUAGE_BADGES[highlightLanguage] ??
+      identifier.slice(0, 4).toUpperCase(),
+    highlightLanguage,
+    kind: "known",
+  };
+}
+
+/** The candidate list is intentionally limited to languages registered in the bundled hljs build. */
+export function codeLanguageOptions(): readonly CodeLanguageMetadata[] {
+  const options: CodeLanguageMetadata[] = [
+    codeLanguageMetadata(""),
+    codeLanguageMetadata("plaintext"),
+  ];
+  const seen = new Set(
+    options.map((option) => option.identifier || option.kind),
+  );
+  // Include aliases as selectable entries as well as searchable metadata. This
+  // lets a user who chooses `toml`, `tsx`, or `c#` keep that spelling in the
+  // Markdown info string even when highlight.js uses another grammar id.
+  const identifiers = [
+    ...hljs.listLanguages().sort(),
+    // Keep aliases which have their own user-facing spelling visible as
+    // entries; the remaining aliases stay searchable through metadata.
+    "c#",
+    "c++",
+    "html",
+    "toml",
+    "tsx",
+  ];
+  for (const identifier of identifiers) {
+    const option = codeLanguageMetadata(identifier);
+    if (option.kind !== "known" || seen.has(identifier.toLowerCase())) continue;
+    seen.add(identifier.toLowerCase());
+    options.push(option);
+  }
+  return options;
+}
+
+/** Validate only newly entered identifiers; existing info strings are not rewritten by this check. */
+export function isValidCodeLanguageIdentifier(value: string): boolean {
+  const hasInvalidCharacter = Array.from(value).some((character) => {
+    const code = character.charCodeAt(0);
+    return (
+      code <= 0x1f ||
+      (code >= 0x7f && code <= 0x9f) ||
+      /\s/.test(character) ||
+      character === "`" ||
+      character === "~"
+    );
+  });
+  return value.length <= 128 && value.length > 0 && !hasInvalidCharacter;
+}
+
+/** Replace only the first info-string token and retain all following metadata verbatim. */
+export function replaceCodeLanguageIdentifier(
+  info: string,
+  identifier: string,
+): string {
+  const leading = info.match(/^\s*/)?.[0] ?? "";
+  const rest = info.slice(leading.length);
+  const match = /^(\S+)([\s\S]*)$/.exec(rest);
+  if (!match) return leading + identifier;
+  return leading + identifier + (match[2] ?? "");
+}
+
 export function escapeHtml(value: string): string {
   return value
     .replaceAll("&", "&amp;")
@@ -85,57 +282,31 @@ export function escapeHtml(value: string): string {
 }
 
 function validLanguageAttribute(language: string): boolean {
-  return /^[A-Za-z0-9_+.-]+$/.test(language);
+  return isValidCodeLanguageIdentifier(language);
 }
 
-const LANGUAGE_LABELS: Record<string, string> = {
-  bash: "Shell",
-  c: "C",
-  cpp: "C++",
-  css: "CSS",
-  csv: "CSV",
-  go: "Go",
-  http: "HTTP",
-  ini: "INI",
-  java: "Java",
-  javascript: "JavaScript",
-  json: "JSON",
-  kotlin: "Kotlin",
-  less: "Less",
-  markdown: "Markdown",
-  php: "PHP",
-  plaintext: "txt",
-  python: "Python",
-  ruby: "Ruby",
-  rust: "Rust",
-  scss: "SCSS",
-  sql: "SQL",
-  swift: "Swift",
-  typescript: "TypeScript",
-  xml: "XML",
-  yaml: "YAML",
-};
-
 export function codeLanguageLabel(language: string): string {
-  const normalized = normalizedLanguage(language);
-  return (
-    LANGUAGE_LABELS[knownLanguage(language) ?? ""] ??
-    (normalized && knownLanguage(language) ? normalized : "txt")
-  );
+  return codeLanguageMetadata(language).label;
 }
 
 export function codeLanguageIcon(language: string): string {
-  const normalized = knownLanguage(language) ?? "plaintext";
-  if (normalized === "plaintext") return "";
-  if (normalized === "typescript") return "TS";
-  if (normalized === "javascript") return "JS";
-  if (normalized === "python") return "🐍";
-  if (normalized === "json") return "{}";
-  if (normalized === "markdown") return "M↓";
-  if (normalized === "css" || normalized === "scss" || normalized === "less")
-    return "#";
-  if (normalized === "html" || normalized === "xml") return "<>";
-  return "</>";
+  return codeLanguageMetadata(language).badge;
+}
+
+export function codeControlIcon(
+  name: "copy" | "expand" | "close" | "more" | "chevron",
+): string {
+  const path =
+    name === "copy"
+      ? '<rect x="5" y="5" width="10" height="12" rx="1.5"/><path d="M8 5V3.5A1.5 1.5 0 0 1 9.5 2h6A1.5 1.5 0 0 1 17 3.5v8A1.5 1.5 0 0 1 15.5 13H15"/>'
+      : name === "expand"
+        ? '<path d="M8 3H3v5M3 3l6 6M16 21h5v-5M21 21l-6-6M16 3h5v5M21 3l-6 6M8 21H3v-5M3 21l6-6"/>'
+        : name === "close"
+          ? '<path d="m5 5 14 14M19 5 5 19"/>'
+          : name === "chevron"
+            ? '<path d="m5 8 7 7 7-7"/>'
+            : '<circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/>';
+  return `<svg class="mm-code-action-svg" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${path}</svg>`;
 }
 
 function codeLineNumbers(source: string): string {
@@ -165,35 +336,52 @@ function highlightedHtml(source: string, language: string): string | undefined {
 
 export function renderCodeBlock(source: string, language = ""): string {
   const safeSource = source;
-  const normalized = normalizedLanguage(language);
+  const identifier = codeLanguageIdentifier(language);
+  const normalized = normalizedLanguage(identifier);
   const highlighted =
     safeSource.length <= MAX_RENDER_SOURCE_LENGTH
       ? highlightedHtml(safeSource, language)
       : undefined;
   const body = highlighted ?? escapeHtml(safeSource);
   const languageAttribute =
-    normalized && validLanguageAttribute(normalized)
-      ? ' data-language="' + escapeHtml(normalized) + '"'
+    identifier && validLanguageAttribute(identifier)
+      ? ' data-language="' + escapeHtml(identifier) + '"'
       : "";
   const highlightAttribute =
     safeSource.length > MAX_RENDER_SOURCE_LENGTH
       ? ' data-mm-highlight="skipped-large"'
       : "";
+  const metadata = codeLanguageMetadata(language);
   const codeClass =
-    normalized && validLanguageAttribute(normalized)
+    highlighted !== undefined &&
+    metadata.kind === "known" &&
+    normalized &&
+    validLanguageAttribute(normalized)
       ? ' class="language-' + escapeHtml(normalized) + " hljs" + '"'
+      : "";
+  const unsupportedAttribute =
+    metadata.kind === "custom" && safeSource.length <= MAX_RENDER_SOURCE_LENGTH
+      ? ' data-mm-highlight="unsupported"'
       : "";
   const languageLabel = codeLanguageLabel(language);
   const languageIcon = codeLanguageIcon(language);
+  const languageInfoAttribute =
+    language.length > 0
+      ? ' data-mm-code-info="' + escapeHtml(language) + '"'
+      : "";
   return (
     '<div class="mm-code-block"' +
     languageAttribute +
     highlightAttribute +
+    unsupportedAttribute +
+    languageInfoAttribute +
     ' data-mm-code-language="' +
     escapeHtml(languageLabel) +
+    '" data-mm-code-language-kind="' +
+    metadata.kind +
     '">' +
     '<div class="mm-code-block-header">' +
-    '<div class="mm-code-language-control" role="img" aria-label="Code language: ' +
+    '<div class="mm-code-language-control mm-code-language-readonly" role="img" aria-label="Code language: ' +
     escapeHtml(languageLabel) +
     '">' +
     '<span class="mm-code-language-icon" aria-hidden="true">' +
@@ -202,20 +390,25 @@ export function renderCodeBlock(source: string, language = ""): string {
     '<span class="mm-code-language-label">' +
     escapeHtml(languageLabel) +
     "</span>" +
-    '<span class="mm-code-language-chevron" aria-hidden="true">⌄</span>' +
     "</div>" +
     '<div class="mm-code-block-actions">' +
     '<button type="button" class="mm-code-action" data-mm-code-action="copy" aria-label="Copy code" title="Copy code">' +
-    '<span class="mm-code-action-icon" aria-hidden="true">⧉</span>' +
+    '<span class="mm-code-action-icon">' +
+    codeControlIcon("copy") +
+    "</span>" +
     '<span class="mm-code-action-label">Copy</span>' +
     "</button>" +
     '<span class="mm-code-action-separator" aria-hidden="true"></span>' +
     '<button type="button" class="mm-code-action" data-mm-code-action="expand" aria-label="Expand code" title="Expand">' +
-    '<span class="mm-code-action-icon" aria-hidden="true">⤢</span>' +
+    '<span class="mm-code-action-icon">' +
+    codeControlIcon("expand") +
+    "</span>" +
     '<span class="mm-code-action-label">Expand</span>' +
     "</button>" +
     '<button type="button" class="mm-code-action mm-code-action-more" data-mm-code-action="more" aria-label="More code block actions" title="More code block actions">' +
-    '<span class="mm-code-action-icon" aria-hidden="true">•••</span>' +
+    '<span class="mm-code-action-icon">' +
+    codeControlIcon("more") +
+    "</span>" +
     "</button>" +
     "</div>" +
     "</div>" +

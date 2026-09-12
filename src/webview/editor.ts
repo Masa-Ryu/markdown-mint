@@ -43,6 +43,7 @@ import {
 import {
   isHostMessage,
   PROTOCOL_VERSION,
+  type ClipboardResultMessage,
   type PreviewMessage as HostPreviewMessage,
   type PreviewTypography,
   type SaveResultMessage,
@@ -80,8 +81,22 @@ import {
   type ProfileFeatureId,
   type ProfileFeatureValues,
 } from "./profileFeatures";
-import { copyCodeText, toggleCodeBlockFullscreen } from "./codeBlockControls";
-import { codeLanguageIcon, codeLanguageLabel } from "../core/visualRendering";
+import {
+  copyCodeText as copyClipboardText,
+  enhanceCodeBlockControls,
+  scheduleCodeLineNumberSync,
+  type CodeBlockControlBinding,
+  type CodeBlockControlOptions,
+} from "./codeBlockControls";
+import {
+  codeControlIcon,
+  codeLanguageIdentifier,
+  codeLanguageIcon,
+  codeLanguageMetadata,
+  codeLanguageOptions,
+  isValidCodeLanguageIdentifier,
+  replaceCodeLanguageIdentifier,
+} from "../core/visualRendering";
 
 export type DocumentProfile = "github" | "gitlab" | "commonmark";
 export type EditorMode = "rich" | "preview" | "source";
@@ -133,6 +148,7 @@ export interface EditorInitialDocument {
   resourceBaseUrl?: string;
   typography?: PreviewTypography;
   mode?: "editor" | "preview";
+  clipboardAvailable?: boolean;
 }
 
 export interface DocumentMessage extends EditorInitialDocument {
@@ -281,6 +297,7 @@ const COMMON_EMOJI: ReadonlyArray<{
 ];
 
 const editorPluginKey = new PluginKey("markdown-mint-editor");
+let nextCodeLanguagePickerId = 0;
 
 function newOperationId(): string {
   const cryptoApi = typeof crypto !== "undefined" ? crypto : undefined;
@@ -1009,12 +1026,21 @@ class CodeBlockNodeView {
   private readonly languageInput: HTMLInputElement;
   private readonly languageIcon: HTMLSpanElement;
   private readonly languageLabel: HTMLSpanElement;
+  private readonly languageTrigger: HTMLButtonElement;
+  private readonly languageMenu: HTMLDivElement;
+  private readonly languageOutsideHandler: (event: MouseEvent) => void;
   private readonly lineNumbers: HTMLDivElement;
+  private readonly controls: CodeBlockControlBinding;
+  private languagePickerOpen = false;
+  private languageActiveIndex = -1;
+  private languageQuery = "";
+  private destroyed = false;
 
   constructor(
     node: PMNode,
     view: EditorView,
     getPos: () => number | undefined,
+    controlOptions: CodeBlockControlOptions = {},
   ) {
     this.view = view;
     this.getPos = getPos;
@@ -1028,71 +1054,94 @@ class CodeBlockNodeView {
     header.className = "mm-code-block-header";
     const languageControl = document.createElement("div");
     languageControl.className = "mm-code-language-control";
+    languageControl.setAttribute("data-mm-code-language-control", "true");
     this.languageIcon = document.createElement("span");
     this.languageIcon.className = "mm-code-language-icon";
     this.languageIcon.setAttribute("aria-hidden", "true");
     this.languageLabel = document.createElement("span");
     this.languageLabel.className = "mm-code-language-label";
     this.languageLabel.setAttribute("aria-hidden", "true");
+    this.languageTrigger = document.createElement("button");
+    this.languageTrigger.type = "button";
+    this.languageTrigger.className = "mm-code-language-trigger";
+    this.languageTrigger.setAttribute("aria-haspopup", "listbox");
+    this.languageTrigger.setAttribute("aria-expanded", "false");
+    this.languageTrigger.append(this.languageIcon, this.languageLabel);
+    const languageChevron = document.createElement("span");
+    languageChevron.className = "mm-code-language-chevron";
+    languageChevron.append(
+      document
+        .createRange()
+        .createContextualFragment(codeControlIcon("chevron")),
+    );
+    languageChevron.setAttribute("aria-hidden", "true");
+    this.languageTrigger.append(languageChevron);
+    this.languageMenu = document.createElement("div");
+    this.languageMenu.className = "mm-code-language-menu";
+    this.languageMenu.id = `mm-code-language-${++nextCodeLanguagePickerId}`;
+    this.languageMenu.hidden = true;
+    this.languageMenu.setAttribute("role", "listbox");
+    this.languageMenu.setAttribute("aria-label", "Code block languages");
     this.languageInput = document.createElement("input");
     this.languageInput.className = "mm-code-language mm-code-language-inline";
     this.languageInput.type = "text";
-    this.languageInput.placeholder = "txt";
+    this.languageInput.placeholder = "Search or enter language";
     this.languageInput.spellcheck = false;
     this.languageInput.autocomplete = "off";
-    this.languageInput.setAttribute("aria-label", "Code block language");
-    languageControl.addEventListener("mousedown", (event) => {
-      if (event.target === this.languageInput) return;
+    this.languageInput.setAttribute("role", "combobox");
+    this.languageInput.setAttribute("aria-autocomplete", "list");
+    this.languageTrigger.setAttribute("aria-controls", this.languageMenu.id);
+    this.languageInput.setAttribute(
+      "aria-controls",
+      `${this.languageMenu.id}-options`,
+    );
+    this.languageInput.setAttribute("aria-expanded", "false");
+    this.languageMenu.append(this.languageInput);
+    this.languageTrigger.addEventListener("click", (event) => {
       event.preventDefault();
-      this.languageInput.focus();
+      event.stopPropagation();
+      this.toggleLanguagePicker();
     });
+    this.languageTrigger.addEventListener("mousedown", (event) =>
+      event.stopPropagation(),
+    );
     this.languageInput.addEventListener("mousedown", (event) => {
       event.stopPropagation();
-      this.languageInput.focus();
+      if (!this.languagePickerOpen) this.openLanguagePicker();
     });
-    this.languageInput.addEventListener("input", () =>
-      this.updateLanguagePresentation(this.languageInput.value),
-    );
-    this.languageInput.addEventListener("change", () => {
-      this.setCodeLanguage(this.languageInput.value.trim());
+    this.languageInput.addEventListener("input", () => {
+      this.languageQuery = this.languageInput.value;
+      this.renderLanguageOptions();
     });
-    const languageChevron = document.createElement("span");
-    languageChevron.className = "mm-code-language-chevron";
-    languageChevron.textContent = "⌄";
-    languageChevron.setAttribute("aria-hidden", "true");
-    languageControl.append(
-      this.languageIcon,
-      this.languageLabel,
-      this.languageInput,
-      languageChevron,
+    this.languageInput.addEventListener("keydown", (event) =>
+      this.handleLanguageKeyDown(event),
     );
+    this.languageMenu.addEventListener("click", (event) => {
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+      const option = target.closest<HTMLButtonElement>(
+        "[data-mm-language-option]",
+      );
+      if (!option) return;
+      event.preventDefault();
+      this.commitLanguageInput(option.dataset.mmLanguageOption ?? "");
+    });
+    this.languageOutsideHandler = (event: MouseEvent): void => {
+      const target = event.target;
+      if (target instanceof Node && languageControl.contains(target)) return;
+      this.closeLanguagePicker(false);
+    };
+    document.addEventListener("pointerdown", this.languageOutsideHandler);
+    languageControl.append(this.languageTrigger, this.languageMenu);
 
     const actions = document.createElement("div");
     actions.className = "mm-code-block-actions";
-    const copy = this.createActionButton("copy", "⧉", "Copy");
-    copy.addEventListener("click", (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      copyCodeText(this.contentDOM.textContent ?? "", this.dom.ownerDocument);
-      copy.dataset.mmCopyState = "copied";
-      copy.setAttribute("aria-label", "Copied code");
-      copy.title = "Copied";
-      this.dom.ownerDocument.defaultView?.setTimeout(() => {
-        copy.dataset.mmCopyState = "";
-        copy.setAttribute("aria-label", "Copy code");
-        copy.title = "Copy code";
-      }, 1400);
-    });
+    const copy = this.createActionButton("copy", "Copy");
     const separator = document.createElement("span");
     separator.className = "mm-code-action-separator";
     separator.setAttribute("aria-hidden", "true");
-    const expand = this.createActionButton("expand", "⤢", "Expand");
-    expand.addEventListener("click", (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      toggleCodeBlockFullscreen(this.card);
-    });
-    const more = this.createActionButton("more", "•••", "");
+    const expand = this.createActionButton("expand", "Expand");
+    const more = this.createActionButton("more", "");
     more.classList.add("mm-code-action-more");
     actions.append(copy, separator, expand, more);
     header.append(languageControl, actions);
@@ -1112,11 +1161,14 @@ class CodeBlockNodeView {
     this.card.append(body);
 
     this.update(node);
+    this.controls = enhanceCodeBlockControls(this.card, {
+      ...controlOptions,
+      getCodeText: () => this.currentCodeText(),
+    });
   }
 
   private createActionButton(
     action: "copy" | "expand" | "more",
-    iconText: string,
     label: string,
   ): HTMLButtonElement {
     const button = document.createElement("button");
@@ -1130,8 +1182,13 @@ class CodeBlockNodeView {
     button.title = label ? label : "More code block actions";
     const icon = document.createElement("span");
     icon.className = "mm-code-action-icon";
-    icon.textContent = iconText;
-    icon.setAttribute("aria-hidden", "true");
+    icon.append(
+      document
+        .createRange()
+        .createContextualFragment(
+          codeControlIcon(action === "more" ? "more" : action),
+        ),
+    );
     button.append(icon);
     if (label) {
       const text = document.createElement("span");
@@ -1143,11 +1200,285 @@ class CodeBlockNodeView {
     return button;
   }
 
+  private currentCodeText(): string {
+    const position = this.positionOf();
+    if (position === undefined) return this.contentDOM.textContent ?? "";
+    const node = this.view.state.doc.nodeAt(position);
+    return node?.type.name === "code_block"
+      ? node.textContent
+      : (this.contentDOM.textContent ?? "");
+  }
+
+  private positionOf(): number | undefined {
+    try {
+      return this.getPos();
+    } catch {
+      return undefined;
+    }
+  }
+
+  private toggleLanguagePicker(): void {
+    if (this.languagePickerOpen) this.closeLanguagePicker(false);
+    else this.openLanguagePicker();
+  }
+
+  private openLanguagePicker(): void {
+    if (this.destroyed) return;
+    this.languagePickerOpen = true;
+    this.languageQuery = "";
+    this.languageActiveIndex = 0;
+    this.languageInput.value = "";
+    this.languageMenu.hidden = false;
+    const control = this.languageTrigger.parentElement;
+    const viewportHeight = this.dom.ownerDocument.defaultView?.innerHeight ?? 0;
+    const controlRect = control?.getBoundingClientRect();
+    const shouldOpenUp =
+      Boolean(controlRect) &&
+      viewportHeight > 0 &&
+      controlRect!.bottom + Math.min(420, viewportHeight - 40) >
+        viewportHeight &&
+      controlRect!.top > Math.min(420, viewportHeight - 40);
+    this.languageMenu.classList.toggle(
+      "mm-code-language-menu-up",
+      shouldOpenUp,
+    );
+    this.languageTrigger.setAttribute("aria-expanded", "true");
+    this.languageInput.setAttribute("aria-expanded", "true");
+    this.renderLanguageOptions();
+    this.languageInput.focus();
+  }
+
+  private closeLanguagePicker(restoreFocus: boolean): void {
+    if (!this.languagePickerOpen) return;
+    this.languagePickerOpen = false;
+    this.languageQuery = "";
+    this.languageActiveIndex = -1;
+    this.languageMenu.hidden = true;
+    this.languageTrigger.setAttribute("aria-expanded", "false");
+    this.languageInput.setAttribute("aria-expanded", "false");
+    const position = this.positionOf();
+    const node =
+      position === undefined ? undefined : this.view.state.doc.nodeAt(position);
+    this.languageInput.value = String(node?.attrs.params ?? "");
+    this.languageInput.removeAttribute("aria-activedescendant");
+    this.languageInput.removeAttribute("data-mm-language-error");
+    if (restoreFocus) this.languageTrigger.focus();
+  }
+
+  private filteredLanguageOptions(): Array<
+    ReturnType<typeof codeLanguageMetadata>
+  > {
+    const query = this.languageQuery.trim().toLowerCase();
+    const options = [...codeLanguageOptions()];
+    if (!query) return options;
+    return options
+      .map((option, index) => {
+        const values = [option.identifier, option.label, ...option.aliases]
+          .join(" ")
+          .toLowerCase();
+        const exactName = [option.identifier, option.label].some(
+          (value) => value.toLowerCase() === query,
+        );
+        const exactAlias = option.aliases.some(
+          (value) => value.toLowerCase() === query,
+        );
+        const starts = values.startsWith(query);
+        const includes = values.includes(query);
+        return {
+          option,
+          index,
+          score: exactName ? 0 : exactAlias ? 1 : starts ? 2 : includes ? 3 : 9,
+        };
+      })
+      .filter((entry) => entry.score < 9)
+      .sort(
+        (left, right) => left.score - right.score || left.index - right.index,
+      )
+      .map((entry) => entry.option);
+  }
+
+  private renderLanguageOptions(): void {
+    const previous = this.languageMenu.querySelector(
+      ".mm-code-language-options",
+    );
+    previous?.remove();
+    const list = document.createElement("div");
+    list.className = "mm-code-language-options";
+    list.id = `${this.languageMenu.id}-options`;
+    const currentPosition = this.positionOf();
+    const currentInfo =
+      currentPosition === undefined
+        ? ""
+        : String(
+            this.view.state.doc.nodeAt(currentPosition)?.attrs.params ?? "",
+          );
+    const currentIdentifier = codeLanguageIdentifier(currentInfo).toLowerCase();
+    const options = this.filteredLanguageOptions().slice();
+    const query = this.languageQuery.trim();
+    const currentMetadata = codeLanguageMetadata(currentInfo);
+    const hasCurrentIdentifier = options.some(
+      (option) => option.identifier.toLowerCase() === currentIdentifier,
+    );
+    if (
+      currentMetadata.kind === "custom" &&
+      !options.some(
+        (option) =>
+          option.identifier.toLowerCase() ===
+          currentMetadata.identifier.toLowerCase(),
+      ) &&
+      (!query ||
+        currentMetadata.identifier.toLowerCase().includes(query.toLowerCase()))
+    ) {
+      options.unshift(currentMetadata);
+    }
+    for (const option of options) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "mm-code-language-option";
+      if (option.kind === "custom")
+        button.classList.add("mm-code-language-custom");
+      const queryIdentifier = query.toLowerCase();
+      const queryAlias =
+        query &&
+        isValidCodeLanguageIdentifier(query) &&
+        (option.identifier.toLowerCase() === queryIdentifier ||
+          option.aliases.includes(queryIdentifier))
+          ? query
+          : undefined;
+      const selectedIdentifier = option.aliases.includes(currentIdentifier)
+        ? codeLanguageIdentifier(currentInfo)
+        : (queryAlias ?? option.identifier);
+      button.dataset.mmLanguageOption = selectedIdentifier;
+      button.setAttribute("role", "option");
+      button.setAttribute(
+        "aria-selected",
+        String(
+          option.identifier.toLowerCase() === currentIdentifier ||
+            (!hasCurrentIdentifier &&
+              option.aliases.some((alias) => alias === currentIdentifier)),
+        ),
+      );
+      const text = document.createElement("span");
+      text.className = "mm-code-language-option-text";
+      text.textContent =
+        option.kind === "unspecified"
+          ? "Language not specified"
+          : option.kind === "custom"
+            ? `Use “${option.identifier}”`
+            : option.label;
+      const identifier = document.createElement("small");
+      if (option.kind === "custom") {
+        identifier.className = "mm-code-language-option-help";
+        identifier.textContent =
+          "Highlighting is unavailable; the language name will be preserved.";
+        button.append(text, identifier);
+      } else {
+        const badge = document.createElement("span");
+        badge.className = "mm-code-language-option-badge";
+        badge.textContent = option.badge;
+        identifier.className = "mm-code-language-option-id";
+        identifier.textContent = option.identifier || "(none)";
+        button.append(badge, text, identifier);
+      }
+      list.append(button);
+    }
+    const hasExact = options.some((option) =>
+      [option.identifier, option.label, ...option.aliases].some(
+        (value) => value.toLowerCase() === query.toLowerCase(),
+      ),
+    );
+    if (query && isValidCodeLanguageIdentifier(query) && !hasExact) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "mm-code-language-option mm-code-language-custom";
+      button.dataset.mmLanguageOption = query;
+      button.setAttribute("role", "option");
+      const text = document.createElement("span");
+      text.className = "mm-code-language-option-text";
+      text.textContent = `Use “${query}”`;
+      const detail = document.createElement("small");
+      detail.className = "mm-code-language-option-help";
+      detail.textContent =
+        "Highlighting is unavailable; the language name will be preserved.";
+      button.append(text, detail);
+      list.prepend(button);
+    }
+    this.languageMenu.append(list);
+    const buttons = list.querySelectorAll<HTMLButtonElement>(
+      "[data-mm-language-option]",
+    );
+    if (buttons.length === 0) this.languageActiveIndex = -1;
+    else
+      this.languageActiveIndex = Math.max(
+        0,
+        Math.min(this.languageActiveIndex, buttons.length - 1),
+      );
+    buttons.forEach((button, index) => {
+      const id = `${this.languageMenu.id}-option-${index}`;
+      button.id = id;
+      button.classList.toggle("is-active", index === this.languageActiveIndex);
+    });
+    const active = buttons[this.languageActiveIndex];
+    if (active)
+      this.languageInput.setAttribute("aria-activedescendant", active.id);
+    else this.languageInput.removeAttribute("aria-activedescendant");
+  }
+
+  private commitLanguageInput(identifier?: string): void {
+    if (this.languageInput.matches(":disabled")) return;
+    const value = (identifier ?? this.languageInput.value).trim();
+    if (value && !isValidCodeLanguageIdentifier(value)) {
+      this.languageInput.setAttribute(
+        "data-mm-language-error",
+        "Language identifiers cannot contain whitespace, controls, or fences.",
+      );
+      return;
+    }
+    this.setCodeLanguage(value);
+    this.closeLanguagePicker(true);
+  }
+
+  private handleLanguageKeyDown(event: KeyboardEvent): void {
+    if (event.isComposing || event.keyCode === 229) return;
+    const buttons = Array.from(
+      this.languageMenu.querySelectorAll<HTMLButtonElement>(
+        "[data-mm-language-option]",
+      ),
+    );
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      this.languageActiveIndex = Math.min(
+        buttons.length - 1,
+        this.languageActiveIndex + 1,
+      );
+      this.renderLanguageOptions();
+    } else if (event.key === "ArrowUp") {
+      event.preventDefault();
+      this.languageActiveIndex = Math.max(0, this.languageActiveIndex - 1);
+      this.renderLanguageOptions();
+    } else if (event.key === "Enter") {
+      event.preventDefault();
+      const active = buttons[this.languageActiveIndex];
+      this.commitLanguageInput(active?.dataset.mmLanguageOption);
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      this.closeLanguagePicker(true);
+    } else if (event.key === "Tab") {
+      this.closeLanguagePicker(false);
+    }
+  }
+
   private updateLanguagePresentation(language: string): void {
-    const label = codeLanguageLabel(language);
+    const metadata = codeLanguageMetadata(language);
+    const label = metadata.label;
     this.languageIcon.textContent = codeLanguageIcon(language);
     this.languageLabel.textContent = label;
     this.card.dataset.mmCodeLanguage = label;
+    this.card.dataset.mmCodeLanguageKind = metadata.kind;
+    this.languageTrigger.setAttribute(
+      "aria-label",
+      `Code block language: ${label}`,
+    );
     this.languageInput.setAttribute(
       "aria-label",
       `Code block language: ${label}`,
@@ -1167,15 +1498,21 @@ class CodeBlockNodeView {
   }
 
   private setCodeLanguage(language: string): void {
-    const position = this.getPos();
+    const position = this.positionOf();
     if (position === undefined) return;
     const current = this.view.state.doc.nodeAt(position);
     if (!current || current.type.name !== "code_block") return;
+    if (language && !isValidCodeLanguageIdentifier(language)) return;
+    const currentInfo = String(current.attrs.params ?? "");
+    const nextInfo = language
+      ? replaceCodeLanguageIdentifier(currentInfo, language)
+      : "";
+    if (nextInfo === currentInfo) return;
     this.view.focus();
     this.view.dispatch(
       this.view.state.tr.setNodeMarkup(position, undefined, {
         ...current.attrs,
-        params: language,
+        params: nextInfo,
       }),
     );
   }
@@ -1183,10 +1520,12 @@ class CodeBlockNodeView {
   update(node: PMNode): boolean {
     if (node.type.name !== "code_block") return false;
     const language = String(node.attrs.params ?? "");
-    if (this.languageInput.value !== language)
+    if (!this.languagePickerOpen && this.languageInput.value !== language)
       this.languageInput.value = language;
+    this.card.dataset.mmCodeInfo = language;
     this.updateLanguagePresentation(language);
     this.updateLineNumbers(node.textContent);
+    scheduleCodeLineNumberSync(this.card);
     return true;
   }
 
@@ -1197,8 +1536,16 @@ class CodeBlockNodeView {
     );
   }
 
-  ignoreMutation(): boolean {
-    return false;
+  ignoreMutation(mutation: ViewMutationRecord): boolean {
+    if (mutation.type === "selection") return false;
+    return !this.contentDOM.contains(mutation.target);
+  }
+
+  destroy(): void {
+    this.destroyed = true;
+    this.closeLanguagePicker(false);
+    document.removeEventListener("pointerdown", this.languageOutsideHandler);
+    this.controls.dispose();
   }
 }
 
@@ -1426,6 +1773,11 @@ export class MarkdownEditorApp {
   private readonly compatibilityEl: HTMLElement;
   private readonly statusEl: HTMLElement;
   private readonly previewEl: HTMLElement;
+  private clipboardAvailable = false;
+  private readonly pendingClipboard = new Map<
+    string,
+    { resolve: (success: boolean) => void; timer?: number }
+  >();
   private previewEnhancer: RenderingEnhancer | undefined;
   /**
    * The last Markdown snapshot produced for the current PM document.
@@ -1630,6 +1982,7 @@ export class MarkdownEditorApp {
     this.version = initial.version;
     this.operationId = initial.operationId;
     this.resourceBaseUrl = initial.resourceBaseUrl;
+    this.clipboardAvailable = initial.clipboardAvailable === true;
     this.applyTypography(initial.typography);
     this.root.replaceChildren();
     this.root.classList.add("markdown-mint-app");
@@ -1719,7 +2072,12 @@ export class MarkdownEditorApp {
         list_item: (node, view, getPos) =>
           new TaskItemNodeView(node, view, getPos),
         code_block: (node, view, getPos) =>
-          new CodeBlockNodeView(node, view, getPos),
+          new CodeBlockNodeView(
+            node,
+            view,
+            getPos,
+            this.codeBlockControlOptions(),
+          ),
         image: (node) => new ImageNodeView(node, () => this.resourceBaseUrl),
         raw_block: (node, view, getPos) =>
           String(node.attrs.kind ?? "") === "alert"
@@ -1822,6 +2180,12 @@ export class MarkdownEditorApp {
       clearTimeout(this.derivedViewsTimer);
       this.derivedViewsTimer = undefined;
     }
+    for (const pending of this.pendingClipboard.values()) {
+      if (pending.timer !== undefined)
+        this.root.ownerDocument.defaultView?.clearTimeout(pending.timer);
+      pending.resolve(false);
+    }
+    this.pendingClipboard.clear();
     window.removeEventListener("message", this.messageHandler);
     window.removeEventListener("resize", this.writingToolbarResizeHandler);
     this.stage.removeEventListener("scroll", this.writingToolbarScrollHandler);
@@ -2499,14 +2863,16 @@ export class MarkdownEditorApp {
         }
         this.resolveDisplayImages(this.previewEl);
         this.previewEnhancer?.dispose();
-        this.previewEnhancer = enhanceRenderedContent(this.previewEl);
+        this.previewEnhancer = enhanceRenderedContent(
+          this.previewEl,
+          this.codeBlockControlOptions(),
+        );
         this.previewRenderKey = previewKey;
         this.previewNeedsRefresh = false;
       }
     } else {
       this.previewNeedsRefresh = true;
     }
-
     // ImageNodeView ignores this display-only attribute mutation so the
     // absolute webview URI never leaks into the ProseMirror document.
     this.resolveDisplayImages(this.view.dom);
@@ -2542,6 +2908,46 @@ export class MarkdownEditorApp {
         refreshCompatibility: true,
       });
     }, 0);
+  }
+
+  private codeBlockControlOptions(): CodeBlockControlOptions {
+    // Keep this callback dynamic: the initial document may be constructed
+    // before the host's clipboard capability flag arrives. Existing NodeViews
+    // must still switch to the authoritative host route after that message.
+    return { copyText: (value) => this.copyCodeBlockText(value) };
+  }
+
+  private async copyCodeBlockText(value: string): Promise<boolean> {
+    if (this.vscode && this.clipboardAvailable) {
+      try {
+        if (await this.writeHostClipboard(value)) return true;
+      } catch {
+        // Fall through to the browser clipboard path when the host route is
+        // unavailable or rejects the request.
+      }
+    }
+    return copyClipboardText(value, this.root.ownerDocument);
+  }
+
+  private writeHostClipboard(value: string): Promise<boolean> {
+    if (!this.vscode || !this.clipboardAvailable) return Promise.resolve(false);
+    const requestId = newOperationId();
+    return new Promise<boolean>((resolve) => {
+      const timer = this.root.ownerDocument.defaultView?.setTimeout(() => {
+        this.pendingClipboard.delete(requestId);
+        resolve(false);
+      }, 5_000);
+      this.pendingClipboard.set(
+        requestId,
+        timer === undefined ? { resolve } : { resolve, timer },
+      );
+      this.vscode?.postMessage({
+        protocolVersion: PROTOCOL_VERSION,
+        type: "clipboard-write",
+        requestId,
+        text: value,
+      });
+    });
   }
 
   /** Resolve local image references for the webview display only. */
@@ -6219,8 +6625,10 @@ export class MarkdownEditorApp {
   private handleMessage(message: unknown): void {
     if (!isHostMessage(message)) return;
     if (message.type === "document") {
+      this.clipboardAvailable = message.clipboardAvailable === true;
       this.receiveDocument(message);
     } else if (message.type === "preview") {
+      this.clipboardAvailable = message.clipboardAvailable === true;
       this.receivePreview(message);
     } else if (message.type === "edit-rejected") {
       this.sync.reject(message.operationId, message.currentVersion);
@@ -6245,6 +6653,8 @@ export class MarkdownEditorApp {
         this.statusEl.textContent =
           "Draft opened separately; reloading the authoritative document…";
       }
+    } else if (message.type === "clipboard-result") {
+      this.resolveClipboard(message);
     } else if (message.type === "error") {
       if (
         this.pendingProfile?.operationId &&
@@ -6258,7 +6668,17 @@ export class MarkdownEditorApp {
     }
   }
 
+  private resolveClipboard(message: ClipboardResultMessage): void {
+    const pending = this.pendingClipboard.get(message.requestId);
+    if (!pending) return;
+    this.pendingClipboard.delete(message.requestId);
+    if (pending.timer !== undefined)
+      this.root.ownerDocument.defaultView?.clearTimeout(pending.timer);
+    pending.resolve(message.success);
+  }
+
   private receivePreview(message: HostPreviewMessage): void {
+    this.clipboardAvailable = message.clipboardAvailable === true;
     if (
       message.version < this.version ||
       message.version < this.authoritativeVersion
@@ -6354,6 +6774,7 @@ export class MarkdownEditorApp {
   }
 
   receiveDocument(message: DocumentMessage): void {
+    this.clipboardAvailable = message.clipboardAvailable === true;
     // A host acknowledgement must be processed even during IME composition;
     // otherwise it would be mistaken for an external edit and leave the local
     // draft in a permanent conflict state.
