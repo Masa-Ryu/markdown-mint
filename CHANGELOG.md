@@ -5,9 +5,11 @@
 - Simplified the code-language picker to show language labels only while
   retaining searchable identifiers, aliases, and highlighting metadata.
 
-- Added Ctrl+Enter submission for link, image, profile-feature, and table
-  insertion/editing modals while preserving IME composition and excluding
-  destructive confirmation dialogs.
+- Fixed Ctrl+Enter submission for link, image, profile-feature, and table
+  insertion/editing modals by capturing the shortcut at the document boundary
+  before nested controls can stop propagation. Submission still preserves IME
+  composition, excludes destructive confirmations, and lets modal-local key
+  handlers update their state before the form is submitted.
 
 - Fixed image insertion to accept relative paths while preserving the original
   Markdown source and existing absolute URL support.
