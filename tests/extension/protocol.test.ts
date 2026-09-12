@@ -111,6 +111,8 @@ describe("Markdown Mint wire protocol", () => {
         type: "save-result",
         operationId: "save:5:abc",
         saved: true,
+        requestedVersion: 5,
+        savedVersion: 6,
         version: 6,
         isDirty: false,
       }),
@@ -121,6 +123,30 @@ describe("Markdown Mint wire protocol", () => {
         type: "save",
         baseVersion: 0,
         operationId: "save:bad",
+      }),
+    ).toBeUndefined();
+  });
+
+  it("accepts bounded user notifications without making them document state", () => {
+    expect(
+      parseWebviewMessage({
+        protocolVersion: PROTOCOL_VERSION,
+        type: "notify",
+        level: "error",
+        message: "The local draft needs attention.",
+      }),
+    ).toEqual({
+      protocolVersion: PROTOCOL_VERSION,
+      type: "notify",
+      level: "error",
+      message: "The local draft needs attention.",
+    });
+    expect(
+      parseWebviewMessage({
+        protocolVersion: PROTOCOL_VERSION,
+        type: "notify",
+        level: "error",
+        message: "x".repeat(1_025),
       }),
     ).toBeUndefined();
   });

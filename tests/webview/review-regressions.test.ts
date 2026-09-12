@@ -467,9 +467,8 @@ describe("reviewed webview synchronization races", () => {
     expect(app.sync.queuedEdit?.markdown).toContain("two");
 
     app.receiveDocument(hostDocument("external", 3, { reason: "external" }));
-    expect(root.querySelector(".mm-recover")?.hasAttribute("hidden")).toBe(
-      false,
-    );
+    expect(root.querySelector(".mm-statusbar")).toBeNull();
+    expect(root.querySelector(".mm-recover")).toBeNull();
 
     app.receiveDocument(
       hostDocument(String(first.markdown), 2, {
@@ -479,8 +478,9 @@ describe("reviewed webview synchronization races", () => {
     );
 
     expect(edits(messages)).toHaveLength(1);
-    expect(root.querySelector<HTMLElement>(".mm-status")?.dataset.state).toBe(
-      "conflict",
+    expect(root.querySelector(".mm-status")).toBeNull();
+    expect(messages.some((message: any) => message.type === "notify")).toBe(
+      true,
     );
     expect(app.view.state.doc.textContent).toContain("one");
     expect(
@@ -497,7 +497,7 @@ describe("reviewed webview synchronization races", () => {
   });
 
   it("does not let a profile change disappear when an older edit is acknowledged", () => {
-    const { app, root, messages } = makeApp({
+    const { app, messages } = makeApp({
       markdown: "base",
       profile: "github",
     });
@@ -523,12 +523,8 @@ describe("reviewed webview synchronization races", () => {
     expect(edits(messages)).toHaveLength(1);
 
     app.view.dispatch(app.view.state.tr.insertText(" again"));
-    const status = root.querySelector<HTMLElement>(".mm-status");
     const continuedSync = edits(messages).length > 1;
-    const explicitConflict =
-      status?.dataset.state === "conflict" &&
-      root.querySelector(".mm-recover")?.hasAttribute("hidden") === false;
-    expect(continuedSync || explicitConflict).toBe(true);
+    expect(continuedSync).toBe(true);
   });
 
   it("does not request preview recursively when a dedicated preview is initialized or applied", () => {
@@ -678,6 +674,71 @@ describe("reviewed webview synchronization races", () => {
     expect(saveMessages[0]).toMatchObject({
       protocolVersion: PROTOCOL_VERSION,
       type: "save",
+      baseVersion: 3,
+    });
+  });
+
+  it("keeps input made during a successful save as a separate unsaved edit", () => {
+    const { app, root, messages, persisted } = makeApp({ markdown: "base" });
+    const saveEvent = new KeyboardEvent("keydown", {
+      key: "s",
+      metaKey: true,
+      ctrlKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    app.view.dom.dispatchEvent(saveEvent);
+    const firstSave = messages.find(hasMessageType("save")) as any;
+    expect(firstSave).toBeDefined();
+
+    app.view.dispatch(app.view.state.tr.insertText(" after"));
+    const localEdit = edits(messages).at(-1)! as any;
+    const secondSaveEvent = new KeyboardEvent("keydown", {
+      key: "s",
+      metaKey: true,
+      ctrlKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    app.view.dom.dispatchEvent(secondSaveEvent);
+    expect(messages.filter(hasMessageType("save"))).toHaveLength(1);
+
+    app.receiveDocument(
+      hostDocument("base", 2, {
+        operationId: firstSave.operationId,
+        reason: "save",
+      }),
+    );
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        data: {
+          protocolVersion: PROTOCOL_VERSION,
+          type: "save-result",
+          operationId: firstSave.operationId,
+          saved: true,
+          requestedVersion: firstSave.baseVersion,
+          version: 2,
+          isDirty: true,
+        },
+      }),
+    );
+
+    expect(app.view.state.doc.textContent).toContain("after");
+    expect(root.querySelector(".mm-statusbar")).toBeNull();
+    expect(root.querySelector(".mm-status")).toBeNull();
+    expect(
+      (persisted.value as { recoveryDraft?: string } | undefined)
+        ?.recoveryDraft,
+    ).toContain("after");
+
+    app.receiveDocument(
+      hostDocument(String(localEdit.markdown), 3, {
+        operationId: String(localEdit.operationId),
+        reason: "ack",
+      }),
+    );
+    expect(messages.filter(hasMessageType("save"))).toHaveLength(2);
+    expect(messages.filter(hasMessageType("save")).at(-1)).toMatchObject({
       baseVersion: 3,
     });
   });

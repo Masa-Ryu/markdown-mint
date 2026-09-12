@@ -62,7 +62,9 @@ The dedicated preview and Mint's integration with VS Code's built-in Markdown pr
 
 Markdown Mint also contributes styles and rendering support to the built-in Markdown preview. Other preview extensions, custom styles, and differences in viewport size can affect the result.
 
-Your Markdown text document remains the source of truth. Undo and redo use VS Code's document history. When an edit conflicts with a newer document version, Mint offers draft recovery rather than silently replacing the newer content.
+Your Markdown text document remains the source of truth. Undo and redo use VS Code's document history. Normal queued edits, duplicate notifications, and independent external changes settle quietly; independent changes are merged against the exact document snapshot on which the edit was based. When changes cannot be merged safely, or VS Code cannot apply or save the document, Mint preserves the local draft and uses the standard VS Code source-editor/notification path rather than silently replacing content. Matching recovery data is restored automatically after a webview restart, while data for another document or base snapshot is left untouched.
+
+Markdown Mint does not add a persistent synchronization, save, conflict, or recovery status bar to the editor. The VS Code auto-save setting remains unchanged.
 
 ## Formatting
 

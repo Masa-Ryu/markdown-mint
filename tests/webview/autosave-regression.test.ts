@@ -109,15 +109,10 @@ function addTrailingEmptyParagraph(app: MarkdownEditorApp): TextSelection {
   return selection;
 }
 
-function status(root: HTMLElement): string | undefined {
-  return root.querySelector<HTMLElement>(".mm-status")?.dataset.state;
-}
-
 function expectNoConflict(root: HTMLElement): void {
-  expect(status(root)).not.toBe("conflict");
-  expect(root.querySelector<HTMLButtonElement>(".mm-recover")?.hidden).toBe(
-    true,
-  );
+  expect(root.querySelector(".mm-statusbar")).toBeNull();
+  expect(root.querySelector(".mm-status")).toBeNull();
+  expect(root.querySelector(".mm-recover")).toBeNull();
 }
 
 function expectEmptyParagraphCaret(app: MarkdownEditorApp): void {
@@ -336,7 +331,7 @@ describe("autosave and authoritative snapshot regressions", () => {
     expect(edits(composing.messages)).toHaveLength(2);
   });
 
-  it("applies real external, undo/redo, and explicit reload snapshots", () => {
+  it("applies real external and history snapshots while retaining an unsafe overlap", () => {
     const { app, messages } = makeApp("one");
     const external = "two";
     app.receiveDocument(hostDocument(external, 2, { reason: "external" }));
@@ -359,38 +354,34 @@ describe("autosave and authoritative snapshot regressions", () => {
     reload.app.receiveDocument(
       hostDocument("authoritative", 2, { reason: "external" }),
     );
-    expect(status(reload.root)).toBe("conflict");
-    const reloadButton =
-      reload.root.querySelector<HTMLButtonElement>(".mm-recover");
-    expect(reloadButton?.hidden).toBe(false);
-    reloadButton?.click();
-    const reloadAction = Array.from(
-      reload.root.querySelectorAll<HTMLButtonElement>(
-        ".mm-recovery-dialog button",
-      ),
-    ).find((button) => button.textContent === "Reload authoritative");
-    reloadAction?.click();
-    expect(
-      reload.messages.some(
-        (message) =>
-          typeof message === "object" &&
-          message !== null &&
-          (message as { type?: unknown }).type === "ready",
-      ),
-    ).toBe(true);
-
-    reload.app.receiveDocument(
-      hostDocument("authoritative", 3, { reason: "external" }),
+    expect(reload.app.view.state.doc.textContent).toContain("draft");
+    expect(reload.root.querySelector(".mm-statusbar")).toBeNull();
+    expect(reload.root.querySelector(".mm-recover")).toBeNull();
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        data: {
+          protocolVersion: PROTOCOL_VERSION,
+          type: "edit-rejected",
+          operationId: reloadEdit.operationId,
+          reason: "stale",
+          message: "The document changed.",
+          currentMarkdown: "authoritative",
+          currentVersion: 2,
+          draftMarkdown: reloadEdit.markdown,
+        },
+      }),
     );
     expect(
-      reload.app.view.state.doc.eq(
-        parseMarkdown("authoritative", "github").doc,
-      ),
+      reload.messages.some((message: any) => message.type === "notify"),
     ).toBe(true);
-    expect(reload.app.view.state.doc.textContent).not.toContain(
-      reloadEdit.markdown,
-    );
-    expect(status(reload.root)).not.toBe("conflict");
+    // The standard source route remains available for a genuinely unsafe
+    // overlap; no custom recovery control is required.
+    reload.root
+      .querySelector<HTMLButtonElement>('[data-mode="source"]')!
+      .click();
+    expect(
+      reload.messages.some((message: any) => message.type === "source"),
+    ).toBe(true);
     expect(app.view.state.doc.textContent).toBe("two");
     expect(messages.filter(isEdit)).toHaveLength(0);
   });
