@@ -9,6 +9,11 @@
   no longer adds an extra bottom gap; and empty rendered nodes stay hidden
   without changing preserved Markdown comments or source structure.
 
+- Fixed plain `ArrowUp` at the first visual row of a code block so it moves to
+  the previous editable block, including wrapped lines and nested containers,
+  while preserving normal in-code movement, controls, modifiers, IME, and
+  expanded-code focus trapping.
+
 - Fixed Mermaid flowchart node labels that drifted right when Mermaid's inline
   stylesheet was blocked by the strict Webview CSP. Shared external CSS now
   restores centering only for `flowchart-v2` node labels; edge labels, other
