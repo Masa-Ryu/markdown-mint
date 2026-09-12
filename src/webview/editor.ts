@@ -2178,6 +2178,9 @@ export class MarkdownEditorApp {
   private emojiDialogOpen = false;
   private stage!: HTMLElement;
   private tableToolbar!: HTMLElement;
+  private tableToolbarRevealed = false;
+  private tableToolbarRevealRequested = false;
+  private tableToolbarRevealTimer: ReturnType<typeof setTimeout> | undefined;
   private profileToolbar!: HTMLElement;
   private profileFeatureDialog!: HTMLDialogElement;
   private profileFeatureAlertType!: HTMLSelectElement;
@@ -2273,6 +2276,7 @@ export class MarkdownEditorApp {
   private readonly writingToolbarScrollHandler = (): void =>
     this.updateWritingToolbarState();
   private readonly writingPointerDownHandler = (event: PointerEvent): void => {
+    this.requestTableToolbarReveal(event.target);
     const active = this.activePopup;
     if (!active) return;
     const target = event.target;
@@ -2404,7 +2408,9 @@ export class MarkdownEditorApp {
     this.installTooltipHandlers();
 
     this.view = new EditorView(editorMount, {
-      state: this.createState(initial.markdown),
+      state: this.createState(initial.markdown, {
+        prepareStarter: this.initialized,
+      }),
       dispatchTransaction: (tr) => this.dispatchTransaction(tr),
       attributes: {
         class: "ProseMirror mm-document-content",
@@ -2491,6 +2497,10 @@ export class MarkdownEditorApp {
           this.updateWritingToolbarState();
           return false;
         },
+        mousedown: (_view, event) => {
+          this.requestTableToolbarReveal(event.target);
+          return false;
+        },
         copy: (view, event) => this.handleCopy(view, event as ClipboardEvent),
         cut: (view, event) => this.handleCut(view, event as ClipboardEvent),
         paste: (view, event) => this.handlePaste(view, event as ClipboardEvent),
@@ -2551,6 +2561,10 @@ export class MarkdownEditorApp {
       clearTimeout(this.derivedViewsTimer);
       this.derivedViewsTimer = undefined;
     }
+    if (this.tableToolbarRevealTimer !== undefined) {
+      clearTimeout(this.tableToolbarRevealTimer);
+      this.tableToolbarRevealTimer = undefined;
+    }
     for (const pending of this.pendingClipboard.values()) {
       if (pending.timer !== undefined)
         this.root.ownerDocument.defaultView?.clearTimeout(pending.timer);
@@ -2582,7 +2596,10 @@ export class MarkdownEditorApp {
     this.view.destroy();
   }
 
-  private createState(markdown: string): EditorState {
+  private createState(
+    markdown: string,
+    options: { prepareStarter?: boolean } = {},
+  ): EditorState {
     let doc: PMNode;
     let starterState: StarterPluginState = {
       active: false,
@@ -2591,13 +2608,21 @@ export class MarkdownEditorApp {
     this.starterOriginalSource = markdown;
     try {
       const parsed = this.core.parseMarkdown(markdown, this.profile);
-      const prepared = prepareStarterDocument(
-        markdown,
-        parsed.doc,
-        this.schema,
-      );
-      doc = prepared.doc;
-      starterState = prepared.state;
+      if (options.prepareStarter === false) {
+        // The fallback state only keeps ProseMirror structurally valid while
+        // the host's first document message is still outstanding. It is not
+        // an authoritative blank source, so the blank-document starter must
+        // remain inactive until a real document is received.
+        doc = parsed.doc;
+      } else {
+        const prepared = prepareStarterDocument(
+          markdown,
+          parsed.doc,
+          this.schema,
+        );
+        doc = prepared.doc;
+        starterState = prepared.state;
+      }
       this.previousSnapshot = parsed.snapshot ?? parsed;
     } catch (error) {
       this.parseError =
@@ -3305,7 +3330,9 @@ export class MarkdownEditorApp {
       }
     }
     if (selectionSet || docChanged || discardedTransient)
-      this.updateToolbarState(oldSelection, this.view.state.selection);
+      this.updateToolbarState(oldSelection, this.view.state.selection, {
+        revealTableToolbar: selectionSet || docChanged || discardedTransient,
+      });
   }
 
   private mapTransientBlankRange(tr: Transaction): void {
@@ -3685,7 +3712,7 @@ export class MarkdownEditorApp {
       this.initialized &&
       !this.parseError &&
       this.mode === "rich" &&
-      isInTable(this.view.state);
+      Boolean(tableContext(this.view.state.selection));
     for (const button of Array.from(
       this.root.querySelectorAll<HTMLButtonElement>(".mm-table-toolbar-button"),
     ))
@@ -5752,6 +5779,18 @@ export class MarkdownEditorApp {
     this.positionWritingPopup();
   }
 
+  private requestTableToolbarReveal(target: EventTarget | null): void {
+    if (
+      this.destroyed ||
+      !this.view ||
+      !(target instanceof Element) ||
+      !this.view.dom.contains(target)
+    )
+      return;
+    this.tableToolbarRevealRequested = Boolean(target.closest("td, th"));
+    if (this.tableToolbarRevealRequested) this.scheduleWritingToolbarUpdate();
+  }
+
   private scheduleWritingToolbarUpdate(): void {
     if (this.destroyed) return;
     const update = (): void => {
@@ -6583,7 +6622,7 @@ export class MarkdownEditorApp {
       this.setNotice("Tables are unavailable in CommonMark.");
       return false;
     }
-    if (!isInTable(this.view.state)) {
+    if (!tableContext(this.view.state.selection)) {
       this.setNotice("Place the cursor inside a table to use table commands.");
       return false;
     }
@@ -7036,6 +7075,7 @@ export class MarkdownEditorApp {
   private updateToolbarState(
     _oldSelection: Selection,
     selection: Selection,
+    options: { revealTableToolbar?: boolean } = {},
   ): void {
     const heading =
       this.root.querySelector<HTMLSelectElement>(".mm-heading-select");
@@ -7047,7 +7087,9 @@ export class MarkdownEditorApp {
     }
     this.updateEditingControlState();
     this.updateListToolbarState(selection);
-    this.updateTableToolbar(selection);
+    this.updateTableToolbar(selection, {
+      allowReveal: options.revealTableToolbar === true,
+    });
     this.updateSelectionToolbar(selection);
     this.updateEmptyLineInsert(selection);
     this.positionWritingPopup();
@@ -7079,7 +7121,22 @@ export class MarkdownEditorApp {
     }
   }
 
-  private updateTableToolbar(selection = this.view.state.selection): void {
+  private revealTableToolbar(): void {
+    if (this.tableToolbarRevealed) return;
+    this.tableToolbarRevealed = true;
+    this.tableToolbar.classList.add("is-revealing");
+    if (this.tableToolbarRevealTimer !== undefined)
+      clearTimeout(this.tableToolbarRevealTimer);
+    this.tableToolbarRevealTimer = setTimeout(() => {
+      this.tableToolbar.classList.remove("is-revealing");
+      this.tableToolbarRevealTimer = undefined;
+    }, 220);
+  }
+
+  private updateTableToolbar(
+    selection = this.view.state.selection,
+    options: { allowReveal?: boolean } = {},
+  ): void {
     if (this.destroyed || !this.tableToolbar || !this.view) return;
     const updateAlignmentState = (
       active: "left" | "center" | "right" | null,
@@ -7102,10 +7159,28 @@ export class MarkdownEditorApp {
       this.mode === "rich" &&
       this.profile !== "commonmark";
     const context = canShow ? tableContext(selection) : null;
-    if (!context) {
+    if (
+      canShow &&
+      context &&
+      (options.allowReveal === true || this.tableToolbarRevealRequested)
+    ) {
+      this.revealTableToolbar();
+      this.tableToolbarRevealRequested = false;
+    }
+
+    const visible = canShow && this.tableToolbarRevealed;
+    const actionsEnabled = visible && context !== null;
+    for (const button of Array.from(
+      this.tableToolbar.querySelectorAll<HTMLButtonElement>(
+        ".mm-table-toolbar-button",
+      ),
+    ))
+      button.disabled = !actionsEnabled;
+
+    this.tableToolbar.hidden = !visible;
+    this.tableToolbar.setAttribute("aria-hidden", String(!visible));
+    if (!visible || !context) {
       updateAlignmentState(null);
-      this.tableToolbar.hidden = true;
-      this.tableToolbar.setAttribute("aria-hidden", "true");
       this.tableToolbar.removeAttribute("data-table-pos");
       this.updateTableNumberingState(null);
       return;
@@ -7133,8 +7208,6 @@ export class MarkdownEditorApp {
       alignments.size === 1 ? ([...alignments][0] ?? null) : null,
     );
 
-    this.tableToolbar.hidden = false;
-    this.tableToolbar.setAttribute("aria-hidden", "false");
     this.tableToolbar.dataset.tablePos = String(context.tableStart - 1);
     this.updateTableNumberingState(context);
   }
@@ -7880,6 +7953,7 @@ export class MarkdownEditorApp {
     this.derivedViewsRevision += 1;
     this.pendingDerivedViews = null;
 
+    const wasInitialized = this.initialized;
     const previousState = this.view.state;
     const previousDoc = previousState.doc;
     const forceReparse =
@@ -7908,6 +7982,7 @@ export class MarkdownEditorApp {
       }
     }
     let preserveState =
+      wasInitialized &&
       !forceReparse &&
       currentMarkdown !== null &&
       previousProfile === message.profile &&
@@ -7972,7 +8047,6 @@ export class MarkdownEditorApp {
       message.version,
     );
     this.previewOnly = message.mode === "preview";
-    this.setInitialized(true);
     this.applyTypography(message.typography);
     this.version = Math.max(this.version, message.version);
     this.operationId = message.operationId;
@@ -7999,6 +8073,7 @@ export class MarkdownEditorApp {
       this.sync.setVersion(this.version);
       this.sync.noteAuthoritative(this.version, message.markdown);
       this.sync.clear();
+      this.setInitialized(true);
       this.refreshDerivedViews(message.markdown, undefined, {
         // Entering the preview panel is a display event, so make its first
         // snapshot visible immediately. Rich editing never takes this path;
@@ -8043,6 +8118,7 @@ export class MarkdownEditorApp {
       this.sourceEl.value = message.markdown;
       if (message.mode !== "preview")
         this.previewEl.textContent = message.markdown;
+      this.setInitialized(true);
       if (message.mode !== "preview") {
         this.setMode("source", false);
         // A parser exception only disables the rich representation. Keep the
@@ -8063,7 +8139,7 @@ export class MarkdownEditorApp {
           "The document changed while this Alert dialog was open; nothing was updated.",
           "error",
         );
-      this.persistRecovery(this.lastValidMarkdown);
+      this.persistRecovery(message.markdown, message.markdown, message.version);
       return;
     }
     this.view.setProps({ editable: () => !this.previewOnly });
@@ -8096,6 +8172,9 @@ export class MarkdownEditorApp {
         previousState.apply(setStarterMeta(previousState.tr, prepared.state)),
       );
     }
+    // Remove the loading veil only after the authoritative document and its
+    // starter state have both been reflected in ProseMirror.
+    this.setInitialized(true);
     this.dirty = false;
     this.conflict = false;
     this.syncPaused = false;

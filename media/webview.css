@@ -488,6 +488,12 @@ textarea:focus-visible {
   display: none;
 }
 
+/* Keep the provisional ProseMirror document out of the first paint. The
+ * toolbar and status bar remain available while the host sends the source. */
+.markdown-mint-app[data-loading] .mm-rich-panel {
+  visibility: hidden;
+}
+
 .mm-rich-panel .ProseMirror {
   min-height: 100%;
   cursor: text;
@@ -1024,6 +1030,24 @@ textarea:focus-visible {
   color: var(--mm-control-foreground);
   background: transparent;
   box-shadow: none;
+}
+@keyframes mm-table-toolbar-reveal {
+  from {
+    opacity: 0;
+    transform: translateY(-2px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.mm-table-toolbar.is-revealing {
+  animation: mm-table-toolbar-reveal 180ms ease-out both;
+}
+@media (prefers-reduced-motion: reduce) {
+  .mm-table-toolbar.is-revealing {
+    animation: none;
+  }
 }
 .mm-table-toolbar:not([hidden]) {
   display: flex;

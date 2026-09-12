@@ -55,6 +55,22 @@ function dispatchCellText(app: MarkdownEditorApp, cell: Element): void {
   );
 }
 
+function dispatchCellSelection(
+  app: MarkdownEditorApp,
+  anchorCell: Element,
+  headCell = anchorCell,
+): void {
+  app.view.dispatch(
+    app.view.state.tr.setSelection(
+      CellSelection.create(
+        app.view.state.doc,
+        app.view.posAtDOM(anchorCell, 0) - 1,
+        app.view.posAtDOM(headCell, 0) - 1,
+      ),
+    ),
+  );
+}
+
 function selectTableCell(
   app: MarkdownEditorApp,
   root: HTMLElement,
@@ -656,8 +672,14 @@ describe("contextual table toolbar", () => {
   it("appears for a text cursor and keeps a logical cell selected after row and alignment operations", () => {
     const source = "| A | B |\n| --- | --- |\n| C | D |";
     const { app, root, messages } = makeApp(source);
-    dispatchCellText(app, root.querySelector("tbody td")!);
     const toolbar = root.querySelector<HTMLElement>(".mm-table-toolbar")!;
+    expect(toolbar.hidden).toBe(true);
+    expect(
+      Array.from(
+        toolbar.querySelectorAll<HTMLButtonElement>(".mm-table-toolbar-button"),
+      ).every((button) => button.disabled),
+    ).toBe(true);
+    dispatchCellText(app, root.querySelector("tbody td")!);
     expect(toolbar.hidden).toBe(false);
     const rowAbove = toolbar.querySelector<HTMLButtonElement>(
       '[data-action="row-above"]',
@@ -735,7 +757,7 @@ describe("contextual table toolbar", () => {
     expect(current).toContain(":---:");
   });
 
-  it("keeps table actions in the main toolbar and hides them outside a table", () => {
+  it("keeps one toolbar visible and disables its actions outside a table", () => {
     const source = "Before\n\n| A | B |\n| --- | --- |\n| C | D |\n\nAfter";
     const { app, root, messages } = makeApp(source);
     const mainToolbar = root.querySelector<HTMLElement>(".mm-toolbar")!;
@@ -768,7 +790,89 @@ describe("contextual table toolbar", () => {
         TextSelection.near(app.view.state.doc.resolve(1)),
       ),
     );
-    expect(tableToolbar.hidden).toBe(true);
+    expect(tableToolbar.hidden).toBe(false);
+    expect(
+      Array.from(
+        tableToolbar.querySelectorAll<HTMLButtonElement>(
+          ".mm-table-toolbar-button",
+        ),
+      ).every((button) => button.disabled),
+    ).toBe(true);
+    expect(tableToolbar.hasAttribute("data-table-pos")).toBe(false);
+    tableToolbar
+      .querySelector<HTMLButtonElement>('[data-action="row-above"]')!
+      .click();
+    expect(messageType(messages, "edit")).toHaveLength(0);
+  });
+
+  it("appears for a CellSelection and re-enables the same toolbar when re-entering a table", () => {
+    const source = "Before\n\n| A | B |\n| --- | --- |\n| C | D |\n\nAfter";
+    const { app, root } = makeApp(source);
+    const toolbar = root.querySelector<HTMLElement>(".mm-table-toolbar")!;
+    const cells = root.querySelectorAll("tbody td");
+    dispatchCellSelection(app, cells[0]!, cells[1]!);
+    expect(toolbar.hidden).toBe(false);
+    expect(
+      Array.from(
+        toolbar.querySelectorAll<HTMLButtonElement>(".mm-table-toolbar-button"),
+      ).every((button) => !button.disabled),
+    ).toBe(true);
+
+    app.view.dispatch(
+      app.view.state.tr.setSelection(
+        TextSelection.near(app.view.state.doc.resolve(1)),
+      ),
+    );
+    expect(toolbar.hidden).toBe(false);
+    expect(
+      Array.from(
+        toolbar.querySelectorAll<HTMLButtonElement>(".mm-table-toolbar-button"),
+      ).every((button) => button.disabled),
+    ).toBe(true);
+
+    dispatchCellText(app, cells[0]!);
+    expect(root.querySelector(".mm-table-toolbar")).toBe(toolbar);
+    expect(
+      Array.from(
+        toolbar.querySelectorAll<HTMLButtonElement>(".mm-table-toolbar-button"),
+      ).every((button) => !button.disabled),
+    ).toBe(true);
+  });
+
+  it("targets the currently selected table when moving between tables", () => {
+    const source =
+      "Before\n\n| A | B |\n| --- | --- |\n| C | D |\n\nMiddle\n\n| E | F |\n| --- | --- |\n| G | H |\n\nAfter";
+    const { app, root } = makeApp(source);
+    const toolbar = root.querySelector<HTMLElement>(".mm-table-toolbar")!;
+    const cells = root.querySelectorAll("tbody td");
+    dispatchCellText(app, cells[0]!);
+    const firstTablePosition = toolbar.dataset.tablePos;
+    dispatchCellText(app, cells[2]!);
+    expect(toolbar.dataset.tablePos).not.toBe(firstTablePosition);
+    expect(
+      toolbar.querySelector<HTMLButtonElement>('[data-action="row-above"]')!
+        .disabled,
+    ).toBe(false);
+  });
+
+  it("leaves the revealed toolbar disabled after deleting the last table", () => {
+    const { app, root, messages } = makeApp(
+      "Before\n\n| A | B |\n| --- | --- |\n| C | D |\n\nAfter",
+    );
+    const toolbar = root.querySelector<HTMLElement>(".mm-table-toolbar")!;
+    dispatchCellText(app, root.querySelector("tbody td")!);
+    const tableDelete = toolbar.querySelector<HTMLButtonElement>(
+      '[data-action="table-delete"]',
+    )!;
+    tableDelete.click();
+    expect(root.querySelector("table")).toBeNull();
+    expect(toolbar.hidden).toBe(false);
+    expect(
+      Array.from(
+        toolbar.querySelectorAll<HTMLButtonElement>(".mm-table-toolbar-button"),
+      ).every((button) => button.disabled),
+    ).toBe(true);
+    expect(messageType(messages, "edit")).toHaveLength(1);
   });
 
   it("preserves the selected cell and source while scrolling a long table", () => {
@@ -842,7 +946,7 @@ describe("contextual table toolbar", () => {
     expect(numbering.getAttribute("aria-pressed")).toBe("false");
   });
 
-  it("hides actions for a selection extending outside the table", () => {
+  it("disables actions for a selection extending outside the table", () => {
     const { app, root } = makeApp(
       "| A | B |\n| --- | --- |\n| C | D |\n\nAfter",
     );
@@ -858,7 +962,43 @@ describe("contextual table toolbar", () => {
         ),
       ),
     );
+    expect(toolbar.hidden).toBe(false);
+    expect(
+      Array.from(
+        toolbar.querySelectorAll<HTMLButtonElement>(".mm-table-toolbar-button"),
+      ).every((button) => button.disabled),
+    ).toBe(true);
+  });
+
+  it("does not reveal the toolbar for hover alone", () => {
+    const { root } = makeApp(
+      "Before\n\n| A | B |\n| --- | --- |\n| C | D |\n\nAfter",
+    );
+    const toolbar = root.querySelector<HTMLElement>(".mm-table-toolbar")!;
+    const cell = root.querySelector<HTMLTableCellElement>("tbody td")!;
+    cell.dispatchEvent(new MouseEvent("mouseover", { bubbles: true }));
+    cell.dispatchEvent(new MouseEvent("mousemove", { bubbles: true }));
     expect(toolbar.hidden).toBe(true);
+  });
+
+  it("runs the reveal animation only once", () => {
+    const { app, root } = makeApp(
+      "Before\n\n| A | B |\n| --- | --- |\n| C | D |\n\nAfter",
+    );
+    const toolbar = root.querySelector<HTMLElement>(".mm-table-toolbar")!;
+    const add = vi.spyOn(toolbar.classList, "add");
+    const revealCalls = (): unknown[][] =>
+      add.mock.calls.filter((tokens) => tokens.includes("is-revealing"));
+    const cell = root.querySelector<HTMLTableCellElement>("tbody td")!;
+    dispatchCellText(app, cell);
+    expect(revealCalls()).toHaveLength(1);
+    app.view.dispatch(
+      app.view.state.tr.setSelection(
+        TextSelection.near(app.view.state.doc.resolve(1)),
+      ),
+    );
+    dispatchCellText(app, cell);
+    expect(revealCalls()).toHaveLength(1);
   });
 
   it("does not expose table actions in Preview or CommonMark", () => {
