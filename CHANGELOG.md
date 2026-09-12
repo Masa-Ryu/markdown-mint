@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Fixed Mermaid flowchart node labels that drifted right when Mermaid's inline
+  stylesheet was blocked by the strict Webview CSP. Shared external CSS now
+  restores centering only for `flowchart-v2` node labels; edge labels, other
+  diagram types, CSP, sanitization, and Markdown source preservation remain
+  unchanged.
+
 - Fixed image insertion to accept relative paths while preserving the original
   Markdown source and existing absolute URL support.
 

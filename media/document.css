@@ -886,6 +886,24 @@ body {
   fill: var(--mm-mermaid-foreground) !important;
   color: var(--mm-mermaid-foreground) !important;
 }
+/* Mermaid flowchart-v2 positions node label text at x=0 and normally relies on
+ * its generated SVG stylesheet for text-anchor: middle. Webview CSP blocks
+ * that inline stylesheet, so restore only the flowchart node-label rule here;
+ * edge labels and other diagram types keep their generated alignment. */
+.markdown-body
+  .mm-mermaid
+  svg[aria-roledescription="flowchart-v2"]
+  .node
+  .label
+  text:not([text-anchor]),
+.mm-document-content
+  .mm-mermaid
+  svg[aria-roledescription="flowchart-v2"]
+  .node
+  .label
+  text:not([text-anchor]) {
+  text-anchor: middle;
+}
 .markdown-body .mm-mermaid svg .edgePaths .path,
 .mm-document-content .mm-mermaid svg .edgePaths .path,
 .markdown-body .mm-mermaid svg .edgePaths path,

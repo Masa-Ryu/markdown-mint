@@ -7,7 +7,26 @@ const documentCss = readFileSync(
   "utf8",
 );
 
-describe("shared document math styles", () => {
+describe("shared document styles", () => {
+  it("centers only flowchart-v2 node labels for Mermaid diagrams", () => {
+    expect(documentCss).toContain(
+      `.markdown-body
+  .mm-mermaid
+  svg[aria-roledescription="flowchart-v2"]
+  .node
+  .label
+  text:not([text-anchor]),
+.mm-document-content
+  .mm-mermaid
+  svg[aria-roledescription="flowchart-v2"]
+  .node
+  .label
+  text:not([text-anchor]) {
+  text-anchor: middle;
+}`,
+    );
+  });
+
   it("keeps tall KaTeX glyphs inside a readable line box", () => {
     expect(documentCss).toMatch(
       /\.markdown-body \.mm-math-inline \.katex,\s*\.mm-document-content \.mm-math-inline \.katex\s*\{\s*font-size:\s*1\.25em;\s*line-height:\s*1\.3;/,

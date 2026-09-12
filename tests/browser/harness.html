@@ -66,10 +66,68 @@
         '\\end{bmatrix}',
         '$$'
       ].join('\n');
+      const mermaidFixture = [
+        '# Mermaid browser fixture',
+        '',
+        '```mermaid',
+        'flowchart LR',
+        '    A[Markdown Source] --> B[Rich Editor]',
+        '    B --> C[Preview]',
+        '    C --> D{Looks identical?}',
+        '    D -- Yes --> E[Save]',
+        '    D -- No --> B',
+        '    E --> F[GitHub / GitLab]',
+        '```',
+        '',
+        '```mermaid',
+        'sequenceDiagram',
+        '    participant U as User',
+        '    participant E as Editor',
+        '    participant M as Markdown',
+        '    participant P as Preview',
+        '    U->>E: Edit',
+        '    E->>M: Update',
+        '    M->>P: Render',
+        '    P-->>U: Preview',
+        '```'
+      ].join('\n');
+      const mermaidCoverageFixture = [
+        '# Mermaid coverage fixture',
+        '',
+        '```mermaid',
+        'flowchart TD',
+        '    subgraph Flow [処理フロー]',
+        '        A[Short] --> B([日本語 ノード])',
+        '        B --> C{Long label: choose a path}',
+        '        C -->|Yes| D["**Markdown**<br/>複数行"]',
+        '        C -->|No| E[Database]',
+        '    end',
+        '```',
+        '',
+        '```mermaid',
+        'classDiagram',
+        '    class Editor {',
+        '        +String source',
+        '        +render()',
+        '    }',
+        '```',
+        '',
+        '```mermaid',
+        'stateDiagram-v2',
+        '    [*] --> Editing',
+        '    Editing --> Preview',
+        '```'
+      ].join('\n');
       const fixture = new URLSearchParams(location.search).get('fixture');
       const initialMode = new URLSearchParams(location.search).get('mode');
       if (initialMode === 'preview') document.body.dataset.markdownMintMode = 'preview';
-      let markdown = fixture === 'math' ? mathFixture : markdownFixture;
+      let markdown = fixture === 'math'
+        ? mathFixture
+        : fixture === 'mermaid'
+          ? mermaidFixture
+          : fixture === 'mermaid-coverage'
+            ? mermaidCoverageFixture
+            : markdownFixture;
       let version = 1;
       let profile = 'github';
       const history = [];
@@ -105,6 +163,92 @@
       const typography = { fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif', fontSize: 14, lineHeight: 1.6 };
       const reject = (operationId, reason, message, draftMarkdown) => deliver({ type: 'edit-rejected', operationId, reason, message, currentMarkdown: markdown, currentVersion: version, ...(draftMarkdown === undefined ? {} : { draftMarkdown }) });
       const accept = (operationId, reason = 'ack') => deliver({ type: 'document', markdown, version, profile, ...(operationId === undefined ? {} : { operationId }), reason, mode: 'editor', typography });
+      const mermaidMetrics = () => {
+        const visible = svg => {
+          const box = svg.getBoundingClientRect();
+          return box.width > 0 && box.height > 0;
+        };
+        const flowcharts = Array.from(document.querySelectorAll('.mm-mermaid svg[aria-roledescription="flowchart-v2"]')).filter(visible);
+        const flowchartNodes = flowcharts.flatMap(svg => Array.from(svg.querySelectorAll('.node'))).map(node => {
+          const shape = node.querySelector('.label-container');
+          const text = node.querySelector('.label text');
+          if (!shape || !text) return { id: node.id, text: text?.textContent ?? '', textAnchor: 'missing', centerDelta: Infinity };
+          const shapeBox = shape.getBoundingClientRect();
+          const textBox = text.getBoundingClientRect();
+          return {
+            id: node.id,
+            text: text.textContent ?? '',
+            textAnchor: getComputedStyle(text).textAnchor,
+            shapeTag: shape?.querySelector('rect, circle, ellipse, polygon, path')?.tagName.toLowerCase() ?? shape?.tagName.toLowerCase() ?? 'missing',
+            rounded: shape?.classList.contains('outer-path') || Number(shape?.getAttribute('rx') ?? shape?.querySelector('rect')?.getAttribute('rx') ?? 0) > 0,
+            centerDelta: Math.abs(
+              (textBox.left + textBox.width / 2) -
+              (shapeBox.left + shapeBox.width / 2)
+            ),
+            shapeBox: shapeBox.toJSON(),
+            textBox: textBox.toJSON()
+          };
+        });
+        const edgeLabels = flowcharts.flatMap(svg => Array.from(svg.querySelectorAll('.edgeLabel text'))).map(text => ({
+          text: text.textContent ?? '',
+          attribute: text.getAttribute('text-anchor'),
+          computed: getComputedStyle(text).textAnchor
+        }));
+        const sequenceMessages = Array.from(document.querySelectorAll('.mm-mermaid svg[aria-roledescription="sequence"]')).filter(visible).flatMap(svg => Array.from(svg.querySelectorAll('.messageText'))).map(text => ({
+          text: text.textContent ?? '',
+          attribute: text.getAttribute('text-anchor'),
+          computed: getComputedStyle(text).textAnchor
+        }));
+        const diagramKinds = Array.from(document.querySelectorAll('.mm-mermaid svg[aria-roledescription]')).filter(visible).map(svg => svg.getAttribute('aria-roledescription'));
+        const clusterCount = flowcharts.reduce((count, svg) => count + svg.querySelectorAll('.cluster').length, 0);
+        const cspViolations = window.__markdownMintCspViolations ?? [];
+        return {
+          flowchartCount: flowcharts.length,
+          flowchartNodeCount: flowchartNodes.length,
+          flowchartNodes,
+          edgeLabels,
+          sequenceMessages,
+          diagramKinds,
+          clusterCount,
+          sourcePreserved: markdown === mermaidFixture,
+          coverageSourcePreserved: markdown === mermaidCoverageFixture,
+          cspViolations,
+          unexpectedCspViolations: cspViolations.filter(violation =>
+            violation.directive !== 'style-src-elem' || violation.blockedURI !== 'inline'
+          )
+        };
+      };
+      const mermaidCheck = () => {
+        const metrics = mermaidMetrics();
+        const failures = [];
+        const coverage = fixture === 'mermaid-coverage';
+        if (metrics.flowchartCount !== 1) failures.push(`expected one flowchart, got ${metrics.flowchartCount}`);
+        if (coverage && metrics.flowchartNodeCount < 5) failures.push(`expected at least five coverage nodes, got ${metrics.flowchartNodeCount}`);
+        if (!coverage && metrics.flowchartNodeCount !== 6) failures.push(`expected six flowchart nodes, got ${metrics.flowchartNodeCount}`);
+        for (const node of metrics.flowchartNodes) {
+          if (node.textAnchor !== 'middle') failures.push(`${node.id} text-anchor is ${node.textAnchor}`);
+          if (node.centerDelta > 2.5) failures.push(`${node.id} center delta is ${node.centerDelta.toFixed(2)}px`);
+        }
+        const branchLabels = metrics.edgeLabels.filter(label => label.text === 'Yes' || label.text === 'No');
+        if (branchLabels.length !== 2) failures.push(`expected Yes and No edge labels, got ${branchLabels.length}`);
+        if (branchLabels.some(label => label.attribute !== 'middle' || label.computed !== 'middle')) failures.push('Yes / No edge-label alignment changed');
+        if (coverage) {
+          if (!metrics.diagramKinds.includes('classDiagram')) failures.push('class diagram was not rendered');
+          if (!metrics.diagramKinds.includes('stateDiagram')) failures.push('state diagram was not rendered');
+          if (metrics.clusterCount < 1) failures.push('subgraph was not rendered');
+          const labels = metrics.flowchartNodes.map(node => node.text).join(' ');
+          if (!labels.includes('日本語') || !labels.includes('Markdown')) failures.push('coverage labels were not rendered');
+          if (!metrics.flowchartNodes.some(node => node.rounded)) failures.push('rounded node was not rendered');
+          if (!metrics.flowchartNodes.some(node => node.shapeTag === 'polygon')) failures.push('diamond node was not rendered');
+        } else {
+          if (metrics.sequenceMessages.length !== 4) failures.push(`expected four sequence messages, got ${metrics.sequenceMessages.length}`);
+          if (metrics.sequenceMessages.some(label => label.computed !== 'middle')) failures.push('sequence message alignment changed');
+          if (!metrics.sourcePreserved) failures.push('Mermaid Markdown source changed');
+        }
+        if (coverage && !metrics.coverageSourcePreserved) failures.push('coverage Mermaid Markdown source changed');
+        if (metrics.unexpectedCspViolations.length > 0) failures.push('unexpected CSP violation detected');
+        return { pass: failures.length === 0, failures, metrics };
+      };
       const host = {
         postMessage(message) {
           messages.push(clone(message));
@@ -190,7 +334,9 @@
             line: getComputedStyle(content).lineHeight
           } : undefined;
           return { viewport: [innerWidth, innerHeight, document.documentElement.clientWidth], rich: measure(rich), preview: measure(preview), body: { width: document.body.clientWidth, scrollWidth: document.body.scrollWidth, scrollHeight: document.body.scrollHeight } };
-        }
+        },
+        mermaidMetrics,
+        mermaidCheck
       };
     })();
   </script>

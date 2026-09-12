@@ -37,6 +37,7 @@
       <thead><tr><th>Name</th><th>値</th><th>空欄</th></tr></thead>
       <tbody><tr><td>A</td><td>日本語</td><td></td></tr></tbody>
     </table>
+    <!-- markdown-mint-mermaid-fixture -->
     <!-- The server fills this marker for ?fixture=math with the same KaTeX
          wrappers used by the extension's native Markdown renderer. -->
     <!-- markdown-mint-math-fixture -->
@@ -58,6 +59,22 @@
             blocks: content?.querySelectorAll('.mm-math-block').length ?? 0,
             matrices: content?.querySelectorAll('.mm-math-block mtable').length ?? 0,
             inline: content?.querySelectorAll('.mm-math-inline').length ?? 0,
+          },
+          mermaid: {
+            flowcharts: content?.querySelectorAll('svg[aria-roledescription="flowchart-v2"]').length ?? 0,
+            nodes: content?.querySelectorAll('svg[aria-roledescription="flowchart-v2"] .node').length ?? 0,
+            nodeAnchors: Array.from(content?.querySelectorAll('svg[aria-roledescription="flowchart-v2"] .node .label text') ?? []).map(text => getComputedStyle(text).textAnchor),
+            centerDeltas: Array.from(content?.querySelectorAll('svg[aria-roledescription="flowchart-v2"] .node') ?? []).map(node => {
+              const shape = node.querySelector('.label-container');
+              const text = node.querySelector('.label text');
+              if (!shape || !text) return Infinity;
+              const shapeBox = shape.getBoundingClientRect();
+              const textBox = text.getBoundingClientRect();
+              return Math.abs((textBox.left + textBox.width / 2) - (shapeBox.left + shapeBox.width / 2));
+            }),
+            edgeLabels: Array.from(content?.querySelectorAll('svg[aria-roledescription="flowchart-v2"] .edgeLabel text') ?? []).map(text => ({ text: text.textContent, computed: getComputedStyle(text).textAnchor })),
+            sequenceMessages: Array.from(content?.querySelectorAll('svg[aria-roledescription="sequence"] .messageText') ?? []).map(text => getComputedStyle(text).textAnchor),
+            sourcePreserved: Array.from(content?.querySelectorAll('.mm-mermaid') ?? []).every(diagram => diagram.dataset.mermaidSource?.includes('flowchart LR') || diagram.dataset.mermaidSource?.includes('sequenceDiagram')),
           },
           font: content ? getComputedStyle(content).fontFamily : '',
           size: content ? getComputedStyle(content).fontSize : '',
