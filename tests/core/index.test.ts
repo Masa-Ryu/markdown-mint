@@ -27,6 +27,15 @@ function replaceTopLevel(
   return schema.topNodeType.create(null, children);
 }
 
+function removeTopLevel(
+  snapshot: ReturnType<typeof parseMarkdown>,
+  index: number,
+): PMNode {
+  const children = childrenOf(snapshot.doc);
+  children.splice(index, 1);
+  return schema.topNodeType.create(null, children);
+}
+
 function childrenOf(node: PMNode): PMNode[] {
   const children: PMNode[] = [];
   node.forEach((child) => children.push(child));
@@ -177,6 +186,116 @@ describe("Markdown core", () => {
     expect(serialized).toBe("one\r\n\r\n\r\n\r\nchanged");
     expect(reparseMarkdown(serialized).doc.eq(changed)).toBe(true);
   });
+
+  it.each([
+    {
+      name: "LF",
+      source: "one\n\n \n\t\ntwo",
+      first: " \n",
+      second: "\t\n",
+    },
+    {
+      name: "CRLF",
+      source: "one\r\n\r\n \r\n\t\r\ntwo",
+      first: " \r\n",
+      second: "\t\r\n",
+    },
+    {
+      name: "mixed line endings",
+      source: "one\n\r\n \n\t\r\ntwo",
+      first: " \n",
+      second: "\t\r\n",
+    },
+  ])(
+    "keeps distinct source slices for consecutive materialized blanks after editing the first ($name)",
+    ({ source, second }) => {
+      const snapshot = parseMarkdown(source);
+      expect(childrenOf(snapshot.doc)[1]?.type.name).toBe("paragraph");
+      expect(childrenOf(snapshot.doc)[2]?.type.name).toBe("paragraph");
+
+      const edited = replaceTopLevel(
+        snapshot,
+        1,
+        schema.nodes.paragraph!.create(null, schema.text("x")),
+      );
+      const serialized = serializeMarkdown(edited, snapshot);
+
+      expect(serialized.match(new RegExp(second, "g"))?.length).toBe(1);
+      expect(reparseMarkdown(serialized).doc.eq(edited)).toBe(true);
+    },
+  );
+
+  it.each([
+    {
+      name: "LF",
+      source: "one\n\n \n\t\ntwo",
+      first: " \n",
+      second: "\t\n",
+    },
+    {
+      name: "CRLF",
+      source: "one\r\n\r\n \r\n\t\r\ntwo",
+      first: " \r\n",
+      second: "\t\r\n",
+    },
+    {
+      name: "mixed line endings",
+      source: "one\n\r\n \n\t\r\ntwo",
+      first: " \n",
+      second: "\t\r\n",
+    },
+  ])(
+    "keeps the second source slice when the first materialized blank is deleted ($name)",
+    ({ source, first, second }) => {
+      const snapshot = parseMarkdown(source);
+      const edited = removeTopLevel(snapshot, 1);
+      const serialized = serializeMarkdown(edited, snapshot);
+
+      expect(serialized).toContain(second);
+      expect(serialized).not.toContain(first);
+      expect(reparseMarkdown(serialized).doc.eq(edited)).toBe(true);
+    },
+  );
+
+  it.each([
+    {
+      name: "LF",
+      source: "one\n\n \n\t\ntwo",
+      first: " \n",
+      second: "\t\n",
+    },
+    {
+      name: "CRLF",
+      source: "one\r\n\r\n \r\n\t\r\ntwo",
+      first: " \r\n",
+      second: "\t\r\n",
+    },
+    {
+      name: "mixed line endings",
+      source: "one\n\r\n \n\t\r\ntwo",
+      first: " \n",
+      second: "\t\r\n",
+    },
+  ])(
+    "keeps distinct source slices when editing or deleting the second materialized blank ($name)",
+    ({ source, first, second }) => {
+      const snapshot = parseMarkdown(source);
+      const edited = replaceTopLevel(
+        snapshot,
+        2,
+        schema.nodes.paragraph!.create(null, schema.text("x")),
+      );
+      const editedSource = serializeMarkdown(edited, snapshot);
+      expect(editedSource.match(new RegExp(first, "g"))?.length).toBe(1);
+      expect(reparseMarkdown(editedSource).doc.eq(edited)).toBe(true);
+
+      const deleted = removeTopLevel(snapshot, 2);
+      const deletedSource = serializeMarkdown(deleted, snapshot);
+      expect(deletedSource).toContain(first);
+      expect(deletedSource).not.toContain(second);
+      expect(reparseMarkdown(deletedSource).doc.eq(deleted)).toBe(true);
+    },
+  );
 
   it("keeps leading and trailing empty paragraphs editable", () => {
     const leading = parseMarkdown("\n\none");

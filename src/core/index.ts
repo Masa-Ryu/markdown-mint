@@ -2765,6 +2765,19 @@ function lineBreakSuffix(value: string): string {
   return value.match(/(?:\r\n|\n|\r)+$/)?.[0] ?? "";
 }
 
+function trailingBlankLineEndings(value: string): number {
+  let start = value.length;
+  while (
+    start > 0 &&
+    (value[start - 1] === " " ||
+      value[start - 1] === "\t" ||
+      value[start - 1] === "\r" ||
+      value[start - 1] === "\n")
+  )
+    start -= 1;
+  return lineEndingCount(value.slice(start));
+}
+
 function lineEndingCount(value: string): number {
   let count = 0;
   for (let index = 0; index < value.length; index += 1) {
@@ -3182,21 +3195,79 @@ function sourceMatches(
   // short paragraphs and this function runs after every edit; a quadratic LCS
   // matrix would turn a harmless keystroke into an avoidable memory spike.
   const candidates = new Map<string, number[]>();
+  const identityCandidates = new Map<PMNode, number[]>();
   for (let index = 0; index < previous.length; index += 1) {
-    const key = nodeFingerprint(previous[index]!.node);
+    const previousNode = previous[index]!.node;
+    const key = nodeFingerprint(previousNode);
     const list = candidates.get(key);
     if (list) list.push(index);
     else candidates.set(key, [index]);
+    const identities = identityCandidates.get(previousNode);
+    if (identities) identities.push(index);
+    else identityCandidates.set(previousNode, [index]);
   }
   const matches = new Map<number, number>();
+  const usedPrevious = new Set<number>();
+  const identityCursors = new Map<PMNode, number>();
+  const identityMatches = new Map<number, number>();
+  // ProseMirror preserves object identity for untouched nodes through a
+  // transaction. Prefer that identity before comparing fingerprints so
+  // consecutive source-authored empty paragraphs retain their own source
+  // slices even though their semantic node JSON is identical.
+  for (let index = 0; index < current.length; index += 1) {
+    const node = current[index]!;
+    const identities = identityCandidates.get(node);
+    if (!identities) continue;
+    let cursor = identityCursors.get(node) ?? 0;
+    while (cursor < identities.length && usedPrevious.has(identities[cursor]!))
+      cursor += 1;
+    if (cursor >= identities.length) {
+      identityCursors.set(node, cursor);
+      continue;
+    }
+    const candidate = identities[cursor]!;
+    identityCursors.set(node, cursor + 1);
+    identityMatches.set(index, candidate);
+  }
+  // A reordered document needs the old fingerprint matcher to retain its
+  // established source-order behavior. Identity is only safe when the
+  // untouched nodes still occur in previous-document order; otherwise an
+  // identity match could make a moved duplicate consume a distant source
+  // slice and leave the following blocks unmatched.
+  let previousIdentity = -1;
+  let identityOrderValid = true;
+  for (let index = 0; index < current.length; index += 1) {
+    const candidate = identityMatches.get(index);
+    if (candidate == null) continue;
+    if (candidate <= previousIdentity) {
+      identityOrderValid = false;
+      break;
+    }
+    previousIdentity = candidate;
+  }
+  if (identityOrderValid) {
+    identityMatches.forEach((candidate, index) => {
+      matches.set(index, candidate);
+      usedPrevious.add(candidate);
+    });
+  }
   let previousCursor = -1;
   const cursors = new Map<string, number>();
   for (let index = 0; index < current.length; index += 1) {
+    const identityMatch = matches.get(index);
+    if (identityMatch != null) {
+      previousCursor = Math.max(previousCursor, identityMatch);
+      continue;
+    }
     const key = nodeFingerprint(current[index]!);
     const list = candidates.get(key);
     if (!list) continue;
     let cursor = cursors.get(key) ?? 0;
-    while (cursor < list.length && list[cursor]! <= previousCursor) cursor += 1;
+    while (
+      cursor < list.length &&
+      (list[cursor]! <= previousCursor || usedPrevious.has(list[cursor]!))
+    )
+      cursor += 1;
     if (cursor >= list.length) {
       cursors.set(key, cursor);
       continue;
@@ -3204,6 +3275,7 @@ function sourceMatches(
     const candidate = list[cursor]!;
     cursors.set(key, cursor + 1);
     matches.set(index, candidate);
+    usedPrevious.add(candidate);
     previousCursor = candidate;
   }
   return matches;
@@ -3441,7 +3513,7 @@ export function serializeMarkdown(
       const requiredLineEndings = hasContentBefore
         ? 2 + emptyParagraphsBefore
         : 0;
-      const existingLineEndings = lineEndingCount(lineBreakSuffix(output));
+      const existingLineEndings = trailingBlankLineEndings(output);
       if (index > 0 && requiredLineEndings > existingLineEndings) {
         output += ending.repeat(requiredLineEndings - existingLineEndings);
       }
@@ -3483,7 +3555,7 @@ export function serializeMarkdown(
     const requiredLineEndings = hasContentBefore
       ? 2 + emptyParagraphsBefore
       : 0;
-    const existingLineEndings = lineEndingCount(lineBreakSuffix(output));
+    const existingLineEndings = trailingBlankLineEndings(output);
     const preservedSourceBoundary =
       !insertion &&
       matches.get(index - 1) === index - 1 &&
