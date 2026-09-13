@@ -264,6 +264,7 @@ interface TransientBlankTransactionMeta {
 }
 
 type WritingPopupCloseReason = "discard" | "consume" | "cancel";
+type PopupInputModality = "pointer" | "keyboard";
 
 interface SlashTrigger {
   selection: Selection;
@@ -5699,6 +5700,13 @@ export class MarkdownEditorApp {
       undefined,
       "divider",
     );
+    panel.addEventListener("pointermove", () =>
+      this.setPopupInputModality(panel, "pointer"),
+    );
+    panel.addEventListener("pointerdown", () =>
+      this.setPopupInputModality(panel, "pointer"),
+    );
+    let buttonActivationModality: PopupInputModality | null = null;
     panel.addEventListener("keydown", (event) => {
       if (event.key === "Escape") {
         event.preventDefault();
@@ -5722,6 +5730,7 @@ export class MarkdownEditorApp {
         event.key !== "End"
       )
         return;
+      this.setPopupInputModality(panel, "keyboard");
       event.preventDefault();
       const items = Array.from(
         panel.querySelectorAll<HTMLButtonElement>('button[role="menuitem"]'),
@@ -5755,18 +5764,27 @@ export class MarkdownEditorApp {
     });
 
     button.addEventListener("mousedown", (event) => {
+      buttonActivationModality = "pointer";
       event.preventDefault();
       this.captureWritingPopupSelection();
     });
     button.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" || event.key === " ") {
+        buttonActivationModality = "keyboard";
+        return;
+      }
       if (event.key !== "ArrowDown") return;
       event.preventDefault();
-      if (this.activePopup !== panel) this.toggleWritingPopup(panel, button);
+      if (this.activePopup !== panel)
+        this.toggleWritingPopup(panel, button, "keyboard");
+      else this.setPopupInputModality(panel, "keyboard");
       this.focusPopupItem(panel, 0);
     });
-    button.addEventListener("click", () =>
-      this.toggleWritingPopup(panel, button),
-    );
+    button.addEventListener("click", () => {
+      const inputModality = buttonActivationModality ?? "pointer";
+      buttonActivationModality = null;
+      this.toggleWritingPopup(panel, button, inputModality);
+    });
 
     this.stage.append(panel);
     return button;
@@ -5867,19 +5885,21 @@ export class MarkdownEditorApp {
   private toggleWritingPopup(
     popup: HTMLElement,
     toggle: HTMLButtonElement,
+    inputModality: PopupInputModality = "pointer",
   ): void {
     if (this.activePopup === popup) {
       this.closeWritingPopups("cancel");
       return;
     }
     this.captureWritingPopupSelection();
-    this.openWritingPopup(popup, toggle, toggle);
+    this.openWritingPopup(popup, toggle, toggle, inputModality);
   }
 
   private openWritingPopup(
     popup: HTMLElement,
     toggle: HTMLButtonElement,
     anchor: HTMLElement,
+    inputModality: PopupInputModality = "pointer",
   ): boolean {
     if (
       !this.initialized ||
@@ -5910,6 +5930,7 @@ export class MarkdownEditorApp {
     this.popupReturnFocus = anchor;
     popup.hidden = false;
     popup.setAttribute("aria-hidden", "false");
+    this.setPopupInputModality(popup, inputModality);
     toggle.setAttribute("aria-expanded", "true");
     // Keep every popup in the viewport. Fixed positioning also lets a menu
     // opened from the empty-line affordance stay beside its anchor while the
@@ -5947,6 +5968,7 @@ export class MarkdownEditorApp {
     }
     if (anchor === this.emptyLineButton)
       anchor.setAttribute("aria-expanded", "false");
+    active?.removeAttribute("data-input-modality");
     this.activePopup = null;
     this.activePopupToggle = null;
     this.popupAnchor = null;
@@ -5954,6 +5976,13 @@ export class MarkdownEditorApp {
     this.popupSelection = null;
     this.popupProfile = null;
     this.popupDocumentGeneration = -1;
+  }
+
+  private setPopupInputModality(
+    popup: HTMLElement,
+    inputModality: PopupInputModality,
+  ): void {
+    popup.dataset.inputModality = inputModality;
   }
 
   private consumeSlashTrigger(): void {

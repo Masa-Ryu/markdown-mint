@@ -1047,6 +1047,24 @@ zoom, font loading, and operating-system IME candidate UI remain manual checks.
   then edits surrounding text through the normal editor input path. The saved
   source and PM node state retain the Math atom, strong mark, and link.
 
+## 0.0.48 Insert popup input modality
+
+- The shared Insert block popup opened by the `+` affordance or `/` command
+  keeps its real DOM focus navigation and `:focus-visible` indication while
+  tracking `pointer` or `keyboard` modality on the popup itself.
+- Arrow keys and Home/End switch the open popup to keyboard modality, so a
+  pointer left over another item cannot add a second hover background. A real
+  `pointermove` or `pointerdown` inside the popup returns it to pointer
+  modality. Opening with a mouse click starts in pointer modality; ArrowDown
+  and keyboard Enter/Space activation start in keyboard modality; slash opens
+  with pointer styling until menu navigation begins. Closing removes the
+  modality state before the next open.
+- Writing-UX regression coverage verifies keyboard hover suppression state,
+  pointer restoration, keyboard opening, Enter/Space activation, slash
+  navigation, popup reopen reset, and the existing two-column navigation
+  rules. The native operating-system pointer/IME visual behavior remains a
+  manual check.
+
 ## Explicit limits
 
 Paste/drop image asset copying is optional follow-up work. Native IME and visual
