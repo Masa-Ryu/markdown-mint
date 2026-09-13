@@ -1091,6 +1091,7 @@ describe("bounded writing controls", () => {
     app.view.dispatch(app.view.state.tr.setSelection(selection));
     const floating = root.querySelector<HTMLElement>(".mm-selection-toolbar")!;
     expect(floating.hidden).toBe(false);
+    expect(floating.getAttribute("aria-hidden")).toBe("false");
     expect(floating.getAttribute("aria-label")).toBe("Selection formatting");
     const bold = root.querySelector<HTMLButtonElement>(
       '[data-testid="selection-bold"]',
@@ -1142,6 +1143,102 @@ describe("bounded writing controls", () => {
     ).toContain("**hello**");
     expect(app.view.state.selection.from).toBe(selection.from);
     expect(app.view.state.selection.to).toBe(selection.to);
+  });
+
+  it("does not reshow a collapsed Selection Toolbar after an Enter ACK", () => {
+    const { app, root, messages } = makeApp("aa");
+    setSelectionGeometry(app);
+    const floating = root.querySelector<HTMLElement>(".mm-selection-toolbar")!;
+    const selected = TextSelection.create(app.view.state.doc, 1, 3);
+    app.view.dispatch(app.view.state.tr.setSelection(selected));
+    expect(floating.hidden).toBe(false);
+    expect(floating.getAttribute("aria-hidden")).toBe("false");
+
+    const left = floating.style.left;
+    const top = floating.style.top;
+    expect(left).not.toBe("");
+    expect(top).not.toBe("");
+    app.view.dispatch(
+      app.view.state.tr.setSelection(
+        TextSelection.create(app.view.state.doc, 3),
+      ),
+    );
+    expect(app.view.state.selection.empty).toBe(true);
+    expect(floating.hidden).toBe(true);
+    expect(floating.getAttribute("aria-hidden")).toBe("true");
+
+    app.view.focus();
+    dispatchEditorKey(app, "Enter");
+    expect(app.view.state.selection.empty).toBe(true);
+    expect(editMessages(messages)).toHaveLength(1);
+
+    acknowledgeLastEdit(app, messages, 2);
+
+    expect(app.view.state.selection.empty).toBe(true);
+    expect(floating.hidden).toBe(true);
+    expect(floating.getAttribute("aria-hidden")).toBe("true");
+    expect(floating.style.left).toBe(left);
+    expect(floating.style.top).toBe(top);
+  });
+
+  it("keeps stale Selection Toolbar coordinates hidden during an editing refresh", () => {
+    const { app, root } = makeApp("aa");
+    setSelectionGeometry(app);
+    const floating = root.querySelector<HTMLElement>(".mm-selection-toolbar")!;
+    app.view.dispatch(
+      app.view.state.tr.setSelection(
+        TextSelection.create(app.view.state.doc, 1, 3),
+      ),
+    );
+    expect(floating.hidden).toBe(false);
+    const left = floating.style.left;
+    const top = floating.style.top;
+    expect(left).not.toBe("");
+    expect(top).not.toBe("");
+
+    app.view.dispatch(
+      app.view.state.tr.setSelection(
+        TextSelection.create(app.view.state.doc, 3),
+      ),
+    );
+    expect(floating.hidden).toBe(true);
+    expect(floating.getAttribute("aria-hidden")).toBe("true");
+
+    app.receiveDocument(hostDocument("aa", 2, { reason: "external" }));
+
+    expect(floating.hidden).toBe(true);
+    expect(floating.getAttribute("aria-hidden")).toBe("true");
+    expect(floating.style.left).toBe(left);
+    expect(floating.style.top).toBe(top);
+  });
+
+  it("hides and clears the Selection Toolbar when editing is disabled", () => {
+    const { app, root } = makeApp("hello world");
+    const floating = root.querySelector<HTMLElement>(".mm-selection-toolbar")!;
+    app.view.dispatch(
+      app.view.state.tr.setSelection(
+        TextSelection.create(app.view.state.doc, 1, 6),
+      ),
+    );
+    expect(floating.hidden).toBe(false);
+    const internal = app as unknown as {
+      selectionToolbarSelection: unknown;
+    };
+    expect(internal.selectionToolbarSelection).not.toBeNull();
+
+    app.receiveDocument({
+      protocolVersion: PROTOCOL_VERSION,
+      type: "document",
+      markdown: "hello world",
+      version: 2,
+      profile: "github",
+      mode: "preview",
+      reason: "external",
+    });
+
+    expect(floating.hidden).toBe(true);
+    expect(floating.getAttribute("aria-hidden")).toBe("true");
+    expect(internal.selectionToolbarSelection).toBeNull();
   });
 
   it("moves focus to the visible selection toolbar with Tab without editing", () => {
