@@ -66,7 +66,10 @@ export interface CompatibilityDiagnostic {
 /** A source slice associated with an unchanged top-level ProseMirror node. */
 export interface MarkdownBlockSnapshot {
   node: PMNode;
-  /** The complete original slice, including the separator after this block. */
+  /**
+   * The source slice for this node and its boundary. Materialized empty
+   * paragraphs carry only the surplus line-ending slice that represents them.
+   */
   source: string;
   /** The part covered by the Markdown block token. */
   body: string;
@@ -1733,7 +1736,11 @@ function scanFootnotes(source: string): FootnoteScan {
 
 const documentMetadata = new WeakMap<
   PMNode,
-  { footnotes: FootnoteDefinition[]; source?: string }
+  {
+    footnotes: FootnoteDefinition[];
+    source?: string;
+    lineEnding?: MarkdownSnapshot["lineEnding"];
+  }
 >();
 
 /**
@@ -1855,7 +1862,11 @@ function isFootnoteDefinitionBlock(value: string): boolean {
   return hasDefinition;
 }
 
-function parseInternal(source: string, profile: Profile): MarkdownSnapshot {
+function parseInternal(
+  source: string,
+  profile: Profile,
+  materializeBlankParagraphs = true,
+): MarkdownSnapshot {
   const footnoteScan = scanFootnotes(source);
   const md = createMarkdownIt(profile);
   const details = detectDetails(source, md);
@@ -1886,11 +1897,13 @@ function parseInternal(source: string, profile: Profile): MarkdownSnapshot {
   for (const detail of details) events.push({ start: detail.start, detail });
   events.sort((left, right) => left.start - right.start);
 
-  const nodes: PMNode[] = [];
-  const blocks: MarkdownBlockSnapshot[] = [];
+  const parsedBlocks: Array<{
+    node: PMNode;
+    block: MarkdownBlockSnapshot;
+    startOffset: number;
+    sourceEndOffset: number;
+  }> = [];
   const footnoteMap = footnoteScan.byLabel;
-  const leading =
-    events.length > 0 ? source.slice(0, events[0]!.start) : source;
   for (let eventIndex = 0; eventIndex < events.length; eventIndex += 1) {
     const event = events[eventIndex]!;
     const nextEvent = events[eventIndex + 1];
@@ -1911,16 +1924,20 @@ function parseInternal(source: string, profile: Profile): MarkdownSnapshot {
           )
         : nodeTypes.raw_block.create({ source: body, kind: "details" });
       if (parts) detailsPartsByAttrs.set(node.attrs, parts);
-      nodes.push(node);
-      blocks.push({
+      parsedBlocks.push({
         node,
-        source: body + separator,
-        body,
-        separator,
-        startLine: lineIndexAt(source, detail.start),
-        endLine:
-          lineIndexAt(source, Math.max(detail.start, detail.end - 1)) + 1,
-        kind: "details",
+        block: {
+          node,
+          source: body + separator,
+          body,
+          separator,
+          startLine: lineIndexAt(source, detail.start),
+          endLine:
+            lineIndexAt(source, Math.max(detail.start, detail.end - 1)) + 1,
+          kind: "details",
+        },
+        startOffset: detail.start,
+        sourceEndOffset: nextStart,
       });
       continue;
     }
@@ -1994,40 +2011,124 @@ function parseInternal(source: string, profile: Profile): MarkdownSnapshot {
     // editable prose. Its exact slice remains in the neighbouring separator
     // and the structured definition list on the snapshot.
     if (isFootnoteDefinitionBlock(bodyForDetection)) continue;
-    nodes.push(node);
-    blocks.push({
+    parsedBlocks.push({
       node,
-      source: body + separator,
-      body,
-      separator,
-      startLine: location.startLine,
-      endLine: location.endLine,
-      kind: node.type.name,
+      block: {
+        node,
+        source: body + separator,
+        body,
+        separator,
+        startLine: location.startLine,
+        endLine: location.endLine,
+        kind: node.type.name,
+      },
+      startOffset: location.start,
+      sourceEndOffset: nextStart,
     });
   }
   if (
-    nodes.length === 0 &&
+    parsedBlocks.length === 0 &&
     source.trim().length > 0 &&
     footnoteScan.definitions.length === 0
   ) {
     const raw = nodeTypes.raw_block.create({ source, kind: "unparsed" });
-    nodes.push(raw);
-    blocks.push({
+    parsedBlocks.push({
       node: raw,
-      source,
-      body: source,
-      separator: "",
-      startLine: 0,
-      endLine: offsets.length,
-      kind: "unparsed",
+      block: {
+        node: raw,
+        source,
+        body: source,
+        separator: "",
+        startLine: 0,
+        endLine: offsets.length,
+        kind: "unparsed",
+      },
+      startOffset: 0,
+      sourceEndOffset: source.length,
     });
+  }
+  const nodes: PMNode[] = [];
+  const blocks: MarkdownBlockSnapshot[] = [];
+  let leading =
+    parsedBlocks.length > 0
+      ? source.slice(0, parsedBlocks[0]!.startOffset)
+      : source;
+  const appendMaterializedEmptyBlocks = (
+    parts: string[],
+    startOffset: number,
+  ): void => {
+    let offset = startOffset;
+    for (const part of parts) {
+      const block = materializedEmptyBlock(source, part, offset);
+      nodes.push(block.node);
+      blocks.push(block);
+      offset += part.length;
+    }
+  };
+
+  if (parsedBlocks.length > 0 && materializeBlankParagraphs) {
+    const leadingCount = materializedEmptyCount(leading, 1);
+    if (leadingCount > 0) {
+      appendMaterializedEmptyBlocks(splitBlankBoundary(leading, 1), 0);
+      leading = "";
+    }
+
+    for (let index = 0; index < parsedBlocks.length; index += 1) {
+      const parsedBlock = parsedBlocks[index]!;
+      const nextBlock = parsedBlocks[index + 1];
+      const hasAdjacentNext =
+        nextBlock != null &&
+        parsedBlock.sourceEndOffset === nextBlock.startOffset;
+      const isTrailing =
+        nextBlock == null && parsedBlock.sourceEndOffset === source.length;
+      const structuralLineEndings = hasAdjacentNext ? 2 : isTrailing ? 1 : 0;
+      const bodySuffix = lineBreakSuffix(parsedBlock.block.body);
+      const boundary = bodySuffix + parsedBlock.block.separator;
+      const emptyCount =
+        structuralLineEndings > 0
+          ? materializedEmptyCount(boundary, structuralLineEndings)
+          : 0;
+      if (emptyCount > 0) {
+        const parts = splitBlankBoundary(boundary, structuralLineEndings);
+        const firstPart = parts[0]!;
+        const firstSeparator = firstPart.slice(bodySuffix.length);
+        const block = {
+          ...parsedBlock.block,
+          source: parsedBlock.block.body + firstSeparator,
+          separator: firstSeparator,
+        };
+        nodes.push(parsedBlock.node);
+        blocks.push(block);
+        const boundaryStart =
+          parsedBlock.startOffset +
+          parsedBlock.block.body.length -
+          bodySuffix.length;
+        appendMaterializedEmptyBlocks(
+          parts.slice(1),
+          boundaryStart + firstPart.length,
+        );
+      } else {
+        nodes.push(parsedBlock.node);
+        blocks.push(parsedBlock.block);
+      }
+    }
+  } else {
+    for (const parsedBlock of parsedBlocks) {
+      nodes.push(parsedBlock.node);
+      blocks.push(parsedBlock.block);
+    }
   }
   const doc = schema.topNodeType.create(
     null,
     nodes.length > 0 ? nodes : [emptyParagraph()],
   );
-  documentMetadata.set(doc, { footnotes: footnoteScan.definitions, source });
-  const last = blocks[blocks.length - 1];
+  const lineEnding = markdownLineEnding(source);
+  documentMetadata.set(doc, {
+    footnotes: footnoteScan.definitions,
+    source,
+    lineEnding,
+  });
+  const last = parsedBlocks[parsedBlocks.length - 1]?.block;
   const trailing = last
     ? source.slice(
         last.startLine == null
@@ -2042,7 +2143,7 @@ function parseInternal(source: string, profile: Profile): MarkdownSnapshot {
     blocks,
     leading,
     trailing,
-    lineEnding: markdownLineEnding(source),
+    lineEnding,
     footnotes: footnoteScan.definitions,
   };
 }
@@ -2095,7 +2196,11 @@ export function parseMarkdown(
     footnotes: rest.footnotes ?? [],
     profile,
   };
-  documentMetadata.set(doc, { footnotes: snapshot.footnotes ?? [], source });
+  documentMetadata.set(doc, {
+    footnotes: snapshot.footnotes ?? [],
+    source,
+    lineEnding: snapshot.lineEnding,
+  });
   latestParse = { source, profile, snapshot };
   return snapshot;
 }
@@ -2409,7 +2514,7 @@ function detailsBodySnapshot(
   const key = `${profile}\u0000${source}`;
   let snapshot = detailsBodySnapshots.get(key);
   if (!snapshot) {
-    snapshot = parseInternal(source, profile);
+    snapshot = parseInternal(source, profile, false);
     if (detailsBodySnapshots.size >= 64)
       detailsBodySnapshots.delete(detailsBodySnapshots.keys().next().value!);
     detailsBodySnapshots.set(key, snapshot);
@@ -2532,6 +2637,60 @@ function serializeBlock(node: PMNode, tableCell = false): string {
   }
 }
 
+/**
+ * Serialize top-level blocks while giving empty paragraphs one line ending of
+ * their own. A regular block boundary is two line endings, so a document with
+ * one empty paragraph between two blocks has three rather than four. This is
+ * the inverse of parseInternal's surplus-line materialization rule.
+ */
+function serializeTopLevelChildren(
+  children: PMNode[],
+  ending: "\n" | "\r\n",
+): string {
+  if (children.length === 0) return "";
+  let output = "";
+  let index = 0;
+  while (index < children.length && isEmptyParagraph(children[index])) {
+    output += ending;
+    index += 1;
+  }
+  if (index >= children.length) return output;
+
+  output += serializeBlock(children[index]!);
+  index += 1;
+  while (index < children.length) {
+    let emptyCount = 0;
+    while (index < children.length && isEmptyParagraph(children[index])) {
+      emptyCount += 1;
+      index += 1;
+    }
+    if (emptyCount > 0) {
+      if (index >= children.length) {
+        output += ending.repeat(emptyCount + 1);
+        break;
+      }
+      output += ending.repeat(emptyCount + 2);
+      output += serializeBlock(children[index]!);
+      index += 1;
+      continue;
+    }
+    output += `${ending}${ending}${serializeBlock(children[index]!)}`;
+    index += 1;
+  }
+  return output;
+}
+
+function appendGeneratedEmptyParagraph(
+  output: string,
+  ending: "\n" | "\r\n",
+  hasContentBefore: boolean,
+): string {
+  if (!hasContentBefore) return output + ending;
+  return output.endsWith(ending)
+    ? output + ending
+    : output + `${ending}${ending}`;
+}
+
 function serializeListItem(item: PMNode, marker: string): string {
   const task = item.attrs.checked;
   const content = childrenOf(item)
@@ -2549,6 +2708,88 @@ function serializeListItem(item: PMNode, marker: string): string {
 
 function lineBreakSuffix(value: string): string {
   return value.match(/(?:\r\n|\n|\r)+$/)?.[0] ?? "";
+}
+
+function lineEndingCount(value: string): number {
+  return (value.match(/\r\n|\r|\n/g) ?? []).length;
+}
+
+function isBlankSource(value: string): boolean {
+  return value.length > 0 && /^[\t \r\n]*$/u.test(value);
+}
+
+/**
+ * Return the number of editable empty paragraphs represented by a source
+ * boundary. A regular block boundary consumes two line endings; the final
+ * terminator of a document consumes one, while leading blank lines have no
+ * structural line ending to consume.
+ */
+function materializedEmptyCount(
+  boundary: string,
+  structuralLineEndings: number,
+): number {
+  if (!isBlankSource(boundary)) return 0;
+  return Math.max(0, lineEndingCount(boundary) - structuralLineEndings);
+}
+
+/**
+ * Split a blank boundary into the regular structural part followed by one
+ * line-ending slice per materialized empty paragraph. Keeping the slices in
+ * the snapshot lets an edit preserve the original whitespace bytes around
+ * unchanged nodes instead of normalizing the source globally.
+ */
+function splitBlankBoundary(
+  value: string,
+  structuralLineEndings: number,
+): string[] {
+  const endings = Array.from(value.matchAll(/\r\n|\r|\n/g));
+  if (endings.length <= structuralLineEndings) return [value];
+  const parts: string[] = [];
+  let start = 0;
+  let consumed = 0;
+  const partCount = endings.length - structuralLineEndings + 1;
+  for (let part = 0; part < partCount; part += 1) {
+    const take = part === 0 ? structuralLineEndings : 1;
+    consumed += take;
+    const ending = endings[consumed - 1];
+    if (!ending || ending.index == null) return [value];
+    const end = ending.index + ending[0].length;
+    parts.push(value.slice(start, end));
+    start = end;
+  }
+  if (start < value.length) parts[parts.length - 1] += value.slice(start);
+  return parts;
+}
+
+function materializedEmptyBlock(
+  source: string,
+  value: string,
+  start: number,
+): MarkdownBlockSnapshot {
+  const node = emptyParagraph();
+  return {
+    node,
+    source: value,
+    body: "",
+    separator: value,
+    startLine: lineIndexAt(source, start),
+    endLine: lineIndexAt(source, start + value.length),
+    kind: "empty-paragraph",
+  };
+}
+
+function isMaterializedEmptyBlock(
+  block: MarkdownBlockSnapshot | undefined,
+): boolean {
+  return (
+    block?.kind === "empty-paragraph" &&
+    block.node.type.name === "paragraph" &&
+    block.node.content.size === 0
+  );
+}
+
+function isEmptyParagraph(node: PMNode | undefined): boolean {
+  return node?.type.name === "paragraph" && node.content.size === 0;
 }
 
 interface ReferenceDefinitionSnapshot {
@@ -2980,9 +3221,12 @@ export function serializeMarkdown(
   const children = childrenOf(doc);
   const blocks = previous?.blocks ?? [];
   if (blocks.length === 0) {
-    const serialized = children
-      .map((node) => serializeBlock(node))
-      .join("\n\n");
+    const metadata = documentMetadata.get(doc);
+    const ending: "\n" | "\r\n" =
+      previous?.lineEnding === "crlf" || metadata?.lineEnding === "crlf"
+        ? "\r\n"
+        : "\n";
+    const serialized = serializeTopLevelChildren(children, ending);
     const last = children[children.length - 1];
     if (last?.type.name === "raw_block" || last?.type.name === "details") {
       const rawEnding = lineBreakSuffix(String(last.attrs.source ?? ""));
@@ -2995,8 +3239,6 @@ export function serializeMarkdown(
         return serialized + ending;
       }
     }
-    const metadata = documentMetadata.get(doc);
-    const ending = previous?.lineEnding === "crlf" ? "\r\n" : "\n";
     return appendFootnoteDefinitions(
       serialized,
       metadata?.footnotes ?? [],
@@ -3019,17 +3261,50 @@ export function serializeMarkdown(
     const matched = matches.get(index);
     if (matched !== undefined) nextPrevious = matched;
   }
+  const hasContentAfter: boolean[] = new Array(children.length);
+  let contentAfter = false;
+  for (let index = children.length - 1; index >= 0; index -= 1) {
+    hasContentAfter[index] = contentAfter;
+    if (!isEmptyParagraph(children[index])) contentAfter = true;
+  }
   let output = leading;
+  let hasContentBefore = false;
   for (let index = 0; index < children.length; index += 1) {
     const node = children[index]!;
     const matched = matches.get(index);
     if (matched != null) {
       output += blocks[matched]!.source;
+      if (!isEmptyParagraph(node)) hasContentBefore = true;
       continue;
     }
 
     const samePosition = blocks[index];
     const insertion = !samePosition || nextMatchedPrevious[index] === index;
+    if (isEmptyParagraph(node)) {
+      output = appendGeneratedEmptyParagraph(output, ending, hasContentBefore);
+      continue;
+    }
+    if (samePosition && isMaterializedEmptyBlock(samePosition)) {
+      let emptyParagraphsBefore = 0;
+      for (
+        let previousIndex = index - 1;
+        previousIndex >= 0 && isEmptyParagraph(children[previousIndex]);
+        previousIndex -= 1
+      )
+        emptyParagraphsBefore += 1;
+      const requiredLineEndings = hasContentBefore
+        ? 2 + emptyParagraphsBefore
+        : 0;
+      const existingLineEndings = lineEndingCount(lineBreakSuffix(output));
+      if (index > 0 && requiredLineEndings > existingLineEndings) {
+        output += ending.repeat(requiredLineEndings - existingLineEndings);
+      }
+      output += toLineEnding(serializeBlock(node), ending);
+      if (hasContentAfter[index]) output += `${ending}${ending}`;
+      else if (index < children.length - 1) output += ending;
+      hasContentBefore = true;
+      continue;
+    }
     if (previous && !insertion && samePosition) {
       const preservedInline = preserveRawInlineSourceSlice(
         node,
@@ -3052,6 +3327,17 @@ export function serializeMarkdown(
     // when their preceding block is unchanged. Existing blank separators can
     // also use CR or mixed endings, independently of the generated line ending.
     const previousNode = blocks[index - 1]?.node;
+    let emptyParagraphsBefore = 0;
+    for (
+      let previousIndex = index - 1;
+      previousIndex >= 0 && isEmptyParagraph(children[previousIndex]);
+      previousIndex -= 1
+    )
+      emptyParagraphsBefore += 1;
+    const requiredLineEndings = hasContentBefore
+      ? 2 + emptyParagraphsBefore
+      : 0;
+    const existingLineEndings = lineEndingCount(lineBreakSuffix(output));
     const preservedSourceBoundary =
       !insertion &&
       matches.get(index - 1) === index - 1 &&
@@ -3065,9 +3351,9 @@ export function serializeMarkdown(
     if (
       index > 0 &&
       !preservedSourceBoundary &&
-      !output.endsWith(`${ending}${ending}`)
+      requiredLineEndings > existingLineEndings
     ) {
-      output += output.endsWith(ending) ? ending : `${ending}${ending}`;
+      output += ending.repeat(requiredLineEndings - existingLineEndings);
     }
     const generated =
       node.type.name === "details"
@@ -3087,6 +3373,7 @@ export function serializeMarkdown(
     ) {
       output += ending;
     }
+    hasContentBefore = true;
   }
   if (children.length === 0 && previous?.trailing) output += previous.trailing;
   if (!previous) {
@@ -4072,9 +4359,22 @@ function semanticNode(node: PMNode, codeContext = false): unknown {
   };
 }
 
-function semanticDocument(source: string, profile: Profile): string {
+function semanticDocument(
+  source: string,
+  profile: Profile,
+  ignoreTopLevelEmptyParagraphs = false,
+): string {
   const snapshot = parseMarkdown(source, profile);
-  return JSON.stringify(semanticNode(snapshot.doc));
+  if (!ignoreTopLevelEmptyParagraphs)
+    return JSON.stringify(semanticNode(snapshot.doc));
+  const children = childrenOf(snapshot.doc).filter(
+    (node) => !isEmptyParagraph(node),
+  );
+  const document = schema.topNodeType.create(
+    null,
+    children.length > 0 ? children : [emptyParagraph()],
+  );
+  return JSON.stringify(semanticNode(document));
 }
 
 function protectedSources(snapshot: MarkdownSnapshot): string[] {
@@ -4089,6 +4389,8 @@ function protectedSources(snapshot: MarkdownSnapshot): string[] {
 /**
  * Format Markdown with Prettier when available. If Prettier fails or changes
  * the PM structure/protected atoms, the original source is returned safely.
+ * Top-level empty paragraphs are spacing representation and may be removed by
+ * this explicit formatting operation.
  */
 export async function formatMarkdown(
   source: string,
@@ -4121,8 +4423,8 @@ export async function formatMarkdown(
       );
     }
     if (
-      semanticDocument(source, profile) !==
-      JSON.stringify(semanticNode(after.doc))
+      semanticDocument(source, profile, true) !==
+      semanticDocument(formatted, profile, true)
     ) {
       throw new Error(
         "Markdown formatting was skipped because the parsed document structure would change.",

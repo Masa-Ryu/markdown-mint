@@ -81,6 +81,131 @@ describe("Markdown core", () => {
     expect(snapshot.lineEnding).toBe("crlf");
   });
 
+  it.each([
+    {
+      name: "LF",
+      source: "one\n\n\n\ntwo",
+      ending: "\n",
+    },
+    {
+      name: "CRLF",
+      source: "one\r\n\r\n\r\n\r\ntwo",
+      ending: "\r\n",
+    },
+  ])(
+    "materializes source-authored blank lines for $name",
+    ({ source, ending }) => {
+      const snapshot = parseMarkdown(source);
+      const children = childrenOf(snapshot.doc);
+
+      expect(
+        children.filter(
+          (node) => node.type.name === "paragraph" && node.content.size === 0,
+        ),
+      ).toHaveLength(2);
+      expect(serializeMarkdown(snapshot.doc, snapshot)).toBe(source);
+      expect(serializeMarkdown(snapshot.doc)).toBe(source);
+
+      const serialized = serializeMarkdown(snapshot.doc, snapshot);
+      expect(serialized).toBe(source);
+      expect(serialized.match(new RegExp(ending, "g"))?.length).toBe(4);
+      expect(parseMarkdown(serialized).doc.eq(snapshot.doc)).toBe(true);
+    },
+  );
+
+  it("roundtrips empty paragraphs authored by the Rich document", () => {
+    const document = schema.topNodeType.create(null, [
+      schema.nodes.paragraph!.create(null, schema.text("one")),
+      schema.nodes.paragraph!.create(),
+      schema.nodes.paragraph!.create(),
+      schema.nodes.paragraph!.create(null, schema.text("two")),
+    ]);
+
+    const serialized = serializeMarkdown(document);
+    expect(serialized).toBe("one\n\n\n\ntwo");
+    expect(parseMarkdown(serialized).doc.eq(document)).toBe(true);
+  });
+
+  it("preserves a source-authored separator when a neighboring block changes", () => {
+    const source = "one\n\n\n\ntwo";
+    const snapshot = parseMarkdown(source);
+    const changed = replaceTopLevel(
+      snapshot,
+      3,
+      schema.nodes.paragraph!.create(null, schema.text("changed")),
+    );
+
+    const serialized = serializeMarkdown(changed, snapshot);
+    expect(serialized).toBe("one\n\n\n\nchanged");
+    expect(parseMarkdown(serialized).doc.eq(changed)).toBe(true);
+  });
+
+  it("keeps leading and trailing empty paragraphs editable", () => {
+    const leading = parseMarkdown("\n\none");
+    const leadingEdit = replaceTopLevel(
+      leading,
+      0,
+      schema.nodes.paragraph!.create(null, schema.text("zero")),
+    );
+    expect(serializeMarkdown(leadingEdit, leading)).toBe("zero\n\n\none");
+    expect(
+      parseMarkdown(serializeMarkdown(leadingEdit, leading)).doc.eq(
+        leadingEdit,
+      ),
+    ).toBe(true);
+
+    const trailing = parseMarkdown("one\n\n\n");
+    const trailingEdit = replaceTopLevel(
+      trailing,
+      2,
+      schema.nodes.paragraph!.create(null, schema.text("two")),
+    );
+    expect(serializeMarkdown(trailingEdit, trailing)).toBe("one\n\n\ntwo");
+    expect(
+      parseMarkdown(serializeMarkdown(trailingEdit, trailing)).doc.eq(
+        trailingEdit,
+      ),
+    ).toBe(true);
+  });
+
+  it.each(["\n\none", "one\n\n\n", "\n\none\n\n\ntwo\n\n"])(
+    "preserves leading and trailing blank paragraph shape for %j",
+    (source) => {
+      const snapshot = parseMarkdown(source);
+      const serialized = serializeMarkdown(snapshot.doc);
+
+      expect(serialized).toBe(source);
+      expect(serializeMarkdown(snapshot.doc, snapshot)).toBe(source);
+      expect(parseMarkdown(serialized).doc.eq(snapshot.doc)).toBe(true);
+    },
+  );
+
+  it.each([
+    ["table", "| A |\n| --- |\n| one |\n\n\n\ntwo"],
+    ["code", "```ts\none\n```\n\n\n\ntwo"],
+    ["Alert", "> [!NOTE]\n> one\n\n\n\ntwo"],
+    [
+      "Details",
+      "<details open>\n<summary>Info</summary>\n\nbody\n\n</details>\n\n\n\ntwo",
+    ],
+    ["list", "- one\n- two\n\n\n\ntwo"],
+    ["heading", "# one\n\n\n\ntwo"],
+  ] as const)(
+    "uses the same blank separator rule after %s",
+    (_name, source) => {
+      const snapshot = parseMarkdown(source, "github");
+      const emptyParagraphs = childrenOf(snapshot.doc).filter(
+        (node) => node.type.name === "paragraph" && node.content.size === 0,
+      );
+
+      expect(emptyParagraphs).toHaveLength(2);
+      expect(serializeMarkdown(snapshot.doc, snapshot)).toBe(source);
+      expect(
+        parseMarkdown(serializeMarkdown(snapshot.doc)).doc.eq(snapshot.doc),
+      ).toBe(true);
+    },
+  );
+
   it("reuses untouched top-level blocks when a neighboring block changes", () => {
     const source = 'before\n\n<div data-x="1">raw</div>\n\n# after\n';
     const snapshot = parseMarkdown(source);
@@ -684,6 +809,16 @@ $$
     await expect(
       formatMarkdown("[bad](javascript:alert(1))\n"),
     ).rejects.toThrow(/formatting was skipped/i);
+  });
+
+  it("leaves blank-line normalization to explicit formatting", async () => {
+    const source = "one\n\n\n\ntwo";
+    const snapshot = parseMarkdown(source);
+
+    expect(serializeMarkdown(snapshot.doc, snapshot)).toBe(source);
+    const formatted = await formatMarkdown(source);
+    expect(formatted).not.toMatch(/\n{3,}/u);
+    expect(parseMarkdown(formatted).doc.childCount).toBe(2);
   });
 
   it("handles a long document with linear source matching", () => {

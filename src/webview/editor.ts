@@ -1000,6 +1000,36 @@ function topLevelRangeNodes(
   return result;
 }
 
+function sameDocumentIgnoringTrailingEmptyParagraphs(
+  left: PMNode,
+  right: PMNode,
+): boolean {
+  const children = (document: PMNode): PMNode[] => {
+    const result: PMNode[] = [];
+    document.forEach((node) => result.push(node));
+    return result;
+  };
+  const trim = (nodes: PMNode[]): PMNode[] => {
+    const result = nodes.slice();
+    while (
+      result.length > 1 &&
+      result.at(-1)?.type.name === "paragraph" &&
+      result.at(-1)?.content.size === 0
+    )
+      result.pop();
+    return result;
+  };
+  const leftChildren = children(left);
+  const rightChildren = children(right);
+  const leftTrimmed = trim(leftChildren);
+  const rightTrimmed = trim(rightChildren);
+  return (
+    rightChildren.length >= leftChildren.length &&
+    leftTrimmed.length === rightTrimmed.length &&
+    leftTrimmed.every((node, index) => node.eq(rightTrimmed[index]!))
+  );
+}
+
 function removeTopLevelRange(doc: PMNode, range: TransientBlankRange): PMNode {
   const children: PMNode[] = [];
   let position = 0;
@@ -3453,8 +3483,9 @@ export class MarkdownEditorApp {
         // while its trailing paragraph remains omitted from the source.
         transientOnly = appendMeta.meaningful !== true;
       } else if (hasContent) {
-        // The first edit in a generated paragraph commits the paragraph and
-        // all of the generated spacing around it as user-authored content.
+        // The transaction already removed untouched generated paragraphs;
+        // only the edited target remains authored content. Clear the marker
+        // so the target is serialized normally from now on.
         this.transientBlanks = null;
       } else if (
         transactions.some(
@@ -8545,12 +8576,10 @@ export class MarkdownEditorApp {
     const scrollTop = stage?.scrollTop ?? 0;
 
     // A TextDocument event can repeat the authoritative source after an edit
-    // acknowledgement. Parsing that source again is unsafe because the PM
-    // document may contain transient empty paragraphs that Markdown does not
-    // encode. Keep the exact EditorState when the source and profile are the
-    // same. A terminal-whitespace-only normalization is also safe when both
-    // sources parse to the same semantic document (for example VS Code's
-    // trimFinalNewlines participant).
+    // acknowledgement. Keep the exact EditorState when the source and profile
+    // are the same. A terminal-whitespace-only normalization is also safe
+    // when it removes only generated/editor-end empty paragraphs (for example
+    // VS Code's trimFinalNewlines participant).
     let currentMarkdown: string | null = null;
     if (!this.parseError) {
       try {
@@ -8589,7 +8618,10 @@ export class MarkdownEditorApp {
             currentMarkdown,
             message.profile,
           );
-          if (incoming.doc.eq(local.doc)) {
+          if (
+            incoming.doc.eq(local.doc) ||
+            sameDocumentIgnoringTrailingEmptyParagraphs(incoming.doc, local.doc)
+          ) {
             preserveState = true;
             normalizedSnapshot = incoming;
           }

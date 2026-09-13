@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.0.46
+
+- Materialize source-authored surplus top-level blank lines as editable Rich
+  empty paragraphs while preserving their original LF/CRLF source slices.
+  Round-trip Rich-created blank paragraphs, explicit Format Markdown cleanup,
+  and transient trailing caret paragraphs without leaking generated spacing.
+
 ## 0.0.45
 
 - Commit only the paragraph typed after clicking below the final Rich editor
