@@ -669,6 +669,39 @@ describe("table Enter navigation", () => {
 });
 
 describe("contextual table toolbar", () => {
+  it("keeps the main Table button active across cells and CellSelection only", () => {
+    const { app, root } = makeApp(
+      "Before\n\n| Name | Value |\n| --- | --- |\n| A | 100 |\n| B | 200 |\n\nAfter",
+    );
+    const tableButton = root.querySelector<HTMLButtonElement>(
+      '[data-testid="toolbar-table"]',
+    )!;
+    expect(tableButton.getAttribute("aria-pressed")).toBe("false");
+
+    selectTableCell(app, root, 1, 0);
+    expect(tableButton.getAttribute("aria-pressed")).toBe("true");
+
+    selectTableCell(app, root, 2, 1);
+    expect(tableButton.getAttribute("aria-pressed")).toBe("true");
+
+    const cells = root.querySelectorAll("tbody td");
+    dispatchCellSelection(app, cells[0]!, cells[1]!);
+    expect(tableButton.getAttribute("aria-pressed")).toBe("true");
+
+    const doc = app.view.state.doc;
+    const afterStart = doc.child(doc.childCount - 1);
+    let afterPosition = 0;
+    for (let index = 0; index < doc.childCount - 1; index += 1)
+      afterPosition += doc.child(index).nodeSize;
+    expect(afterStart.type.name).toBe("paragraph");
+    app.view.dispatch(
+      app.view.state.tr.setSelection(
+        TextSelection.create(doc, afterPosition + 2),
+      ),
+    );
+    expect(tableButton.getAttribute("aria-pressed")).toBe("false");
+  });
+
   it("appears for a text cursor and keeps a logical cell selected after row and alignment operations", () => {
     const source = "| A | B |\n| --- | --- |\n| C | D |";
     const { app, root, messages } = makeApp(source);

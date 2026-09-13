@@ -88,7 +88,12 @@ import {
   type AlertType,
 } from "../core/alerts";
 import { appendToolbarIcon, type ToolbarIconName } from "./icons";
-import { createListCommand, isListActive, type ListKind } from "./listCommands";
+import { createListCommand, type ListKind } from "./listCommands";
+import {
+  getToolbarActiveState,
+  isToolbarMarkActive,
+  type ToolbarActiveKey,
+} from "./toolbarState";
 import {
   createTableNumberingCommand,
   createTableNumberingPlugin,
@@ -876,12 +881,8 @@ function commandForMark(markName: string, schema: Schema) {
   return (state: EditorState, dispatch?: (tr: Transaction) => void) => {
     const mark = schema.marks[markName];
     if (!mark) return false;
-    const { from, to, empty } = state.selection;
-    const active = empty
-      ? Boolean(
-          mark.isInSet(state.storedMarks || state.doc.resolve(from).marks()),
-        )
-      : state.doc.rangeHasMark(from, to, mark.create());
+    const { from, to } = state.selection;
+    const active = isToolbarMarkActive(state, state.selection, markName);
     if (dispatch) {
       if (active) dispatch(state.tr.removeMark(from, to, mark));
       else dispatch(state.tr.addMark(from, to, mark.create()));
@@ -3441,6 +3442,9 @@ export class MarkdownEditorApp {
     const selectionSet = transactions.some(
       (transaction) => transaction.selectionSet,
     );
+    const storedMarksSet = transactions.some(
+      (transaction) => transaction.storedMarksSet,
+    );
     if (docChanged && !transientOnly) {
       this.closeWritingPopups();
       this.dirty = true;
@@ -3480,7 +3484,7 @@ export class MarkdownEditorApp {
         this.scheduleDerivedViews(markdown);
       }
     }
-    if (selectionSet || docChanged || discardedTransient)
+    if (selectionSet || storedMarksSet || docChanged || discardedTransient)
       this.updateToolbarState(oldSelection, this.view.state.selection, {
         revealTableToolbar: selectionSet || docChanged || discardedTransient,
       });
@@ -3885,7 +3889,9 @@ export class MarkdownEditorApp {
     this.updateEditingControlState();
   }
 
-  private updateEditingControlState(): void {
+  private updateEditingControlState(
+    selection = this.view.state.selection,
+  ): void {
     const editingDisabled =
       !this.initialized ||
       this.previewOnly ||
@@ -3965,6 +3971,7 @@ export class MarkdownEditorApp {
     if (editingDisabled && this.emptyLineButton)
       this.emptyLineButton.hidden = true;
     this.updateTableToolbar();
+    this.updateToolbarActiveState(selection);
   }
 
   private setConflict(message: string): void {
@@ -4149,6 +4156,7 @@ export class MarkdownEditorApp {
       parent: HTMLElement = primary,
       menuItem = false,
       iconName?: ToolbarIconName,
+      activeKey?: ToolbarActiveKey,
     ): HTMLButtonElement => {
       const button = makeElement("button", {
         type: "button",
@@ -4160,6 +4168,10 @@ export class MarkdownEditorApp {
       }) as HTMLButtonElement;
       if (iconName) appendToolbarIcon(button, iconName);
       else button.textContent = label;
+      if (activeKey) {
+        button.dataset.toolbarActive = activeKey;
+        button.setAttribute("aria-pressed", "false");
+      }
       button.addEventListener("mousedown", (event) => {
         event.preventDefault();
         // A menu item's mousedown must not focus the ProseMirror surface:
@@ -4270,6 +4282,7 @@ export class MarkdownEditorApp {
       primary,
       false,
       "bold",
+      "strong",
     );
     addButton(
       "",
@@ -4279,6 +4292,7 @@ export class MarkdownEditorApp {
       primary,
       false,
       "italic",
+      "em",
     );
     const strikeButton = addButton(
       "",
@@ -4294,6 +4308,7 @@ export class MarkdownEditorApp {
       primary,
       false,
       "strikethrough",
+      "strike",
     );
     strikeButton.dataset.gfmOnly = "true";
     addButton(
@@ -4304,6 +4319,7 @@ export class MarkdownEditorApp {
       primary,
       false,
       "inline-code",
+      "code",
     );
     addButton(
       "",
@@ -4313,6 +4329,7 @@ export class MarkdownEditorApp {
       primary,
       false,
       "link",
+      "link",
     );
     addButton(
       "",
@@ -4321,6 +4338,7 @@ export class MarkdownEditorApp {
       "toolbar-image",
       primary,
       false,
+      "image",
       "image",
     );
     const emojiButton = makeElement("button", {
@@ -4350,6 +4368,7 @@ export class MarkdownEditorApp {
       "bullet-list",
     );
     bulletListButton.dataset.listKind = "bullet";
+    bulletListButton.setAttribute("aria-pressed", "false");
     const orderedListButton = addButton(
       "",
       "Ordered list",
@@ -4360,6 +4379,7 @@ export class MarkdownEditorApp {
       "ordered-list",
     );
     orderedListButton.dataset.listKind = "ordered";
+    orderedListButton.setAttribute("aria-pressed", "false");
     const taskButton = addButton(
       "",
       "Task list",
@@ -4371,6 +4391,7 @@ export class MarkdownEditorApp {
     );
     taskButton.dataset.gfmOnly = "true";
     taskButton.dataset.listKind = "task";
+    taskButton.setAttribute("aria-pressed", "false");
     addButton(
       "",
       "Block quote",
@@ -4378,6 +4399,7 @@ export class MarkdownEditorApp {
       "toolbar-quote",
       primary,
       false,
+      "blockquote",
       "blockquote",
     );
     addButton(
@@ -4388,6 +4410,7 @@ export class MarkdownEditorApp {
       primary,
       false,
       "code-block",
+      "code_block",
     );
     const insertTableButton = addButton(
       "",
@@ -4396,6 +4419,7 @@ export class MarkdownEditorApp {
       "toolbar-table",
       primary,
       false,
+      "table",
       "table",
     );
     insertTableButton.dataset.gfmOnly = "true";
@@ -4407,6 +4431,7 @@ export class MarkdownEditorApp {
       primary,
       false,
       "divider",
+      "horizontal_rule",
     );
     addButton(
       "",
@@ -5857,6 +5882,17 @@ export class MarkdownEditorApp {
 
   private updateSelectionToolbar(selection = this.view.state.selection): void {
     if (!this.selectionToolbar || !this.stage || !this.view) return;
+    for (const button of Array.from(
+      this.selectionToolbar.querySelectorAll<HTMLButtonElement>("[data-mark]"),
+    )) {
+      const markName = button.dataset.mark;
+      const active = Boolean(
+        markName &&
+        !button.disabled &&
+        isToolbarMarkActive(this.view.state, selection, markName),
+      );
+      button.setAttribute("aria-pressed", String(active));
+    }
     const canShow =
       this.initialized &&
       !this.previewOnly &&
@@ -5933,23 +5969,6 @@ export class MarkdownEditorApp {
     top = Math.max(minTop, Math.min(maxTop, top));
     this.selectionToolbar.style.left = `${Math.round(left)}px`;
     this.selectionToolbar.style.top = `${Math.round(top)}px`;
-    for (const button of Array.from(
-      this.selectionToolbar.querySelectorAll<HTMLButtonElement>("[data-mark]"),
-    )) {
-      const markName = button.dataset.mark;
-      const mark = markName ? this.schema.marks[markName] : undefined;
-      const active = Boolean(
-        mark &&
-        (selection.empty
-          ? mark.isInSet(this.view.state.storedMarks || selection.$from.marks())
-          : this.view.state.doc.rangeHasMark(
-              selection.from,
-              selection.to,
-              mark,
-            )),
-      );
-      button.setAttribute("aria-pressed", String(active));
-    }
   }
 
   private handleBlankDocumentPointer(event: MouseEvent): boolean {
@@ -6179,6 +6198,7 @@ export class MarkdownEditorApp {
 
   private updateWritingToolbarState(): void {
     if (this.destroyed || !this.view) return;
+    this.updateToolbarActiveState(this.view.state.selection);
     this.updateSelectionToolbar(this.view.state.selection);
     this.updateEmptyLineInsert(this.view.state.selection);
     this.positionWritingPopup();
@@ -7453,28 +7473,46 @@ export class MarkdownEditorApp {
     if (mode === "rich") this.view.focus();
   }
 
-  private updateListToolbarState(selection = this.view.state.selection): void {
+  private updateToolbarActiveState(
+    selection = this.view.state.selection,
+  ): void {
+    if (!this.view) return;
+
+    const activeState = getToolbarActiveState(
+      this.view.state,
+      selection,
+      Boolean(tableContext(selection)),
+    );
     const editingDisabled =
       !this.initialized ||
       this.previewOnly ||
       this.mode !== "rich" ||
       Boolean(this.parseError);
+
+    for (const button of Array.from(
+      this.root.querySelectorAll<HTMLButtonElement>("[data-toolbar-active]"),
+    )) {
+      const key = button.dataset.toolbarActive as ToolbarActiveKey | undefined;
+      const active = Boolean(
+        !editingDisabled && key && !button.disabled && activeState[key],
+      );
+      button.setAttribute("aria-pressed", String(active));
+      button.classList.toggle("is-active", active);
+    }
+
     for (const button of Array.from(
       this.root.querySelectorAll<HTMLButtonElement>("[data-list-kind]"),
     )) {
       const kind = button.dataset.listKind as ListKind | undefined;
-      let active = false;
-      if (!editingDisabled && kind) {
-        try {
-          active = isListActive(this.view.state, kind);
-        } catch {
-          active = false;
-        }
-      }
+      const active = Boolean(
+        !editingDisabled &&
+        kind &&
+        !button.disabled &&
+        activeState.listKind === kind,
+      );
       button.setAttribute("aria-pressed", String(active));
       button.classList.toggle("is-active", active);
     }
-    void selection;
   }
 
   private updateToolbarState(
@@ -7490,8 +7528,7 @@ export class MarkdownEditorApp {
       heading.value =
         node.type.name === "heading" ? String(node.attrs.level) : "p";
     }
-    this.updateEditingControlState();
-    this.updateListToolbarState(selection);
+    this.updateEditingControlState(selection);
     this.updateTableToolbar(selection, {
       allowReveal: options.revealTableToolbar === true,
     });

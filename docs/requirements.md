@@ -921,6 +921,36 @@ The 0.0.5 and earlier evidence above remains historical.
   blocks, table edges, modifiers, composition setup, source/host/dirty/history
   invariants, paragraph and slash insertion, and all five display fixtures.
 
+## 0.0.41 toolbar semantic active state
+
+- The main toolbar derives persistent active state from one current
+  EditorState/Selection context. Bold, italic, strikethrough, inline code, and
+  link use the same `storedMarks`, `$from.marks()`, and `rangeHasMark()` helper
+  as the Selection toolbar.
+- Bullet, ordered, and task lists retain `activeListKind()` semantics and
+  remain mutually exclusive. Blockquote and code block buttons activate only
+  when the current cursor or selection remains inside that block.
+- The main Table button activates for a text cursor, another table cell, or a
+  rectangular `CellSelection` by reusing `tableContext(selection)`. It clears
+  immediately after leaving the table. Image and horizontal rule activate only
+  for an explicit `NodeSelection` of the corresponding node.
+- Stateful controls synchronize both `aria-pressed` and `.is-active`; disabled
+  CommonMark controls are forced inactive. Format, Emoji, and other insert-only
+  actions do not receive persistent active state.
+- Selection changes, document transactions, profile/document updates, and mode
+  transitions all refresh the same semantic state. No toolbar layout, CSS
+  colors, table contextual UX, or Markdown serialization behavior changes.
+- Regression coverage exercises list exclusivity, Table cursor/cell changes and
+  `CellSelection`, blockquote/code-block transitions, empty and non-empty mark
+  selections, explicit image/rule `NodeSelection`, and CommonMark disabled
+  controls. The full unit suite passed 606 tests across 34 files; TypeScript
+  compilation and lint passed with the repository's existing 48 `any` warnings.
+- The browser fixture check passed 37 Rich/Preview and 37 native cases, and the
+  native Extension Development Host acceptance suite exited successfully. The
+  verified package is `markdown-mint-0.0.41.vsix` with 96 files. The repository
+  format check still reports the pre-existing warning in
+  `tests/browser/block-editing.test.mjs`, which is outside this change.
+
 ## Explicit limits
 
 Paste/drop image asset copying is optional follow-up work. Native IME and visual

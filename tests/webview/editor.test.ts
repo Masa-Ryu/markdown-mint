@@ -1515,13 +1515,28 @@ describe("rich editor rendering", () => {
       true,
     );
     expect(
+      root
+        .querySelector<HTMLButtonElement>('[data-testid="toolbar-strike"]')
+        ?.getAttribute("aria-pressed"),
+    ).toBe("false");
+    expect(
       root.querySelector<HTMLButtonElement>(
         '[data-testid="toolbar-task-list"]',
       ),
     ).toHaveProperty("disabled", true);
     expect(
+      root
+        .querySelector<HTMLButtonElement>('[data-testid="toolbar-task-list"]')
+        ?.getAttribute("aria-pressed"),
+    ).toBe("false");
+    expect(
       root.querySelector<HTMLButtonElement>('[data-testid="toolbar-table"]'),
     ).toHaveProperty("disabled", true);
+    expect(
+      root
+        .querySelector<HTMLButtonElement>('[data-testid="toolbar-table"]')
+        ?.getAttribute("aria-pressed"),
+    ).toBe("false");
     app.destroy();
   });
 });

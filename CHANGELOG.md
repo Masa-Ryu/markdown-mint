@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.0.41
+
+- Unify the main and selection toolbar's semantic active state from the current
+  ProseMirror selection. Bold, italic, strikethrough, inline code, and link
+  now share one mark helper, while list, blockquote, code block, and table
+  state is reflected through synchronized `aria-pressed` and active styling.
+- Keep Table active for text cursors, cross-cell selections, and `CellSelection`
+  through the existing table context rules. Image and horizontal rule expose
+  active state only for an explicit `NodeSelection`; insert-only commands keep
+  no persistent state, and CommonMark-disabled controls remain inactive.
+
 ## 0.0.40
 
 - Add a virtual, keyboard-only caret between top-level blocks. Plain horizontal
