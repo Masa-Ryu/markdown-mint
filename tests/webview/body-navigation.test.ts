@@ -290,8 +290,10 @@ describe("body navigation selection handoff", () => {
     const boundary = vi
       .spyOn(app.view, "endOfTextblock")
       .mockReturnValue(false);
+    const posAtCoords = vi.spyOn(app.view, "posAtCoords");
     expect(key("ArrowDown").defaultPrevented).toBe(false);
     expect(app.view.state.selection.$from.parent.type.name).toBe("code_block");
+    expect(posAtCoords).not.toHaveBeenCalled();
     boundary.mockReturnValue(true);
     expect(key("ArrowDown").defaultPrevented).toBe(true);
     expect(app.view.state.selection).toBeInstanceOf(BlockBoundarySelection);
