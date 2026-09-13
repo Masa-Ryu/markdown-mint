@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.0.43
+
+- Make every supported Math form consistently editable from its rendered atom:
+  inline `$...$`, display `$$...$$`, and fenced `math`, `latex`, `tex`, and
+  `asciimath` sources now share the existing Edit Math dialog. Preserve Math
+  wrappers, aliases, metadata, fence style, indentation, line endings, marks,
+  links, and stale drafts while keeping ordinary text double clicks native.
+
 ## 0.0.42
 
 - Restrict Block quote and Code block toolbar active state to selections that

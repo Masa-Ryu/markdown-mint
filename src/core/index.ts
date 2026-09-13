@@ -34,6 +34,12 @@ import {
   type DetailsSourceParts,
   type DetailsTagRange,
 } from "./details";
+import { isMathFenceLanguage } from "./math";
+export {
+  isMathFenceLanguage,
+  mathFenceLanguage,
+  MATH_FENCE_LANGUAGES,
+} from "./math";
 export {
   alertSourceWithBody,
   alertSourceWithType,
@@ -1379,16 +1385,19 @@ function protectedFence(
   offsets: number[],
 ): boolean {
   const info = token.info?.trim().split(/\s+/, 1)[0]?.toLowerCase() ?? "";
+  if (isMathFenceLanguage(token.info ?? "")) return true;
   if (
-    /^(?:mermaid|math|latex|tex|asciimath|mdx|frontmatter|yaml|geojson|topojson|stl|plantuml|kroki|blockdiag|graphviz)$/.test(
+    /^(?:mermaid|mdx|frontmatter|yaml|geojson|topojson|stl|plantuml|kroki|blockdiag|graphviz)$/.test(
       info,
     )
   )
     return true;
   const raw = sourceForToken(token, source, offsets).trimStart();
+  const rawInfo = raw.match(/^(?:`{3,}|~{3,})[ \t]*([^\r\n]*)/)?.[1] ?? "";
   return (
-    /^```+\s*(?:mermaid|math|latex|tex)\b/i.test(raw) ||
-    /^~~~+\s*(?:mermaid|math|latex|tex)\b/i.test(raw)
+    isMathFenceLanguage(rawInfo) ||
+    /^```+\s*mermaid\b/i.test(raw) ||
+    /^~~~+\s*mermaid\b/i.test(raw)
   );
 }
 
@@ -1529,7 +1538,7 @@ function parseBlocks(
         const rawSource = sourceForToken(token, source, offsets);
         if (protectedFence(token, source, offsets)) {
           const info = token.info?.trim().split(/\s+/, 1)[0] ?? "";
-          const kind = /^(?:math|latex|tex|asciimath)$/i.test(info)
+          const kind = isMathFenceLanguage(info)
             ? "math-block"
             : "protected-fence";
           result.push(
@@ -2091,7 +2100,11 @@ export function parseMarkdown(
   return snapshot;
 }
 
-function escapeMarkdownText(value: string, table = false): string {
+function escapeMarkdownText(
+  value: string,
+  table = false,
+  initialLineStart = true,
+): string {
   let result = value.replace(/\\/g, "\\\\");
   let escaped = "";
   // Escape punctuation that can change a paragraph's block shape when a
@@ -2099,7 +2112,7 @@ function escapeMarkdownText(value: string, table = false): string {
   // thematic breaks, directives, and setext headings). Escaping is valid in
   // all inline contexts and keeps parse(serialize(doc)) structurally stable.
   const markdownPunctuation = "`*_[]<>#-+.!~$:=&()";
-  let lineStart = true;
+  let lineStart = initialLineStart;
   for (const character of result) {
     if (lineStart && character === " ") {
       // Three leading spaces are indentation in Markdown. Numeric entities
@@ -2147,9 +2160,14 @@ function escapeLinkDestination(value: unknown, table = false): string {
   return escaped;
 }
 
-function serializeInlineMarked(node: PMNode, table: boolean): string {
+function serializeInlineMarked(
+  node: PMNode,
+  table: boolean,
+  ignoredLink?: Mark,
+): string {
   const children = childrenOf(node);
   let output = "";
+  let lineStart = true;
   let active: Mark[] = [];
   const delimiter = (mark: Mark): string => {
     if (mark.type.name === "strong") return "**";
@@ -2183,13 +2201,42 @@ function serializeInlineMarked(node: PMNode, table: boolean): string {
       common += 1;
     for (let index = active.length - 1; index >= common; index -= 1)
       output += delimiter(active[index]!);
+    if (active.length !== common) lineStart = false;
     active = active.slice(0, common);
     for (let index = common; index < target.length; index += 1) {
       output += delimiter(target[index]!);
+      if (delimiter(target[index]!)) lineStart = false;
       active.push(target[index]!);
     }
   };
-  for (const child of children) {
+  for (let index = 0; index < children.length; index += 1) {
+    const child = children[index]!;
+    const childLink = child.marks.find((mark) => mark.type.name === "link");
+    if (childLink && !ignoredLink?.eq(childLink)) {
+      let end = index + 1;
+      while (end < children.length) {
+        const nextLink = children[end]!.marks.find(
+          (mark) => mark.type.name === "link",
+        );
+        if (!nextLink || !nextLink.eq(childLink)) break;
+        end += 1;
+      }
+      if (end > index + 1) {
+        closeTo([]);
+        const inner = serializeInlineMarked(
+          node.copy(Fragment.fromArray(children.slice(index, end))),
+          table,
+          childLink,
+        );
+        const title = childLink.attrs.title
+          ? ` "${String(childLink.attrs.title).replace(/"/g, '\\"')}"`
+          : "";
+        output += `[${inner}](${escapeLinkDestination(childLink.attrs.href, table)}${title})`;
+        lineStart = false;
+        index = end - 1;
+        continue;
+      }
+    }
     if (child.isText) {
       const targetMarks = regularMarks(child);
       let value = child.text ?? "";
@@ -2203,7 +2250,8 @@ function serializeInlineMarked(node: PMNode, table: boolean): string {
         active.some((mark, index) => !mark.eq(targetMarks[index]!));
       if (leadingBreaks && marksChange) {
         closeTo([]);
-        output += escapeMarkdownText(leadingBreaks, table);
+        output += escapeMarkdownText(leadingBreaks, table, lineStart);
+        lineStart = leadingBreaks.endsWith("\n");
         value = value.slice(leadingBreaks.length);
       }
       if (!value) {
@@ -2214,8 +2262,10 @@ function serializeInlineMarked(node: PMNode, table: boolean): string {
       const code = child.marks.some((mark) => mark.type.name === "code");
       let text = code
         ? serializeCodeSpan(value, table)
-        : escapeMarkdownText(value, table);
-      const link = child.marks.find((mark) => mark.type.name === "link");
+        : escapeMarkdownText(value, table, lineStart);
+      const link = child.marks.find(
+        (mark) => mark.type.name === "link" && !ignoredLink?.eq(mark),
+      );
       if (link) {
         const title = link.attrs.title
           ? ` "${String(link.attrs.title).replace(/"/g, '\\"')}"`
@@ -2223,10 +2273,14 @@ function serializeInlineMarked(node: PMNode, table: boolean): string {
         text = `[${text}](${escapeLinkDestination(link.attrs.href, table)}${title})`;
       }
       output += text;
+      lineStart = value.endsWith("\n");
     } else {
-      closeTo([]);
-      if (child.type.name === "hard_break") output += "<br>";
-      else if (child.type.name === "image") {
+      if (child.type.name === "hard_break") {
+        closeTo([]);
+        output += "<br>";
+        lineStart = false;
+      } else if (child.type.name === "image") {
+        closeTo([]);
         const alt = String(child.attrs.alt ?? "").replace(/[[\]]/g, "\\$&");
         const title = child.attrs.title
           ? ` "${String(child.attrs.title).replace(/"/g, '\\"')}"`
@@ -2238,10 +2292,13 @@ function serializeInlineMarked(node: PMNode, table: boolean): string {
             ? `{${width ? `width=${width}` : ""}${width && height ? " " : ""}${height ? `height=${height}` : ""}}`
             : "";
         const image = `![${alt}](${escapeLinkDestination(child.attrs.src, table)}${title})${dimensions}`;
-        const link = child.marks.find((mark) => mark.type.name === "link");
+        const link = child.marks.find(
+          (mark) => mark.type.name === "link" && !ignoredLink?.eq(mark),
+        );
         output += link
           ? `[${image}](${escapeLinkDestination(link.attrs.href, table)}${link.attrs.title ? ` "${String(link.attrs.title).replace(/"/g, '\\"')}"` : ""})`
           : image;
+        lineStart = false;
       } else if (child.type.name === "raw_inline") {
         let raw = String(child.attrs.source ?? "");
         const code = child.marks.some((mark) => mark.type.name === "code");
@@ -2252,21 +2309,10 @@ function serializeInlineMarked(node: PMNode, table: boolean): string {
             mark.type.name === "em" ||
             mark.type.name === "strike",
         );
-        for (
-          let markIndex = regular.length - 1;
-          markIndex >= 0;
-          markIndex -= 1
-        ) {
-          const mark = regular[markIndex]!;
-          const delimiter =
-            mark.type.name === "strong"
-              ? "**"
-              : mark.type.name === "em"
-                ? "*"
-                : "~~";
-          raw = delimiter + raw + delimiter;
-        }
-        const link = child.marks.find((mark) => mark.type.name === "link");
+        const link = child.marks.find(
+          (mark) => mark.type.name === "link" && !ignoredLink?.eq(mark),
+        );
+        closeTo(link ? [] : regular);
         if (link) {
           const title = link.attrs.title
             ? ` "${String(link.attrs.title).replace(/"/g, '\\"')}"`
@@ -2274,7 +2320,12 @@ function serializeInlineMarked(node: PMNode, table: boolean): string {
           raw = `[${raw}](${escapeLinkDestination(link.attrs.href, table)}${title})`;
         }
         output += raw;
-      } else output += serializeInlineMarked(child, table);
+        if (raw) lineStart = raw.endsWith("\n");
+      } else {
+        closeTo([]);
+        output += serializeInlineMarked(child, table);
+        if (output) lineStart = output.endsWith("\n");
+      }
     }
   }
   closeTo([]);
@@ -2782,6 +2833,85 @@ function normalisedRaw(node: PMNode): string {
   return "";
 }
 
+interface RawInlineSourceChange {
+  oldSource: string;
+  newSource: string;
+}
+
+function sameMarks(left: PMNode, right: PMNode): boolean {
+  return (
+    left.marks.length === right.marks.length &&
+    left.marks.every((mark, index) => mark.eq(right.marks[index]!))
+  );
+}
+
+/** Find a single raw-inline source edit without matching identical text. */
+function rawInlineSourceChange(
+  previous: PMNode,
+  current: PMNode,
+  changes: RawInlineSourceChange[] = [],
+): RawInlineSourceChange | null | undefined {
+  if (previous.type !== current.type || !sameMarks(previous, current))
+    return null;
+  if (previous.type.name === "raw_inline") {
+    if (String(previous.attrs.kind ?? "") !== String(current.attrs.kind ?? ""))
+      return null;
+    const oldSource = String(previous.attrs.source ?? "");
+    const newSource = String(current.attrs.source ?? "");
+    if (oldSource !== newSource) changes.push({ oldSource, newSource });
+    return changes.length <= 1 ? changes[0] : null;
+  }
+  if (previous.isText || current.isText)
+    return previous.eq(current) ? changes[0] : null;
+  if (
+    !previous.sameMarkup(current) ||
+    previous.childCount !== current.childCount
+  )
+    return null;
+  for (let index = 0; index < previous.childCount; index += 1) {
+    const change = rawInlineSourceChange(
+      previous.child(index),
+      current.child(index),
+      changes,
+    );
+    if (change === null) return null;
+  }
+  return changes.length <= 1 ? changes[0] : null;
+}
+
+/** Preserve all surrounding paragraph bytes for a sole inline raw edit. */
+function preserveRawInlineSourceSlice(
+  currentNode: PMNode,
+  previous: MarkdownSnapshot,
+  previousBlock: MarkdownBlockSnapshot,
+): string | null {
+  if (previousBlock.node.type.name !== "paragraph") return null;
+  const change = rawInlineSourceChange(previousBlock.node, currentNode);
+  if (!change || !change.oldSource || change.oldSource === change.newSource)
+    return null;
+  const occurrences: number[] = [];
+  let searchFrom = 0;
+  while (occurrences.length < 64) {
+    const occurrence = previousBlock.source.indexOf(
+      change.oldSource,
+      searchFrom,
+    );
+    if (occurrence < 0) break;
+    occurrences.push(occurrence);
+    searchFrom = occurrence + Math.max(1, change.oldSource.length);
+  }
+  for (const occurrence of occurrences) {
+    const candidate =
+      previousBlock.source.slice(0, occurrence) +
+      change.newSource +
+      previousBlock.source.slice(occurrence + change.oldSource.length);
+    const candidateNode = parseMarkdown(candidate, previous.profile ?? "github")
+      .doc.firstChild;
+    if (candidateNode?.eq(currentNode)) return candidate;
+  }
+  return null;
+}
+
 /**
  * Serialize a ProseMirror document. If a snapshot is supplied, exact source
  * slices are reused for unchanged top-level nodes, including their line
@@ -2896,6 +3026,17 @@ export function serializeMarkdown(
 
     const samePosition = blocks[index];
     const insertion = !samePosition || nextMatchedPrevious[index] === index;
+    if (previous && !insertion && samePosition) {
+      const preservedInline = preserveRawInlineSourceSlice(
+        node,
+        previous,
+        samePosition,
+      );
+      if (preservedInline) {
+        output += preservedInline;
+        continue;
+      }
+    }
     const codeInfoSource =
       !insertion && samePosition && codeInfoOnlySource(node, samePosition);
     if (codeInfoSource) {

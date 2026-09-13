@@ -1003,6 +1003,32 @@ A second case enables Code line wrapping and verifies three visual rows remain
 native interior movement. The focused run passed in Chromium; native VS Code
 zoom, font loading, and operating-system IME candidate UI remain manual checks.
 
+## Unreleased Math rendered-atom editing
+
+- The shared `MATH_FENCE_LANGUAGES` set and `isMathFenceLanguage(info)` helper
+  keep parser, renderer, and source-editor recognition aligned for `math`,
+  `latex`, `tex`, and `asciimath`, including case-insensitive info strings and
+  additional metadata. Existing fence marker, length, alias casing, metadata,
+  indentation, line endings, closing spacing, and embedded-fence safety remain
+  source-preserving.
+- Inline `$...$`, display `$$...$$` (including compact, multiline, CRLF, CR,
+  and up-to-three-space indented forms), and all four Math fence aliases use the
+  existing Edit Math dialog. Inline Math remains an atomic `NodeSelection` with
+  `tabIndex=-1`; Enter/Space on a selected atom and programmatic activation are
+  available without adding every inline expression to normal Tab order.
+- Single clicks only select Math, while double clicks on the Math atom open the
+  dialog. Ordinary text double clicks remain native, interactive descendants are
+  excluded, surrounding marks and links are retained, escaped dollars remain
+  intact, and stale targets keep their draft without applying it to a different
+  node. Mermaid, Code, Details, block-boundary navigation, synchronization, and
+  recovery paths retain their existing behavior.
+- Table-driven unit coverage checks alias/parser/editor alignment, mixed-case
+  metadata, fence and display source matrices, inline marks/links/escaped
+  dollars, multiple and identical expressions, keyboard activation, and stale
+  drafts. Chromium coverage exercises one document containing inline Math,
+  display Math, and all four fenced aliases through single click, double click,
+  Cancel, Update, body checks, and wrapper checks.
+
 ## Explicit limits
 
 Paste/drop image asset copying is optional follow-up work. Native IME and visual
