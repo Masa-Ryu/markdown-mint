@@ -982,6 +982,7 @@ The 0.0.5 and earlier evidence above remains historical.
   verified package is `markdown-mint-0.0.41.vsix` with 96 files. The repository
   format check still reports the pre-existing warning in
   `tests/browser/block-editing.test.mjs`, which is outside this change.
+
 ## 0.0.41 native Code vertical movement
 
 The editor owns only the transition out of a textblock. For a collapsed,
