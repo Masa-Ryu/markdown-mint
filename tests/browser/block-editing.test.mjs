@@ -596,8 +596,16 @@ async function testHorizontalNavigation(page) {
     paragraphText:
       window.markdownMint.view.state.selection.$from.parent.textContent,
   }));
-  assert.equal(slashState.popupHidden, false, "boundary slash did not open Insert block");
-  assert.equal(slashState.paragraphText, "", "slash popup changed paragraph text");
+  assert.equal(
+    slashState.popupHidden,
+    false,
+    "boundary slash did not open Insert block",
+  );
+  assert.equal(
+    slashState.paragraphText,
+    "",
+    "slash popup changed paragraph text",
+  );
   await page.keyboard.press("Escape");
   await expectSource(page, blocks("Before", fence("ts", "code"), "/", "After"));
 }
@@ -725,6 +733,239 @@ async function testExpandedCodeVerticalNavigation(page) {
   await page.screenshot({ path: resolve(output, "expanded-code-caret.png") });
   await noEdits(page, before, "expanded code row navigation and boundaries");
   await page.keyboard.press("Escape");
+}
+
+async function testCodeVerticalNavigation(page) {
+  const lines = [
+    "function greet(name) {",
+    "  console.log(`Hello, ${name}!`);",
+    "}",
+    "",
+    'greet("Markdown");',
+  ];
+  const body = lines.join("\n");
+  const source = blocks("Before", fence("javascript", body), "After");
+  const viewports = [
+    { width: 760, height: 180 },
+    { width: 520, height: 190 },
+  ];
+  const startColumn = 4;
+  const starts = [];
+  let offset = 0;
+  for (const line of lines) {
+    starts.push(offset);
+    offset += line.length + 1;
+  }
+  const expectedDown = [
+    starts[1] + startColumn,
+    starts[2] + Math.min(startColumn, lines[2].length),
+    starts[3],
+    starts[4] + startColumn,
+  ];
+
+  for (let iteration = 0; iteration < 20; iteration += 1) {
+    await page.setViewportSize(viewports[iteration % viewports.length]);
+    await load(page, source);
+    const before = await saved(page);
+    await caret(page, ".mm-code-block-pre code", startColumn);
+    await page.evaluate(() => {
+      const dom = window.markdownMint.view.dom;
+      window.__markdownMintVerticalKeys = [];
+      dom.addEventListener("keydown", (event) => {
+        if (event.key === "ArrowUp" || event.key === "ArrowDown")
+          window.__markdownMintVerticalKeys.push({
+            key: event.key,
+            defaultPrevented: event.defaultPrevented,
+          });
+      });
+    });
+    let state = await selection(page);
+    assert.equal(state.parent, "code_block");
+    assert.equal(state.offset, startColumn);
+
+    const initialScrollTop = await page.evaluate(
+      () => document.querySelector(".mm-stage")?.scrollTop ?? 0,
+    );
+    const codeScrollPositions = [];
+    for (const expected of expectedDown) {
+      await page.keyboard.press("ArrowDown");
+      await settle(page);
+      state = await selection(page);
+      assert.equal(state.parent, "code_block");
+      assert.equal(state.offset, expected);
+      const layout = await page.evaluate(() => {
+        const stage = document.querySelector(".mm-stage");
+        const view = window.markdownMint.view;
+        const rect = view.coordsAtPos(view.state.selection.head);
+        const stageRect = stage?.getBoundingClientRect();
+        return {
+          top: rect.top,
+          bottom: rect.bottom,
+          stageTop: stageRect?.top ?? 0,
+          stageBottom: stageRect?.bottom ?? 0,
+          scrollTop: stage?.scrollTop ?? 0,
+        };
+      });
+      codeScrollPositions.push(layout.scrollTop);
+      assert.ok(
+        layout.top >= layout.stageTop - 2 &&
+          layout.bottom <= layout.stageBottom + 2,
+        "native ArrowDown did not keep the caret in the viewport",
+      );
+    }
+    assert.ok(
+      (
+        await page.evaluate(
+          () => window.markdownMint.view.state.selection.constructor.name,
+        )
+      ).includes("TextSelection"),
+      "the final code row was not reached before the boundary",
+    );
+    const downEvents = await page.evaluate(
+      () => window.__markdownMintVerticalKeys,
+    );
+    assert.deepEqual(
+      downEvents.map((event) => event.defaultPrevented),
+      [false, false, false, false],
+      "interior code rows were intercepted instead of using native movement",
+    );
+    const afterCodeScroll = await page.evaluate(
+      () => document.querySelector(".mm-stage")?.scrollTop ?? 0,
+    );
+    assert.ok(
+      Math.max(...codeScrollPositions, afterCodeScroll) > initialScrollTop,
+      `moving to a later code row did not scroll the stage (${initialScrollTop} -> ${codeScrollPositions.join(",")} -> ${afterCodeScroll})`,
+    );
+
+    await page.keyboard.press("ArrowDown");
+    await expectBoundary(page, "last code row -> boundary");
+    const boundaryEvent = await page.evaluate(() =>
+      window.__markdownMintVerticalKeys.at(-1),
+    );
+    assert.deepEqual(boundaryEvent, {
+      key: "ArrowDown",
+      defaultPrevented: true,
+    });
+    await page.keyboard.press("ArrowDown");
+    state = await selection(page);
+    assert.equal(state.parent, "paragraph");
+    assert.equal(state.text, "After");
+
+    await page.keyboard.press("ArrowUp");
+    await expectBoundary(page, "After -> code boundary");
+    await page.keyboard.press("ArrowUp");
+    state = await selection(page);
+    assert.equal(state.parent, "code_block");
+    assert.equal(state.offset, expectedDown[3]);
+    for (const expected of [
+      starts[3],
+      starts[2] + Math.min(startColumn, lines[2].length),
+      starts[1] + startColumn,
+      startColumn,
+    ]) {
+      await page.keyboard.press("ArrowUp");
+      await settle(page);
+      state = await selection(page);
+      assert.equal(state.parent, "code_block");
+      assert.equal(state.offset, expected);
+    }
+    await page.keyboard.press("ArrowUp");
+    await expectBoundary(page, "first code row -> boundary");
+    const upEvents = await page.evaluate(() =>
+      window.__markdownMintVerticalKeys
+        .filter((event) => event.key === "ArrowUp")
+        .map((event) => event.defaultPrevented),
+    );
+    assert.deepEqual(
+      upEvents,
+      [true, true, false, false, false, false, true],
+      "interior code rows were intercepted on reverse native movement",
+    );
+    await noEdits(
+      page,
+      before,
+      `native code vertical movement iteration ${iteration + 1}`,
+    );
+  }
+
+  // A wrapped logical line must expose every visual row to the browser. The
+  // logical end is a block edge only after the final wrapped row is reached.
+  await page.setViewportSize({ width: 420, height: 420 });
+  const wrappedLine =
+    "const message = `This deliberately long JavaScript line keeps moving " +
+    "through wrapped visual rows while preserving the desired column`;";
+  const wrappedSource = blocks(
+    "Before",
+    fence("javascript", wrappedLine),
+    "After",
+  );
+  await load(page, wrappedSource);
+  const wrappedBefore = await saved(page);
+  const wrappedBlock = page.locator(".mm-code-block").first();
+  await wrappedBlock.locator('[data-mm-code-action="more"]').click();
+  await wrappedBlock.locator('[data-mm-code-menu-option="wrap"]').click();
+  await settle(page);
+  const wrappedRows = await page.evaluate(() => {
+    const code = document.querySelector(".mm-code-block-pre code");
+    if (!code) return 0;
+    const range = document.createRange();
+    range.selectNodeContents(code);
+    return new Set(
+      Array.from(range.getClientRects()).map((rect) => Math.round(rect.top)),
+    ).size;
+  });
+  assert.ok(
+    wrappedRows >= 3,
+    `wrapped fixture has only ${wrappedRows} visual rows`,
+  );
+  await caret(page, ".mm-code-block-pre code", 5);
+  await page.evaluate(() => {
+    const dom = window.markdownMint.view.dom;
+    window.__markdownMintVerticalKeys = [];
+    dom.addEventListener("keydown", (event) => {
+      if (event.key === "ArrowUp" || event.key === "ArrowDown")
+        window.__markdownMintVerticalKeys.push({
+          key: event.key,
+          defaultPrevented: event.defaultPrevented,
+        });
+    });
+  });
+  let wrappedState = await selection(page);
+  let previousOffset = wrappedState.offset;
+  let previousTop = await page.evaluate(() => {
+    const view = window.markdownMint.view;
+    return view.coordsAtPos(view.state.selection.head).top;
+  });
+  for (let row = 0; row < 3; row += 1) {
+    await page.keyboard.press("ArrowDown");
+    await settle(page);
+    wrappedState = await selection(page);
+    assert.equal(wrappedState.parent, "code_block");
+    assert.ok(
+      wrappedState.offset > previousOffset,
+      "wrapped ArrowDown did not advance within the logical line",
+    );
+    const currentTop = await page.evaluate(() => {
+      const view = window.markdownMint.view;
+      return view.coordsAtPos(view.state.selection.head).top;
+    });
+    assert.ok(
+      currentTop > previousTop + 1,
+      "wrapped ArrowDown stayed on the same visual row",
+    );
+    previousOffset = wrappedState.offset;
+    previousTop = currentTop;
+  }
+  const wrappedEvents = await page.evaluate(
+    () => window.__markdownMintVerticalKeys,
+  );
+  assert.deepEqual(
+    wrappedEvents.map((event) => event.defaultPrevented),
+    [false, false, false],
+    "wrapped interior rows were intercepted instead of using native movement",
+  );
+  await noEdits(page, wrappedBefore, "wrapped code interior movement");
+  await page.setViewportSize({ width: 960, height: 900 });
 }
 
 async function testSelectionAndModifiers(page) {
@@ -1461,6 +1702,7 @@ async function main() {
       testAlertConflict,
       testHorizontalNavigation,
       testWrappedVerticalNavigation,
+      testCodeVerticalNavigation,
       testExpandedCodeVerticalNavigation,
       testSelectionAndModifiers,
       testVerticalGoalAndEmptyEdges,

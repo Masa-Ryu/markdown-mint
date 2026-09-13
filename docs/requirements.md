@@ -921,6 +921,26 @@ The 0.0.5 and earlier evidence above remains historical.
   blocks, table edges, modifiers, composition setup, source/host/dirty/history
   invariants, paragraph and slash insertion, and all five display fixtures.
 
+## 0.0.41 native Code vertical movement
+
+The editor owns only the transition out of a textblock. For a collapsed,
+unmodified ArrowUp or ArrowDown, `EditorView.endOfTextblock()` remains the
+boundary decision. When it reports an interior displayed row, the webview
+returns `false` without calling `preventDefault()`, allowing the browser and
+ProseMirror DOM selection to retain native visual-row, syntax-highlight span,
+wrapping, and scroll behavior. At the first or last row, the existing
+`BlockBoundarySelection` path runs and reuses the captured desired X column for
+the adjacent block. Alert textareas and table keymaps keep their separate
+native/navigation handlers.
+
+The browser regression uses the JavaScript `greet` fixture from a 180–190px
+viewport, measures each code-block selection offset and caret visibility while
+the stage scrolls, walks through a blank line in both directions, verifies the
+virtual boundary, and repeats the sequence 20 times at two viewport widths.
+A second case enables Code line wrapping and verifies three visual rows remain
+native interior movement. The focused run passed in Chromium; native VS Code
+zoom, font loading, and operating-system IME candidate UI remain manual checks.
+
 ## Explicit limits
 
 Paste/drop image asset copying is optional follow-up work. Native IME and visual
