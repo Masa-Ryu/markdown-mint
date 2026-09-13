@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.0.48
+
+- Keep the Code language picker idle on open: the search input receives focus,
+  no candidate is active, and only the configured language is selected.
+- Track keyboard and pointer modality separately so Arrow/search navigation
+  exposes one active candidate while pointer movement restores hover feedback.
+  Empty Enter no longer removes a language implicitly.
+
 ## 0.0.47
 
 - Apply authoritative terminal whitespace changes to the Rich document instead

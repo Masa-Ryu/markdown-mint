@@ -172,7 +172,42 @@ async function testCodeHeader(page) {
   await page.locator(".mm-code-language-trigger").click();
   await page.locator(".mm-code-language-menu:not([hidden])").waitFor();
   const input = page.locator(".mm-code-language-inline");
+  const menu = page.locator(".mm-code-language-menu:not([hidden])");
+  assert.equal(
+    await input.evaluate((element) => document.activeElement === element),
+    true,
+    "language picker did not focus its search input",
+  );
+  assert.equal(await menu.getAttribute("data-input-modality"), "pointer");
+  assert.equal(await input.getAttribute("aria-activedescendant"), null);
+  assert.equal(await menu.locator(".is-active").count(), 0);
+  assert.equal(
+    await menu
+      .locator('[data-mm-language-option="ts"]')
+      .getAttribute("aria-selected"),
+    "true",
+  );
+  assert.equal(
+    await menu
+      .locator('[data-mm-language-option=""]')
+      .getAttribute("aria-selected"),
+    "false",
+  );
   await input.fill("javascript");
+  assert.equal(await menu.getAttribute("data-input-modality"), "keyboard");
+  assert.equal(await menu.locator(".is-active").count(), 1);
+  assert.equal(
+    await input.getAttribute("aria-activedescendant"),
+    await menu.locator(".is-active").getAttribute("id"),
+  );
+  await menu.locator(".mm-code-language-option").first().hover();
+  assert.equal(await menu.getAttribute("data-input-modality"), "pointer");
+  assert.equal(await menu.locator(".is-active").count(), 0);
+  assert.equal(await input.getAttribute("aria-activedescendant"), null);
+  await input.fill("");
+  await input.press("Enter");
+  await noEdits(page, before, "empty language enter");
+  await page.locator(".mm-code-language-trigger").click();
   await page.keyboard.press("ArrowDown");
   assert.equal(
     await input.evaluate((element) => document.activeElement === element),

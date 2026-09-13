@@ -272,6 +272,8 @@ interface TransientBlankTransactionMeta {
 
 type WritingPopupCloseReason = "discard" | "consume" | "cancel";
 
+type LanguageInputModality = "pointer" | "keyboard";
+
 interface SlashTrigger {
   selection: Selection;
   documentGeneration: number;
@@ -1127,6 +1129,7 @@ class CodeBlockNodeView {
   private languageRemovalDialog: HTMLDialogElement | null = null;
   private languagePickerOpen = false;
   private languageActiveIndex = -1;
+  private languageInputModality: LanguageInputModality = "pointer";
   private languageQuery = "";
   private destroyed = false;
   private languageStartInfo: string | null = null;
@@ -1249,7 +1252,9 @@ class CodeBlockNodeView {
       if (!this.languagePickerOpen) this.openLanguagePicker();
     });
     this.languageInput.addEventListener("input", () => {
+      this.setLanguageInputModality("keyboard");
       this.languageQuery = this.languageInput.value;
+      this.languageActiveIndex = this.languageQuery.trim() ? 0 : -1;
       this.renderLanguageOptions();
     });
     this.languageInput.addEventListener("keydown", (event) =>
@@ -1261,6 +1266,12 @@ class CodeBlockNodeView {
     this.languageInput.addEventListener("compositionend", () => {
       this.languageComposing = false;
       this.languageCompositionEndedAt = Date.now();
+    });
+    this.languageMenu.addEventListener("pointermove", () => {
+      this.setLanguageInputModality("pointer");
+    });
+    this.languageMenu.addEventListener("pointerdown", () => {
+      this.setLanguageInputModality("pointer");
     });
     this.languageMenu.addEventListener("click", (event) => {
       const target = event.target;
@@ -1380,7 +1391,8 @@ class CodeBlockNodeView {
       position === undefined ? null : this.view.state.doc.nodeAt(position);
     this.languagePickerOpen = true;
     this.languageQuery = "";
-    this.languageActiveIndex = 0;
+    this.languageActiveIndex = -1;
+    this.setLanguageInputModality("pointer");
     this.languageInput.value = "";
     this.languageMenu.hidden = false;
     const control = this.languageTrigger.parentElement;
@@ -1407,7 +1419,9 @@ class CodeBlockNodeView {
     this.languagePickerOpen = false;
     this.languageQuery = "";
     this.languageActiveIndex = -1;
+    this.setLanguageInputModality("pointer");
     this.languageMenu.hidden = true;
+    this.languageMenu.removeAttribute("data-input-modality");
     this.languageTrigger.setAttribute("aria-expanded", "false");
     this.languageInput.setAttribute("aria-expanded", "false");
     const position = this.positionOf();
@@ -1556,11 +1570,12 @@ class CodeBlockNodeView {
     const buttons = list.querySelectorAll<HTMLButtonElement>(
       "[data-mm-language-option]",
     );
-    if (buttons.length === 0) this.languageActiveIndex = -1;
+    if (buttons.length === 0 || this.languageActiveIndex < 0)
+      this.languageActiveIndex = -1;
     else
-      this.languageActiveIndex = Math.max(
-        0,
-        Math.min(this.languageActiveIndex, buttons.length - 1),
+      this.languageActiveIndex = Math.min(
+        this.languageActiveIndex,
+        buttons.length - 1,
       );
     buttons.forEach((button, index) => {
       const id = `${this.languageMenu.id}-option-${index}`;
@@ -1604,6 +1619,7 @@ class CodeBlockNodeView {
     );
     if (event.key === "ArrowDown") {
       event.preventDefault();
+      this.setLanguageInputModality("keyboard");
       this.languageActiveIndex = Math.min(
         buttons.length - 1,
         this.languageActiveIndex + 1,
@@ -1611,11 +1627,16 @@ class CodeBlockNodeView {
       this.renderLanguageOptions();
     } else if (event.key === "ArrowUp") {
       event.preventDefault();
+      this.setLanguageInputModality("keyboard");
       this.languageActiveIndex = Math.max(0, this.languageActiveIndex - 1);
       this.renderLanguageOptions();
     } else if (event.key === "Enter") {
       event.preventDefault();
       const active = buttons[this.languageActiveIndex];
+      if (!active && !this.languageInput.value.trim()) {
+        this.closeLanguagePicker(true);
+        return;
+      }
       this.commitLanguageInput(active?.dataset.mmLanguageOption);
     } else if (event.key === "Escape") {
       event.preventDefault();
@@ -1623,6 +1644,17 @@ class CodeBlockNodeView {
     } else if (event.key === "Tab") {
       this.closeLanguagePicker(false);
     }
+  }
+
+  private setLanguageInputModality(modality: LanguageInputModality): void {
+    this.languageInputModality = modality;
+    this.languageMenu.dataset.inputModality = modality;
+    if (modality !== "pointer") return;
+    this.languageActiveIndex = -1;
+    this.languageMenu
+      .querySelectorAll<HTMLElement>(".mm-code-language-option.is-active")
+      .forEach((option) => option.classList.remove("is-active"));
+    this.languageInput.removeAttribute("aria-activedescendant");
   }
 
   private updateLanguagePresentation(language: string): void {
