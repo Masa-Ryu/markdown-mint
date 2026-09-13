@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { DOMSerializer, type Node as PMNode } from "prosemirror-model";
+import { EditorState } from "prosemirror-state";
 import {
   formatMarkdown,
   inspectCompatibility,
@@ -28,6 +29,31 @@ function childrenOf(node: PMNode): PMNode[] {
   const children: PMNode[] = [];
   node.forEach((child) => children.push(child));
   return children;
+}
+
+function replaceText(doc: PMNode, value: string, replacement: string): PMNode {
+  let from = -1;
+  let marks: PMNode["marks"] = [];
+  doc.descendants((node, position) => {
+    if (!node.isText || from >= 0 || !node.text?.includes(value)) return;
+    from = position + node.text.indexOf(value);
+    marks = node.marks;
+  });
+  if (from < 0) throw new Error(`Text not found: ${value}`);
+  return EditorState.create({ schema, doc }).tr.replaceWith(
+    from,
+    from + value.length,
+    schema.text(replacement, marks),
+  ).doc;
+}
+
+function mathAtoms(doc: PMNode): PMNode[] {
+  const atoms: PMNode[] = [];
+  doc.descendants((node) => {
+    if (node.type.name === "raw_inline" && node.attrs.kind === "math_inline")
+      atoms.push(node);
+  });
+  return atoms;
 }
 
 describe("Markdown core", () => {
@@ -117,6 +143,138 @@ describe("Markdown core", () => {
     ]);
     const serialized = serializeMarkdown(document);
     expect(parseMarkdown(serialized).doc.eq(document)).toBe(true);
+  });
+
+  it.each([
+    {
+      label: "strong",
+      source: "Before **[$x$](https://example.com)** After",
+      regularMarks: ["strong"],
+      title: null,
+      expected: "Changed **[$x$](https://example.com)** After",
+    },
+    {
+      label: "em",
+      source: "Before *[$x$](https://example.com)* After",
+      regularMarks: ["em"],
+      title: null,
+      expected: "Changed *[$x$](https://example.com)* After",
+    },
+    {
+      label: "strike",
+      source: "Before ~~[$x$](https://example.com)~~ After",
+      regularMarks: ["strike"],
+      title: null,
+      expected: "Changed ~~[$x$](https://example.com)~~ After",
+    },
+    {
+      label: "strong and em",
+      source: "Before ***[$x$](https://example.com)*** After",
+      regularMarks: ["strong", "em"],
+      title: null,
+      expected: "Changed ***[$x$](https://example.com)*** After",
+    },
+    {
+      label: "strong and strike",
+      source: "Before **~~[$x$](https://example.com)~~** After",
+      regularMarks: ["strong", "strike"],
+      title: null,
+      expected: "Changed **~~[$x$](https://example.com)~~** After",
+    },
+    {
+      label: "link title",
+      source: 'Before **[$x$](https://example.com "Math")** After',
+      regularMarks: ["strong"],
+      title: "Math",
+      expected: 'Changed **[$x$](https://example.com "Math")** After',
+    },
+  ] as const)(
+    "retains $label around a single-child linked inline Math atom",
+    ({ source, regularMarks, title, expected }) => {
+      const snapshot = parseMarkdown(source);
+      const edited = replaceText(snapshot.doc, "Before", "Changed");
+      const serialized = serializeMarkdown(edited);
+      const reparsed = parseMarkdown(serialized).doc;
+      const [math] = mathAtoms(reparsed);
+
+      expect(serialized).toBe(expected);
+      expect(reparsed.eq(edited)).toBe(true);
+      expect(math).toBeDefined();
+      expect(math!.attrs.source).toBe("$x$");
+      expect(math!.marks.map((mark) => mark.type.name).sort()).toEqual(
+        [...regularMarks, "link"].sort(),
+      );
+      const link = math!.marks.find((mark) => mark.type.name === "link")!;
+      expect(link.attrs.href).toBe("https://example.com");
+      expect(link.attrs.title).toBe(title);
+    },
+  );
+
+  it("retains both linked Math atoms and their destinations after a generic edit", () => {
+    const source =
+      "Before **[$x$](https://a.example)** middle **[$x$](https://b.example)** After";
+    const snapshot = parseMarkdown(source);
+    const edited = replaceText(snapshot.doc, "Before", "Changed");
+    const serialized = serializeMarkdown(edited);
+    const reparsed = parseMarkdown(serialized).doc;
+    const atoms = mathAtoms(reparsed);
+
+    expect(reparsed.eq(edited)).toBe(true);
+    expect(atoms).toHaveLength(2);
+    expect(
+      atoms.map(
+        (node) =>
+          node.marks.find((mark) => mark.type.name === "link")?.attrs.href,
+      ),
+    ).toEqual(["https://a.example", "https://b.example"]);
+    expect(
+      atoms.every((node) =>
+        node.marks.some((mark) => mark.type.name === "strong"),
+      ),
+    ).toBe(true);
+  });
+
+  it.each([
+    "**Before [$x$](https://example.com) After**",
+    "[Before **$x$** After](https://example.com)",
+    "[Before $x$ After](https://example.com)",
+  ])("retains surrounding marks and links for %s", (source) => {
+    const snapshot = parseMarkdown(source);
+    const edited = replaceText(snapshot.doc, "Before", "Changed");
+    const serialized = serializeMarkdown(edited);
+
+    expect(parseMarkdown(serialized).doc.eq(edited)).toBe(true);
+  });
+
+  it("uses the original source slice when only linked inline Math changes", () => {
+    const source = "Before **[$x$](https://example.com)** After";
+    const snapshot = parseMarkdown(source);
+    const state = EditorState.create({ schema, doc: snapshot.doc });
+    let position = -1;
+    state.doc.descendants((node, currentPosition) => {
+      if (position < 0 && node.type.name === "raw_inline")
+        position = currentPosition;
+    });
+    const math = state.doc.nodeAt(position)!;
+    const transaction = state.tr.setNodeMarkup(position, undefined, {
+      ...math.attrs,
+      source: "$y$",
+    });
+
+    expect(serializeMarkdown(transaction.doc, snapshot)).toBe(
+      "Before **[$y$](https://example.com)** After",
+    );
+  });
+
+  it.each([
+    "Before **[![alt](https://image.example/image.png)](https://example.com)** After",
+    "Before **[one<br>two](https://example.com)** After",
+  ])("audits linked non-text inline nodes for %s", (source) => {
+    const snapshot = parseMarkdown(source);
+    const edited = replaceText(snapshot.doc, "Before", "Changed");
+    const serialized = serializeMarkdown(edited);
+
+    expect(parseMarkdown(serialized).doc.eq(edited)).toBe(true);
   });
 
   it("renders raw HTML and unsafe destinations as inert output", () => {

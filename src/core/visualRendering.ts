@@ -4,6 +4,7 @@ import {
   renderStaticAsset,
   type StaticAssetKind,
 } from "./staticAssetRendering";
+import { isMathFenceLanguage } from "./math";
 
 export interface HighlightSpan {
   readonly from: number;
@@ -799,15 +800,7 @@ export function renderAdvancedBlock(
     lowerKind === "diagram-mermaid"
   )
     return mermaidPlaceholder(fence.body);
-  if (
-    language === "math" ||
-    language === "latex" ||
-    language === "tex" ||
-    language === "asciimath" ||
-    lowerKind === "math" ||
-    lowerKind === "latex" ||
-    lowerKind === "tex"
-  )
+  if (isMathFenceLanguage(language) || isMathFenceLanguage(lowerKind))
     return renderMath(fence.body, true);
   if (
     language === "geojson" ||

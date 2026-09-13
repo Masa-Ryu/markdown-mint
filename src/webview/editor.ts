@@ -2610,7 +2610,15 @@ export class MarkdownEditorApp {
                 { canEdit: () => this.canEditBlock() && !this.composing },
               ),
         raw_inline: (node, view, getPos) =>
-          createRenderedNodeView(node, view, getPos, () => this.profile),
+          createRenderedNodeView(
+            node,
+            view,
+            getPos,
+            () => this.profile,
+            (position, returnFocus) =>
+              this.openRenderedBlockEditor(position, returnFocus),
+            { canEdit: () => this.canEditBlock() && !this.composing },
+          ),
       },
       handleDOMEvents: {
         beforeinput: (view, event) =>
@@ -2856,6 +2864,7 @@ export class MarkdownEditorApp {
           : commandForMark("strike", this.schema)(state, dispatch),
       "Mod-`": commandForMark("code", this.schema),
       Enter: (state, dispatch) => {
+        if (this.editSelectedInlineMath(state, dispatch)) return true;
         if (this.composing) return false;
         if (state.selection instanceof BlockBoundarySelection) {
           if (dispatch) this.materializeBoundary(state.selection.head);
@@ -2866,6 +2875,7 @@ export class MarkdownEditorApp {
           ? this.moveToNextTableRow(state, context, dispatch)
           : enter(state, dispatch);
       },
+      Space: (state, dispatch) => this.editSelectedInlineMath(state, dispatch),
       "Shift-Enter": shiftEnter,
       "Mod-z": () => this.sendHostCommand("undo"),
       "Mod-y": () => this.sendHostCommand("redo"),
@@ -2983,6 +2993,30 @@ export class MarkdownEditorApp {
       this.view.dispatch(transaction),
     );
     return handled;
+  }
+
+  private editSelectedInlineMath(
+    state: EditorState,
+    dispatch?: (tr: Transaction) => void,
+  ): boolean {
+    const selection = state.selection;
+    if (
+      !(selection instanceof NodeSelection) ||
+      selection.node.type.name !== "raw_inline" ||
+      blockSourceEditor(selection.node)?.kind !== "math" ||
+      !this.canEditBlock() ||
+      this.composing ||
+      this.profileFeatureDialogOpen
+    )
+      return false;
+    if (dispatch) {
+      const dom = this.view.nodeDOM(selection.from);
+      this.openRenderedBlockEditor(
+        selection.from,
+        dom instanceof HTMLElement ? dom : undefined,
+      );
+    }
+    return true;
   }
 
   private handleInsertBlockSlash(
@@ -5085,13 +5119,17 @@ export class MarkdownEditorApp {
       const currentNode = stale
         ? null
         : this.view.state.doc.nodeAt(editTarget.position);
+      const currentSourceEditor = currentNode
+        ? blockSourceEditor(currentNode)
+        : null;
+      const currentIsAlert =
+        currentNode?.type.name === "raw_block" &&
+        String(currentNode.attrs.kind ?? "") === "alert";
       if (
         stale ||
         currentNode !== editTarget.node ||
         !currentNode ||
-        currentNode.type.name !== "raw_block" ||
-        (String(currentNode.attrs.kind ?? "") !== "alert" &&
-          !blockSourceEditor(currentNode)) ||
+        (!currentIsAlert && !currentSourceEditor) ||
         String(currentNode.attrs.source ?? "") !== editTarget.source
       ) {
         this.profileFeatureError.hidden = false;
@@ -5101,17 +5139,30 @@ export class MarkdownEditorApp {
         return;
       }
 
-      const sourceEditor = blockSourceEditor(currentNode);
+      const sourceEditor = currentSourceEditor;
       if (sourceEditor) {
         const body = this.profileFeatureBodyInput.value;
         const nextSource =
           body === sourceEditor.body
             ? editTarget.source
             : sourceEditor.replace(body);
-        // Validate the wrapper as one block; never silently split a source
-        // containing a closing math delimiter into newly inserted blocks.
+        // Validate the wrapper as one rendered source atom; never silently
+        // split a source containing a closing delimiter into new blocks/text.
         const parsed = this.core.parseMarkdown(nextSource, this.profile).doc;
-        if (parsed.childCount !== 1 || !blockSourceEditor(parsed.firstChild!)) {
+        const parsedSourceEditor =
+          currentNode.type.name === "raw_inline"
+            ? parsed.childCount === 1 &&
+              parsed.firstChild?.type.name === "paragraph" &&
+              parsed.firstChild.childCount === 1
+              ? blockSourceEditor(parsed.firstChild.firstChild!)
+              : null
+            : parsed.childCount === 1
+              ? blockSourceEditor(parsed.firstChild!)
+              : null;
+        if (
+          !parsedSourceEditor ||
+          parsedSourceEditor.kind !== sourceEditor.kind
+        ) {
           this.profileFeatureError.hidden = false;
           this.profileFeatureError.textContent =
             "The source must remain one Math or Mermaid block. Your draft has been kept.";

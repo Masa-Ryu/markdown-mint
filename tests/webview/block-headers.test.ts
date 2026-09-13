@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  isMathFenceLanguage,
   parseMarkdown,
   renderMarkdown,
   schema,
@@ -10,6 +11,7 @@ import {
   type MarkdownEditorApp,
 } from "../../src/webview/editor";
 import { blockSourceEditor } from "../../src/webview/blockSourceEditing";
+import { NodeSelection } from "prosemirror-state";
 
 const apps: MarkdownEditorApp[] = [];
 function setup(source: string) {
@@ -541,6 +543,302 @@ describe("block header actions", () => {
       .click();
     expect(serializeMarkdown(app.view.state.doc)).toBe("external replacement");
     expect(input.value).toBe("unsaved expression");
+    expect(
+      root.querySelector(".mm-profile-feature-dialog[open]"),
+    ).not.toBeNull();
+  });
+
+  it.each(["math", "latex", "tex", "asciimath"] as const)(
+    "keeps the parser and rendered source editor aligned for %s fences",
+    (language) => {
+      const source = `~~~${language} title="Pythagoras" custom=value\r\nx^2\r\n~~~\r\n`;
+      expect(isMathFenceLanguage(`${language} title="Pythagoras"`)).toBe(true);
+      const snapshot = parseMarkdown(source);
+      const node = snapshot.doc.firstChild!;
+      expect(node.type.name).toBe("raw_block");
+      expect(node.attrs.kind).toBe("math-block");
+      expect(blockSourceEditor(node)?.kind).toBe("math");
+      expect(renderMarkdown(source)).toContain('class="mm-math mm-math-block"');
+      expect(serializeMarkdown(snapshot.doc, snapshot)).toBe(source);
+      expect(blockSourceEditor(node)?.replace("y^3")).toBe(
+        source.replace("x^2", "y^3"),
+      );
+    },
+  );
+
+  it("recognizes a mixed-case Math alias without changing its source casing", () => {
+    const source = '```LaTeX title="Pythagoras" custom=value\nx^2\n```\n';
+    const snapshot = parseMarkdown(source);
+    const node = snapshot.doc.firstChild!;
+    const editor = blockSourceEditor(node)!;
+
+    expect(node.attrs.kind).toBe("math-block");
+    expect(editor.kind).toBe("math");
+    expect(editor.body).toBe("x^2");
+    expect(editor.replace("y^3")).toBe(
+      '```LaTeX title="Pythagoras" custom=value\ny^3\n```\n',
+    );
+  });
+
+  it.each([
+    ["multiline LF", "$$\nx^2\n$$\n", "x^2"],
+    ["multiline CRLF", "$$\r\nx^2\r\n$$\r\n", "x^2"],
+    ["multiline CR", "$$\rx^2\r$$\r", "x^2"],
+    ["compact one-line", "$$x^2$$", "x^2"],
+    ["indented", "   $$\n   x^2\n   $$\n", "   x^2"],
+  ] as const)(
+    "keeps display Math source editable and source-preserving: %s",
+    (_label, source, body) => {
+      const snapshot = parseMarkdown(source);
+      const node = snapshot.doc.firstChild!;
+      const editor = blockSourceEditor(node);
+
+      expect(node.type.name).toBe("raw_block");
+      expect(node.attrs.kind).toBe("math-block");
+      expect(editor?.kind).toBe("math");
+      expect(editor?.body).toBe(body);
+      expect(editor?.replace("y^3")).toBe(source.replace(body, "y^3"));
+    },
+  );
+
+  it("edits only an inline Math atom and keeps ordinary text double clicks native", () => {
+    const source = "Before $x^2$ After";
+    const { root, app, messages } = setup(source);
+    const math = root.querySelector<HTMLElement>(
+      ".mm-rendered-inline[data-mm-editable-math='true']",
+    )!;
+    expect(math).not.toBeNull();
+    expect(math.tabIndex).toBe(-1);
+    expect(math.getAttribute("role")).toBe("button");
+    expect(math.getAttribute("aria-label")).toBe("Edit Math");
+
+    const paragraph = root.querySelector("p")!;
+    paragraph.dispatchEvent(
+      new MouseEvent("dblclick", { bubbles: true, cancelable: true }),
+    );
+    expect(root.querySelector(".mm-profile-feature-dialog[open]")).toBeNull();
+
+    const click = new MouseEvent("click", {
+      bubbles: true,
+      cancelable: true,
+      detail: 1,
+    });
+    math.dispatchEvent(click);
+    expect(click.defaultPrevented).toBe(false);
+    const position = app.view.posAtDOM(math, 0);
+    app.view.dispatch(
+      app.view.state.tr.setSelection(
+        NodeSelection.create(app.view.state.doc, position),
+      ),
+    );
+    expect(app.view.state.selection.constructor.name).toBe("NodeSelection");
+    expect(root.querySelector(".mm-profile-feature-dialog[open]")).toBeNull();
+
+    math.dispatchEvent(
+      new MouseEvent("dblclick", { bubbles: true, cancelable: true }),
+    );
+    const dialog = root.querySelector<HTMLDialogElement>(
+      ".mm-profile-feature-dialog[open]",
+    )!;
+    const input = dialog.querySelector<HTMLTextAreaElement>(
+      "[data-feature-field=body]",
+    )!;
+    expect(input.value).toBe("x^2");
+    dialog
+      .querySelector<HTMLButtonElement>("button:not([type='submit'])")!
+      .click();
+    expect(serializeMarkdown(app.view.state.doc)).toBe(source);
+    expect(
+      messages.filter(
+        (message) => (message as { type: string }).type === "edit",
+      ),
+    ).toHaveLength(0);
+
+    const beforeText = paragraph.firstChild!;
+    beforeText.dispatchEvent(
+      new MouseEvent("dblclick", { bubbles: true, cancelable: true }),
+    );
+    expect(root.querySelector(".mm-profile-feature-dialog[open]")).toBeNull();
+
+    math.dispatchEvent(
+      new MouseEvent("dblclick", { bubbles: true, cancelable: true }),
+    );
+    const updateDialog = root.querySelector<HTMLDialogElement>(
+      ".mm-profile-feature-dialog[open]",
+    )!;
+    updateDialog.querySelector<HTMLTextAreaElement>(
+      "[data-feature-field=body]",
+    )!.value = "y^3";
+    updateDialog
+      .querySelector<HTMLButtonElement>("button[type=submit]")!
+      .click();
+    expect(serializeMarkdown(app.view.state.doc)).toBe("Before $y^3$ After");
+    expect(
+      messages.filter(
+        (message) => (message as { type: string }).type === "edit",
+      ),
+    ).toHaveLength(1);
+  });
+
+  it.each(["Enter", " "])(
+    "opens inline Math from a selected atom with %s",
+    (key) => {
+      const { root, app } = setup("Before $x$ After");
+      const math = root.querySelector<HTMLElement>(
+        ".mm-rendered-inline[data-mm-editable-math='true']",
+      )!;
+      math.dispatchEvent(
+        new MouseEvent("click", {
+          bubbles: true,
+          cancelable: true,
+          detail: 1,
+        }),
+      );
+      const position = app.view.posAtDOM(math, 0);
+      app.view.dispatch(
+        app.view.state.tr.setSelection(
+          NodeSelection.create(app.view.state.doc, position),
+        ),
+      );
+      expect(app.view.state.selection.constructor.name).toBe("NodeSelection");
+      app.view.focus();
+      const event = new KeyboardEvent("keydown", {
+        key,
+        bubbles: true,
+        cancelable: true,
+      });
+      app.view.dom.dispatchEvent(event);
+      expect(event.defaultPrevented).toBe(true);
+      expect(
+        root.querySelector(".mm-profile-feature-dialog[open]"),
+      ).not.toBeNull();
+    },
+  );
+
+  it.each([
+    [
+      "different expressions",
+      "Before $a$ middle $b$ After",
+      "b",
+      "c",
+      "Before $a$ middle $c$ After",
+    ],
+    [
+      "identical expressions",
+      "Before $x$ middle $x$ After",
+      "x",
+      "y",
+      "Before $x$ middle $y$ After",
+    ],
+  ] as const)(
+    "updates only the selected inline Math atom: %s",
+    (_label, source, body, replacement, expected) => {
+      const { root, app } = setup(source);
+      const math = root.querySelectorAll<HTMLElement>(
+        ".mm-rendered-inline[data-mm-editable-math='true']",
+      )[1]!;
+      math.dispatchEvent(
+        new MouseEvent("dblclick", { bubbles: true, cancelable: true }),
+      );
+      const dialog = root.querySelector<HTMLDialogElement>(
+        ".mm-profile-feature-dialog[open]",
+      )!;
+      const input = dialog.querySelector<HTMLTextAreaElement>(
+        "[data-feature-field=body]",
+      )!;
+      expect(input.value).toBe(body);
+      input.value = replacement;
+      dialog.querySelector<HTMLButtonElement>("button[type=submit]")!.click();
+      expect(serializeMarkdown(app.view.state.doc)).toBe(expected);
+    },
+  );
+
+  it.each([
+    "**Before $x^2$ After**",
+    "Text *before $x^2$ after*",
+    "[Text $x^2$](https://example.com)",
+  ])("preserves surrounding inline marks while editing Math: %s", (source) => {
+    const { root, app } = setup(source);
+    const math = root.querySelector<HTMLElement>(
+      ".mm-rendered-inline[data-mm-editable-math='true']",
+    )!;
+    math.dispatchEvent(
+      new MouseEvent("dblclick", { bubbles: true, cancelable: true }),
+    );
+    const dialog = root.querySelector<HTMLDialogElement>(
+      ".mm-profile-feature-dialog[open]",
+    )!;
+    dialog.querySelector<HTMLTextAreaElement>(
+      "[data-feature-field=body]",
+    )!.value = "y^3";
+    dialog.querySelector<HTMLButtonElement>("button[type=submit]")!.click();
+    expect(serializeMarkdown(app.view.state.doc)).toBe(
+      source.replace("x^2", "y^3"),
+    );
+  });
+
+  it("keeps escaped dollars inside an inline Math source atom", () => {
+    const source = "Before $x\\$y$ After";
+    const { root, app } = setup(source);
+    const math = root.querySelector<HTMLElement>(
+      ".mm-rendered-inline[data-mm-editable-math='true']",
+    )!;
+    math.dispatchEvent(
+      new MouseEvent("dblclick", { bubbles: true, cancelable: true }),
+    );
+    const dialog = root.querySelector<HTMLDialogElement>(
+      ".mm-profile-feature-dialog[open]",
+    )!;
+    const input = dialog.querySelector<HTMLTextAreaElement>(
+      "[data-feature-field=body]",
+    )!;
+    expect(input.value).toBe("x\\$y");
+    dialog
+      .querySelector<HTMLButtonElement>("button:not([type='submit'])")!
+      .click();
+    expect(serializeMarkdown(app.view.state.doc)).toBe(source);
+
+    math.dispatchEvent(
+      new MouseEvent("dblclick", { bubbles: true, cancelable: true }),
+    );
+    root.querySelector<HTMLTextAreaElement>(
+      "[data-feature-field=body]",
+    )!.value = "z";
+    root
+      .querySelector<HTMLButtonElement>(
+        ".mm-profile-feature-dialog button[type=submit]",
+      )!
+      .click();
+    expect(serializeMarkdown(app.view.state.doc)).toBe("Before $z$ After");
+  });
+
+  it("keeps an inline Math draft when the target becomes stale", () => {
+    const { root, app } = setup("Before $x$ After");
+    const math = root.querySelector<HTMLElement>(
+      ".mm-rendered-inline[data-mm-editable-math='true']",
+    )!;
+    math.dispatchEvent(
+      new MouseEvent("dblclick", { bubbles: true, cancelable: true }),
+    );
+    const input = root.querySelector<HTMLTextAreaElement>(
+      "[data-feature-field=body]",
+    )!;
+    input.value = "draft survives";
+    app.receiveDocument({
+      protocolVersion: 1,
+      type: "document",
+      markdown: "External replacement",
+      version: 2,
+      profile: "github",
+      reason: "external",
+    });
+    root
+      .querySelector<HTMLButtonElement>(
+        ".mm-profile-feature-dialog button[type=submit]",
+      )!
+      .click();
+    expect(serializeMarkdown(app.view.state.doc)).toBe("External replacement");
+    expect(input.value).toBe("draft survives");
     expect(
       root.querySelector(".mm-profile-feature-dialog[open]"),
     ).not.toBeNull();

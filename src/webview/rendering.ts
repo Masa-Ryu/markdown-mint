@@ -463,26 +463,45 @@ export function createRenderedNodeView(
   dom.setAttribute("aria-live", "polite");
   dom.hidden = initiallyEmpty;
 
-  const isInteractiveTarget = (target: EventTarget | null): boolean =>
-    target instanceof Element &&
-    Boolean(target.closest("button,a,input,select,textarea"));
+  const isInteractiveTarget = (target: EventTarget | null): boolean => {
+    if (!(target instanceof Element)) return false;
+    const interactive = target.closest("button,a,input,select,textarea");
+    return Boolean(interactive && dom.contains(interactive));
+  };
   const updateEditorSemantics = (): void => {
     const sourceEditor = blockSourceEditor(current);
-    if (!inline && sourceEditor && onEditRequest) {
-      dom.tabIndex = 0;
+    if (
+      sourceEditor &&
+      onEditRequest &&
+      (!inline || sourceEditor.kind === "math")
+    ) {
+      // Inline Math remains an atomic NodeSelection in the document and is
+      // intentionally not part of normal Tab order. tabIndex=-1 still lets
+      // the guarded keyboard path restore focus after the dialog closes.
+      dom.tabIndex = inline ? -1 : 0;
       dom.setAttribute("role", "button");
       dom.setAttribute(
         "aria-label",
         sourceEditor.kind === "math" ? "Edit Math" : "Edit Mermaid",
       );
+      if (inline) dom.dataset.mmEditableMath = "true";
+      else delete dom.dataset.mmEditableMath;
     } else {
       dom.removeAttribute("tabindex");
       dom.removeAttribute("role");
       dom.removeAttribute("aria-label");
+      delete dom.dataset.mmEditableMath;
     }
   };
   const openEditor = (event: Event): void => {
-    if (!onEditRequest || inline || isInteractiveTarget(event.target)) return;
+    const sourceEditor = blockSourceEditor(current);
+    if (
+      !onEditRequest ||
+      !sourceEditor ||
+      (inline && sourceEditor.kind !== "math") ||
+      isInteractiveTarget(event.target)
+    )
+      return;
     const position = positionOf();
     if (
       position === undefined ||
@@ -492,13 +511,33 @@ export function createRenderedNodeView(
     )
       return;
     const live = view.state.doc.nodeAt(position);
-    if (!live || live.type !== current.type || !blockSourceEditor(live)) return;
+    const liveSourceEditor = live && blockSourceEditor(live);
+    if (
+      !live ||
+      live.type !== current.type ||
+      !liveSourceEditor ||
+      liveSourceEditor.kind !== sourceEditor.kind
+    )
+      return;
     current = live;
     event.preventDefault();
     event.stopPropagation();
     onEditRequest(position, dom);
   };
   const handleClick = (event: Event): void => {
+    // A Math atom may be wrapped by a Markdown link mark. Keep a physical
+    // click on the atom available for NodeSelection/double-click editing
+    // instead of letting the ancestor link navigate on the first click.
+    const sourceEditor = blockSourceEditor(current);
+    const hasLinkMark = current.marks.some((mark) => mark.type.name === "link");
+    if (
+      inline &&
+      sourceEditor?.kind === "math" &&
+      hasLinkMark &&
+      (event as MouseEvent).detail > 0 &&
+      !isInteractiveTarget(event.target)
+    )
+      event.preventDefault();
     // A physical click remains a normal selection/operation. `detail === 0`
     // is the browser's keyboard/accessibility activation path.
     if ((event as MouseEvent).detail === 0) openEditor(event);
@@ -594,10 +633,11 @@ export function createRenderedNodeView(
     },
     stopEvent: (event) => {
       const target = event.target;
-      return (
-        target instanceof Element &&
-        Boolean(target.closest("a,button,input,summary,select,textarea"))
+      if (!(target instanceof Element)) return false;
+      const interactive = target.closest(
+        "a,button,input,summary,select,textarea",
       );
+      return Boolean(interactive && dom.contains(interactive));
     },
     ignoreMutation: () => true,
     destroy: () => {

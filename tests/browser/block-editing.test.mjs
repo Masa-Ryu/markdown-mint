@@ -1563,6 +1563,164 @@ async function testMathAndMermaidHeaders(page) {
   }
 }
 
+async function testAllMathSources(page) {
+  const source = [
+    "Before $a+b$ After.",
+    "",
+    "$$",
+    "c+d",
+    "$$",
+    "",
+    fence("math", "e+f"),
+    "",
+    fence("latex", "g+h"),
+    "",
+    fence("tex", "i+j"),
+    "",
+    fence("asciimath", "k+l"),
+  ].join("\n");
+  let current = source;
+  await load(page, source);
+  let baseline = await saved(page);
+
+  const inline = page.locator(
+    `${rich} .mm-rendered-inline[data-mm-editable-math="true"]`,
+  );
+  await inline.waitFor();
+  assert.equal(await inline.getAttribute("tabindex"), "-1");
+  await inline.click();
+  assert.equal((await selection(page)).kind, "NodeSelection");
+  assert.equal((await selection(page)).dialogs, 0);
+  await inline.dblclick();
+  let dialog = page.locator(".mm-profile-feature-dialog[open]");
+  await dialog.waitFor();
+  assert.equal(
+    await dialog.locator('[data-feature-field="body"]').inputValue(),
+    "a+b",
+  );
+  await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+  await noEdits(page, baseline, "inline Math cancel");
+
+  for (const key of ["Enter", "Space"]) {
+    await inline.focus();
+    await page.keyboard.press(key);
+    await dialog.waitFor();
+    assert.equal(
+      await dialog.locator('[data-feature-field="body"]').inputValue(),
+      "a+b",
+    );
+    await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+    await noEdits(page, baseline, `inline Math ${key} cancel`);
+  }
+
+  const paragraph = page.locator(`${rich} > p`).first();
+  await paragraph.dblclick({ position: { x: 3, y: 3 } });
+  assert.equal((await selection(page)).dialogs, 0);
+
+  await inline.dblclick();
+  dialog = page.locator(".mm-profile-feature-dialog[open]");
+  await dialog.locator('[data-feature-field="body"]').fill("A+B");
+  await dialog.locator('button[type="submit"]').click();
+  current = current.replace("a+b", "A+B");
+  await expectSource(page, current);
+  baseline = await saved(page);
+
+  const bodies = [
+    ["c+d", "C+D"],
+    ["e+f", "E+F"],
+    ["g+h", "G+H"],
+    ["i+j", "I+J"],
+    ["k+l", "K+L"],
+  ];
+  const blockButtons = page.locator(
+    `${rich} > .mm-rendered-node:not(.mm-rendered-inline)[aria-label="Edit Math"]`,
+  );
+  assert.equal(await blockButtons.count(), bodies.length);
+  for (let index = 0; index < bodies.length; index += 1) {
+    const [body, replacement] = bodies[index];
+    const rendered = blockButtons.nth(index);
+    await rendered.waitFor();
+    assert.equal(await rendered.getAttribute("aria-label"), "Edit Math");
+    await rendered.locator(".mm-math-block").click();
+    assert.equal((await selection(page)).dialogs, 0);
+    await rendered.dblclick();
+    dialog = page.locator(".mm-profile-feature-dialog[open]");
+    await dialog.waitFor();
+    assert.equal(
+      await dialog.locator('[data-feature-field="body"]').inputValue(),
+      body,
+    );
+    await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+    await noEdits(page, baseline, `Math block ${index} cancel`);
+
+    await rendered.dblclick();
+    await dialog.locator('[data-feature-field="body"]').fill(replacement);
+    await dialog.locator('button[type="submit"]').click();
+    current = current.replace(body, replacement);
+    await expectSource(page, current);
+    baseline = await saved(page);
+  }
+
+  assert.match(current, /\$\$\nC\+D\n\$\$/);
+  assert.match(current, /```math\nE\+F\n```/);
+  assert.match(current, /```latex\nG\+H\n```/);
+  assert.match(current, /```tex\nI\+J\n```/);
+  assert.match(current, /```asciimath\nK\+L\n```/);
+  assert.equal(
+    await page
+      .locator(
+        `${rich} > .mm-rendered-node:not(.mm-rendered-inline)[aria-label="Edit Math"]`,
+      )
+      .count(),
+    bodies.length,
+  );
+}
+
+async function testLinkedInlineMathGenericSerializer(page) {
+  const source = "Before **[$x$](https://example.com)** After";
+  let current = source;
+  await load(page, source);
+
+  const math = page.locator(
+    `${rich} .mm-rendered-inline[data-mm-editable-math="true"]`,
+  );
+  await math.dblclick();
+  let dialog = page.locator(".mm-profile-feature-dialog[open]");
+  await dialog.locator('[data-feature-field="body"]').fill("y");
+  await dialog.locator('button[type="submit"]').click();
+  current = current.replace("$x$", "$y$");
+  await expectSource(page, current);
+
+  await caret(page, `${rich} > p:first-child`, 0, "Before".length);
+  await page.keyboard.type("Changed");
+  current = current.replace("Before", "Changed");
+  await page.waitForFunction(() => !window.markdownMint.sync.hasPending);
+  const genericSource = (await saved(page)).markdown;
+  assert.equal(genericSource.replace(/\u00a0/g, " "), current);
+
+  const atoms = await page.evaluate(() => {
+    const result = [];
+    window.markdownMint.view.state.doc.descendants((node) => {
+      if (node.type.name !== "raw_inline") return;
+      if (node.attrs.kind !== "math_inline") return;
+      const link = node.marks.find((mark) => mark.type.name === "link");
+      result.push({
+        source: node.attrs.source,
+        marks: node.marks.map((mark) => mark.type.name),
+        href: link?.attrs.href,
+      });
+    });
+    return result;
+  });
+  assert.deepEqual(atoms, [
+    {
+      source: "$y$",
+      marks: ["strong", "link"],
+      href: "https://example.com",
+    },
+  ]);
+}
+
 async function testDocumentFixtures(page) {
   const fixtures = [
     ["common-test.md", "commonmark"],
@@ -1713,6 +1871,8 @@ async function main() {
       testDetailsWithUnmatchedBacktickAndRawScript,
       testDetailsWithInlineHtmlAttributeTags,
       testMathAndMermaidHeaders,
+      testAllMathSources,
+      testLinkedInlineMathGenericSerializer,
       testDocumentFixtures,
     ]) {
       if (

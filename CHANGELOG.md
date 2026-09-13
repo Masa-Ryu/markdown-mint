@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.0.44
+
+- Preserve strong, emphasis, strikethrough, combined marks, link destinations,
+  and link titles when generic serialization edits a paragraph containing a
+  linked inline Math atom, including single-child and identical Math links.
+  Keep source-slice preservation for Math-only edits and avoid nested link
+  markup when a rendered Math NodeView is wrapped by a ProseMirror link mark.
+
+## 0.0.43
+
+- Make every supported Math form consistently editable from its rendered atom:
+  inline `$...$`, display `$$...$$`, and fenced `math`, `latex`, `tex`, and
+  `asciimath` sources now share the existing Edit Math dialog. Preserve Math
+  wrappers, aliases, metadata, fence style, indentation, line endings, marks,
+  links, and stale drafts while keeping ordinary text double clicks native.
+
 ## 0.0.42
 
 - Restrict Block quote and Code block toolbar active state to selections that
