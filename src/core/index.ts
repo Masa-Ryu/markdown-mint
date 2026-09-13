@@ -53,6 +53,13 @@ export { serializeCodeBlockMarkdown } from "./codeBlockSerialization";
 /** The Markdown dialect used by the editor and preview. */
 export type Profile = "github" | "gitlab" | "commonmark";
 
+/**
+ * Maximum number of source-authored empty paragraphs materialized for one
+ * blank run. The remainder stays in a source-preserving spacer atom so an
+ * untrusted document cannot allocate one PM/DOM node per newline.
+ */
+export const MAX_MATERIALIZED_EMPTY_PARAGRAPHS = 256;
+
 /** A diagnostic returned by {@link inspectCompatibility}. */
 export interface CompatibilityDiagnostic {
   message: string;
@@ -68,7 +75,8 @@ export interface MarkdownBlockSnapshot {
   node: PMNode;
   /**
    * The source slice for this node and its boundary. Materialized empty
-   * paragraphs carry only the surplus line-ending slice that represents them.
+   * paragraphs and bounded blank-spacer atoms carry the surplus line-ending
+   * slice that represents them.
    */
   source: string;
   /** The part covered by the Markdown block token. */
@@ -734,9 +742,17 @@ function tokenLocation(
 }
 
 function markdownLineEnding(source: string): MarkdownSnapshot["lineEnding"] {
-  const crlf = (source.match(/\r\n/g) ?? []).length;
-  const lf = (source.match(/(?<!\r)\n/g) ?? []).length;
-  const cr = (source.match(/\r(?!\n)/g) ?? []).length;
+  let crlf = 0;
+  let lf = 0;
+  let cr = 0;
+  for (let index = 0; index < source.length; index += 1) {
+    if (source[index] === "\r") {
+      if (source[index + 1] === "\n") {
+        crlf += 1;
+        index += 1;
+      } else cr += 1;
+    } else if (source[index] === "\n") lf += 1;
+  }
   if (crlf === 0 && lf === 0 && cr === 0) return "none";
   if (crlf > 0 && lf === 0 && cr === 0) return "crlf";
   if (lf > 0 && crlf === 0 && cr === 0) return "lf";
@@ -1740,6 +1756,7 @@ const documentMetadata = new WeakMap<
     footnotes: FootnoteDefinition[];
     source?: string;
     lineEnding?: MarkdownSnapshot["lineEnding"];
+    sourcePreservedNoOp?: boolean;
   }
 >();
 
@@ -1866,6 +1883,7 @@ function parseInternal(
   source: string,
   profile: Profile,
   materializeBlankParagraphs = true,
+  leadingStructuralLineEndings = 0,
 ): MarkdownSnapshot {
   const footnoteScan = scanFootnotes(source);
   const md = createMarkdownIt(profile);
@@ -2053,24 +2071,44 @@ function parseInternal(
     parsedBlocks.length > 0
       ? source.slice(0, parsedBlocks[0]!.startOffset)
       : source;
-  const appendMaterializedEmptyBlocks = (
-    parts: string[],
+  const appendMaterializedBlankBoundary = (
+    parts: BlankBoundaryParts,
     startOffset: number,
   ): void => {
-    let offset = startOffset;
-    for (const part of parts) {
-      const block = materializedEmptyBlock(source, part, offset);
+    let line = lineIndexAt(source, startOffset);
+    for (const part of parts.empty) {
+      const block = materializedEmptyBlock(part, line);
       nodes.push(block.node);
       blocks.push(block);
-      offset += part.length;
+      line += lineEndingCount(part);
+    }
+    if (parts.overflow) {
+      const block = materializedBlankSpacerBlock(parts.overflow, line);
+      nodes.push(block.node);
+      blocks.push(block);
     }
   };
 
+  const blankOnly =
+    parsedBlocks.length === 0 &&
+    materializeBlankParagraphs &&
+    isLineEndingOnlySource(source) &&
+    lineEndingCount(source) > 0;
+  if (blankOnly) {
+    const parts = splitBlankBoundary(source, leadingStructuralLineEndings);
+    appendMaterializedBlankBoundary(parts, parts.structural.length);
+    leading = parts.structural;
+  }
+
   if (parsedBlocks.length > 0 && materializeBlankParagraphs) {
-    const leadingCount = materializedEmptyCount(leading, 1);
+    const leadingCount = materializedEmptyCount(
+      leading,
+      leadingStructuralLineEndings,
+    );
     if (leadingCount > 0) {
-      appendMaterializedEmptyBlocks(splitBlankBoundary(leading, 1), 0);
-      leading = "";
+      const parts = splitBlankBoundary(leading, leadingStructuralLineEndings);
+      appendMaterializedBlankBoundary(parts, parts.structural.length);
+      leading = parts.structural;
     }
 
     for (let index = 0; index < parsedBlocks.length; index += 1) {
@@ -2090,7 +2128,7 @@ function parseInternal(
           : 0;
       if (emptyCount > 0) {
         const parts = splitBlankBoundary(boundary, structuralLineEndings);
-        const firstPart = parts[0]!;
+        const firstPart = parts.structural;
         const firstSeparator = firstPart.slice(bodySuffix.length);
         const block = {
           ...parsedBlock.block,
@@ -2103,8 +2141,8 @@ function parseInternal(
           parsedBlock.startOffset +
           parsedBlock.block.body.length -
           bodySuffix.length;
-        appendMaterializedEmptyBlocks(
-          parts.slice(1),
+        appendMaterializedBlankBoundary(
+          parts,
           boundaryStart + firstPart.length,
         );
       } else {
@@ -2127,6 +2165,10 @@ function parseInternal(
     footnotes: footnoteScan.definitions,
     source,
     lineEnding,
+    sourcePreservedNoOp: blocks.some(
+      (block) =>
+        block.kind === "empty-paragraph" || block.kind === "blank-spacer",
+    ),
   });
   const last = parsedBlocks[parsedBlocks.length - 1]?.block;
   const trailing = last
@@ -2135,7 +2177,9 @@ function parseInternal(
           ? source.length
           : offsetForLine(offsets, last.endLine, source.length),
       )
-    : source;
+    : nodes.length > 0
+      ? ""
+      : source;
   return {
     doc,
     source,
@@ -2165,7 +2209,7 @@ export function parseMarkdown(
 
   const frontSource = source.slice(frontmatter.start, frontmatter.end);
   const restSource = source.slice(frontmatter.end);
-  const rest = parseInternal(restSource, profile);
+  const rest = parseInternal(restSource, profile, true, 1);
   const front = nodeTypes.raw_block.create({
     source: frontSource,
     kind: "frontmatter",
@@ -2200,6 +2244,10 @@ export function parseMarkdown(
     footnotes: snapshot.footnotes ?? [],
     source,
     lineEnding: snapshot.lineEnding,
+    sourcePreservedNoOp: blocks.some(
+      (block) =>
+        block.kind === "empty-paragraph" || block.kind === "blank-spacer",
+    ),
   });
   latestParse = { source, profile, snapshot };
   return snapshot;
@@ -2582,8 +2630,11 @@ function serializeBlock(node: PMNode, tableCell = false): string {
       // trailing blank line disappears when the document is reopened.
       return `${fence}${info}\n${content}\n${fence}`;
     }
-    case "raw_block":
-      return String(node.attrs.source ?? "").replace(/(?:\r\n|\n|\r)+$/, "");
+    case "raw_block": {
+      const source = String(node.attrs.source ?? "");
+      if (String(node.attrs.kind ?? "") === "blank-spacer") return source;
+      return source.replace(/(?:\r\n|\n|\r)+$/, "");
+    }
     case "details":
       return serializeDetails(node).replace(/(?:\r\n|\n|\r)+$/, "");
     case "bullet_list":
@@ -2650,8 +2701,9 @@ function serializeTopLevelChildren(
   if (children.length === 0) return "";
   let output = "";
   let index = 0;
-  while (index < children.length && isEmptyParagraph(children[index])) {
-    output += ending;
+  while (index < children.length && isBlankSpacingNode(children[index])) {
+    const node = children[index]!;
+    output += isBlankSpacerNode(node) ? serializeBlock(node) : ending;
     index += 1;
   }
   if (index >= children.length) return output;
@@ -2660,16 +2712,19 @@ function serializeTopLevelChildren(
   index += 1;
   while (index < children.length) {
     let emptyCount = 0;
-    while (index < children.length && isEmptyParagraph(children[index])) {
-      emptyCount += 1;
+    let spacer = "";
+    while (index < children.length && isBlankSpacingNode(children[index])) {
+      const node = children[index]!;
+      if (isBlankSpacerNode(node)) spacer += serializeBlock(node);
+      else emptyCount += 1;
       index += 1;
     }
-    if (emptyCount > 0) {
+    if (emptyCount > 0 || spacer) {
       if (index >= children.length) {
-        output += ending.repeat(emptyCount + 1);
+        output += ending.repeat(emptyCount + 1) + spacer;
         break;
       }
-      output += ending.repeat(emptyCount + 2);
+      output += ending.repeat(emptyCount + 2) + spacer;
       output += serializeBlock(children[index]!);
       index += 1;
       continue;
@@ -2711,11 +2766,28 @@ function lineBreakSuffix(value: string): string {
 }
 
 function lineEndingCount(value: string): number {
-  return (value.match(/\r\n|\r|\n/g) ?? []).length;
+  let count = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    const character = value[index];
+    if (character === "\r") {
+      if (value[index + 1] === "\n") index += 1;
+      count += 1;
+    } else if (character === "\n") count += 1;
+  }
+  return count;
 }
 
 function isBlankSource(value: string): boolean {
   return value.length > 0 && /^[\t \r\n]*$/u.test(value);
+}
+
+/**
+ * A blank-only source made solely of line endings gets one editable paragraph
+ * per line ending. Whitespace-only starter sources retain their established
+ * single-paragraph shape so their source-preservation contract is unchanged.
+ */
+function isLineEndingOnlySource(value: string): boolean {
+  return /^(?:\r\n|\n|\r)+$/u.test(value);
 }
 
 /**
@@ -2738,33 +2810,69 @@ function materializedEmptyCount(
  * the snapshot lets an edit preserve the original whitespace bytes around
  * unchanged nodes instead of normalizing the source globally.
  */
+interface BlankBoundaryParts {
+  /** The structural separator that remains attached to the preceding block. */
+  structural: string;
+  /** At most the bounded number of editable empty paragraph source slices. */
+  empty: string[];
+  /** The unmaterialized suffix, kept in one source-preserving spacer atom. */
+  overflow: string;
+}
+
 function splitBlankBoundary(
   value: string,
   structuralLineEndings: number,
-): string[] {
-  const endings = Array.from(value.matchAll(/\r\n|\r|\n/g));
-  if (endings.length <= structuralLineEndings) return [value];
-  const parts: string[] = [];
-  let start = 0;
-  let consumed = 0;
-  const partCount = endings.length - structuralLineEndings + 1;
-  for (let part = 0; part < partCount; part += 1) {
-    const take = part === 0 ? structuralLineEndings : 1;
-    consumed += take;
-    const ending = endings[consumed - 1];
-    if (!ending || ending.index == null) return [value];
-    const end = ending.index + ending[0].length;
-    parts.push(value.slice(start, end));
-    start = end;
+): BlankBoundaryParts {
+  const totalLineEndings = lineEndingCount(value);
+  const extraLineEndings = totalLineEndings - structuralLineEndings;
+  if (extraLineEndings <= 0)
+    return { structural: value, empty: [], overflow: "" };
+
+  const empty: string[] = [];
+  let endingIndex = 0;
+  let partStart = 0;
+  let structuralEnd = structuralLineEndings === 0 ? 0 : -1;
+  for (let index = 0; index < value.length; index += 1) {
+    const character = value[index];
+    let endingLength = 0;
+    if (character === "\r") {
+      endingLength = value[index + 1] === "\n" ? 2 : 1;
+    } else if (character === "\n") endingLength = 1;
+    if (endingLength === 0) continue;
+
+    endingIndex += 1;
+    const end = index + endingLength;
+    if (structuralLineEndings > 0 && endingIndex === structuralLineEndings) {
+      structuralEnd = end;
+      partStart = end;
+    } else if (
+      endingIndex > structuralLineEndings &&
+      empty.length < MAX_MATERIALIZED_EMPTY_PARAGRAPHS
+    ) {
+      empty.push(value.slice(partStart, end));
+      partStart = end;
+    }
+    index += endingLength - 1;
+    if (
+      empty.length === MAX_MATERIALIZED_EMPTY_PARAGRAPHS &&
+      extraLineEndings > MAX_MATERIALIZED_EMPTY_PARAGRAPHS
+    )
+      break;
   }
-  if (start < value.length) parts[parts.length - 1] += value.slice(start);
-  return parts;
+
+  if (structuralEnd < 0) return { structural: value, empty: [], overflow: "" };
+  const structural = value.slice(0, structuralEnd);
+  const remainder = value.slice(partStart);
+  if (empty.length < extraLineEndings) {
+    return { structural, empty, overflow: remainder };
+  }
+  if (empty.length > 0) empty[empty.length - 1] += remainder;
+  return { structural, empty, overflow: "" };
 }
 
 function materializedEmptyBlock(
-  source: string,
   value: string,
-  start: number,
+  startLine: number,
 ): MarkdownBlockSnapshot {
   const node = emptyParagraph();
   return {
@@ -2772,9 +2880,28 @@ function materializedEmptyBlock(
     source: value,
     body: "",
     separator: value,
-    startLine: lineIndexAt(source, start),
-    endLine: lineIndexAt(source, start + value.length),
+    startLine,
+    endLine: startLine + lineEndingCount(value),
     kind: "empty-paragraph",
+  };
+}
+
+function materializedBlankSpacerBlock(
+  value: string,
+  startLine: number,
+): MarkdownBlockSnapshot {
+  const node = nodeTypes.raw_block.create({
+    source: value,
+    kind: "blank-spacer",
+  });
+  return {
+    node,
+    source: value,
+    body: "",
+    separator: value,
+    startLine,
+    endLine: startLine + lineEndingCount(value),
+    kind: "blank-spacer",
   };
 }
 
@@ -2790,6 +2917,17 @@ function isMaterializedEmptyBlock(
 
 function isEmptyParagraph(node: PMNode | undefined): boolean {
   return node?.type.name === "paragraph" && node.content.size === 0;
+}
+
+function isBlankSpacerNode(node: PMNode | undefined): boolean {
+  return (
+    node?.type.name === "raw_block" &&
+    String(node.attrs.kind ?? "") === "blank-spacer"
+  );
+}
+
+function isBlankSpacingNode(node: PMNode | undefined): boolean {
+  return isEmptyParagraph(node) || isBlankSpacerNode(node);
 }
 
 interface ReferenceDefinitionSnapshot {
@@ -3214,7 +3352,8 @@ export function serializeMarkdown(
     const metadata = documentMetadata.get(doc);
     if (
       metadata?.source &&
-      sourceNeedsExactCanonicalPreservation(metadata.source)
+      (metadata.sourcePreservedNoOp ||
+        sourceNeedsExactCanonicalPreservation(metadata.source))
     )
       return metadata.source;
   }
@@ -3228,7 +3367,10 @@ export function serializeMarkdown(
         : "\n";
     const serialized = serializeTopLevelChildren(children, ending);
     const last = children[children.length - 1];
-    if (last?.type.name === "raw_block" || last?.type.name === "details") {
+    if (
+      (last?.type.name === "raw_block" && !isBlankSpacerNode(last)) ||
+      last?.type.name === "details"
+    ) {
       const rawEnding = lineBreakSuffix(String(last.attrs.source ?? ""));
       if (rawEnding) {
         const ending = rawEnding.includes("\r\n")
@@ -3265,7 +3407,7 @@ export function serializeMarkdown(
   let contentAfter = false;
   for (let index = children.length - 1; index >= 0; index -= 1) {
     hasContentAfter[index] = contentAfter;
-    if (!isEmptyParagraph(children[index])) contentAfter = true;
+    if (!isBlankSpacingNode(children[index])) contentAfter = true;
   }
   let output = leading;
   let hasContentBefore = false;
@@ -3274,7 +3416,7 @@ export function serializeMarkdown(
     const matched = matches.get(index);
     if (matched != null) {
       output += blocks[matched]!.source;
-      if (!isEmptyParagraph(node)) hasContentBefore = true;
+      if (!isBlankSpacingNode(node)) hasContentBefore = true;
       continue;
     }
 
@@ -3282,6 +3424,10 @@ export function serializeMarkdown(
     const insertion = !samePosition || nextMatchedPrevious[index] === index;
     if (isEmptyParagraph(node)) {
       output = appendGeneratedEmptyParagraph(output, ending, hasContentBefore);
+      continue;
+    }
+    if (isBlankSpacerNode(node)) {
+      output += serializeBlock(node);
       continue;
     }
     if (samePosition && isMaterializedEmptyBlock(samePosition)) {
@@ -3967,7 +4113,9 @@ function renderNode(
 ): string {
   switch (node.type.name) {
     case "paragraph":
-      return `<p>${renderInline(node, state)}</p>`;
+      return node.content.size === 0
+        ? "<p><br></p>"
+        : `<p>${renderInline(node, state)}</p>`;
     case "heading": {
       const level = Math.max(1, Math.min(6, Number(node.attrs.level) || 1));
       return `<h${level} id="${escapeHtml(headingId(node, state, root, position))}">${renderInline(node, state)}</h${level}>`;
@@ -3992,6 +4140,8 @@ function renderNode(
     case "raw_block": {
       const source = String(node.attrs.source ?? "");
       const kind = String(node.attrs.kind ?? "unknown");
+      if (kind === "blank-spacer")
+        return '<div class="mm-blank-spacer" data-mm-blank-spacer="true" aria-hidden="true"></div>';
       if (kind === "html-comment" || /^\s*<!--[\s\S]*-->\s*$/.test(source))
         return "";
       if (kind === "alert") return renderAlert(source, state);
@@ -4246,6 +4396,7 @@ export function inspectCompatibility(
     "gitlab-description-list",
     "math-block",
     "protected-fence",
+    "blank-spacer",
   ]);
   for (const block of snapshot.blocks ?? []) {
     if (block.node.type.name !== "raw_block") continue;
@@ -4368,7 +4519,7 @@ function semanticDocument(
   if (!ignoreTopLevelEmptyParagraphs)
     return JSON.stringify(semanticNode(snapshot.doc));
   const children = childrenOf(snapshot.doc).filter(
-    (node) => !isEmptyParagraph(node),
+    (node) => !isBlankSpacingNode(node),
   );
   const document = schema.topNodeType.create(
     null,
@@ -4380,6 +4531,7 @@ function semanticDocument(
 function protectedSources(snapshot: MarkdownSnapshot): string[] {
   const result: string[] = [];
   walk(snapshot.doc, (node) => {
+    if (isBlankSpacerNode(node)) return;
     const raw = normalisedRaw(node);
     if (raw) result.push(raw);
   });

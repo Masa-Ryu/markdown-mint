@@ -12,6 +12,8 @@ import {
   alertSourceParts,
   alertSourceWithBody,
   alertSourceWithType,
+  MAX_MATERIALIZED_EMPTY_PARAGRAPHS,
+  type Profile,
 } from "../../src/core/index";
 
 function replaceTopLevel(
@@ -29,6 +31,13 @@ function childrenOf(node: PMNode): PMNode[] {
   const children: PMNode[] = [];
   node.forEach((child) => children.push(child));
   return children;
+}
+
+function reparseMarkdown(source: string, profile: Profile = "github") {
+  // parseMarkdown keeps a one-entry cache for render/compatibility sharing.
+  // Evict the target source so round-trip assertions exercise a real parse.
+  parseMarkdown("cache-bust", profile);
+  return parseMarkdown(source, profile);
 }
 
 function replaceText(doc: PMNode, value: string, replacement: string): PMNode {
@@ -109,7 +118,9 @@ describe("Markdown core", () => {
       const serialized = serializeMarkdown(snapshot.doc, snapshot);
       expect(serialized).toBe(source);
       expect(serialized.match(new RegExp(ending, "g"))?.length).toBe(4);
-      expect(parseMarkdown(serialized).doc.eq(snapshot.doc)).toBe(true);
+      expect(reparseMarkdown(serialized, "github").doc.eq(snapshot.doc)).toBe(
+        true,
+      );
     },
   );
 
@@ -123,7 +134,20 @@ describe("Markdown core", () => {
 
     const serialized = serializeMarkdown(document);
     expect(serialized).toBe("one\n\n\n\ntwo");
-    expect(parseMarkdown(serialized).doc.eq(document)).toBe(true);
+    expect(reparseMarkdown(serialized).doc.eq(document)).toBe(true);
+  });
+
+  it("renders materialized empty paragraphs as one visible line", () => {
+    expect(renderMarkdown("one\n\n\ntwo")).toContain(
+      "<p>one</p>\n<p><br></p>\n<p>two</p>",
+    );
+  });
+
+  it("keeps the empty source starter document to one paragraph", () => {
+    const snapshot = parseMarkdown("");
+    expect(snapshot.doc.childCount).toBe(1);
+    expect(snapshot.doc.firstChild?.type.name).toBe("paragraph");
+    expect(serializeMarkdown(snapshot.doc, snapshot)).toBe("");
   });
 
   it("preserves a source-authored separator when a neighboring block changes", () => {
@@ -138,6 +162,20 @@ describe("Markdown core", () => {
     const serialized = serializeMarkdown(changed, snapshot);
     expect(serialized).toBe("one\n\n\n\nchanged");
     expect(parseMarkdown(serialized).doc.eq(changed)).toBe(true);
+  });
+
+  it("preserves CRLF source-authored separators when a neighboring block changes", () => {
+    const source = "one\r\n\r\n\r\n\r\ntwo";
+    const snapshot = parseMarkdown(source);
+    const changed = replaceTopLevel(
+      snapshot,
+      3,
+      schema.nodes.paragraph!.create(null, schema.text("changed")),
+    );
+
+    const serialized = serializeMarkdown(changed, snapshot);
+    expect(serialized).toBe("one\r\n\r\n\r\n\r\nchanged");
+    expect(reparseMarkdown(serialized).doc.eq(changed)).toBe(true);
   });
 
   it("keeps leading and trailing empty paragraphs editable", () => {
@@ -181,6 +219,62 @@ describe("Markdown core", () => {
   );
 
   it.each([
+    ["\none", 1],
+    ["\n\none", 2],
+    ["\r\none", 1],
+    ["\r\n\r\none", 2],
+    ["\n", 1],
+    ["\n\n", 2],
+    ["\n\n\n", 3],
+    ["\r\n", 1],
+    ["\r\n\r\n", 2],
+  ] as const)(
+    "materializes %d leading or blank-only line endings in %j",
+    (source, expectedEmptyParagraphs) => {
+      const snapshot = parseMarkdown(source);
+      const children = childrenOf(snapshot.doc);
+
+      expect(
+        children.filter(
+          (node) => node.type.name === "paragraph" && node.content.size === 0,
+        ),
+      ).toHaveLength(expectedEmptyParagraphs);
+      expect(serializeMarkdown(snapshot.doc)).toBe(source);
+      expect(serializeMarkdown(snapshot.doc, snapshot)).toBe(source);
+      expect(reparseMarkdown(source).doc.eq(snapshot.doc)).toBe(true);
+    },
+  );
+
+  it("bounds a huge blank run without changing its source-preserving slice", () => {
+    const source = `one${"\n".repeat(100_000)}two`;
+    const snapshot = parseMarkdown(source);
+    const children = childrenOf(snapshot.doc);
+    const emptyParagraphs = children.filter(
+      (node) => node.type.name === "paragraph" && node.content.size === 0,
+    );
+    const spacers = children.filter(
+      (node) =>
+        node.type.name === "raw_block" && node.attrs.kind === "blank-spacer",
+    );
+
+    expect(emptyParagraphs).toHaveLength(MAX_MATERIALIZED_EMPTY_PARAGRAPHS);
+    expect(spacers).toHaveLength(1);
+    expect(snapshot.doc.childCount).toBe(MAX_MATERIALIZED_EMPTY_PARAGRAPHS + 3);
+    expect(serializeMarkdown(snapshot.doc)).toBe(source);
+    expect(
+      reparseMarkdown(serializeMarkdown(snapshot.doc)).doc.eq(snapshot.doc),
+    ).toBe(true);
+    const changed = replaceTopLevel(
+      snapshot,
+      children.length - 1,
+      schema.nodes.paragraph!.create(null, schema.text("changed")),
+    );
+    const changedSource = serializeMarkdown(changed, snapshot);
+    expect(changedSource).toBe(source.replace(/two$/u, "changed"));
+    expect(parseMarkdown(changedSource).doc.eq(changed)).toBe(true);
+  });
+
+  it.each([
     ["table", "| A |\n| --- |\n| one |\n\n\n\ntwo"],
     ["code", "```ts\none\n```\n\n\n\ntwo"],
     ["Alert", "> [!NOTE]\n> one\n\n\n\ntwo"],
@@ -201,7 +295,9 @@ describe("Markdown core", () => {
       expect(emptyParagraphs).toHaveLength(2);
       expect(serializeMarkdown(snapshot.doc, snapshot)).toBe(source);
       expect(
-        parseMarkdown(serializeMarkdown(snapshot.doc)).doc.eq(snapshot.doc),
+        reparseMarkdown(serializeMarkdown(snapshot.doc), "github").doc.eq(
+          snapshot.doc,
+        ),
       ).toBe(true);
     },
   );

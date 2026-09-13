@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.0.47
+
+- Apply authoritative terminal whitespace changes to the Rich document instead
+  of retaining stale empty paragraphs. Keep source-authored blank-line shape
+  visible with a bounded, source-preserving spacer for oversized blank runs,
+  and align empty-paragraph preview geometry across Rich and native surfaces.
+
 ## 0.0.46
 
 - Materialize source-authored surplus top-level blank lines as editable Rich

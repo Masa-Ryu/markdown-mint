@@ -1845,6 +1845,89 @@ async function testBlankLineRoundTrip(page) {
   });
 }
 
+async function testAuthoritativeTerminalWhitespace(page) {
+  const cases = [
+    {
+      initial: "one\n\n\n",
+      authoritative: "one\n\n",
+      afterInput: "one\n\nnext",
+      emptyParagraphs: 1,
+    },
+    {
+      initial: "one\n\n\n\n",
+      authoritative: "one\n",
+      afterInput: "onenext\n",
+      emptyParagraphs: 0,
+    },
+    {
+      initial: "one\r\n\r\n\r\n",
+      authoritative: "one\r\n\r\n",
+      afterInput: "one\r\n\r\nnext",
+      emptyParagraphs: 1,
+    },
+    {
+      initial: "one\r\n\r\n\r\n\r\n",
+      authoritative: "one\r\n",
+      afterInput: "onenext\r\n",
+      emptyParagraphs: 0,
+    },
+  ];
+
+  for (const testCase of cases) {
+    await load(page, testCase.initial);
+    await page.evaluate(
+      (markdown) =>
+        window.__markdownMintHarness.deliverExternal(markdown, "github"),
+      testCase.authoritative,
+    );
+    await page.waitForFunction(
+      (markdown) =>
+        window.__markdownMintHarness.document.markdown === markdown &&
+        !window.markdownMint.sync.hasPending,
+      testCase.authoritative,
+    );
+    await settle(page);
+
+    assert.deepEqual(await richDocumentShape(page), {
+      types: Array.from(
+        { length: testCase.emptyParagraphs + 1 },
+        () => "paragraph",
+      ),
+      emptyParagraphs: testCase.emptyParagraphs,
+    });
+    assert.equal(
+      await page.evaluate((markdown) => {
+        window.markdownMint.core.parseMarkdown("cache-bust", "github");
+        const authoritative = window.markdownMint.core.parseMarkdown(
+          markdown,
+          "github",
+        ).doc;
+        return window.markdownMint.view.state.doc.eq(authoritative);
+      }, testCase.authoritative),
+      true,
+      "Rich document diverged from the authoritative parse",
+    );
+    const caretValid = await page.evaluate(() => {
+      const { selection, doc } = window.markdownMint.view.state;
+      return (
+        selection.from >= 0 &&
+        selection.to <= doc.content.size &&
+        selection.$from.parent.type.name === "paragraph"
+      );
+    });
+    assert.equal(caretValid, true, "authoritative update lost a valid caret");
+
+    await caret(page, `${rich} > p:last-child`, -1);
+    await page.keyboard.insertText("next");
+    await expectSource(page, testCase.afterInput);
+    assert.equal(
+      testCase.afterInput.replace(/\r\n|\r/g, "\n").match(/\n{3,}/u),
+      null,
+      "deleted terminal blank paragraphs were regenerated",
+    );
+  }
+}
+
 async function testDocumentFixtures(page) {
   const fixtures = [
     ["common-test.md", "commonmark"],
@@ -1998,6 +2081,7 @@ async function main() {
       testAllMathSources,
       testLinkedInlineMathGenericSerializer,
       testBlankLineRoundTrip,
+      testAuthoritativeTerminalWhitespace,
       testDocumentFixtures,
     ]) {
       if (

@@ -150,6 +150,7 @@ const nativeSpacingBlocks = {
     '<div class="markdown-alert markdown-alert-note"><p class="markdown-alert-title">Note</p><p>Alert body.</p></div>',
   code: nativeCodeBlock(),
   paragraph: "<p>Paragraph body.</p>",
+  "materialized-blank": "<p>one</p><p><br></p><p>two</p>",
   table: nativeTable,
   toc: '<nav class="table-of-contents" aria-label="Table of contents"><ul><li><a href="#heading">Heading</a></li></ul></nav>',
   description: "<dl><dt>Term</dt><dd>Definition</dd></dl><p>After</p>",
@@ -217,6 +218,7 @@ const nativeSpacingCases = {
   "comment-first": ["comment", "paragraph"],
   "comment-last": ["paragraph", "comment"],
   "empty-toc": ["comment"],
+  "materialized-blank": ["materialized-blank"],
 };
 
 function nativeSpacingFixture(name) {
