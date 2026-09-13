@@ -1,6 +1,22 @@
 # Changelog
 
+## 0.0.42
+
+- Restrict Block quote and Code block toolbar active state to selections that
+  share the target block ancestor. Ranges across separate same-type blocks or
+  a normal paragraph are inactive, while nested selections sharing an outer
+  blockquote remain active.
+
 ## 0.0.41
+
+- Unify the main and selection toolbar's semantic active state from the current
+  ProseMirror selection. Bold, italic, strikethrough, inline code, and link
+  now share one mark helper, while list, blockquote, code block, and table
+  state is reflected through synchronized `aria-pressed` and active styling.
+- Keep Table active for text cursors, cross-cell selections, and `CellSelection`
+  through the existing table context rules. Image and horizontal rule expose
+  active state only for an explicit `NodeSelection`; insert-only commands keep
+  no persistent state, and CommonMark-disabled controls remain inactive.
 
 - Delegate ordinary ArrowUp and ArrowDown movement inside ProseMirror
   textblocks, including syntax-highlighted and wrapped Code blocks, to the

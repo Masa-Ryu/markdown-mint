@@ -79,10 +79,19 @@ function textSelectionForAll(doc: PMNode): TextSelection | null {
   return nearby instanceof TextSelection ? nearby : null;
 }
 
-function stateWithCommandSelection(state: EditorState): EditorState {
-  if (!(state.selection instanceof AllSelection)) return state;
-  const selection = textSelectionForAll(state.doc);
-  return selection ? state.apply(state.tr.setSelection(selection)) : state;
+function stateWithCommandSelection(
+  state: EditorState,
+  selection = state.selection,
+): EditorState {
+  if (!(selection instanceof AllSelection)) {
+    return selection === state.selection
+      ? state
+      : state.apply(state.tr.setSelection(selection));
+  }
+  const textSelection = textSelectionForAll(state.doc);
+  return textSelection
+    ? state.apply(state.tr.setSelection(textSelection))
+    : state;
 }
 
 /** Resolve the schema node used to represent a toolbar list kind. */
@@ -196,8 +205,11 @@ function listKindForContext(context: ListContext): ListKind | null {
 }
 
 /** Return the active semantic list kind at the current selection. */
-export function activeListKind(state: EditorState): ListKind | null {
-  const commandState = stateWithCommandSelection(state);
+export function activeListKind(
+  state: EditorState,
+  selection = state.selection,
+): ListKind | null {
+  const commandState = stateWithCommandSelection(state, selection);
   const context = listContextForSelection(commandState.selection);
   return context ? listKindForContext(context) : null;
 }

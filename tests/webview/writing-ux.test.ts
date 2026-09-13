@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { Node as PMNode } from "prosemirror-model";
-import { TextSelection } from "prosemirror-state";
+import { NodeSelection, TextSelection } from "prosemirror-state";
 import {
   parseMarkdown,
   renderMarkdown,
@@ -87,6 +87,36 @@ function paragraphTextPosition(
   for (let index = 0; index < paragraphIndex; index += 1)
     position += doc.child(index).nodeSize;
   return position + 1 + offset;
+}
+
+function topLevelNodeStart(doc: PMNode, index: number): number {
+  let position = 0;
+  for (let childIndex = 0; childIndex < index; childIndex += 1)
+    position += doc.child(childIndex).nodeSize;
+  return position;
+}
+
+function firstTextRange(
+  doc: PMNode,
+  predicate: (node: PMNode) => boolean,
+): { from: number; to: number } {
+  let range: { from: number; to: number } | undefined;
+  doc.descendants((node, position) => {
+    if (!range && node.isText && node.text && predicate(node))
+      range = { from: position, to: position + node.nodeSize };
+  });
+  if (!range) throw new Error("Expected a matching text node");
+  return range;
+}
+
+function firstNodePosition(doc: PMNode, nodeName: string): number {
+  let position: number | undefined;
+  doc.descendants((node, nodePosition) => {
+    if (position === undefined && node.type.name === nodeName)
+      position = nodePosition;
+  });
+  if (position === undefined) throw new Error(`Missing ${nodeName} node`);
+  return position;
 }
 
 function selectTrailingEmptyParagraph(app: MarkdownEditorApp): void {
@@ -480,6 +510,333 @@ describe("bounded writing controls", () => {
     expect(app.view.state.doc.firstChild?.type.name).toBe("paragraph");
     expect(bullet.getAttribute("aria-pressed")).toBe("false");
     expect(editMessages(messages)).toHaveLength(1);
+  });
+
+  it("keeps list active states exclusive as the selection changes list kind", () => {
+    const { root } = makeApp("one");
+    const bullet = root.querySelector<HTMLButtonElement>(
+      '[data-testid="toolbar-bullet-list"]',
+    )!;
+    const ordered = root.querySelector<HTMLButtonElement>(
+      '[data-testid="toolbar-ordered-list"]',
+    )!;
+    const task = root.querySelector<HTMLButtonElement>(
+      '[data-testid="toolbar-task-list"]',
+    )!;
+
+    bullet.click();
+    expect(bullet.getAttribute("aria-pressed")).toBe("true");
+    expect(ordered.getAttribute("aria-pressed")).toBe("false");
+    expect(task.getAttribute("aria-pressed")).toBe("false");
+
+    ordered.click();
+    expect(bullet.getAttribute("aria-pressed")).toBe("false");
+    expect(ordered.getAttribute("aria-pressed")).toBe("true");
+    expect(task.getAttribute("aria-pressed")).toBe("false");
+
+    task.click();
+    expect(bullet.getAttribute("aria-pressed")).toBe("false");
+    expect(ordered.getAttribute("aria-pressed")).toBe("false");
+    expect(task.getAttribute("aria-pressed")).toBe("true");
+
+    task.click();
+    expect(bullet.getAttribute("aria-pressed")).toBe("false");
+    expect(ordered.getAttribute("aria-pressed")).toBe("false");
+    expect(task.getAttribute("aria-pressed")).toBe("false");
+  });
+
+  it("synchronizes main and selection toolbar active states for inline marks", () => {
+    const { app, root } = makeApp(
+      "plain **bold** plain *italic* plain ~~strike~~ plain `code` plain [link](https://example.com) plain",
+    );
+    setSelectionGeometry(app);
+    const marks = [
+      ["strong", "toolbar-bold", "selection-bold"],
+      ["em", "toolbar-italic", "selection-italic"],
+      ["strike", "toolbar-strike", "selection-strike"],
+      ["code", "toolbar-code", "selection-code"],
+      ["link", "toolbar-link", "selection-link"],
+    ] as const;
+    const plainRange = firstTextRange(
+      app.view.state.doc,
+      (node) => node.marks.length === 0,
+    );
+
+    for (const [markName, mainTestId, selectionTestId] of marks) {
+      const range = firstTextRange(app.view.state.doc, (node) =>
+        node.marks.some((mark) => mark.type.name === markName),
+      );
+      const main = root.querySelector<HTMLButtonElement>(
+        `[data-testid="${mainTestId}"]`,
+      )!;
+      const selectionButton = root.querySelector<HTMLButtonElement>(
+        `[data-testid="${selectionTestId}"]`,
+      )!;
+
+      app.view.dispatch(
+        app.view.state.tr.setSelection(
+          TextSelection.create(app.view.state.doc, range.from + 1),
+        ),
+      );
+      expect(main.getAttribute("aria-pressed")).toBe("true");
+      expect(main.classList.contains("is-active")).toBe(true);
+      expect(selectionButton.getAttribute("aria-pressed")).toBe("true");
+
+      app.view.dispatch(
+        app.view.state.tr.setSelection(
+          TextSelection.create(app.view.state.doc, range.from, range.to),
+        ),
+      );
+      expect(main.getAttribute("aria-pressed")).toBe("true");
+      expect(selectionButton.getAttribute("aria-pressed")).toBe("true");
+
+      app.view.dispatch(
+        app.view.state.tr.setSelection(
+          TextSelection.create(app.view.state.doc, plainRange.from + 1),
+        ),
+      );
+      expect(main.getAttribute("aria-pressed")).toBe("false");
+      expect(main.classList.contains("is-active")).toBe(false);
+      expect(selectionButton.getAttribute("aria-pressed")).toBe("false");
+    }
+
+    expect(
+      root
+        .querySelector<HTMLButtonElement>('[data-testid="toolbar-format"]')
+        ?.hasAttribute("aria-pressed"),
+    ).toBe(false);
+    expect(
+      root
+        .querySelector<HTMLButtonElement>('[data-testid="toolbar-emoji"]')
+        ?.hasAttribute("aria-pressed"),
+    ).toBe(false);
+
+    const strong = app.schema.marks.strong;
+    app.view.dispatch(
+      app.view.state.tr.setStoredMarks(strong ? [strong.create()] : null),
+    );
+    expect(
+      root
+        .querySelector<HTMLButtonElement>('[data-testid="toolbar-bold"]')
+        ?.getAttribute("aria-pressed"),
+    ).toBe("true");
+    expect(
+      root
+        .querySelector<HTMLButtonElement>('[data-testid="selection-bold"]')
+        ?.getAttribute("aria-pressed"),
+    ).toBe("true");
+    app.view.dispatch(app.view.state.tr.setStoredMarks(null));
+    expect(
+      root
+        .querySelector<HTMLButtonElement>('[data-testid="toolbar-bold"]')
+        ?.getAttribute("aria-pressed"),
+    ).toBe("false");
+  });
+
+  it("marks block context active and only activates image and rule NodeSelections", () => {
+    const { app, root } = makeApp(
+      "before\n\n> quoted\n\n```ts\ncode\n```\n\nafter",
+    );
+    const quote = root.querySelector<HTMLButtonElement>(
+      '[data-testid="toolbar-quote"]',
+    )!;
+    const code = root.querySelector<HTMLButtonElement>(
+      '[data-testid="toolbar-code-block"]',
+    )!;
+    const image = root.querySelector<HTMLButtonElement>(
+      '[data-testid="toolbar-image"]',
+    )!;
+    const rule = root.querySelector<HTMLButtonElement>(
+      '[data-testid="toolbar-horizontal-rule"]',
+    )!;
+    const doc = app.view.state.doc;
+    expect(image.getAttribute("aria-pressed")).toBe("false");
+    expect(rule.getAttribute("aria-pressed")).toBe("false");
+
+    app.view.dispatch(
+      app.view.state.tr.setSelection(
+        TextSelection.create(doc, topLevelNodeStart(doc, 1) + 3),
+      ),
+    );
+    expect(quote.getAttribute("aria-pressed")).toBe("true");
+    expect(code.getAttribute("aria-pressed")).toBe("false");
+
+    app.view.dispatch(
+      app.view.state.tr.setSelection(
+        TextSelection.create(app.view.state.doc, topLevelNodeStart(doc, 2) + 2),
+      ),
+    );
+    expect(quote.getAttribute("aria-pressed")).toBe("false");
+    expect(code.getAttribute("aria-pressed")).toBe("true");
+
+    app.view.dispatch(
+      app.view.state.tr.setSelection(
+        TextSelection.create(app.view.state.doc, topLevelNodeStart(doc, 3) + 2),
+      ),
+    );
+    expect(quote.getAttribute("aria-pressed")).toBe("false");
+    expect(code.getAttribute("aria-pressed")).toBe("false");
+
+    const nodeApp = makeApp("before\n\n![alt](image.png)\n\n---\n\nafter");
+    const nodeDoc = nodeApp.app.view.state.doc;
+    nodeApp.app.view.dispatch(
+      nodeApp.app.view.state.tr.setSelection(
+        NodeSelection.create(nodeDoc, firstNodePosition(nodeDoc, "image")),
+      ),
+    );
+    expect(
+      nodeApp.root
+        .querySelector<HTMLButtonElement>('[data-testid="toolbar-image"]')
+        ?.getAttribute("aria-pressed"),
+    ).toBe("true");
+    expect(
+      nodeApp.root
+        .querySelector<HTMLButtonElement>(
+          '[data-testid="toolbar-horizontal-rule"]',
+        )
+        ?.getAttribute("aria-pressed"),
+    ).toBe("false");
+
+    nodeApp.app.view.dispatch(
+      nodeApp.app.view.state.tr.setSelection(
+        NodeSelection.create(
+          nodeApp.app.view.state.doc,
+          firstNodePosition(nodeApp.app.view.state.doc, "horizontal_rule"),
+        ),
+      ),
+    );
+    expect(
+      nodeApp.root
+        .querySelector<HTMLButtonElement>('[data-testid="toolbar-image"]')
+        ?.getAttribute("aria-pressed"),
+    ).toBe("false");
+    expect(
+      nodeApp.root
+        .querySelector<HTMLButtonElement>(
+          '[data-testid="toolbar-horizontal-rule"]',
+        )
+        ?.getAttribute("aria-pressed"),
+    ).toBe("true");
+    nodeApp.app.destroy();
+  });
+
+  it("requires a shared blockquote ancestor for range active state", () => {
+    const sameBlock = makeApp("> first line\n> second line");
+    const sameDoc = sameBlock.app.view.state.doc;
+    const firstLine = firstTextRange(
+      sameDoc,
+      (node) => node.text?.includes("first line") ?? false,
+    );
+    const secondLine = firstTextRange(
+      sameDoc,
+      (node) => node.text?.includes("second line") ?? false,
+    );
+    sameBlock.app.view.dispatch(
+      sameBlock.app.view.state.tr.setSelection(
+        TextSelection.create(sameDoc, firstLine.from, secondLine.to),
+      ),
+    );
+    expect(quoteButton(sameBlock.root).getAttribute("aria-pressed")).toBe(
+      "true",
+    );
+
+    const separateBlocks = makeApp("> quote A\n\nnormal\n\n> quote B");
+    const separateDoc = separateBlocks.app.view.state.doc;
+    const quoteA = firstTextRange(
+      separateDoc,
+      (node) => node.text === "quote A",
+    );
+    const quoteB = firstTextRange(
+      separateDoc,
+      (node) => node.text === "quote B",
+    );
+    separateBlocks.app.view.dispatch(
+      separateBlocks.app.view.state.tr.setSelection(
+        TextSelection.create(separateDoc, quoteA.from, quoteB.to),
+      ),
+    );
+    expect(quoteButton(separateBlocks.root).getAttribute("aria-pressed")).toBe(
+      "false",
+    );
+
+    const quoteToNormal = makeApp("> quote\n\nnormal");
+    const quoteToNormalDoc = quoteToNormal.app.view.state.doc;
+    const quote = firstTextRange(
+      quoteToNormalDoc,
+      (node) => node.text === "quote",
+    );
+    const normal = firstTextRange(
+      quoteToNormalDoc,
+      (node) => node.text === "normal",
+    );
+    quoteToNormal.app.view.dispatch(
+      quoteToNormal.app.view.state.tr.setSelection(
+        TextSelection.create(quoteToNormalDoc, quote.from, normal.to),
+      ),
+    );
+    expect(quoteButton(quoteToNormal.root).getAttribute("aria-pressed")).toBe(
+      "false",
+    );
+  });
+
+  it("requires a shared code block ancestor for range active state", () => {
+    const sameBlock = makeApp("```text\nfirst line\nsecond line\n```");
+    const sameDoc = sameBlock.app.view.state.doc;
+    const firstLine = firstTextRange(
+      sameDoc,
+      (node) => node.text?.includes("first line") ?? false,
+    );
+    const secondLine = firstTextRange(
+      sameDoc,
+      (node) => node.text?.includes("second line") ?? false,
+    );
+    sameBlock.app.view.dispatch(
+      sameBlock.app.view.state.tr.setSelection(
+        TextSelection.create(sameDoc, firstLine.from, secondLine.to),
+      ),
+    );
+    expect(
+      sameBlock.root
+        .querySelector<HTMLButtonElement>('[data-testid="toolbar-code-block"]')
+        ?.getAttribute("aria-pressed"),
+    ).toBe("true");
+
+    const separateBlocks = makeApp(
+      "```text\ncode A\n```\n\nnormal\n\n```text\ncode B\n```",
+    );
+    const separateDoc = separateBlocks.app.view.state.doc;
+    const codeA = firstTextRange(
+      separateDoc,
+      (node) => node.text?.includes("code A") ?? false,
+    );
+    const codeB = firstTextRange(
+      separateDoc,
+      (node) => node.text?.includes("code B") ?? false,
+    );
+    separateBlocks.app.view.dispatch(
+      separateBlocks.app.view.state.tr.setSelection(
+        TextSelection.create(separateDoc, codeA.from, codeB.to),
+      ),
+    );
+    expect(
+      separateBlocks.root
+        .querySelector<HTMLButtonElement>('[data-testid="toolbar-code-block"]')
+        ?.getAttribute("aria-pressed"),
+    ).toBe("false");
+  });
+
+  it("keeps blockquote active when a range shares an outer nested blockquote", () => {
+    const { app, root } = makeApp("> outer\n>\n> > inner A\n>\n> > inner B");
+    const doc = app.view.state.doc;
+    const innerA = firstTextRange(doc, (node) => node.text === "inner A");
+    const innerB = firstTextRange(doc, (node) => node.text === "inner B");
+
+    app.view.dispatch(
+      app.view.state.tr.setSelection(
+        TextSelection.create(doc, innerA.from, innerB.to),
+      ),
+    );
+    expect(quoteButton(root).getAttribute("aria-pressed")).toBe("true");
   });
 
   it("toggles block quote through mousedown and click while preserving the cursor", () => {
