@@ -337,8 +337,13 @@ passed standalone bundled-formatter verification. `git diff --check` passed.
 Code keeps its editable ProseMirror contentDOM, language search/custom names,
 metadata-removal confirmation, copy, line numbers, highlight, wrap, and expand
 controls. Clicking the language label once opens the chooser; chooser arrows
-stay in the candidate list. A language-only change preserves the original fence,
-line endings, body whitespace, and metadata.
+stay in the candidate list. The chooser initially focuses its search input
+without activating a candidate, keeps only the configured language selected,
+and switches between keyboard active indication and pointer hover feedback
+while preserving the existing DOM focus behavior. An empty Enter does not
+remove a language; removal remains an explicit selection of **Language not
+specified**. A language-only change preserves the original fence, line
+endings, body whitespace, and metadata.
 
 Alert keeps its native textarea and source-preserving marker/body writer. Its
 outer ProseMirror NodeSelection identifies the owning Alert while the native
