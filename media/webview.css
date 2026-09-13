@@ -870,9 +870,13 @@ textarea:focus-visible {
   font: inherit;
   text-align: start;
 }
-.mm-code-block-view .mm-code-language-option:hover,
+.mm-code-block-view
+  .mm-code-language-menu:not([data-input-modality="keyboard"])
+  .mm-code-language-option:hover,
 .mm-code-block-view .mm-code-language-option:focus-visible,
-.mm-code-block-view .mm-code-language-option.is-active {
+.mm-code-block-view
+  .mm-code-language-menu[data-input-modality="keyboard"]
+  .mm-code-language-option.is-active {
   border-color: var(--vscode-focusBorder, var(--mm-focus-border));
   background: var(--vscode-list-hoverBackground, var(--mm-control-hover-background));
   outline: 0;

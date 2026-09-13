@@ -340,6 +340,130 @@ describe("rich editor rendering", () => {
     app.destroy();
   });
 
+  it("opens the language picker without an active candidate", () => {
+    const { app, root, messages } = makeApp("```javascript\nvalue\n```");
+    root.querySelector<HTMLButtonElement>(".mm-code-language-trigger")!.click();
+    const input = root.querySelector<HTMLInputElement>(
+      ".mm-code-language-inline",
+    )!;
+    const menu = input.closest<HTMLElement>(".mm-code-language-menu")!;
+    const javascript = root.querySelector<HTMLButtonElement>(
+      '[data-mm-language-option="javascript"]',
+    )!;
+    const unspecified = root.querySelector<HTMLButtonElement>(
+      '[data-mm-language-option=""]',
+    )!;
+
+    expect(document.activeElement).toBe(input);
+    expect(menu.dataset.inputModality).toBe("pointer");
+    expect(input.getAttribute("aria-activedescendant")).toBeNull();
+    expect(menu.querySelector(".is-active")).toBeNull();
+    expect(javascript.getAttribute("aria-selected")).toBe("true");
+    expect(unspecified.getAttribute("aria-selected")).toBe("false");
+    expect(app.view.state.doc.firstChild?.attrs.params).toBe("javascript");
+    expect(messages.filter(isEditMessage)).toHaveLength(0);
+    app.destroy();
+  });
+
+  it("switches language picker modality and clears keyboard indication on pointer input", () => {
+    const { app, root } = makeApp("```javascript\nvalue\n```");
+    root.querySelector<HTMLButtonElement>(".mm-code-language-trigger")!.click();
+    const input = root.querySelector<HTMLInputElement>(
+      ".mm-code-language-inline",
+    )!;
+    const menu = input.closest<HTMLElement>(".mm-code-language-menu")!;
+    const options = (): HTMLButtonElement[] =>
+      Array.from(
+        menu.querySelectorAll<HTMLButtonElement>("[data-mm-language-option]"),
+      );
+
+    input.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        bubbles: true,
+        cancelable: true,
+        key: "ArrowUp",
+      }),
+    );
+    expect(menu.dataset.inputModality).toBe("keyboard");
+    expect(menu.querySelector(".is-active")).toBe(options()[0]);
+    expect(input.getAttribute("aria-activedescendant")).toBe(options()[0]?.id);
+
+    input.value = "java";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    const filteredFirst = menu.querySelector<HTMLButtonElement>(
+      "[data-mm-language-option]",
+    )!;
+    expect(menu.dataset.inputModality).toBe("keyboard");
+    expect(menu.querySelector(".is-active")).toBe(filteredFirst);
+    expect(input.getAttribute("aria-activedescendant")).toBe(filteredFirst.id);
+
+    filteredFirst.dispatchEvent(new Event("pointermove", { bubbles: true }));
+    expect(menu.dataset.inputModality).toBe("pointer");
+    expect(menu.querySelector(".is-active")).toBeNull();
+    expect(input.getAttribute("aria-activedescendant")).toBeNull();
+
+    input.value = "java";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    const pointerDownTarget = menu.querySelector<HTMLButtonElement>(
+      "[data-mm-language-option]",
+    )!;
+    pointerDownTarget.dispatchEvent(
+      new Event("pointerdown", { bubbles: true }),
+    );
+    expect(menu.dataset.inputModality).toBe("pointer");
+    expect(menu.querySelector(".is-active")).toBeNull();
+    expect(input.getAttribute("aria-activedescendant")).toBeNull();
+    app.destroy();
+  });
+
+  it("does not remove a language on empty Enter without an active candidate", () => {
+    const { app, root, messages } = makeApp("```javascript\nvalue\n```");
+    const trigger = root.querySelector<HTMLButtonElement>(
+      ".mm-code-language-trigger",
+    )!;
+    trigger.click();
+    const input = root.querySelector<HTMLInputElement>(
+      ".mm-code-language-inline",
+    )!;
+    const menu = input.closest<HTMLElement>(".mm-code-language-menu")!;
+    const emptyEnter = new KeyboardEvent("keydown", {
+      bubbles: true,
+      cancelable: true,
+      key: "Enter",
+    });
+    input.dispatchEvent(emptyEnter);
+
+    expect(emptyEnter.defaultPrevented).toBe(true);
+    expect(app.view.state.doc.firstChild?.attrs.params).toBe("javascript");
+    expect(messages.filter(isEditMessage)).toHaveLength(0);
+    expect(menu.hidden).toBe(true);
+
+    trigger.click();
+    input.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        bubbles: true,
+        cancelable: true,
+        key: "ArrowDown",
+      }),
+    );
+    expect(input.getAttribute("aria-activedescendant")).toBeTruthy();
+    expect(
+      root.querySelector<HTMLButtonElement>(
+        `[id="${input.getAttribute("aria-activedescendant")}"]`,
+      )?.dataset.mmLanguageOption,
+    ).toBe("");
+    input.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        bubbles: true,
+        cancelable: true,
+        key: "Enter",
+      }),
+    );
+    expect(app.view.state.doc.firstChild?.attrs.params).toBe("");
+    expect(messages.filter(isEditMessage)).toHaveLength(1);
+    app.destroy();
+  });
+
   it("shows labels only while retaining searchable language identifiers", () => {
     const { app, root } = makeApp("```ts\nvalue\n```");
     root.querySelector<HTMLButtonElement>(".mm-code-language-trigger")?.click();
