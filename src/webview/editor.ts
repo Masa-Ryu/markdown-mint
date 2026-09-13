@@ -3948,13 +3948,12 @@ export class MarkdownEditorApp {
       this.invalidateProfileFeatureDialog();
     }
     this.updateProfileToolbar();
-    if (this.selectionToolbar) {
-      this.selectionToolbar.hidden = editingDisabled;
-      this.selectionToolbar.setAttribute(
-        "aria-hidden",
-        String(editingDisabled),
-      );
-      if (editingDisabled) this.clearSelectionToolbarSelection();
+    // Normal selection visibility belongs to updateSelectionToolbar. This
+    // path may only force the toolbar closed when the selection is ineligible.
+    if (this.selectionToolbar && !this.selectionToolbarEligible(selection)) {
+      this.selectionToolbar.hidden = true;
+      this.selectionToolbar.setAttribute("aria-hidden", "true");
+      this.clearSelectionToolbarSelection();
     }
     if (editingDisabled && this.emptyLineButton)
       this.emptyLineButton.hidden = true;
