@@ -3178,16 +3178,7 @@ export class MarkdownEditorApp {
   private bodyNavigation: BodyNavigation | undefined;
 
   private get navigation(): BodyNavigation {
-    return (this.bodyNavigation ??= new BodyNavigation(
-      this.view,
-      (position, node) =>
-        this.moveSelectionAfterBlock(
-          this.view.state,
-          position,
-          node,
-          (transaction) => this.view.dispatch(transaction),
-        ),
-    ));
+    return (this.bodyNavigation ??= new BodyNavigation(this.view));
   }
 
   private exitTable(
@@ -3201,7 +3192,7 @@ export class MarkdownEditorApp {
 
   private exitTableAtEnd(
     state: EditorState,
-    dispatch?: (tr: Transaction) => void,
+    _dispatch?: (tr: Transaction) => void,
     axis: "horiz" | "vert" = "vert",
   ): boolean {
     if (!(state.selection instanceof TextSelection) || !state.selection.empty)
@@ -3226,18 +3217,17 @@ export class MarkdownEditorApp {
     // cell. Leave only when the cursor is at the final textblock boundary.
     const cellContentEnd = context.cellPos + cell.nodeSize - 1;
     if (state.selection.from < cellContentEnd - 1) return false;
-    if (axis === "vert")
-      return this.navigation.moveVerticallyFromBlockEdge(
-        context.tableStart - 1 + context.table.nodeSize,
-        1,
-        state.selection.head,
-      );
-    return this.moveSelectionAfterTable(state, context, dispatch);
+    return this.navigation.moveFromBlockEdge(
+      context.tableStart - 1 + context.table.nodeSize,
+      1,
+      axis === "vert",
+      axis === "vert" ? state.selection.head : undefined,
+    );
   }
 
   private exitTableAtStart(
     state: EditorState,
-    dispatch?: (tr: Transaction) => void,
+    _dispatch?: (tr: Transaction) => void,
     axis: "horiz" | "vert" = "vert",
   ): boolean {
     if (!(state.selection instanceof TextSelection) || !state.selection.empty)
@@ -3261,27 +3251,12 @@ export class MarkdownEditorApp {
         return false;
       }
     }
-    const tablePosition = context.tableStart - 1;
-    if (
-      state.doc.resolve(tablePosition).depth !== 0 ||
-      !isBlockBoundary(state.doc, tablePosition)
-    )
-      return false;
-    if (axis === "vert")
-      return this.navigation.moveVerticallyFromBlockEdge(
-        tablePosition,
-        -1,
-        state.selection.head,
-      );
-    const target = new BlockBoundarySelection(state.doc.resolve(tablePosition));
-    if (!dispatch) return true;
-    dispatch(
-      state.tr
-        .setSelection(target)
-        .setMeta("addToHistory", false)
-        .scrollIntoView(),
+    return this.navigation.moveFromBlockEdge(
+      context.tableStart - 1,
+      -1,
+      axis === "vert",
+      axis === "vert" ? state.selection.head : undefined,
     );
-    return true;
   }
 
   private moveSelectionAfterTable(
@@ -3311,9 +3286,8 @@ export class MarkdownEditorApp {
     const blockEnd = position + node.nodeSize;
     let transaction = state.tr;
     let target: Selection;
-    // Leave a virtual stop between top-level blocks. This keeps table exits
-    // and the final rendered block on the same non-mutating navigation graph
-    // as BodyNavigation.
+    // Escape keeps its dedicated virtual insertion stop between top-level
+    // blocks. Arrow navigation uses BodyNavigation's actual-target graph.
     if (
       state.doc.resolve(position).depth === 0 &&
       isBlockBoundary(state.doc, blockEnd)

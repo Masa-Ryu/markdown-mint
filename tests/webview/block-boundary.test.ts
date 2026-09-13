@@ -91,7 +91,7 @@ function editMessages(messages: unknown[]): Array<{ markdown: string }> {
 }
 
 describe("top-level block boundary navigation", () => {
-  it("walks code, Alert, Details and rendered blocks through virtual boundaries", () => {
+  it("walks code, Alert, Details and rendered blocks as actual arrow targets", () => {
     const source = [
       "Before",
       "",
@@ -117,9 +117,6 @@ describe("top-level block boundary navigation", () => {
     const originalDoc = app.view.state.doc;
     select("code", "end");
     key("ArrowRight");
-    expect(app.view.state.selection).toBeInstanceOf(BlockBoundarySelection);
-    expect(root.querySelector(".mm-block-boundary-cursor")).not.toBeNull();
-    key("ArrowRight");
     expect(app.view.state.selection).toBeInstanceOf(NodeSelection);
     expect((app.view.state.selection as NodeSelection).node.attrs.kind).toBe(
       "alert",
@@ -129,12 +126,8 @@ describe("top-level block boundary navigation", () => {
     )!;
     body.setSelectionRange(body.value.length, body.value.length);
     key("ArrowRight", body);
-    expect(app.view.state.selection).toBeInstanceOf(BlockBoundarySelection);
-    key("ArrowRight");
     expect(app.view.state.selection.$from.parent.textContent).toBe("Body");
     select("Body", "end");
-    key("ArrowRight");
-    expect(app.view.state.selection).toBeInstanceOf(BlockBoundarySelection);
     key("ArrowRight");
     expect(app.view.state.selection).toBeInstanceOf(NodeSelection);
     expect((app.view.state.selection as NodeSelection).node.attrs.kind).toBe(
@@ -192,12 +185,21 @@ describe("top-level block boundary navigation", () => {
     expect(editMessages(messages)).toHaveLength(0);
   });
 
-  it("materializes one paragraph for text and Enter, while boundary deletion is a no-op", () => {
+  it("keeps insertion affordances on explicit boundaries while arrows skip them", () => {
     const { app, messages, select, key } = setup(
       "Before\n\n```ts\ncode\n```\n\nAfter",
     );
     select("code", "end");
-    key("ArrowRight");
+    const boundaryPosition =
+      app.view.state.doc.child(0)!.nodeSize +
+      app.view.state.doc.child(1)!.nodeSize;
+    app.view.dispatch(
+      app.view.state.tr.setSelection(
+        new BlockBoundarySelection(
+          app.view.state.doc.resolve(boundaryPosition),
+        ),
+      ),
+    );
     expect(key("Backspace").defaultPrevented).toBe(true);
     expect(app.view.state.selection).toBeInstanceOf(BlockBoundarySelection);
     expect(
@@ -214,8 +216,13 @@ describe("top-level block boundary navigation", () => {
     expect(app.view.state.selection.$from.parent.textContent).toBe("Hello");
     expect(editMessages(messages).at(-1)?.markdown).toContain("Hello");
 
-    select("code", "end");
-    key("ArrowRight");
+    app.view.dispatch(
+      app.view.state.tr.setSelection(
+        new BlockBoundarySelection(
+          app.view.state.doc.resolve(boundaryPosition),
+        ),
+      ),
+    );
     key("Enter");
     expect(app.view.state.selection.$from.parent.type.name).toBe("paragraph");
     expect(app.view.state.selection.$from.parent.textContent).toBe("");

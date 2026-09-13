@@ -99,15 +99,13 @@ afterEach(() => {
 });
 
 describe("table exit and blank-space editing", () => {
-  it("keeps horizontal table edges virtual and crosses vertical edges directly", () => {
+  it("crosses table edges directly in both axes without a virtual stop", () => {
     const source = "Before\n\n| A | B |\n| --- | --- |\n| C | D |\n\nAfter";
     const { app, messages } = makeApp(source);
-    let tablePosition = -1;
     let firstCellPosition = -1;
     let lastCellPosition = -1;
     const cellPositions: number[] = [];
     app.view.state.doc.descendants((node, offset) => {
-      if (node.type.spec.tableRole === "table") tablePosition = offset;
       if (
         (node.type.spec.tableRole === "cell" ||
           node.type.spec.tableRole === "header_cell") &&
@@ -122,7 +120,6 @@ describe("table exit and blank-space editing", () => {
         lastCellPosition = offset;
       }
     });
-    expect(tablePosition).toBeGreaterThanOrEqual(0);
     expect(firstCellPosition).toBeGreaterThanOrEqual(0);
     expect(lastCellPosition).toBeGreaterThanOrEqual(0);
     expect(cellPositions).toHaveLength(4);
@@ -141,11 +138,12 @@ describe("table exit and blank-space editing", () => {
     });
     app.view.dom.dispatchEvent(firstArrow);
     expect(firstArrow.defaultPrevented).toBe(true);
-    expect(app.view.state.selection).toBeInstanceOf(BlockBoundarySelection);
-    expect(app.view.state.selection.from).toBe(tablePosition);
+    expect(app.view.state.selection.$from.parent.textContent).toBe("Before");
+    expect(app.view.state.selection.$from.parentOffset).toBe(6);
+    expect(app.view.state.selection).not.toBeInstanceOf(BlockBoundarySelection);
 
-    // A first-column cell in a later row still belongs to the table's native
-    // horizontal navigation; only the table's top-left edge is a boundary.
+    // A first-column cell in a later row remains inside the table's native
+    // horizontal navigation; only an actual outer edge can leave the table.
     app.view.dispatch(
       app.view.state.tr.setSelection(
         TextSelection.create(app.view.state.doc, cellPositions[2]! + 2),
@@ -192,7 +190,9 @@ describe("table exit and blank-space editing", () => {
     });
     app.view.dom.dispatchEvent(finalArrow);
     expect(finalArrow.defaultPrevented).toBe(true);
-    expect(app.view.state.selection).toBeInstanceOf(BlockBoundarySelection);
+    expect(app.view.state.selection.$from.parent.textContent).toBe("After");
+    expect(app.view.state.selection.$from.parentOffset).toBe(0);
+    expect(app.view.state.selection).not.toBeInstanceOf(BlockBoundarySelection);
     expect(app.view.state.doc).toBe(original);
     expect(edits(messages)).toHaveLength(beforeEdits);
   });
@@ -313,7 +313,7 @@ describe("table exit and blank-space editing", () => {
       exitAtEnd(app.view.state, (transaction) =>
         app.view.dispatch(transaction),
       ),
-    ).toBe(false);
+    ).toBe(true);
     expect(app.view.state.selection.$from.parent.textContent).toBe("last");
     expect(app.view.state.doc.lastChild?.type.name).toBe("table");
   });

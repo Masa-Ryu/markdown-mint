@@ -688,7 +688,7 @@ describe("table Enter navigation", () => {
   });
 });
 
-describe("table vertical navigation", () => {
+describe("table arrow navigation", () => {
   it("enters and exits a table without exposing a block boundary", () => {
     const source = "Before\n\n| H1 | H2 |\n| --- | --- |\n| A1 | A2 |\n\nAfter";
     const { app, root, messages } = makeApp(source);
@@ -725,6 +725,54 @@ describe("table vertical navigation", () => {
     dispatchEditorKey(app, "ArrowDown");
     expect(activeTableCell(app)).toEqual({ row: 0, column: 0 });
     expect(app.view.state.doc).toBe(before);
+  });
+
+  it("crosses horizontal table edges directly at any container depth", () => {
+    const cases = [
+      {
+        source: "Before\n\n| H1 | H2 |\n| --- | --- |\n| A1 | A2 |\n\nAfter",
+        before: "Before",
+        after: "After",
+      },
+      {
+        source: [
+          "> Before",
+          ">",
+          "> | H1 | H2 |",
+          "> | --- | --- |",
+          "> | A1 | A2 |",
+          ">",
+          "> After",
+        ].join("\n"),
+        before: "Before",
+        after: "After",
+      },
+    ];
+
+    for (const { source, before, after } of cases) {
+      const { app, root, messages } = makeApp(source);
+      const original = app.view.state.doc;
+
+      selectTableCell(app, root, 0, 0);
+      const left = dispatchEditorKey(app, "ArrowLeft");
+      expect(left.defaultPrevented).toBe(true);
+      expect(app.view.state.selection.$from.parent.textContent).toBe(before);
+      expect(app.view.state.selection.$from.parentOffset).toBe(before.length);
+      expect(app.view.state.selection).not.toBeInstanceOf(
+        BlockBoundarySelection,
+      );
+
+      selectTableCell(app, root, 1, 1, 2);
+      const right = dispatchEditorKey(app, "ArrowRight");
+      expect(right.defaultPrevented).toBe(true);
+      expect(app.view.state.selection.$from.parent.textContent).toBe(after);
+      expect(app.view.state.selection.$from.parentOffset).toBe(0);
+      expect(app.view.state.selection).not.toBeInstanceOf(
+        BlockBoundarySelection,
+      );
+      expect(app.view.state.doc).toBe(original);
+      expect(messageType(messages, "edit")).toHaveLength(0);
+    }
   });
 
   it("moves through a table nested in a blockquote without leaving its container", () => {
