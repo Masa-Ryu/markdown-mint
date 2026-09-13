@@ -7,6 +7,7 @@ import {
   schema,
   serializeMarkdown,
 } from "../../src/core";
+import { BlockBoundarySelection } from "../../src/webview/blockBoundary";
 import { PROTOCOL_VERSION } from "../../src/shared/protocol";
 import {
   createEditorApp,
@@ -2002,6 +2003,18 @@ describe("bounded writing controls", () => {
     );
     expect(root.querySelectorAll(".mm-block-gap-insert")).toHaveLength(1);
 
+    app.view.dispatch(
+      app.view.state.tr.setSelection(
+        new BlockBoundarySelection(
+          app.view.state.doc.resolve(topLevelNodeStart(app.view.state.doc, 1)),
+        ),
+      ),
+    );
+    expect(gap.hidden).toBe(true);
+
+    app.view.dispatch(
+      app.view.state.tr.setSelection(TextSelection.atStart(app.view.state.doc)),
+    );
     move(120);
     expect(gap.hidden).toBe(false);
     expect(gap.dataset.position).toBe(
@@ -2099,56 +2112,6 @@ describe("bounded writing controls", () => {
       }),
     );
     expect(gap.hidden).toBe(false);
-  });
-
-  it("creates transient top-level paragraphs before and after with Mod-Enter", () => {
-    const source = "one\n\ntwo";
-    const after = makeApp(source);
-    after.app.view.dispatch(
-      after.app.view.state.tr.setSelection(
-        TextSelection.create(
-          after.app.view.state.doc,
-          paragraphTextPosition(after.app.view.state.doc, 0, 3),
-        ),
-      ),
-    );
-    const afterKey = dispatchEditorKey(after.app, "Enter", { ctrlKey: true });
-    expect(afterKey.defaultPrevented).toBe(true);
-    expect(after.app.view.state.doc.childCount).toBe(3);
-    expect(after.app.view.state.doc.child(1)?.content.size).toBe(0);
-    expect(
-      (
-        after.app as unknown as { currentMarkdown: () => string }
-      ).currentMarkdown(),
-    ).toBe(source);
-    expect(editMessages(after.messages)).toHaveLength(0);
-
-    const before = makeApp(source);
-    before.app.view.dispatch(
-      before.app.view.state.tr.setSelection(
-        TextSelection.create(
-          before.app.view.state.doc,
-          paragraphTextPosition(before.app.view.state.doc, 1, 0),
-        ),
-      ),
-    );
-    const beforeKey = dispatchEditorKey(before.app, "Enter", {
-      ctrlKey: true,
-      shiftKey: true,
-    });
-    expect(beforeKey.defaultPrevented).toBe(true);
-    expect(before.app.view.state.doc.childCount).toBe(3);
-    expect(before.app.view.state.doc.child(1)?.content.size).toBe(0);
-    expect(
-      (
-        before.app as unknown as { currentMarkdown: () => string }
-      ).currentMarkdown(),
-    ).toBe(source);
-    expect(editMessages(before.messages)).toHaveLength(0);
-
-    dispatchTextInput(after.app, "x");
-    expect(editMessages(after.messages)).toHaveLength(1);
-    expect(after.app.view.state.doc.child(1)?.textContent).toBe("x");
   });
 
   it("offers Insert beside a top-level empty paragraph without mutating Markdown until a command is committed", () => {

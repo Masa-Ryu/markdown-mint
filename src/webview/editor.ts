@@ -2618,8 +2618,6 @@ export class MarkdownEditorApp {
                 {
                   canEdit: () => this.canEditBlock(),
                   composition: (active) => this.handleBlockComposition(active),
-                  onBlockGapShortcut: (direction, position) =>
-                    this.insertTransientBlockGapAroundNode(position, direction),
                   canPreserveLocalInput: () =>
                     this.initialized &&
                     !this.previewOnly &&
@@ -2912,10 +2910,6 @@ export class MarkdownEditorApp {
           ? this.gfmUnavailable(dispatch)
           : commandForMark("strike", this.schema)(state, dispatch),
       "Mod-`": commandForMark("code", this.schema),
-      "Mod-Shift-Enter": (state, dispatch) =>
-        this.insertTransientBlockGapFromSelection(state, "before", dispatch),
-      "Mod-Enter": (state, dispatch) =>
-        this.insertTransientBlockGapFromSelection(state, "after", dispatch),
       Enter: (state, dispatch) => {
         if (this.editSelectedInlineMath(state, dispatch)) return true;
         if (this.composing) return false;
@@ -3234,60 +3228,6 @@ export class MarkdownEditorApp {
     }
   }
 
-  private transientBlockGapPosition(
-    state: EditorState,
-    direction: "before" | "after",
-  ): number | null {
-    const selection = state.selection;
-    if (selection instanceof BlockBoundarySelection) return selection.head;
-    if (
-      selection instanceof NodeSelection &&
-      selection.$from.depth === 0 &&
-      (selection.node.isBlock || selection.node.isAtom)
-    )
-      return direction === "before" ? selection.from : selection.to;
-    if (
-      selection instanceof NodeSelection &&
-      selection.$from.depth === 1 &&
-      selection.node.isInline &&
-      selection.node.isAtom &&
-      selection.$from.parent.isTextblock
-    )
-      return direction === "before"
-        ? selection.$from.before(1)
-        : selection.$from.after(1);
-    if (
-      !(selection instanceof TextSelection) ||
-      !selection.empty ||
-      selection.$from.depth !== 1 ||
-      !selection.$from.parent.isTextblock
-    )
-      return null;
-    const parent = selection.$from.parent;
-    if (direction === "before" && selection.$from.parentOffset === 0)
-      return selection.$from.before(1);
-    if (
-      direction === "after" &&
-      selection.$from.parentOffset === parent.content.size
-    )
-      return selection.$from.after(1);
-    return null;
-  }
-
-  private insertTransientBlockGapFromSelection(
-    state: EditorState,
-    direction: "before" | "after",
-    dispatch?: (tr: Transaction) => void,
-  ): boolean {
-    if (state !== this.view.state) return false;
-    const position = this.transientBlockGapPosition(state, direction);
-    if (position === null) return false;
-    const transaction = this.createTransientBlockGapTransaction(position);
-    if (!transaction) return false;
-    if (dispatch) dispatch(transaction);
-    return true;
-  }
-
   private insertTransientBlockGap(
     position: number,
     openPopup = false,
@@ -3328,17 +3268,6 @@ export class MarkdownEditorApp {
     return true;
   }
 
-  private insertTransientBlockGapAroundNode(
-    position: number,
-    direction: "before" | "after",
-  ): boolean {
-    const node = this.view.state.doc.nodeAt(position);
-    if (!node || !isBlockBoundary(this.view.state.doc, position)) return false;
-    const boundary =
-      direction === "before" ? position : position + node.nodeSize;
-    return this.insertTransientBlockGap(boundary);
-  }
-
   private handleAppKeyDown(event: KeyboardEvent): boolean {
     const starter = getStarterState(this.view.state);
     if (
@@ -3352,15 +3281,6 @@ export class MarkdownEditorApp {
     const modifier = isMac() ? event.metaKey : event.ctrlKey;
     if (!modifier || event.altKey) return false;
     const key = event.key.toLowerCase();
-    if (key === "enter") {
-      const handled = this.insertTransientBlockGapFromSelection(
-        this.view.state,
-        event.shiftKey ? "before" : "after",
-        (transaction) => this.view.dispatch(transaction),
-      );
-      if (handled) event.preventDefault();
-      return handled;
-    }
     if (key === "z") {
       event.preventDefault();
       return this.sendHostCommand(event.shiftKey ? "redo" : "undo");
@@ -6450,6 +6370,7 @@ export class MarkdownEditorApp {
     const starter = getStarterState(this.view.state);
     return (
       this.canEditBlock() &&
+      !(this.view.state.selection instanceof BlockBoundarySelection) &&
       !(starter?.active && starter.untouched) &&
       (!this.transientBlanks || this.activePopupToggle === this.blockGapButton)
     );

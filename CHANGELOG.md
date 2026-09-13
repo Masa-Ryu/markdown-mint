@@ -4,9 +4,9 @@
 
 - Add a hover-only top-level block-gap `+` affordance that reuses the existing
   Insert block popup without changing layout or Markdown until a block is
-  committed. Add `Mod+Enter` and `Mod+Shift+Enter` transient paragraph
-  shortcuts for insertion after and before the current top-level block while
-  keeping ordinary arrow navigation on actual targets only.
+  committed. Keep flow-to-flow and flow-to-structural arrow navigation direct,
+  and expose a boundary stop only between adjacent structural top-level
+  blocks.
 
 ## 0.0.44
 

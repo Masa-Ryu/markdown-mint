@@ -3,6 +3,11 @@ import { Fragment } from "prosemirror-model";
 import { NodeSelection, TextSelection } from "prosemirror-state";
 import { BlockBoundarySelection } from "../../src/webview/blockBoundary";
 import {
+  isStructuralNavigationTarget,
+  shouldStopAtStructuralGap,
+  type NavigationTarget,
+} from "../../src/webview/bodyNavigation";
+import {
   parseMarkdown,
   renderMarkdown,
   schema,
@@ -60,6 +65,45 @@ function setup(markdown: string) {
 }
 
 describe("body navigation selection handoff", () => {
+  it("classifies structural gaps from actual top-level targets", () => {
+    const doc = parseMarkdown(
+      [
+        "Paragraph",
+        "",
+        "```ts",
+        "code",
+        "```",
+        "",
+        "| H1 | H2 |",
+        "| --- | --- |",
+        "| A1 | A2 |",
+        "",
+        "> [!NOTE]",
+        "> alert",
+        "",
+        "After",
+      ].join("\n"),
+      "github",
+    ).doc;
+    const targets: NavigationTarget[] = [];
+    doc.forEach((node, position) => targets.push({ node, position }));
+
+    expect(targets.map(({ node }) => node.type.name)).toEqual([
+      "paragraph",
+      "code_block",
+      "table",
+      "raw_block",
+      "paragraph",
+    ]);
+    expect(
+      targets.map(({ node }) => isStructuralNavigationTarget(node)),
+    ).toEqual([false, true, true, true, false]);
+    expect(shouldStopAtStructuralGap(targets[0]!, targets[1]!)).toBe(false);
+    expect(shouldStopAtStructuralGap(targets[1]!, targets[2]!)).toBe(true);
+    expect(shouldStopAtStructuralGap(targets[2]!, targets[3]!)).toBe(true);
+    expect(shouldStopAtStructuralGap(targets[3]!, targets[4]!)).toBe(false);
+  });
+
   it("moves flow content directly without virtual vertical stops", () => {
     const { app, select, key } = setup(
       [
@@ -224,6 +268,8 @@ describe("body navigation selection handoff", () => {
     expect(app.view.state.selection.$from.parent.type.name).toBe("code_block");
     select("code", "end");
     key("ArrowDown");
+    expect(app.view.state.selection).toBeInstanceOf(BlockBoundarySelection);
+    key("ArrowDown");
     expect(document.activeElement).toBe(
       root.querySelector(".mm-alert-body-editor"),
     );
@@ -267,6 +313,8 @@ describe("body navigation selection handoff", () => {
 
     select("Open body", "end");
     key("ArrowDown");
+    expect(app.view.state.selection).toBeInstanceOf(BlockBoundarySelection);
+    key("ArrowDown");
     expect(app.view.state.selection).toBeInstanceOf(NodeSelection);
     expect((app.view.state.selection as NodeSelection).node.type.name).toBe(
       "details",
@@ -277,7 +325,7 @@ describe("body navigation selection handoff", () => {
     expect(app.view.state.selection.$from.parent.textContent).toBe("After");
   });
 
-  it("treats atomic blocks as one vertical stop without a boundary", () => {
+  it("treats atomic blocks as stops and boundaries only between structural targets", () => {
     const { app, select, key } = setup("Before\n\n---\n\n$$\nx^2\n$$\n\nAfter");
     app.view.endOfTextblock = () => true;
 
@@ -287,6 +335,8 @@ describe("body navigation selection handoff", () => {
     expect((app.view.state.selection as NodeSelection).node.type.name).toBe(
       "horizontal_rule",
     );
+    key("ArrowDown");
+    expect(app.view.state.selection).toBeInstanceOf(BlockBoundarySelection);
     key("ArrowDown");
     expect(app.view.state.selection).toBeInstanceOf(NodeSelection);
     expect((app.view.state.selection as NodeSelection).node.attrs.kind).toBe(
@@ -299,6 +349,8 @@ describe("body navigation selection handoff", () => {
     expect((app.view.state.selection as NodeSelection).node.attrs.kind).toBe(
       "math-block",
     );
+    key("ArrowUp");
+    expect(app.view.state.selection).toBeInstanceOf(BlockBoundarySelection);
     key("ArrowUp");
     expect((app.view.state.selection as NodeSelection).node.type.name).toBe(
       "horizontal_rule",
@@ -342,6 +394,22 @@ describe("body navigation selection handoff", () => {
     expect(image.app.view.state.selection.$from.parent.textContent).toBe(
       "Before",
     );
+
+    const imageMath = setup(
+      "Before\n\n![image](https://example.com/image.png)\n\n$$\nx^2\n$$\n\nAfter",
+    );
+    imageMath.app.view.endOfTextblock = () => true;
+    imageMath.select("Before", "end");
+    imageMath.key("ArrowDown");
+    expect(imageMath.app.view.state.selection).toBeInstanceOf(NodeSelection);
+    imageMath.key("ArrowDown");
+    expect(imageMath.app.view.state.selection).toBeInstanceOf(
+      BlockBoundarySelection,
+    );
+    imageMath.key("ArrowDown");
+    expect(
+      (imageMath.app.view.state.selection as NodeSelection).node.attrs.kind,
+    ).toBe("math-block");
   });
 
   it("handles the document-end Details edge without exposing a boundary", () => {
@@ -419,6 +487,8 @@ describe("body navigation selection handoff", () => {
     expect(app.view.state.selection.$from.parentOffset).toBe(0);
     select("code", "end");
     key("ArrowRight");
+    expect(app.view.state.selection).toBeInstanceOf(BlockBoundarySelection);
+    key("ArrowRight");
     const textarea = root.querySelector<HTMLTextAreaElement>(
       ".mm-alert-body-editor",
     )!;
@@ -437,6 +507,8 @@ describe("body navigation selection handoff", () => {
     expect(textarea.selectionStart).toBe(textarea.value.length);
     textarea.setSelectionRange(0, 0);
     key("ArrowLeft", {}, textarea);
+    expect(app.view.state.selection).toBeInstanceOf(BlockBoundarySelection);
+    key("ArrowLeft");
     expect(app.view.state.selection.$from.parent.textContent).toBe("code");
     expect(app.view.state.selection.$from.parentOffset).toBe(4);
     select("code", "start");
@@ -462,6 +534,8 @@ describe("body navigation selection handoff", () => {
       "math-block",
     );
     key("ArrowRight");
+    expect(app.view.state.selection).toBeInstanceOf(BlockBoundarySelection);
+    key("ArrowRight");
     expect(app.view.state.selection).toBeInstanceOf(NodeSelection);
     expect((app.view.state.selection as NodeSelection).node.attrs.kind).toBe(
       "protected-fence",
@@ -472,6 +546,8 @@ describe("body navigation selection handoff", () => {
     expect((app.view.state.selection as NodeSelection).node.attrs.kind).toBe(
       "protected-fence",
     );
+    key("ArrowLeft");
+    expect(app.view.state.selection).toBeInstanceOf(BlockBoundarySelection);
     key("ArrowLeft");
     expect((app.view.state.selection as NodeSelection).node.attrs.kind).toBe(
       "math-block",

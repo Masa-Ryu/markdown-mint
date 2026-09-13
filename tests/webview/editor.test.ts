@@ -7,6 +7,7 @@ import {
   serializeMarkdown,
 } from "../../src/core";
 import { PROTOCOL_VERSION } from "../../src/shared/protocol";
+import { BlockBoundarySelection } from "../../src/webview/blockBoundary";
 import {
   createEditorApp,
   type EditorInitialDocument,
@@ -1041,7 +1042,7 @@ describe("rich editor rendering", () => {
     expect(document.activeElement).toBe(bodyEditor);
     app.destroy();
   });
-  it("moves between consecutive alert bodies with one arrow press", () => {
+  it("uses a boundary stop between consecutive alert bodies", () => {
     const { app, root } = makeApp(
       "Before\n\n> [!NOTE]\n> First\n\n> [!TIP]\n> Second\n\nAfter",
     );
@@ -1063,6 +1064,16 @@ describe("rich editor rendering", () => {
     });
     first.dispatchEvent(right);
     expect(right.defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(app.view.dom);
+    expect(app.view.state.selection).toBeInstanceOf(BlockBoundarySelection);
+
+    app.view.dom.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        bubbles: true,
+        cancelable: true,
+        key: "ArrowRight",
+      }),
+    );
     expect(document.activeElement).toBe(second);
     expect(second.selectionStart).toBe(0);
     expect(second.selectionEnd).toBe(0);
@@ -1076,6 +1087,16 @@ describe("rich editor rendering", () => {
     });
     second.dispatchEvent(left);
     expect(left.defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(app.view.dom);
+    expect(app.view.state.selection).toBeInstanceOf(BlockBoundarySelection);
+
+    app.view.dom.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        bubbles: true,
+        cancelable: true,
+        key: "ArrowLeft",
+      }),
+    );
     expect(document.activeElement).toBe(first);
     expect(first.selectionStart).toBe(first.value.length);
     expect(first.selectionEnd).toBe(first.value.length);
@@ -1588,6 +1609,16 @@ describe("code block vertical boundaries", () => {
     selectCodeBlockText(consecutive.app, 0, 1);
     const consecutiveEvent = dispatchCodeKey(consecutive.root, "ArrowUp", 1);
     expect(consecutiveEvent.defaultPrevented).toBe(true);
+    expect(consecutive.app.view.state.selection).toBeInstanceOf(
+      BlockBoundarySelection,
+    );
+    consecutive.app.view.dom.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        bubbles: true,
+        cancelable: true,
+        key: "ArrowUp",
+      }),
+    );
     expect(consecutive.app.view.state.selection.$from.parent.type.name).toBe(
       "code_block",
     );
@@ -1779,6 +1810,14 @@ describe("code block vertical boundaries", () => {
     )!;
 
     expect(event.defaultPrevented).toBe(true);
+    expect(app.view.state.selection).toBeInstanceOf(BlockBoundarySelection);
+    app.view.dom.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        bubbles: true,
+        cancelable: true,
+        key: "ArrowUp",
+      }),
+    );
     expect(document.activeElement).toBe(body);
     expect(body.selectionStart).toBe(body.value.length);
     expect(app.view.state.selection).toBeInstanceOf(NodeSelection);

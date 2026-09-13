@@ -117,6 +117,8 @@ describe("top-level block boundary navigation", () => {
     const originalDoc = app.view.state.doc;
     select("code", "end");
     key("ArrowRight");
+    expect(app.view.state.selection).toBeInstanceOf(BlockBoundarySelection);
+    key("ArrowRight");
     expect(app.view.state.selection).toBeInstanceOf(NodeSelection);
     expect((app.view.state.selection as NodeSelection).node.attrs.kind).toBe(
       "alert",
@@ -126,8 +128,12 @@ describe("top-level block boundary navigation", () => {
     )!;
     body.setSelectionRange(body.value.length, body.value.length);
     key("ArrowRight", body);
+    expect(app.view.state.selection).toBeInstanceOf(BlockBoundarySelection);
+    key("ArrowRight");
     expect(app.view.state.selection.$from.parent.textContent).toBe("Body");
     select("Body", "end");
+    key("ArrowRight");
+    expect(app.view.state.selection).toBeInstanceOf(BlockBoundarySelection);
     key("ArrowRight");
     expect(app.view.state.selection).toBeInstanceOf(NodeSelection);
     expect((app.view.state.selection as NodeSelection).node.attrs.kind).toBe(

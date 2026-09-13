@@ -337,10 +337,6 @@ export type AlertBoundaryExit = (
   position: number,
   event?: KeyboardEvent,
 ) => boolean;
-export type AlertBlockGapShortcut = (
-  direction: AlertBoundaryDirection,
-  position: number,
-) => boolean;
 export type AlertEditRequest = (
   position: number,
   returnFocus?: HTMLElement,
@@ -350,7 +346,6 @@ export const ALERT_LOCAL_INPUT_META = "markdown-mint-alert-local-input";
 export interface BlockEditingOptions {
   canEdit?: () => boolean;
   composition?: (active: boolean) => void;
-  onBlockGapShortcut?: AlertBlockGapShortcut;
   /** Retain native input already accepted when host synchronization stopped. */
   canPreserveLocalInput?: () => boolean;
 }
@@ -914,30 +909,6 @@ export function createAlertNodeView(
   // bubbles to the editor surface; do not prevent the browser default.
   bodyEditor.addEventListener("keydown", (event) => {
     if (event.key === "Enter") {
-      const modifier = event.ctrlKey || event.metaKey;
-      const direction: AlertBoundaryDirection = event.shiftKey
-        ? "before"
-        : "after";
-      const atEdge =
-        bodyEditor.selectionStart === bodyEditor.selectionEnd &&
-        (direction === "before"
-          ? bodyEditor.selectionStart === 0
-          : bodyEditor.selectionEnd === bodyEditor.value.length);
-      const position = positionOf();
-      if (
-        modifier &&
-        !event.altKey &&
-        !event.isComposing &&
-        !bodyComposing &&
-        event.keyCode !== 229 &&
-        atEdge &&
-        position !== undefined &&
-        options.onBlockGapShortcut?.(direction, position)
-      ) {
-        event.preventDefault();
-        event.stopPropagation();
-        return;
-      }
       event.stopPropagation();
       return;
     }

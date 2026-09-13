@@ -6,6 +6,51 @@ import { BlockBoundarySelection, isBlockBoundary } from "./blockBoundary";
 type Direction = -1 | 1;
 type NavigationResult = "unhandled" | "handled-no-move" | "moved";
 type CaretRect = { left: number; top: number; bottom: number };
+
+export interface NavigationTarget {
+  position: number;
+  node: PMNode;
+}
+
+const structuralNodeTypes = new Set([
+  "code_block",
+  "details",
+  "horizontal_rule",
+  "raw_block",
+]);
+
+/** Classify an actual navigation target without treating every PM block alike. */
+export function isStructuralNavigationTarget(node: PMNode): boolean {
+  if (structuralNodeTypes.has(node.type.name)) return true;
+  if (node.type.spec.tableRole === "table") return true;
+  if (
+    node.type.name === "paragraph" &&
+    node.childCount === 1 &&
+    node.firstChild?.type.name === "image"
+  )
+    return true;
+  // Keep future raw/protected atomic block nodes structural without making
+  // ordinary paragraphs, headings, lists, or blockquotes structural merely
+  // because they belong to the `block` group.
+  return Boolean(
+    node.type.spec.atom && node.type.spec.group?.split(/\s+/).includes("block"),
+  );
+}
+
+/** Only adjacent structural actual targets expose a virtual insertion gap. */
+export function shouldStopAtStructuralGap(
+  previous: NavigationTarget | null,
+  next: NavigationTarget | null,
+): boolean {
+  return Boolean(
+    previous &&
+    next &&
+    previous.position + previous.node.nodeSize === next.position &&
+    isStructuralNavigationTarget(previous.node) &&
+    isStructuralNavigationTarget(next.node),
+  );
+}
+
 const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 
 function textareaCaret(value: string, offset: number): number {
@@ -292,9 +337,9 @@ export class BodyNavigation {
   }
 
   /**
-   * Vertical navigation crosses an insertion boundary in one key press.
-   * Table navigation uses this entry point because its keymap runs before the
-   * editor's general keydown handler.
+   * Leave an existing insertion boundary in one key press. Table navigation
+   * uses this entry point because its keymap runs before the editor's general
+   * keydown handler.
    */
   moveVerticallyFromBoundary(
     position: number,
@@ -307,8 +352,9 @@ export class BodyNavigation {
   }
 
   /**
-   * Arrow navigation from a block edge may cross any container depth without
-   * exposing a BlockBoundarySelection as an intermediate target.
+   * Arrow navigation from a block edge shares the same actual-target graph as
+   * the editor-level handler. A boundary is exposed only for adjacent
+   * structural top-level targets.
    */
   moveFromBlockEdge(
     position: number,
@@ -317,7 +363,14 @@ export class BodyNavigation {
     goalPosition?: number,
   ): boolean {
     if (vertical && goalPosition !== undefined) this.captureGoal(goalPosition);
-    return this.moveFromPosition(position, direction, vertical) !== "unhandled";
+    return (
+      this.moveFromPosition(
+        position,
+        direction,
+        vertical,
+        this.targetAtBlockEdge(position, direction),
+      ) !== "unhandled"
+    );
   }
 
   moveVerticallyFromBlockEdge(
@@ -336,6 +389,72 @@ export class BodyNavigation {
     } catch {
       /* No layout: preserve the native/default edge placement. */
     }
+  }
+
+  private targetForBlock(
+    position: number,
+    block: PMNode,
+  ): NavigationTarget | null {
+    const doc = this.view.state.doc;
+    try {
+      const resolved = doc.resolve(position);
+      if (resolved.depth === 0) {
+        const direct = doc.nodeAt(position);
+        return direct === block ? { position, node: direct } : null;
+      }
+      return {
+        position: resolved.before(1),
+        node: resolved.node(1),
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  private targetAtBlockEdge(
+    position: number,
+    direction: Direction,
+  ): NavigationTarget | null {
+    const doc = this.view.state.doc;
+    if (!isBlockBoundary(doc, position)) return null;
+    try {
+      const resolved = doc.resolve(position);
+      const node = direction > 0 ? resolved.nodeBefore : resolved.nodeAfter;
+      if (!node) return null;
+      return {
+        position: direction > 0 ? position - node.nodeSize : position,
+        node,
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  private targetForSelection(selection: Selection): NavigationTarget | null {
+    const doc = this.view.state.doc;
+    try {
+      if (selection.$from.depth === 0) {
+        const node = doc.nodeAt(selection.from);
+        return node ? { position: selection.from, node } : null;
+      }
+      return {
+        position: selection.$from.before(1),
+        node: selection.$from.node(1),
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  private structuralBoundaryFor(
+    origin: NavigationTarget | null,
+    candidate: NavigationTarget | null,
+    direction: Direction,
+  ): number | null {
+    const previous = direction < 0 ? candidate : origin;
+    const next = direction < 0 ? origin : candidate;
+    if (!shouldStopAtStructuralGap(previous, next)) return null;
+    return next!.position;
   }
 
   private moveFromBlock(
@@ -357,7 +476,12 @@ export class BodyNavigation {
       origin.parent.childCount === 1
     )
       cursor = direction < 0 ? origin.before() : origin.after();
-    return this.moveFromPosition(cursor, direction, vertical);
+    return this.moveFromPosition(
+      cursor,
+      direction,
+      vertical,
+      this.targetForBlock(position, block),
+    );
   }
 
   private moveFromBoundary(
@@ -366,13 +490,14 @@ export class BodyNavigation {
     vertical: boolean,
   ): NavigationResult {
     if (!isBlockBoundary(this.view.state.doc, position)) return "unhandled";
-    return this.moveFromPosition(position, direction, vertical);
+    return this.moveFromPosition(position, direction, vertical, null);
   }
 
   private moveFromPosition(
     position: number,
     direction: Direction,
     vertical: boolean,
+    origin: NavigationTarget | null,
   ): NavigationResult {
     const doc = this.view.state.doc;
     let cursor = position;
@@ -400,6 +525,22 @@ export class BodyNavigation {
           cursor = direction < 0 ? selection.from : selection.to;
           continue;
         }
+      }
+      if (
+        selection instanceof TextSelection &&
+        vertical &&
+        this.goalX !== undefined
+      )
+        selection = this.textSelectionAtX(selection);
+
+      const boundary = this.structuralBoundaryFor(
+        origin,
+        this.targetForSelection(selection),
+        direction,
+      );
+      if (boundary !== null) return this.selectBoundary(boundary);
+
+      if (selection instanceof NodeSelection) {
         const editor = this.alertEditor(selection.from);
         if (editor) {
           this.view.dispatch(
@@ -425,12 +566,6 @@ export class BodyNavigation {
           editor.scrollIntoView?.({ block: "nearest" });
           return "moved";
         }
-      } else if (
-        selection instanceof TextSelection &&
-        vertical &&
-        this.goalX !== undefined
-      ) {
-        selection = this.textSelectionAtX(selection);
       }
       return this.select(selection);
     }
@@ -483,6 +618,16 @@ export class BodyNavigation {
     return dom instanceof Element
       ? dom.querySelector<HTMLTextAreaElement>(".mm-alert-body-editor")
       : null;
+  }
+
+  private selectBoundary(position: number): NavigationResult {
+    const doc = this.view.state.doc;
+    if (!isBlockBoundary(doc, position)) return "unhandled";
+    try {
+      return this.select(new BlockBoundarySelection(doc.resolve(position)));
+    } catch {
+      return "unhandled";
+    }
   }
 
   private select(selection: Selection): NavigationResult {
