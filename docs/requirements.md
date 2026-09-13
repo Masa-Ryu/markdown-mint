@@ -1114,6 +1114,15 @@ graph and do not stop on this mouse-created transient paragraph. Slash input at
 an existing boundary uses the same transient source-omission guard until the
 popup command is chosen.
 
+Profile block features use a separate direct insertion primitive. Alert,
+Details, Math, Mermaid, and GitLab block features accept a valid
+`BlockBoundarySelection` as their insertion target and insert at its exact
+top-level position. The command selects the inserted block without adding an
+implicit empty paragraph, so the existing dialog can be opened and committed
+without pressing Enter first. Dialog generation/profile and stale-document
+guards remain in force; Cancel leaves the boundary, ProseMirror document,
+source, and host edit count unchanged.
+
 ## Explicit limits
 
 Paste/drop image asset copying is optional follow-up work. Native IME and visual

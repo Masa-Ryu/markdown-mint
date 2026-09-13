@@ -2,11 +2,13 @@ import { Fragment, type Node as PMNode, type Schema } from "prosemirror-model";
 import {
   AllSelection,
   NodeSelection,
+  Selection,
   TextSelection,
   type Command,
   type EditorState,
   type Transaction,
 } from "prosemirror-state";
+import { BlockBoundarySelection, isBlockBoundary } from "./blockBoundary";
 
 /** Profiles understood by the source feature palette. */
 export type ProfileFeatureProfile = "github" | "gitlab" | "commonmark";
@@ -325,22 +327,37 @@ function parsedFeatureNodes(
   return kind === expected || matchesMathFence ? nodes : null;
 }
 
-function topLevelBlock(
+export type ProfileFeatureInsertionTarget =
+  | {
+      readonly kind: "block";
+      readonly node: PMNode;
+      readonly pos: number;
+      readonly end: number;
+    }
+  | { readonly kind: "boundary"; readonly pos: number };
+
+function profileFeatureInsertionTarget(
   state: EditorState,
-): { node: PMNode; pos: number; end: number } | null {
+): ProfileFeatureInsertionTarget | null {
   const selection = state.selection;
   if (selection instanceof AllSelection) return null;
+  if (selection instanceof BlockBoundarySelection) {
+    return isBlockBoundary(state.doc, selection.head)
+      ? { kind: "boundary", pos: selection.head }
+      : null;
+  }
   if (selection instanceof NodeSelection) {
     // A raw block selected as a node has a depth-zero resolved position. Keep
     // it intact and insert the next feature after its top-level boundary.
     if (selection.$from.depth !== 0) return null;
     const node = state.doc.nodeAt(selection.from);
     if (!node || node !== selection.node) return null;
-    return { node, pos: selection.from, end: selection.to };
+    return { kind: "block", node, pos: selection.from, end: selection.to };
   }
   if (selection.$from.depth < 1) return null;
   const node = selection.$from.node(1);
   return {
+    kind: "block",
     node,
     pos: selection.$from.before(1),
     end: selection.$from.after(1),
@@ -440,11 +457,31 @@ function applyBlockFeature(
   nodes: PMNode[],
   dispatch: ((tr: Transaction) => void) | undefined,
 ): boolean {
-  const top = topLevelBlock(state);
+  const target = profileFeatureInsertionTarget(state);
   const inserted = nodes[0];
-  if (!top || !inserted || nodes.length !== 1) return false;
+  if (!target || !inserted || nodes.length !== 1) return false;
   if (state.schema !== inserted.type.schema) return false;
   const tr = state.tr;
+  if (target.kind === "boundary") {
+    // A boundary is already the exact top-level insertion position. Do not
+    // materialize a paragraph just to make the block command applicable.
+    tr.insert(target.pos, Fragment.fromArray(nodes));
+    try {
+      tr.setSelection(NodeSelection.create(tr.doc, target.pos));
+    } catch {
+      // Every current block feature is selectable, but keep a valid nearby
+      // selection for a future schema with a non-selectable block atom.
+      tr.setSelection(
+        Selection.near(
+          tr.doc.resolve(Math.min(target.pos, tr.doc.content.size)),
+          1,
+        ),
+      );
+    }
+    if (!dispatch) return true;
+    dispatch(tr.scrollIntoView());
+    return true;
+  }
   const pureSelection = pureTopLevelTextSelection(state);
   if (pureSelection) {
     const parts: PMNode[] = [];
@@ -466,7 +503,7 @@ function applyBlockFeature(
   } else {
     // The insertion point is after the whole top-level block. This keeps raw
     // blocks out of tables and lists even when the selection is nested inside.
-    tr.insert(top.end, Fragment.fromArray(nodes));
+    tr.insert(target.end, Fragment.fromArray(nodes));
   }
   if (!dispatch) return true;
   placeCaretAfterBlock(tr, inserted);

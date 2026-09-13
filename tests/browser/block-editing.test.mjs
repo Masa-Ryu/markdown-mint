@@ -673,6 +673,112 @@ async function testBlockGapInsertion(page) {
   assert.match(committed.markdown, /Before[\s\S]*```[\s\S]*```[\s\S]*After/);
 }
 
+async function testProfileFeaturesAtStructuralBoundary(page) {
+  const tableSource = "| A | B |\n| --- | --- |\n| a | b |";
+  const source = blocks(fence("text", "code"), tableSource);
+  const cases = [
+    {
+      id: "alert",
+      configure: async (dialog) => {
+        await dialog.locator('[data-feature-field="body"]').fill("Alert body");
+      },
+      expected: blocks(fence("text", "code"), alert("Alert body"), tableSource),
+      node: { type: "raw_block", kind: "alert" },
+    },
+    {
+      id: "details",
+      configure: async (dialog) => {
+        await dialog.locator('[data-feature-field="title"]').fill("More");
+        await dialog
+          .locator('[data-feature-field="body"]')
+          .fill("Details body");
+      },
+      expected: blocks(
+        fence("text", "code"),
+        "<details>\n<summary>More</summary>\n\nDetails body\n\n</details>",
+        tableSource,
+      ),
+      node: { type: "details", kind: "details" },
+    },
+    {
+      id: "math",
+      configure: async (dialog) => {
+        await dialog.locator('[data-feature-field="body"]').fill("x^2");
+      },
+      expected: blocks(fence("text", "code"), "$$\nx^2\n$$", tableSource),
+      node: { type: "raw_block", kind: "math-block" },
+    },
+    {
+      id: "mermaid",
+      configure: async (dialog) => {
+        await dialog
+          .locator('[data-feature-field="body"]')
+          .fill("graph TD\nA-->B");
+      },
+      expected: blocks(
+        fence("text", "code"),
+        "```mermaid\ngraph TD\nA-->B\n```",
+        tableSource,
+      ),
+      node: { type: "raw_block", kind: "protected-fence" },
+    },
+  ];
+
+  for (const entry of cases) {
+    await load(page, source);
+    await caret(page, ".mm-code-block-pre code", -1);
+    await page.keyboard.press("ArrowDown");
+    assert.equal(
+      (await selection(page)).kind,
+      "BlockBoundarySelection",
+      `${entry.id}: Code did not expose a boundary before Table`,
+    );
+    const before = await saved(page);
+    const dialog = page.locator('[data-feature-dialog="true"]');
+    await page.locator(`[data-profile-feature="${entry.id}"]`).click();
+    await dialog.waitFor({ state: "visible" });
+    await entry.configure(dialog);
+    await dialog.getByRole("button", { name: "Insert", exact: true }).click();
+    const committed = await saved(page);
+    assert.equal(committed.markdown, entry.expected, `${entry.id}: source`);
+    assert.equal(committed.edits, before.edits + 1, `${entry.id}: edit count`);
+    assert.deepEqual(
+      await page.evaluate(() => {
+        const doc = window.markdownMint.view.state.doc;
+        return Array.from({ length: doc.childCount }, (_, index) => ({
+          type: doc.child(index).type.name,
+          kind: doc.child(index).attrs.kind,
+        }));
+      }),
+      [
+        { type: "code_block", kind: undefined },
+        entry.node,
+        { type: "table", kind: undefined },
+      ],
+      `${entry.id}: top-level order or extra paragraph`,
+    );
+    assert.equal((await selection(page)).kind, "NodeSelection");
+    assert.equal((await selection(page)).nodeKind, entry.node.kind);
+  }
+
+  await load(page, source);
+  await caret(page, ".mm-code-block-pre code", -1);
+  await page.keyboard.press("ArrowDown");
+  const beforeCancel = await saved(page);
+  await page.locator('[data-profile-feature="details"]').click();
+  const cancelDialog = page.locator('[data-feature-dialog="true"]');
+  await cancelDialog.waitFor({ state: "visible" });
+  await cancelDialog
+    .getByRole("button", { name: "Cancel", exact: true })
+    .click();
+  await noEdits(page, beforeCancel, "boundary feature cancel");
+  assert.equal((await selection(page)).kind, "BlockBoundarySelection");
+  assert.equal(
+    await page.evaluate(() => window.markdownMint.view.state.doc.childCount),
+    2,
+  );
+}
+
 async function testStructuralBoundaryNavigationAndInsertion(page) {
   const tableSource = "| H1 | H2 |\n| --- | --- |\n| A1 | A2 |";
   const source = blocks(fence("ts", "code"), tableSource, "After");
@@ -2686,6 +2792,7 @@ async function main() {
       testHorizontalNavigation,
       testInsertAffordances,
       testBlockGapInsertion,
+      testProfileFeaturesAtStructuralBoundary,
       testStructuralBoundaryNavigationAndInsertion,
       testStructuralDocumentEdges,
       testDirectVerticalBlockNavigation,

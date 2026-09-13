@@ -9,7 +9,9 @@
   blocks. An active boundary decoration temporarily reserves one visual line
   without changing the ProseMirror document, and first/last structural blocks
   expose corresponding document-edge insertion boundaries; flow edges remain
-  handled no-ops.
+  handled no-ops. Profile block features now accept that
+  `BlockBoundarySelection` directly, so Alert, Details, Math, Mermaid, and
+  GitLab block features insert at the exact gap without a temporary paragraph.
 
 ## 0.0.44
 
