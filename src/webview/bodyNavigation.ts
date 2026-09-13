@@ -301,8 +301,22 @@ export class BodyNavigation {
     direction: Direction,
     goalPosition?: number,
   ): boolean {
+    if (!isBlockBoundary(this.view.state.doc, position)) return false;
     if (goalPosition !== undefined) this.captureGoal(goalPosition);
     return this.moveFromBoundary(position, direction, true);
+  }
+
+  /**
+   * Vertical navigation from a block edge may cross any container depth.
+   * Unlike BlockBoundarySelection, this is only an actual-target traversal.
+   */
+  moveVerticallyFromBlockEdge(
+    position: number,
+    direction: Direction,
+    goalPosition?: number,
+  ): boolean {
+    if (goalPosition !== undefined) this.captureGoal(goalPosition);
+    return this.moveFromPosition(position, direction, true);
   }
 
   private captureGoal(position: number): void {
@@ -328,7 +342,7 @@ export class BodyNavigation {
     if (isBlockBoundary(doc, position) && doc.nodeAt(position) === block) {
       const boundary = direction < 0 ? position : position + block.nodeSize;
       return vertical
-        ? this.moveFromBoundary(boundary, direction, true)
+        ? this.moveVerticallyFromBoundary(boundary, direction)
         : this.selectBoundary(boundary);
     }
     const origin = doc.resolve(position);
@@ -455,8 +469,16 @@ export class BodyNavigation {
     direction: Direction,
     vertical: boolean,
   ): boolean {
+    if (!isBlockBoundary(this.view.state.doc, position)) return false;
+    return this.moveFromPosition(position, direction, vertical);
+  }
+
+  private moveFromPosition(
+    position: number,
+    direction: Direction,
+    vertical: boolean,
+  ): boolean {
     const doc = this.view.state.doc;
-    if (!isBlockBoundary(doc, position)) return false;
     let cursor = position;
     while (cursor >= 0 && cursor <= doc.content.size) {
       let selection = Selection.findFrom(doc.resolve(cursor), direction);

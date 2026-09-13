@@ -378,8 +378,10 @@ movement crosses only the first/last character boundary and may select a
 `EditorView.endOfTextblock`, crosses insertion boundaries in the same key press,
 and targets the next or previous actual flow-content, editable structural, or
 atomic block. Code, Alert, and table edges use their first/last editable
-position; an atomic block itself remains one stop. The vertical goal X is
-retained across short intermediate targets. A temporary styled textarea layout
+position; table edge traversal is position-based at any container depth, while
+`BlockBoundarySelection` remains top-level insertion-only. An atomic block
+itself remains one stop. The vertical goal X is retained across short
+intermediate targets. A temporary styled textarea layout
 mirror handles Alert wrapping, font metrics, width, line height, and scrolling.
 Modified arrows, selection ranges, IME candidate keys, and expanded-code
 controls keep their own handlers. Vertical movement dispatches only a

@@ -3227,7 +3227,7 @@ export class MarkdownEditorApp {
     const cellContentEnd = context.cellPos + cell.nodeSize - 1;
     if (state.selection.from < cellContentEnd - 1) return false;
     if (axis === "vert")
-      return this.navigation.moveVerticallyFromBoundary(
+      return this.navigation.moveVerticallyFromBlockEdge(
         context.tableStart - 1 + context.table.nodeSize,
         1,
         state.selection.head,
@@ -3268,7 +3268,7 @@ export class MarkdownEditorApp {
     )
       return false;
     if (axis === "vert")
-      return this.navigation.moveVerticallyFromBoundary(
+      return this.navigation.moveVerticallyFromBlockEdge(
         tablePosition,
         -1,
         state.selection.head,

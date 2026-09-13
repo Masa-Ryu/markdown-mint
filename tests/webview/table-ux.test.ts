@@ -8,6 +8,7 @@ import {
   serializeMarkdown,
 } from "../../src/core";
 import { PROTOCOL_VERSION } from "../../src/shared/protocol";
+import { BlockBoundarySelection } from "../../src/webview/blockBoundary";
 import {
   createEditorApp,
   type MarkdownEditorApp,
@@ -91,6 +92,25 @@ function selectTableCell(
       ),
     ),
   );
+}
+
+function selectTextblock(
+  app: MarkdownEditorApp,
+  text: string,
+  edge: "start" | "end",
+): void {
+  let position = -1;
+  app.view.state.doc.descendants((node, offset) => {
+    if (node.isTextblock && node.textContent === text)
+      position = offset + 1 + (edge === "end" ? node.content.size : 0);
+  });
+  expect(position).toBeGreaterThanOrEqual(0);
+  app.view.dispatch(
+    app.view.state.tr.setSelection(
+      TextSelection.create(app.view.state.doc, position),
+    ),
+  );
+  app.view.focus();
 }
 
 function dispatchEditorKey(
@@ -705,6 +725,130 @@ describe("table vertical navigation", () => {
     dispatchEditorKey(app, "ArrowDown");
     expect(activeTableCell(app)).toEqual({ row: 0, column: 0 });
     expect(app.view.state.doc).toBe(before);
+  });
+
+  it("moves through a table nested in a blockquote without leaving its container", () => {
+    const source = [
+      "> Before",
+      ">",
+      "> | H1 | H2 |",
+      "> | --- | --- |",
+      "> | A1 | A2 |",
+      ">",
+      "> After",
+      "",
+      "Root after",
+    ].join("\n");
+    const { app, root, messages } = makeApp(source);
+    const before = app.view.state.doc;
+    app.view.endOfTextblock = () => true;
+
+    selectTextblock(app, "Before", "end");
+    const intoTable = dispatchEditorKey(app, "ArrowDown");
+    expect(intoTable.defaultPrevented).toBe(true);
+    expect(activeTableCell(app)).toEqual({ row: 0, column: 0 });
+    expect(app.view.state.selection).not.toBeInstanceOf(BlockBoundarySelection);
+
+    selectTableCell(app, root, 1, 0, 2);
+    const outOfTable = dispatchEditorKey(app, "ArrowDown");
+    expect(outOfTable.defaultPrevented).toBe(true);
+    expect(app.view.state.selection).toBeInstanceOf(TextSelection);
+    expect(app.view.state.selection.$from.parent.textContent).toBe("After");
+    expect(app.view.state.selection.$from.node(-1).type.spec.tableRole).toBe(
+      undefined,
+    );
+
+    selectTextblock(app, "After", "start");
+    const backToTable = dispatchEditorKey(app, "ArrowUp");
+    expect(backToTable.defaultPrevented).toBe(true);
+    expect(activeTableCell(app).row).toBe(1);
+    expect(app.view.state.selection).not.toBeInstanceOf(BlockBoundarySelection);
+
+    selectTextblock(app, "After", "end");
+    dispatchEditorKey(app, "ArrowDown");
+    expect(app.view.state.selection.$from.parent.textContent).toBe(
+      "Root after",
+    );
+    expect(app.view.state.selection).not.toBeInstanceOf(BlockBoundarySelection);
+    expect(app.view.state.doc).toBe(before);
+    expect(messageType(messages, "edit")).toHaveLength(0);
+  });
+
+  it("moves through a table nested in a list item without escaping the list", () => {
+    const source = [
+      "- Before",
+      "",
+      "  | H1 | H2 |",
+      "  | --- | --- |",
+      "  | A1 | A2 |",
+      "",
+      "  After",
+      "",
+      "- Next item",
+    ].join("\n");
+    const { app, root, messages } = makeApp(source);
+    const before = app.view.state.doc;
+    app.view.endOfTextblock = () => true;
+
+    selectTextblock(app, "Before", "end");
+    dispatchEditorKey(app, "ArrowDown");
+    expect(activeTableCell(app)).toEqual({ row: 0, column: 0 });
+
+    selectTableCell(app, root, 1, 0, 2);
+    dispatchEditorKey(app, "ArrowDown");
+    expect(app.view.state.selection.$from.parent.textContent).toBe("After");
+    expect(app.view.state.selection).not.toBeInstanceOf(BlockBoundarySelection);
+
+    selectTextblock(app, "After", "end");
+    dispatchEditorKey(app, "ArrowDown");
+    expect(app.view.state.selection.$from.parent.textContent).toBe("Next item");
+    expect(app.view.state.selection).not.toBeInstanceOf(BlockBoundarySelection);
+    expect(app.view.state.doc).toBe(before);
+    expect(messageType(messages, "edit")).toHaveLength(0);
+  });
+
+  it("moves through a table nested in expanded Details", () => {
+    const source = [
+      "<details open>",
+      "<summary>Details</summary>",
+      "",
+      "Before",
+      "",
+      "| H1 | H2 |",
+      "| --- | --- |",
+      "| A1 | A2 |",
+      "",
+      "After",
+      "",
+      "</details>",
+      "",
+      "Root after",
+    ].join("\n");
+    const { app, root, messages } = makeApp(source);
+    const before = app.view.state.doc;
+    app.view.endOfTextblock = () => true;
+
+    selectTextblock(app, "Before", "end");
+    dispatchEditorKey(app, "ArrowDown");
+    expect(activeTableCell(app)).toEqual({ row: 0, column: 0 });
+
+    selectTableCell(app, root, 1, 0, 2);
+    dispatchEditorKey(app, "ArrowDown");
+    expect(app.view.state.selection.$from.parent.textContent).toBe("After");
+
+    selectTextblock(app, "After", "start");
+    dispatchEditorKey(app, "ArrowUp");
+    expect(activeTableCell(app).row).toBe(1);
+    expect(app.view.state.selection).not.toBeInstanceOf(BlockBoundarySelection);
+
+    selectTextblock(app, "After", "end");
+    dispatchEditorKey(app, "ArrowDown");
+    expect(app.view.state.selection.$from.parent.textContent).toBe(
+      "Root after",
+    );
+    expect(app.view.state.selection).not.toBeInstanceOf(BlockBoundarySelection);
+    expect(app.view.state.doc).toBe(before);
+    expect(messageType(messages, "edit")).toHaveLength(0);
   });
 });
 

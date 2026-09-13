@@ -812,6 +812,67 @@ async function testTableVerticalNavigation(page) {
   await noEdits(page, before, "table vertical navigation");
 }
 
+async function testNestedBlockquoteTableNavigation(page) {
+  const source = blocks(
+    [
+      "> Before",
+      ">",
+      "> | H1 | H2 |",
+      "> | --- | --- |",
+      "> | A1 | A2 |",
+      ">",
+      "> After",
+    ].join("\n"),
+    "Root after",
+  );
+  await load(page, source);
+  const before = await saved(page);
+
+  await caret(page, `${rich} blockquote > p:first-of-type`, -1);
+  await page.keyboard.press("ArrowDown");
+  let state = await selection(page);
+  assert.equal(state.kind, "TextSelection");
+  assert.equal(state.text, "H1", "nested paragraph Down did not enter table");
+  assert.equal(await page.locator(".mm-block-boundary-cursor").count(), 0);
+
+  await caret(
+    page,
+    `${rich} blockquote tbody tr:last-child td:first-child p`,
+    -1,
+  );
+  await page.keyboard.press("ArrowDown");
+  state = await selection(page);
+  assert.equal(state.kind, "TextSelection");
+  assert.equal(
+    state.text,
+    "After",
+    "nested table Down did not enter the containing blockquote paragraph",
+  );
+  assert.equal(await page.locator(".mm-block-boundary-cursor").count(), 0);
+
+  await caret(page, `${rich} blockquote > p:last-of-type`, 0);
+  await page.keyboard.press("ArrowUp");
+  state = await selection(page);
+  assert.equal(state.kind, "TextSelection");
+  assert.ok(
+    ["A1", "A2"].includes(state.text),
+    `nested table Up selected ${state.text ?? "no cell"}`,
+  );
+  assert.equal(await page.locator(".mm-block-boundary-cursor").count(), 0);
+
+  await caret(page, `${rich} blockquote > p:last-of-type`, -1);
+  await page.keyboard.press("ArrowDown");
+  state = await selection(page);
+  assert.equal(
+    state.text,
+    "Root after",
+    "nested container exit escaped incorrectly",
+  );
+  assert.equal(state.kind, "TextSelection");
+  assert.equal(await page.locator(".mm-block-boundary-cursor").count(), 0);
+  await noEdits(page, before, "nested blockquote table navigation");
+}
+
 async function testExpandedCodeVerticalNavigation(page) {
   const body = "0123456789\nabcdefghij\nABCDEFGHIJ";
   const source = blocks("Before", fence("text", body), "After");
@@ -1989,6 +2050,7 @@ async function main() {
       testDirectVerticalBlockNavigation,
       testWrappedVerticalNavigation,
       testTableVerticalNavigation,
+      testNestedBlockquoteTableNavigation,
       testCodeVerticalNavigation,
       testExpandedCodeVerticalNavigation,
       testSelectionAndModifiers,
