@@ -1092,6 +1092,60 @@ $$
     expect(parseMarkdown(serialized).doc.eq(moved)).toBe(true);
   });
 
+  it("does not let fingerprint fallback cross a future identity anchor", () => {
+    const snapshot = parseMarkdown("A\n\nB\n\nC\n");
+    const original = childrenOf(snapshot.doc);
+    const clonedC = schema.nodeFromJSON(original[2]!.toJSON());
+    expect(clonedC).not.toBe(original[2]);
+    const moved = schema.topNodeType.create(null, [
+      original[0]!,
+      clonedC,
+      original[1]!,
+    ]);
+
+    const serialized = serializeMarkdown(moved, snapshot);
+
+    expect(serialized).toBe("A\n\nC\n\nB\n");
+    expect(reparseMarkdown(serialized).doc.eq(moved)).toBe(true);
+  });
+
+  it.each([
+    {
+      name: "before the next identity anchor",
+      current: (original: PMNode[], clone: PMNode) => [
+        original[0]!,
+        clone,
+        original[1]!,
+        original[2]!,
+      ],
+      expected: "A\n\nC\n\nB\n\nC\n",
+    },
+    {
+      name: "after the previous identity anchor",
+      current: (original: PMNode[], clone: PMNode) => [
+        original[0]!,
+        original[1]!,
+        clone,
+        original[2]!,
+      ],
+      expected: "A\n\nB\n\nC\n\nC\n",
+    },
+  ])(
+    "keeps cloned duplicate insertions ordered $name",
+    ({ current, expected }) => {
+      const snapshot = parseMarkdown("A\n\nB\n\nC\n");
+      const original = childrenOf(snapshot.doc);
+      const clonedC = schema.nodeFromJSON(original[2]!.toJSON());
+      expect(clonedC).not.toBe(original[2]);
+      const moved = schema.topNodeType.create(null, current(original, clonedC));
+
+      const serialized = serializeMarkdown(moved, snapshot);
+
+      expect(serialized).toBe(expected);
+      expect(reparseMarkdown(serialized).doc.eq(moved)).toBe(true);
+    },
+  );
+
   it("bounds user supplied link and image destinations", () => {
     const link = schema.marks.link!.create({
       href: "https://example.org/a path/(part)|pipe\nnext",

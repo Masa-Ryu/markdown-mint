@@ -3245,11 +3245,28 @@ function sourceMatches(
     }
     previousIdentity = candidate;
   }
+  const orderedIdentityMatches = identityOrderValid
+    ? identityMatches
+    : new Map<number, number>();
   if (identityOrderValid) {
-    identityMatches.forEach((candidate, index) => {
+    orderedIdentityMatches.forEach((candidate, index) => {
       matches.set(index, candidate);
       usedPrevious.add(candidate);
     });
+  }
+  // Fingerprint matches must stay inside the interval delimited by the
+  // identity anchors. Without this upper bound, a new node can claim a
+  // source block belonging to a later anchor, producing a non-monotonic
+  // sequence such as 0, 2, 1. Keep a blocked candidate unconsumed so a later
+  // current node can still use it after the anchor.
+  const nextIdentityPrevious: Array<number | undefined> = new Array(
+    current.length,
+  );
+  let nextIdentity: number | undefined;
+  for (let index = current.length - 1; index >= 0; index -= 1) {
+    nextIdentityPrevious[index] = nextIdentity;
+    const candidate = orderedIdentityMatches.get(index);
+    if (candidate != null) nextIdentity = candidate;
   }
   let previousCursor = -1;
   const cursors = new Map<string, number>();
@@ -3273,6 +3290,12 @@ function sourceMatches(
       continue;
     }
     const candidate = list[cursor]!;
+    const nextIdentityPreviousIndex = nextIdentityPrevious[index];
+    if (
+      nextIdentityPreviousIndex != null &&
+      candidate >= nextIdentityPreviousIndex
+    )
+      continue;
     cursors.set(key, cursor + 1);
     matches.set(index, candidate);
     usedPrevious.add(candidate);
@@ -3487,7 +3510,17 @@ export function serializeMarkdown(
     const node = children[index]!;
     const matched = matches.get(index);
     if (matched != null) {
-      output += blocks[matched]!.source;
+      const previousBlock = blocks[matched]!;
+      // A matched block's source normally includes the separator before the
+      // next previous block. If that previous suffix was deleted and this is
+      // now the current terminal block, retain only the block body; otherwise
+      // a removed block's separator would become a new trailing blank line.
+      output +=
+        !isBlankSpacingNode(node) &&
+        index === children.length - 1 &&
+        matched < blocks.length - 1
+          ? previousBlock.body
+          : previousBlock.source;
       if (!isBlankSpacingNode(node)) hasContentBefore = true;
       continue;
     }
