@@ -2877,11 +2877,12 @@ export class MarkdownEditorApp {
       "Mod-Delete": (state) =>
         state.selection instanceof BlockBoundarySelection,
       Tab: (state, dispatch) =>
-        isInTable(state)
+        this.focusSelectionToolbar(state.selection) ||
+        (isInTable(state)
           ? goToNextCell(1)(state, dispatch)
           : listItem
             ? sinkListItem(listItem)(state, dispatch)
-            : false,
+            : false),
       "Shift-Tab": (state, dispatch) =>
         isInTable(state)
           ? goToNextCell(-1)(state, dispatch)
@@ -3112,19 +3113,6 @@ export class MarkdownEditorApp {
   }
 
   private handleAppKeyDown(event: KeyboardEvent): boolean {
-    if (
-      event.altKey &&
-      event.key === "F10" &&
-      this.selectionToolbar &&
-      !this.selectionToolbar.hidden
-    ) {
-      event.preventDefault();
-      const first = this.selectionToolbar.querySelector<HTMLButtonElement>(
-        "button:not(:disabled)",
-      );
-      first?.focus();
-      return true;
-    }
     const starter = getStarterState(this.view.state);
     if (
       !(starter?.active && starter.untouched) &&
@@ -5380,7 +5368,6 @@ export class MarkdownEditorApp {
       const button = makeElement("button", {
         type: "button",
         class: "mm-floating-button",
-        "data-tooltip": `${label} selection`,
         "aria-label": `${label} selection`,
         "aria-pressed": "false",
         "data-mark": markName,
@@ -5428,7 +5415,6 @@ export class MarkdownEditorApp {
     const link = makeElement("button", {
       type: "button",
       class: "mm-floating-button",
-      "data-tooltip": "Link selection",
       "aria-label": "Link selection",
       "aria-pressed": "false",
       "data-mark": "link",
@@ -5669,6 +5655,45 @@ export class MarkdownEditorApp {
     this.selectionToolbarProfile = this.profile;
   }
 
+  private selectionToolbarEligible(selection: Selection): boolean {
+    if (
+      !this.initialized ||
+      this.previewOnly ||
+      this.parseError ||
+      this.conflict ||
+      this.syncPaused ||
+      this.composing ||
+      this.mode !== "rich" ||
+      !(selection instanceof TextSelection) ||
+      selection.empty ||
+      selection.from >= selection.to ||
+      selectionTouchesTable(selection)
+    )
+      return false;
+    if (selection.$from.parent.type.name === "code_block") return false;
+    for (let depth = selection.$from.depth; depth > 0; depth -= 1)
+      if (selection.$from.node(depth).type.name === "code_block") return false;
+    return true;
+  }
+
+  private focusSelectionToolbar(
+    selection: Selection = this.view.state.selection,
+  ): boolean {
+    if (
+      !this.selectionToolbar ||
+      this.selectionToolbar.hidden ||
+      !this.selectionToolbarEligible(selection)
+    )
+      return false;
+    const first = this.selectionToolbar.querySelector<HTMLButtonElement>(
+      "button:not(:disabled)",
+    );
+    if (!first) return false;
+    this.captureSelectionToolbarSelection();
+    first.focus();
+    return true;
+  }
+
   private restoreSelectionToolbarSelection(): boolean {
     if (
       !this.selectionToolbarSelection ||
@@ -5857,28 +5882,7 @@ export class MarkdownEditorApp {
 
   private updateSelectionToolbar(selection = this.view.state.selection): void {
     if (!this.selectionToolbar || !this.stage || !this.view) return;
-    const canShow =
-      this.initialized &&
-      !this.previewOnly &&
-      !this.parseError &&
-      !this.conflict &&
-      !this.syncPaused &&
-      !this.composing &&
-      this.mode === "rich" &&
-      selection instanceof TextSelection &&
-      !selection.empty &&
-      selection.from < selection.to &&
-      !selectionTouchesTable(selection);
-    const parent = selection.$from.parent;
-    const inCode =
-      parent.type.name === "code_block" ||
-      (() => {
-        for (let depth = selection.$from.depth; depth > 0; depth -= 1)
-          if (selection.$from.node(depth).type.name === "code_block")
-            return true;
-        return false;
-      })();
-    if (!canShow || inCode) {
+    if (!this.selectionToolbarEligible(selection)) {
       this.selectionToolbar.hidden = true;
       this.selectionToolbar.setAttribute("aria-hidden", "true");
       this.clearSelectionToolbarSelection();
