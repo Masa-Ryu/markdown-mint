@@ -119,6 +119,12 @@
 
 ## Earlier unreleased changes
 
+- Improved Selection Toolbar keyboard access: its five selection buttons keep
+  accessible aria-labels without overlapping per-button tooltips, and Tab from
+  an eligible text selection moves focus to the first enabled button while
+  preserving the selection. Native Tab/Shift+Tab navigation, keyboard command
+  activation, Escape, and existing Table/List Tab behavior are unchanged.
+
 - Improved the Rich Editor's empty-line Insert block menu with explicit Bullet
   list and Ordered list labels, two-dimensional keyboard navigation that skips
   profile-disabled items, and a transient `/` trigger for the same popup.
