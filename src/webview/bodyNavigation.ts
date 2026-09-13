@@ -183,7 +183,10 @@ export class BodyNavigation {
     let moved = false;
     if (selection instanceof BlockBoundarySelection) {
       moved = this.moveFromBoundary(selection.head, direction, vertical);
-    } else if (selection instanceof NodeSelection && selection.node.isBlock) {
+    } else if (
+      selection instanceof NodeSelection &&
+      (selection.node.isBlock || (vertical && selection.node.isAtom))
+    ) {
       moved = this.moveFromBlock(
         selection.from,
         selection.node,
@@ -288,6 +291,20 @@ export class BodyNavigation {
     );
   }
 
+  /**
+   * Vertical navigation crosses an insertion boundary in one key press.
+   * Table navigation uses this entry point because its keymap runs before the
+   * editor's general keydown handler.
+   */
+  moveVerticallyFromBoundary(
+    position: number,
+    direction: Direction,
+    goalPosition?: number,
+  ): boolean {
+    if (goalPosition !== undefined) this.captureGoal(goalPosition);
+    return this.moveFromBoundary(position, direction, true);
+  }
+
   private captureGoal(position: number): void {
     if (this.goalX !== undefined) return;
     try {
@@ -305,23 +322,38 @@ export class BodyNavigation {
     vertical: boolean,
   ): boolean {
     const doc = this.view.state.doc;
-    // Top-level block edges are virtual stops. Keeping this as a selection
-    // avoids the transient paragraph that older navigation used as a caret
-    // target, so crossing a boundary never edits the document.
+    // Horizontal movement keeps the insertion boundary as an explicit stop.
+    // Vertical movement is content navigation: traverse that same boundary
+    // immediately so one key press selects the adjacent actual target.
     if (isBlockBoundary(doc, position) && doc.nodeAt(position) === block) {
       const boundary = direction < 0 ? position : position + block.nodeSize;
-      return this.selectBoundary(boundary);
+      return vertical
+        ? this.moveFromBoundary(boundary, direction, true)
+        : this.selectBoundary(boundary);
     }
-    let cursor = direction < 0 ? position : position + block.nodeSize;
     const origin = doc.resolve(position);
+    let cursor = direction < 0 ? position : position + block.nodeSize;
+    // An inline atom that occupies its paragraph is already the complete
+    // displayed target. Skip the caret positions around its wrapper so the
+    // next vertical key reaches the adjacent block instead of the same
+    // paragraph after the image/raw inline node.
+    if (
+      vertical &&
+      block.isInline &&
+      block.isAtom &&
+      origin.parent.isTextblock &&
+      origin.parent.childCount === 1
+    )
+      cursor = direction < 0 ? origin.before() : origin.after();
     const originOuterPosition = origin.depth ? origin.before(1) : position;
     const originOuterBlock = origin.depth ? origin.node(1) : block;
     while (cursor >= 0 && cursor <= doc.content.size) {
       let selection = Selection.findFrom(doc.resolve(cursor), direction);
       if (!selection) break;
       // A nested textblock may have a valid Selection.findFrom result in the
-      // next top-level node. Stop at the outer block first so the same
-      // virtual boundary is used for Details, lists, and blockquotes.
+      // next top-level node. Horizontal navigation stops at the outer block
+      // first so Details, lists, and blockquotes retain their boundary stop;
+      // vertical navigation keeps the actual candidate and crosses directly.
       const candidate = selection.$from;
       const candidatePosition = candidate.depth
         ? candidate.before(1)
@@ -334,12 +366,14 @@ export class BodyNavigation {
         (candidatePosition !== originOuterPosition ||
           candidateBlock !== originOuterBlock)
       ) {
-        const boundary =
-          direction < 0
-            ? originOuterPosition
-            : originOuterPosition + originOuterBlock.nodeSize;
-        if (isBlockBoundary(doc, boundary))
-          return this.selectBoundary(boundary);
+        if (!vertical) {
+          const boundary =
+            direction < 0
+              ? originOuterPosition
+              : originOuterPosition + originOuterBlock.nodeSize;
+          if (isBlockBoundary(doc, boundary))
+            return this.selectBoundary(boundary);
+        }
       }
       // A collapsed structured Details remains one visible stop, regardless
       // of the depth of the hidden text position found by ProseMirror.
@@ -355,6 +389,7 @@ export class BodyNavigation {
           break;
         }
       }
+      selection = this.atomicInlineSelection(selection, vertical);
       if (selection instanceof NodeSelection) {
         const dom = this.view.nodeDOM(selection.from);
         if (dom instanceof HTMLElement && dom.hidden) {
@@ -400,6 +435,7 @@ export class BodyNavigation {
     const outerBlock = resolved.depth ? resolved.node(1) : block;
     const outerPosition = resolved.depth ? resolved.before(1) : position;
     if (
+      !vertical &&
       direction > 0 &&
       (outerBlock.type.name === "details" ||
         (resolved.depth === 0 && block.type.name !== "paragraph"))
@@ -439,6 +475,7 @@ export class BodyNavigation {
           break;
         }
       }
+      selection = this.atomicInlineSelection(selection, vertical);
       if (selection instanceof NodeSelection) {
         const dom = this.view.nodeDOM(selection.from);
         if (dom instanceof HTMLElement && dom.hidden) {
@@ -491,6 +528,29 @@ export class BodyNavigation {
       return true;
     } catch {
       return false;
+    }
+  }
+
+  /** A paragraph containing only an atom is one displayed atomic target. */
+  private atomicInlineSelection(
+    selection: Selection,
+    vertical: boolean,
+  ): Selection {
+    if (!vertical || !(selection instanceof TextSelection) || !selection.empty)
+      return selection;
+    const parent = selection.$from.parent;
+    const atom = parent.childCount === 1 ? parent.firstChild : null;
+    if (
+      !parent.isTextblock ||
+      !atom?.isAtom ||
+      !["image", "raw_inline"].includes(atom.type.name) ||
+      atom.type.spec.selectable === false
+    )
+      return selection;
+    try {
+      return NodeSelection.create(this.view.state.doc, selection.$from.start());
+    } catch {
+      return selection;
     }
   }
 

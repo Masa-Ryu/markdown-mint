@@ -99,7 +99,7 @@ afterEach(() => {
 });
 
 describe("table exit and blank-space editing", () => {
-  it("keeps top-level table edges on virtual boundaries", () => {
+  it("keeps horizontal table edges virtual and crosses vertical edges directly", () => {
     const source = "Before\n\n| A | B |\n| --- | --- |\n| C | D |\n\nAfter";
     const { app, messages } = makeApp(source);
     let tablePosition = -1;
@@ -171,8 +171,8 @@ describe("table exit and blank-space editing", () => {
     });
     app.view.dom.dispatchEvent(topArrow);
     expect(topArrow.defaultPrevented).toBe(true);
-    expect(app.view.state.selection).toBeInstanceOf(BlockBoundarySelection);
-    expect(app.view.state.selection.from).toBe(tablePosition);
+    expect(app.view.state.selection).not.toBeInstanceOf(BlockBoundarySelection);
+    expect(app.view.state.selection.$from.parent.textContent).toBe("Before");
 
     const lastCellNode = app.view.state.doc.nodeAt(lastCellPosition)!;
     app.view.dispatch(
@@ -197,7 +197,7 @@ describe("table exit and blank-space editing", () => {
     expect(edits(messages)).toHaveLength(beforeEdits);
   });
 
-  it("leaves a final table through ArrowDown without serializing its trailing target", () => {
+  it("does not expose a vertical boundary after a final table", () => {
     const { app, root, messages } = makeApp("Before");
     app.view.dispatch(
       app.view.state.tr.setSelection(TextSelection.atEnd(app.view.state.doc)),
@@ -244,26 +244,16 @@ describe("table exit and blank-space editing", () => {
     );
 
     expect(edits(messages)).toHaveLength(beforeArrow);
-    expect(app.view.state.selection).toBeInstanceOf(BlockBoundarySelection);
+    expect(app.view.state.selection).not.toBeInstanceOf(BlockBoundarySelection);
     expect(app.view.state.doc.lastChild?.type.name).toBe("table");
     const source = root.querySelector<HTMLTextAreaElement>(
       ".mm-source-textarea",
     )!;
     expect(source.value).not.toMatch(/\n\s*$/);
 
-    expect(
-      app.view.someProp("handleTextInput", (handler) =>
-        handler(
-          app.view,
-          app.view.state.selection.from,
-          app.view.state.selection.to,
-          "After table",
-          () => app.view.state.tr,
-        ),
-      ),
-    ).toBe(true);
-    expect(edits(messages)).toHaveLength(beforeArrow + 1);
-    expect(String(edits(messages).at(-1)?.markdown)).toContain("After table");
+    expect(app.view.state.selection.$from.parent.type.name).toBe("paragraph");
+    expect(app.view.state.selection.$from.parent.textContent).toBe("");
+    expect(edits(messages)).toHaveLength(beforeArrow);
   });
 
   it("does not leave a multi-paragraph cell from its first paragraph", () => {
@@ -323,8 +313,8 @@ describe("table exit and blank-space editing", () => {
       exitAtEnd(app.view.state, (transaction) =>
         app.view.dispatch(transaction),
       ),
-    ).toBe(true);
-    expect(app.view.state.selection).toBeInstanceOf(BlockBoundarySelection);
+    ).toBe(false);
+    expect(app.view.state.selection.$from.parent.textContent).toBe("last");
     expect(app.view.state.doc.lastChild?.type.name).toBe("table");
   });
 

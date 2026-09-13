@@ -3226,6 +3226,12 @@ export class MarkdownEditorApp {
     // cell. Leave only when the cursor is at the final textblock boundary.
     const cellContentEnd = context.cellPos + cell.nodeSize - 1;
     if (state.selection.from < cellContentEnd - 1) return false;
+    if (axis === "vert")
+      return this.navigation.moveVerticallyFromBoundary(
+        context.tableStart - 1 + context.table.nodeSize,
+        1,
+        state.selection.head,
+      );
     return this.moveSelectionAfterTable(state, context, dispatch);
   }
 
@@ -3261,6 +3267,12 @@ export class MarkdownEditorApp {
       !isBlockBoundary(state.doc, tablePosition)
     )
       return false;
+    if (axis === "vert")
+      return this.navigation.moveVerticallyFromBoundary(
+        tablePosition,
+        -1,
+        state.selection.head,
+      );
     const target = new BlockBoundarySelection(state.doc.resolve(tablePosition));
     if (!dispatch) return true;
     dispatch(

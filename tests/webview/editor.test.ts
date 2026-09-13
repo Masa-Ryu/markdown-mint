@@ -1566,8 +1566,6 @@ describe("code block vertical boundaries", () => {
 
     expect(endOfTextblock).toHaveBeenCalledWith("up");
     expect(event.defaultPrevented).toBe(true);
-    expect(app.view.state.selection).toBeInstanceOf(BlockBoundarySelection);
-    dispatchCodeKey(root, "ArrowUp");
     expect(app.view.state.selection.$from.parent.type.name).toBe("paragraph");
     expect(app.view.state.selection.$from.parent.textContent).toBe(
       "Before paragraph",
@@ -1607,8 +1605,6 @@ describe("code block vertical boundaries", () => {
     endOfTextblock.mockReturnValue(true);
     const firstRow = dispatchCodeKey(root, "ArrowUp");
     expect(firstRow.defaultPrevented).toBe(true);
-    expect(app.view.state.selection).toBeInstanceOf(BlockBoundarySelection);
-    dispatchCodeKey(root, "ArrowUp");
     expect(app.view.state.selection.$from.parent.type.name).toBe("paragraph");
     expect(app.view.state.selection.$from.parent.textContent).toBe("Before");
     expect(app.view.state.selection.from).toBe(codePosition - 1);
@@ -1631,8 +1627,6 @@ describe("code block vertical boundaries", () => {
 
     expect(event.defaultPrevented).toBe(true);
     expect(endOfTextblock).toHaveBeenCalledWith("down");
-    expect(app.view.state.selection).toBeInstanceOf(BlockBoundarySelection);
-    dispatchCodeKey(root, "ArrowDown");
     expect(app.view.state.selection.$from.parent.type.name).toBe("paragraph");
     expect(app.view.state.selection.$from.parent.textContent).toBe("After");
     expect(messages.filter(isEditMessage)).toHaveLength(0);
@@ -1651,10 +1645,6 @@ describe("code block vertical boundaries", () => {
     selectCodeBlockText(consecutive.app, 0, 1);
     const consecutiveEvent = dispatchCodeKey(consecutive.root, "ArrowUp", 1);
     expect(consecutiveEvent.defaultPrevented).toBe(true);
-    expect(consecutive.app.view.state.selection).toBeInstanceOf(
-      BlockBoundarySelection,
-    );
-    dispatchCodeKey(consecutive.root, "ArrowUp", 1);
     expect(consecutive.app.view.state.selection.$from.parent.type.name).toBe(
       "code_block",
     );
@@ -1708,14 +1698,9 @@ describe("code block vertical boundaries", () => {
 
     const event = dispatchCodeKey(root, "ArrowUp");
 
-    expect(event.defaultPrevented).toBe(true);
-    expect(app.view.state.selection).toBeInstanceOf(BlockBoundarySelection);
+    expect(event.defaultPrevented).toBe(false);
     expect(app.view.state.doc).toBe(originalDoc);
-    expect(app.view.state.selection.head).toBe(0);
-    const second = dispatchCodeKey(root, "ArrowUp");
-    expect(second.defaultPrevented).toBe(false);
-    expect(app.view.state.selection.head).toBe(0);
-    expect(app.view.state.selection).not.toBe(originalSelection);
+    expect(app.view.state.selection.eq(originalSelection)).toBe(true);
     expect(messages.filter(isEditMessage)).toHaveLength(0);
     endOfTextblock.mockRestore();
     app.destroy();
@@ -1851,8 +1836,6 @@ describe("code block vertical boundaries", () => {
     )!;
 
     expect(event.defaultPrevented).toBe(true);
-    expect(app.view.state.selection).toBeInstanceOf(BlockBoundarySelection);
-    dispatchCodeKey(root, "ArrowUp");
     expect(document.activeElement).toBe(body);
     expect(body.selectionStart).toBe(body.value.length);
     expect(app.view.state.selection).toBeInstanceOf(NodeSelection);

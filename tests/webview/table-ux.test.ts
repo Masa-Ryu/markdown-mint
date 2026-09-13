@@ -668,6 +668,46 @@ describe("table Enter navigation", () => {
   });
 });
 
+describe("table vertical navigation", () => {
+  it("enters and exits a table without exposing a block boundary", () => {
+    const source = "Before\n\n| H1 | H2 |\n| --- | --- |\n| A1 | A2 |\n\nAfter";
+    const { app, root, messages } = makeApp(source);
+    const before = app.view.state.doc;
+    app.view.endOfTextblock = () => true;
+
+    selectTableCell(app, root, 1, 0, 2);
+    const down = dispatchEditorKey(app, "ArrowDown");
+    expect(down.defaultPrevented).toBe(true);
+    expect(app.view.state.selection).toBeInstanceOf(TextSelection);
+    expect(app.view.state.selection.$from.parent.textContent).toBe("After");
+    expect(app.view.state.selection.$from.parent.type.name).toBe("paragraph");
+    expect(app.view.state.doc).toBe(before);
+    expect(messageType(messages, "edit")).toHaveLength(0);
+
+    const up = dispatchEditorKey(app, "ArrowUp");
+    expect(up.defaultPrevented).toBe(true);
+    expect(activeTableCell(app)).toEqual({ row: 1, column: 1 });
+    expect(app.view.state.doc).toBe(before);
+    expect(messageType(messages, "edit")).toHaveLength(0);
+  });
+
+  it("uses the first table cell when moving down from a paragraph", () => {
+    const source = "Before\n\n| H1 | H2 |\n| --- | --- |\n| A1 | A2 |\n\nAfter";
+    const { app } = makeApp(source);
+    app.view.endOfTextblock = () => true;
+    const before = app.view.state.doc;
+
+    app.view.dispatch(
+      app.view.state.tr.setSelection(
+        TextSelection.create(app.view.state.doc, 1 + "Before".length),
+      ),
+    );
+    dispatchEditorKey(app, "ArrowDown");
+    expect(activeTableCell(app)).toEqual({ row: 0, column: 0 });
+    expect(app.view.state.doc).toBe(before);
+  });
+});
+
 describe("contextual table toolbar", () => {
   it("keeps the main Table button active across cells and CellSelection only", () => {
     const { app, root } = makeApp(

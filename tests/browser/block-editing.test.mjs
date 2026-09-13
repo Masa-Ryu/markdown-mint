@@ -610,6 +610,102 @@ async function testHorizontalNavigation(page) {
   await expectSource(page, blocks("Before", fence("ts", "code"), "/", "After"));
 }
 
+async function testDirectVerticalBlockNavigation(page) {
+  const source = blocks("Paragraph A", "Paragraph B");
+  await load(page, source);
+  const before = await saved(page);
+
+  await caret(page, `${rich} > p:first-child`, -1);
+  await page.keyboard.press("ArrowDown");
+  let state = await selection(page);
+  assert.equal(
+    state.kind,
+    "TextSelection",
+    "Down stopped at an insertion boundary",
+  );
+  assert.equal(
+    state.text,
+    "Paragraph B",
+    "Down did not enter the next paragraph",
+  );
+  assert.equal(await page.locator(".mm-block-boundary-cursor").count(), 0);
+
+  await page.keyboard.press("ArrowUp");
+  state = await selection(page);
+  assert.equal(
+    state.kind,
+    "TextSelection",
+    "Up stopped at an insertion boundary",
+  );
+  assert.equal(
+    state.text,
+    "Paragraph A",
+    "Up did not return to the previous paragraph",
+  );
+  await noEdits(page, before, "direct paragraph vertical navigation");
+
+  const atomicSource = blocks("Paragraph A", "---", "Paragraph B");
+  await load(page, atomicSource);
+  const atomicBefore = await saved(page);
+  await caret(page, `${rich} > p:first-child`, -1);
+  await page.keyboard.press("ArrowDown");
+  state = await selection(page);
+  assert.equal(
+    state.kind,
+    "NodeSelection",
+    "ArrowDown did not select the atomic HR",
+  );
+  assert.equal(
+    await page.evaluate(
+      () => window.markdownMint.view.state.selection.node.type.name,
+    ),
+    "horizontal_rule",
+  );
+  assert.equal(await page.locator(".mm-block-boundary-cursor").count(), 0);
+  await page.keyboard.press("ArrowDown");
+  state = await selection(page);
+  assert.equal(
+    state.text,
+    "Paragraph B",
+    "ArrowDown stopped before the paragraph after the HR",
+  );
+  await page.keyboard.press("ArrowUp");
+  state = await selection(page);
+  assert.equal(
+    state.kind,
+    "NodeSelection",
+    "ArrowUp did not return to the atomic HR",
+  );
+  await page.keyboard.press("ArrowUp");
+  assert.equal((await selection(page)).text, "Paragraph A");
+  await noEdits(page, atomicBefore, "atomic vertical navigation");
+
+  const imageSource = blocks(
+    "Paragraph A",
+    "![image](https://example.com/image.png)",
+    "Paragraph B",
+  );
+  await load(page, imageSource);
+  const imageBefore = await saved(page);
+  await caret(page, `${rich} > p:first-child`, -1);
+  await page.keyboard.press("ArrowDown");
+  state = await selection(page);
+  assert.equal(state.kind, "NodeSelection", "image was not treated as atomic");
+  assert.equal(
+    await page.evaluate(
+      () => window.markdownMint.view.state.selection.node.type.name,
+    ),
+    "image",
+  );
+  await page.keyboard.press("ArrowDown");
+  assert.equal((await selection(page)).text, "Paragraph B");
+  await page.keyboard.press("ArrowUp");
+  assert.equal((await selection(page)).kind, "NodeSelection");
+  await page.keyboard.press("ArrowUp");
+  assert.equal((await selection(page)).text, "Paragraph A");
+  await noEdits(page, imageBefore, "image atomic vertical navigation");
+}
+
 async function testWrappedVerticalNavigation(page) {
   await page.setViewportSize({ width: 460, height: 800 });
   const body =
@@ -647,8 +743,6 @@ async function testWrappedVerticalNavigation(page) {
   assert.equal((await selection(page)).active, "mm-alert-body-editor");
   await caret(page, `:nth-match(${alertBody}, 1)`, body.length - 3);
   await page.keyboard.press("ArrowDown");
-  await expectBoundary(page, "last Alert row -> code boundary");
-  await page.keyboard.press("ArrowDown");
   state = await selection(page);
   assert.equal(
     state.parent,
@@ -656,16 +750,12 @@ async function testWrappedVerticalNavigation(page) {
     "last displayed Alert row Down did not enter code",
   );
   await page.keyboard.press("ArrowUp");
-  await expectBoundary(page, "code -> Alert boundary");
-  await page.keyboard.press("ArrowUp");
   assert.equal(
     (await selection(page)).active,
     "mm-alert-body-editor",
     "code Up did not re-enter Alert",
   );
   await caret(page, `:nth-match(${alertBody}, 1)`, 3);
-  await page.keyboard.press("ArrowUp");
-  await expectBoundary(page, "first Alert row -> paragraph boundary");
   await page.keyboard.press("ArrowUp");
   assert.equal(
     (await selection(page)).text,
@@ -675,14 +765,51 @@ async function testWrappedVerticalNavigation(page) {
   await noEdits(page, before, "vertical boundary navigation");
   await caret(page, `:nth-match(${alertBody}, 1)`, -1);
   await page.keyboard.press("ArrowDown");
-  await expectBoundary(page, "final Alert boundary before code typing");
-  await page.keyboard.press("ArrowDown");
+  assert.equal(
+    (await selection(page)).parent,
+    "code_block",
+    "final Alert row did not enter code directly",
+  );
   await page.keyboard.type("Z");
   await page.waitForFunction(() =>
     window.__markdownMintHarness.document.markdown.includes("Z"),
   );
   assert.match((await saved(page)).markdown, /```ts\n[^`]*Z/);
   await page.setViewportSize({ width: 960, height: 900 });
+}
+
+async function testTableVerticalNavigation(page) {
+  const source = blocks(
+    "Before",
+    "| H1 | H2 |\n| --- | --- |\n| A1 | A2 |",
+    "After",
+  );
+  await load(page, source);
+  const before = await saved(page);
+
+  await caret(page, `${rich} > p:first-child`, -1);
+  await page.keyboard.press("ArrowDown");
+  let state = await selection(page);
+  assert.equal(state.kind, "TextSelection");
+  assert.equal(state.text, "H1", "paragraph Down did not enter the table");
+  assert.equal(await page.locator(".mm-block-boundary-cursor").count(), 0);
+
+  await caret(page, `${rich} tbody tr:last-child td:first-child p`, -1);
+  await page.keyboard.press("ArrowDown");
+  state = await selection(page);
+  assert.equal(state.kind, "TextSelection", "table Down stopped at a boundary");
+  assert.equal(
+    state.text,
+    "After",
+    "table Down did not leave to the next paragraph",
+  );
+  assert.equal(await page.locator(".mm-block-boundary-cursor").count(), 0);
+
+  await page.keyboard.press("ArrowUp");
+  state = await selection(page);
+  assert.equal(state.text, "A2", "table Up did not return to a table cell");
+  assert.equal(state.kind, "TextSelection");
+  await noEdits(page, before, "table vertical navigation");
 }
 
 async function testExpandedCodeVerticalNavigation(page) {
@@ -838,7 +965,13 @@ async function testCodeVerticalNavigation(page) {
     );
 
     await page.keyboard.press("ArrowDown");
-    await expectBoundary(page, "last code row -> boundary");
+    state = await selection(page);
+    assert.equal(
+      state.parent,
+      "paragraph",
+      "last code row did not enter the next block",
+    );
+    assert.equal(state.text, "After");
     const boundaryEvent = await page.evaluate(() =>
       window.__markdownMintVerticalKeys.at(-1),
     );
@@ -846,13 +979,6 @@ async function testCodeVerticalNavigation(page) {
       key: "ArrowDown",
       defaultPrevented: true,
     });
-    await page.keyboard.press("ArrowDown");
-    state = await selection(page);
-    assert.equal(state.parent, "paragraph");
-    assert.equal(state.text, "After");
-
-    await page.keyboard.press("ArrowUp");
-    await expectBoundary(page, "After -> code boundary");
     await page.keyboard.press("ArrowUp");
     state = await selection(page);
     assert.equal(state.parent, "code_block");
@@ -870,7 +996,13 @@ async function testCodeVerticalNavigation(page) {
       assert.equal(state.offset, expected);
     }
     await page.keyboard.press("ArrowUp");
-    await expectBoundary(page, "first code row -> boundary");
+    state = await selection(page);
+    assert.equal(
+      state.parent,
+      "paragraph",
+      "first code row did not enter the previous block",
+    );
+    assert.equal(state.text, "Before");
     const upEvents = await page.evaluate(() =>
       window.__markdownMintVerticalKeys
         .filter((event) => event.key === "ArrowUp")
@@ -878,7 +1010,7 @@ async function testCodeVerticalNavigation(page) {
     );
     assert.deepEqual(
       upEvents,
-      [true, true, false, false, false, false, true],
+      [true, false, false, false, false, true],
       "interior code rows were intercepted on reverse native movement",
     );
     await noEdits(
@@ -1008,14 +1140,10 @@ async function testVerticalGoalAndEmptyEdges(page) {
         ).left,
     );
     await page.keyboard.press("ArrowDown");
-    await expectBoundary(page, "code -> short block boundary");
-    await page.keyboard.press("ArrowDown");
     const short = await selection(page);
     if (middle.startsWith(">"))
       assert.equal(short.inputStart, 1, "short Alert must clamp to its end");
     else assert.equal(short.offset, 1, "short paragraph must clamp to its end");
-    await page.keyboard.press("ArrowDown");
-    await expectBoundary(page, "short block -> code boundary");
     await page.keyboard.press("ArrowDown");
     const afterX = await page.evaluate(
       () =>
@@ -1028,7 +1156,6 @@ async function testVerticalGoalAndEmptyEdges(page) {
       Math.abs(afterX - originalX) <= 8,
       `vertical goal lost through short body: ${originalX}px -> ${afterX}px`,
     );
-    await page.keyboard.press("ArrowUp");
     await page.keyboard.press("ArrowUp");
     await page.keyboard.press("ArrowUp");
     await page.keyboard.press("ArrowUp");
@@ -1859,7 +1986,9 @@ async function main() {
       testAlertHeaderAndSelection,
       testAlertConflict,
       testHorizontalNavigation,
+      testDirectVerticalBlockNavigation,
       testWrappedVerticalNavigation,
+      testTableVerticalNavigation,
       testCodeVerticalNavigation,
       testExpandedCodeVerticalNavigation,
       testSelectionAndModifiers,

@@ -144,18 +144,13 @@ describe("top-level block boundary navigation", () => {
     expect(editMessages(messages)).toHaveLength(0);
   });
 
-  it("uses the same boundary for vertical movement and preserves desired X state", () => {
+  it("crosses the boundary directly for vertical movement and preserves desired X state", () => {
     const { app, select, key } = setup("Before\n\n```ts\ncode\n```\n\nAfter");
     const endOfTextblock = app.view.endOfTextblock.bind(app.view);
     app.view.endOfTextblock = () => true;
     select("code", "end");
     key("ArrowDown");
-    expect(app.view.state.selection).toBeInstanceOf(BlockBoundarySelection);
-    key("ArrowDown");
     expect(app.view.state.selection.$from.parent.textContent).toBe("After");
-    select("After", "start");
-    key("ArrowUp");
-    expect(app.view.state.selection).toBeInstanceOf(BlockBoundarySelection);
     key("ArrowUp");
     expect(app.view.state.selection.$from.parent.type.name).toBe("code_block");
     app.view.endOfTextblock = endOfTextblock;
