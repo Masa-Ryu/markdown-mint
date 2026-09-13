@@ -678,16 +678,88 @@ async function testStructuralBoundaryNavigationAndInsertion(page) {
   const source = blocks(fence("ts", "code"), tableSource, "After");
 
   await load(page, source);
+  const table = page.locator(`${rich} > table`);
   const beforeTyping = await saved(page);
   await caret(page, ".mm-code-block-pre code", -1);
+  await settle(page);
+  const initialTableLayout = await table.evaluate((element) => {
+    const stage = document.querySelector(".mm-stage");
+    const stageTop = stage?.getBoundingClientRect().top ?? 0;
+    const rect = element.getBoundingClientRect();
+    return {
+      rectTop: rect.top,
+      stageScrollTop: stage?.scrollTop ?? 0,
+      top: rect.top - stageTop + (stage?.scrollTop ?? 0),
+      marginTop: getComputedStyle(element).marginTop,
+      marginBottom: getComputedStyle(element).marginBottom,
+      lineHeight: Number.parseFloat(
+        getComputedStyle(element.parentElement).lineHeight,
+      ),
+    };
+  });
   await page.keyboard.press("ArrowDown");
+  await settle(page);
   assert.equal(
     (await selection(page)).kind,
     "BlockBoundarySelection",
     "Code -> Table did not expose one insertion boundary",
   );
   assert.equal(await page.locator(".mm-block-boundary-cursor").count(), 1);
+  const activeBoundary = await page
+    .locator(".mm-block-boundary-cursor")
+    .evaluate((element) => {
+      const style = getComputedStyle(element);
+      const stage = document.querySelector(".mm-stage");
+      const stageTop = stage?.getBoundingClientRect().top ?? 0;
+      const tableElement = document.querySelector(
+        ".mm-rich-panel .ProseMirror > table",
+      );
+      const tableRect = tableElement?.getBoundingClientRect();
+      return {
+        display: style.display,
+        position: style.position,
+        height: Number.parseFloat(style.height),
+        tableTop: tableRect
+          ? tableRect.top - stageTop + (stage?.scrollTop ?? 0)
+          : Number.NaN,
+      };
+    });
+  assert.equal(activeBoundary.display, "block");
+  assert.equal(activeBoundary.position, "relative");
+  assert.ok(activeBoundary.height > 0, "boundary spacer has no layout height");
+  const tableShift = activeBoundary.tableTop - initialTableLayout.top;
+  assert.ok(
+    Math.abs(tableShift - initialTableLayout.lineHeight) <
+      initialTableLayout.lineHeight * 0.45,
+    `boundary spacer shifted Table by ${tableShift}px, expected about ${initialTableLayout.lineHeight}px`,
+  );
   await noEdits(page, beforeTyping, "structural boundary selection");
+  const sourceBeforeExit = (await saved(page)).markdown;
+  await page.keyboard.press("ArrowDown");
+  await settle(page);
+  assert.equal((await selection(page)).text, "H1");
+  assert.equal(await page.locator(".mm-block-boundary-cursor").count(), 0);
+  const restoredTableTop = await table.evaluate((element) => {
+    const stage = document.querySelector(".mm-stage");
+    const stageTop = stage?.getBoundingClientRect().top ?? 0;
+    return (
+      element.getBoundingClientRect().top - stageTop + (stage?.scrollTop ?? 0)
+    );
+  });
+  assert.ok(
+    Math.abs(restoredTableTop - initialTableLayout.top) < 1,
+    `leaving the boundary did not restore the Table position: initial=${initialTableLayout.top}, active=${activeBoundary.tableTop}, restored=${restoredTableTop}`,
+  );
+  await noEdits(
+    page,
+    { ...beforeTyping, markdown: sourceBeforeExit },
+    "boundary exit",
+  );
+
+  await load(page, source);
+  await caret(page, ".mm-code-block-pre code", -1);
+  await page.keyboard.press("ArrowDown");
+  assert.equal((await selection(page)).kind, "BlockBoundarySelection");
   await page.keyboard.type("hello");
   await expectSource(
     page,
@@ -821,6 +893,117 @@ async function testStructuralBoundaryNavigationAndInsertion(page) {
     ),
     "horizontal_rule",
   );
+}
+
+async function testStructuralDocumentEdges(page) {
+  const finalAlertSource = blocks(fence("ts", "code"), alert("final alert"));
+  await load(page, finalAlertSource);
+  const beforeAlert = await saved(page);
+  await caret(page, alertBody, -1);
+  await page.keyboard.press("ArrowDown");
+  let state = await selection(page);
+  assert.equal(state.kind, "BlockBoundarySelection");
+  assert.equal(
+    await page.evaluate(() => window.markdownMint.view.state.selection.head),
+    await page.evaluate(() => window.markdownMint.view.state.doc.content.size),
+  );
+  assert.equal(await page.locator(".mm-block-boundary-cursor").count(), 1);
+  await noEdits(page, beforeAlert, "final Alert document-end boundary");
+
+  const stableEdge = await page.evaluate(() => {
+    const stage = document.querySelector(".mm-stage");
+    const selected = window.markdownMint.view.state.selection;
+    return {
+      from: selected.from,
+      to: selected.to,
+      kind: selected.constructor.name.replace(/^_/, ""),
+      scrollTop: stage?.scrollTop ?? 0,
+      scrollY: window.scrollY,
+    };
+  });
+  for (const key of [
+    "ArrowDown",
+    "ArrowDown",
+    "ArrowDown",
+    "ArrowRight",
+    "ArrowRight",
+    "ArrowRight",
+  ]) {
+    await page.keyboard.press(key);
+  }
+  const unchangedEdge = await page.evaluate(() => {
+    const stage = document.querySelector(".mm-stage");
+    const selected = window.markdownMint.view.state.selection;
+    return {
+      from: selected.from,
+      to: selected.to,
+      kind: selected.constructor.name.replace(/^_/, ""),
+      scrollTop: stage?.scrollTop ?? 0,
+      scrollY: window.scrollY,
+    };
+  });
+  assert.deepEqual(
+    unchangedEdge,
+    stableEdge,
+    "document-end boundary leaked native scrolling",
+  );
+  await noEdits(page, beforeAlert, "document-end boundary no-op arrows");
+
+  await page.keyboard.press("ArrowUp");
+  state = await selection(page);
+  assert.equal(state.active, "mm-alert-body-editor");
+  assert.equal(state.kind, "NodeSelection");
+  assert.equal(await page.locator(".mm-block-boundary-cursor").count(), 0);
+  await noEdits(page, beforeAlert, "closing final Alert document-end boundary");
+
+  await caret(page, alertBody, -1);
+  await page.keyboard.press("ArrowDown");
+  assert.equal((await selection(page)).kind, "BlockBoundarySelection");
+  await page.keyboard.type("After alert");
+  await expectSource(
+    page,
+    blocks(fence("ts", "code"), alert("final alert"), "After alert"),
+  );
+
+  await load(page, finalAlertSource);
+  const beforeSlash = await saved(page);
+  await caret(page, alertBody, -1);
+  await page.keyboard.press("ArrowDown");
+  await page.keyboard.type("/");
+  const popup = page.locator("#mm-empty-line-insert-popup");
+  await popup.waitFor({ state: "visible" });
+  const slashState = await saved(page);
+  assert.equal(slashState.markdown, beforeSlash.markdown);
+  assert.equal(slashState.edits, beforeSlash.edits);
+  await popup.getByRole("menuitem", { name: "Code block" }).click();
+  const slashCommitted = await saved(page);
+  assert.ok(slashCommitted.edits > beforeSlash.edits);
+  assert.match(slashCommitted.markdown, /final alert[\s\S]*```/);
+
+  const firstStructuralSource = blocks(fence("ts", "code"), "After");
+  await load(page, firstStructuralSource);
+  const beforeStart = await saved(page);
+  await caret(page, ".mm-code-block-pre code", 0);
+  await page.keyboard.press("ArrowUp");
+  state = await selection(page);
+  assert.equal(state.kind, "BlockBoundarySelection");
+  assert.equal(
+    await page.evaluate(() => window.markdownMint.view.state.selection.head),
+    0,
+  );
+  assert.equal(await page.locator(".mm-block-boundary-cursor").count(), 1);
+  await noEdits(page, beforeStart, "first structural document-start boundary");
+  await page.keyboard.type("Before");
+  await expectSource(page, blocks("Before", fence("ts", "code"), "After"));
+
+  await load(page, "First paragraph");
+  const beforeFlowEdge = await saved(page);
+  await caret(page, `${rich} > p:first-child`, 0);
+  await page.keyboard.press("ArrowUp");
+  state = await selection(page);
+  assert.equal(state.kind, "TextSelection");
+  assert.equal(await page.locator(".mm-block-boundary-cursor").count(), 0);
+  await noEdits(page, beforeFlowEdge, "flow document-start edge");
 }
 
 async function testDirectVerticalBlockNavigation(page) {
@@ -1637,10 +1820,12 @@ async function testVerticalGoalAndEmptyEdges(page) {
       Math.abs(afterX - originalX) <= 8,
       `vertical goal lost through short body: ${originalX}px -> ${afterX}px`,
     );
-    await page.keyboard.press("ArrowUp");
-    await page.keyboard.press("ArrowUp");
-    await page.keyboard.press("ArrowUp");
-    if (middle.startsWith(">")) await page.keyboard.press("ArrowUp");
+    for (let step = 0; step < 3; step += 1) {
+      await page.keyboard.press("ArrowUp");
+      await settle(page);
+    }
+    await page.keyboard.press(middle.startsWith(">") ? "ArrowUp" : "ArrowDown");
+    await settle(page);
     assert.equal(
       (await selection(page)).offset,
       18,
@@ -2502,6 +2687,7 @@ async function main() {
       testInsertAffordances,
       testBlockGapInsertion,
       testStructuralBoundaryNavigationAndInsertion,
+      testStructuralDocumentEdges,
       testDirectVerticalBlockNavigation,
       testArrowDocumentEdges,
       testWrappedVerticalNavigation,

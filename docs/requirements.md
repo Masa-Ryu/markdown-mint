@@ -381,13 +381,20 @@ position, and table edge traversal is position-based at any container depth.
 `BlockBoundarySelection` remains unchanged for pointer and dedicated insertion
 UX (`+`, slash, Enter, and composition), but it is never created or retained
 as an ArrowLeft/Right/Up/Down stop. An atomic block itself remains one stop,
-empty paragraphs remain individual stops, and a document edge is handled
-without moving or scrolling. The vertical goal X is retained across short
-intermediate targets. A temporary styled textarea layout mirror handles Alert
-wrapping, font metrics, width, line height, and scrolling. Modified arrows,
-selection ranges, IME candidate keys, and expanded-code controls keep their own
-handlers. Navigation dispatches only selection transactions and never creates
-a transient paragraph.
+empty paragraphs remain individual stops, and flow document edges are handled
+without moving or scrolling. When the first or last document child is
+structural, its corresponding document edge exposes a `BlockBoundarySelection`
+at position `0` or `doc.content.size`; arrows outward from that edge remain a
+handled no-op. While a boundary selection is active in the focused editor, its
+decoration reserves one visual line as a temporary insertion slot. Leaving it
+without input collapses that line immediately with no document edit; the slot
+is not a paragraph, transient paragraph, or Markdown blank line. Typing, Enter,
+or slash then turns the insertion position into meaningful editing, with slash
+reusing the existing Insert block popup. The vertical goal X is retained across
+short intermediate targets. A temporary styled textarea layout mirror handles
+Alert wrapping, font metrics, width, line height, and scrolling. Modified
+arrows, selection ranges, IME candidate keys, and expanded-code controls keep
+their own handlers. Navigation itself dispatches only selection transactions.
 
 Validation is recorded separately for real Chromium keyboard/mouse/layout
 checks and VS Code native APIs. `npm run test:browser:blocks` covers header
@@ -1103,7 +1110,9 @@ Insert block popup with its existing items. The transient paragraph is omitted
 from the serialized source and does not create a host edit, dirty state,
 autosave, or undo entry until typing or an Insert block command makes it
 meaningful. Ordinary arrow keys continue to use the structural actual-target
-graph and do not stop on this mouse-created transient paragraph.
+graph and do not stop on this mouse-created transient paragraph. Slash input at
+an existing boundary uses the same transient source-omission guard until the
+popup command is chosen.
 
 ## Explicit limits
 

@@ -197,7 +197,7 @@ describe("table exit and blank-space editing", () => {
     expect(edits(messages)).toHaveLength(beforeEdits);
   });
 
-  it("does not expose a vertical boundary after a final table", () => {
+  it("exposes a document-end boundary after a final table", () => {
     const { app, root, messages } = makeApp("Before");
     app.view.dispatch(
       app.view.state.tr.setSelection(TextSelection.atEnd(app.view.state.doc)),
@@ -244,15 +244,14 @@ describe("table exit and blank-space editing", () => {
     );
 
     expect(edits(messages)).toHaveLength(beforeArrow);
-    expect(app.view.state.selection).not.toBeInstanceOf(BlockBoundarySelection);
+    expect(app.view.state.selection).toBeInstanceOf(BlockBoundarySelection);
+    expect(app.view.state.selection.head).toBe(app.view.state.doc.content.size);
     expect(app.view.state.doc.lastChild?.type.name).toBe("table");
     const source = root.querySelector<HTMLTextAreaElement>(
       ".mm-source-textarea",
     )!;
     expect(source.value).not.toMatch(/\n\s*$/);
 
-    expect(app.view.state.selection.$from.parent.type.name).toBe("paragraph");
-    expect(app.view.state.selection.$from.parent.textContent).toBe("");
     expect(edits(messages)).toHaveLength(beforeArrow);
   });
 
@@ -314,7 +313,8 @@ describe("table exit and blank-space editing", () => {
         app.view.dispatch(transaction),
       ),
     ).toBe(true);
-    expect(app.view.state.selection.$from.parent.textContent).toBe("last");
+    expect(app.view.state.selection).toBeInstanceOf(BlockBoundarySelection);
+    expect(app.view.state.selection.head).toBe(app.view.state.doc.content.size);
     expect(app.view.state.doc.lastChild?.type.name).toBe("table");
   });
 

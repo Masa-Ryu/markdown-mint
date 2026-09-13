@@ -51,6 +51,25 @@ export function shouldStopAtStructuralGap(
   );
 }
 
+/** Return an insertion edge only for the first or last structural document child. */
+export function structuralDocumentEdgeFor(
+  origin: NavigationTarget | null,
+  direction: Direction,
+  position: number,
+  doc: PMNode,
+): number | null {
+  if (!origin || !isBlockBoundary(doc, origin.position)) return null;
+  if (!isStructuralNavigationTarget(origin.node)) return null;
+  if (
+    direction > 0 &&
+    position === doc.content.size &&
+    origin.position + origin.node.nodeSize === doc.content.size
+  )
+    return position;
+  if (direction < 0 && position === 0 && origin.position === 0) return position;
+  return null;
+}
+
 const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 
 function textareaCaret(value: string, offset: number): number {
@@ -503,7 +522,16 @@ export class BodyNavigation {
     let cursor = position;
     while (cursor >= 0 && cursor <= doc.content.size) {
       let selection = Selection.findFrom(doc.resolve(cursor), direction);
-      if (!selection) break;
+      if (!selection) {
+        const documentEdge = structuralDocumentEdgeFor(
+          origin,
+          direction,
+          direction > 0 ? doc.content.size : 0,
+          doc,
+        );
+        if (documentEdge !== null) return this.selectBoundary(documentEdge);
+        break;
+      }
       // A collapsed structured Details remains one visible stop, regardless
       // of the depth of the hidden text position found by ProseMirror.
       for (let depth = 1; depth <= selection.$from.depth; depth += 1) {

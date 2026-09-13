@@ -3127,7 +3127,12 @@ export class MarkdownEditorApp {
     )
       return false;
     if (text === "/") {
-      if (!this.materializeBoundary(selection.head)) return false;
+      const transaction = this.createTransientBlockGapTransaction(
+        selection.head,
+      );
+      if (!transaction) return false;
+      this.view.focus();
+      this.dispatchTransaction(transaction);
       const paragraphSelection = this.view.state.selection;
       if (
         this.handleInsertBlockSlash(
@@ -3138,7 +3143,8 @@ export class MarkdownEditorApp {
         )
       )
         return true;
-      // A missing slash popup anchor falls back to the ordinary text path.
+      // A missing slash popup anchor falls back to meaningful text in the
+      // transient paragraph that was just created.
       this.dispatchTransaction(this.view.state.tr.insertText(text));
       this.view.focus();
       return true;

@@ -6,7 +6,10 @@
   Insert block popup without changing layout or Markdown until a block is
   committed. Keep flow-to-flow and flow-to-structural arrow navigation direct,
   and expose a boundary stop only between adjacent structural top-level
-  blocks.
+  blocks. An active boundary decoration temporarily reserves one visual line
+  without changing the ProseMirror document, and first/last structural blocks
+  expose corresponding document-edge insertion boundaries; flow edges remain
+  handled no-ops.
 
 ## 0.0.44
 

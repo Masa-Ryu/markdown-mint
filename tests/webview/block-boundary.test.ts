@@ -234,6 +234,42 @@ describe("top-level block boundary navigation", () => {
     expect(app.view.state.selection.$from.parent.textContent).toBe("");
   });
 
+  it("opens the shared Insert block popup from a boundary without editing first", () => {
+    const source = "Before\n\n```ts\ncode\n```\n\nAfter";
+    const { app, root, messages, select } = setup(source);
+    select("code", "end");
+    const boundaryPosition =
+      app.view.state.doc.child(0)!.nodeSize +
+      app.view.state.doc.child(1)!.nodeSize;
+    app.view.dispatch(
+      app.view.state.tr.setSelection(
+        new BlockBoundarySelection(
+          app.view.state.doc.resolve(boundaryPosition),
+        ),
+      ),
+    );
+    const originalDoc = app.view.state.doc;
+    const handled = app.view.someProp("handleTextInput", (handler) =>
+      handler(
+        app.view,
+        app.view.state.selection.from,
+        app.view.state.selection.to,
+        "/",
+        () => app.view.state.tr,
+      ),
+    );
+
+    expect(handled).toBe(true);
+    expect(app.view.state.doc).not.toBe(originalDoc);
+    expect(
+      (app as unknown as { currentMarkdown: () => string }).currentMarkdown(),
+    ).toBe(source);
+    expect(editMessages(messages)).toHaveLength(0);
+    expect(
+      root.querySelector<HTMLElement>(".mm-empty-line-popup")?.hidden,
+    ).toBe(false);
+  });
+
   it("materializes before native composition input without duplicating text", () => {
     const { app, select } = setup("Before\n\n```ts\ncode\n```\n\nAfter");
     select("code", "end");

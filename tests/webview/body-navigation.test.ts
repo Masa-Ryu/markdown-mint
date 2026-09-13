@@ -5,6 +5,7 @@ import { BlockBoundarySelection } from "../../src/webview/blockBoundary";
 import {
   isStructuralNavigationTarget,
   shouldStopAtStructuralGap,
+  structuralDocumentEdgeFor,
   type NavigationTarget,
 } from "../../src/webview/bodyNavigation";
 import {
@@ -64,6 +65,15 @@ function setup(markdown: string) {
   return { app, root, messages, select, key };
 }
 
+function editMessageCount(messages: unknown[]): number {
+  return messages.filter(
+    (message) =>
+      typeof message === "object" &&
+      message !== null &&
+      (message as { type?: unknown }).type === "edit",
+  ).length;
+}
+
 describe("body navigation selection handoff", () => {
   it("classifies structural gaps from actual top-level targets", () => {
     const doc = parseMarkdown(
@@ -102,6 +112,30 @@ describe("body navigation selection handoff", () => {
     expect(shouldStopAtStructuralGap(targets[1]!, targets[2]!)).toBe(true);
     expect(shouldStopAtStructuralGap(targets[2]!, targets[3]!)).toBe(true);
     expect(shouldStopAtStructuralGap(targets[3]!, targets[4]!)).toBe(false);
+
+    const edgeDoc = parseMarkdown(
+      ["```ts", "first", "```", "", "middle", "", "---"].join("\n"),
+      "github",
+    ).doc;
+    const edgeTargets: NavigationTarget[] = [];
+    edgeDoc.forEach((node, position) => edgeTargets.push({ node, position }));
+    expect(structuralDocumentEdgeFor(edgeTargets[0]!, -1, 0, edgeDoc)).toBe(0);
+    expect(
+      structuralDocumentEdgeFor(
+        edgeTargets[2]!,
+        1,
+        edgeDoc.content.size,
+        edgeDoc,
+      ),
+    ).toBe(edgeDoc.content.size);
+    expect(
+      structuralDocumentEdgeFor(
+        edgeTargets[1]!,
+        1,
+        edgeDoc.content.size,
+        edgeDoc,
+      ),
+    ).toBeNull();
   });
 
   it("moves flow content directly without virtual vertical stops", () => {
@@ -412,24 +446,113 @@ describe("body navigation selection handoff", () => {
     ).toBe("math-block");
   });
 
-  it("handles the document-end Details edge without exposing a boundary", () => {
+  it("exposes document-edge boundaries only for structural targets", () => {
     const source =
       "<details open>\n<summary>End</summary>\n\nLast body\n\n</details>";
     const { app, root, messages, select, key } = setup(source);
+    app.view.endOfTextblock = () => true;
     const details = app.view.state.doc.firstChild;
     select("Last body", "end");
-    const originalSelection = app.view.state.selection;
-    expect(key("ArrowRight").defaultPrevented).toBe(true);
+    const originalDoc = app.view.state.doc;
+    expect(key("ArrowDown").defaultPrevented).toBe(true);
+    expect(app.view.state.selection).toBeInstanceOf(BlockBoundarySelection);
+    expect(app.view.state.selection.head).toBe(app.view.state.doc.content.size);
     expect(app.view.state.doc.firstChild).toBe(details);
     expect(app.view.state.doc.lastChild).toBe(details);
-    expect(app.view.state.selection.eq(originalSelection)).toBe(true);
+    expect(app.view.state.doc).toBe(originalDoc);
+    expect(root.querySelector(".mm-block-boundary-cursor")).not.toBeNull();
+    expect(key("ArrowUp").defaultPrevented).toBe(true);
     expect(app.view.state.selection).not.toBeInstanceOf(BlockBoundarySelection);
-    expect(root.querySelector(".mm-block-boundary-cursor")).toBeNull();
+    expect(app.view.state.selection.$from.parent.textContent).toBe("Last body");
     expect(
       messages.filter(
         (message) => (message as { type?: unknown }).type === "edit",
       ),
     ).toEqual([]);
+
+    const flow = setup("First paragraph");
+    flow.app.view.endOfTextblock = () => true;
+    flow.select("First paragraph", "end");
+    const originalSelection = flow.app.view.state.selection;
+    expect(flow.key("ArrowDown").defaultPrevented).toBe(true);
+    expect(flow.app.view.state.selection.eq(originalSelection)).toBe(true);
+    expect(flow.app.view.state.selection).not.toBeInstanceOf(
+      BlockBoundarySelection,
+    );
+  });
+
+  it("opens the document-end boundary for final Code, Table, and atomic blocks", () => {
+    for (const markdown of [
+      "```ts\ncode\n```",
+      "| A | B |\n| --- | --- |\n| C | D |",
+      "---",
+      "![image](https://example.com/image.png)",
+      "$$\nx^2\n$$",
+    ]) {
+      const { app, root, messages, select, key } = setup(markdown);
+      app.view.endOfTextblock = () => true;
+      const original = app.view.state.doc;
+      const text = markdown.startsWith("```")
+        ? "code"
+        : markdown.startsWith("|")
+          ? "D"
+          : "";
+      if (text) select(text, "end");
+      else {
+        const node = app.view.state.doc.firstChild!;
+        app.view.dispatch(
+          app.view.state.tr.setSelection(
+            NodeSelection.create(app.view.state.doc, 0),
+          ),
+        );
+        expect(node).toBe(app.view.state.doc.firstChild);
+      }
+      const event = key("ArrowDown");
+      expect(event.defaultPrevented).toBe(true);
+      expect(app.view.state.selection).toBeInstanceOf(BlockBoundarySelection);
+      expect(app.view.state.selection.head).toBe(
+        app.view.state.doc.content.size,
+      );
+      expect(app.view.state.doc).toBe(original);
+      expect(editMessageCount(messages)).toBe(0);
+      expect(root.querySelector(".mm-block-boundary-cursor")).not.toBeNull();
+    }
+  });
+
+  it("opens a document-start boundary only for a first structural target", () => {
+    const source = "```ts\ncode\n```\n\nAfter";
+    const { app, messages, select, key } = setup(source);
+    app.view.endOfTextblock = () => true;
+    select("code", "start");
+    const original = app.view.state.doc;
+    expect(key("ArrowUp").defaultPrevented).toBe(true);
+    expect(app.view.state.selection).toBeInstanceOf(BlockBoundarySelection);
+    expect(app.view.state.selection.head).toBe(0);
+    expect(app.view.state.doc).toBe(original);
+    expect(editMessageCount(messages)).toBe(0);
+
+    const handled = app.view.someProp("handleTextInput", (handler) =>
+      handler(
+        app.view,
+        app.view.state.selection.from,
+        app.view.state.selection.to,
+        "Before",
+        () => app.view.state.tr,
+      ),
+    );
+    expect(handled).toBe(true);
+    expect(app.view.state.doc.firstChild?.textContent).toBe("Before");
+    expect(app.view.state.doc.child(1)?.type.name).toBe("code_block");
+
+    const flow = setup("First paragraph\n\nCode");
+    flow.app.view.endOfTextblock = () => true;
+    flow.select("First paragraph", "start");
+    const flowSelection = flow.app.view.state.selection;
+    expect(flow.key("ArrowUp").defaultPrevented).toBe(true);
+    expect(flow.app.view.state.selection.eq(flowSelection)).toBe(true);
+    expect(flow.app.view.state.selection).not.toBeInstanceOf(
+      BlockBoundarySelection,
+    );
   });
 
   it("enters open structured Details and treats closed nested content as one visible stop", () => {
