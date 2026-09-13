@@ -2,6 +2,11 @@
 
 ## 0.0.48
 
+- Prevent Insert popup items from showing simultaneous keyboard-focus and
+  stale-pointer hover backgrounds. Track popup input modality so `+` and `/`
+  keyboard opening and Arrow/Home/End navigation use keyboard styling, while
+  actual pointer movement restores normal hover feedback.
+
 - Keep the Code language picker idle on open: the search input receives focus,
   no candidate is active, and only the configured language is selected.
 - Track keyboard and pointer modality separately so Arrow/search navigation

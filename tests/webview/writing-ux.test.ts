@@ -1677,6 +1677,79 @@ describe("bounded writing controls", () => {
     expect(document.activeElement).toBe(items[0]);
   });
 
+  it("uses keyboard modality for navigation and restores hover on pointermove", () => {
+    const { app, root } = makeApp("one");
+    selectTrailingEmptyParagraph(app);
+    const { panel } = openEmptyLinePopup(root);
+    const items = insertPopupItems(root);
+
+    expect(panel.dataset.inputModality).toBe("pointer");
+    items[0]!.focus();
+    dispatchPopupKey(panel, "ArrowDown");
+
+    expect(document.activeElement).toBe(items[2]);
+    expect(panel.dataset.inputModality).toBe("keyboard");
+    expect(panel.matches('[data-input-modality="keyboard"]')).toBe(true);
+
+    items[5]!.dispatchEvent(new Event("pointermove", { bubbles: true }));
+
+    expect(panel.dataset.inputModality).toBe("pointer");
+    expect(document.activeElement).toBe(items[2]);
+  });
+
+  it("opens the Insert block popup in keyboard modality from ArrowDown", () => {
+    const { app, root } = makeApp("one");
+    selectTrailingEmptyParagraph(app);
+    const plus = root.querySelector<HTMLButtonElement>(
+      ".mm-empty-line-insert",
+    )!;
+    const panel = root.querySelector<HTMLElement>(".mm-empty-line-popup")!;
+    plus.focus();
+
+    const event = dispatchFocusedKey("ArrowDown");
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(panel.hidden).toBe(false);
+    expect(panel.dataset.inputModality).toBe("keyboard");
+    expect(document.activeElement).toBe(insertPopupItems(root)[0]);
+  });
+
+  it("keeps keyboard modality for Enter and Space activation of the plus button", () => {
+    const { app, root } = makeApp("one");
+    selectTrailingEmptyParagraph(app);
+    const plus = root.querySelector<HTMLButtonElement>(
+      ".mm-empty-line-insert",
+    )!;
+    const panel = root.querySelector<HTMLElement>(".mm-empty-line-popup")!;
+
+    for (const key of ["Enter", " "]) {
+      plus.focus();
+      plus.dispatchEvent(
+        new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }),
+      );
+      plus.click();
+      expect(panel.dataset.inputModality).toBe("keyboard");
+      plus.click();
+    }
+  });
+
+  it("resets popup modality when it is closed and reopened with the pointer", () => {
+    const { app, root } = makeApp("one");
+    selectTrailingEmptyParagraph(app);
+    const { panel, plus } = openEmptyLinePopup(root);
+
+    dispatchPopupKey(panel, "ArrowRight");
+    expect(panel.dataset.inputModality).toBe("keyboard");
+
+    plus.click();
+    expect(panel.hidden).toBe(true);
+    expect(panel.hasAttribute("data-input-modality")).toBe(false);
+
+    openEmptyLinePopup(root);
+    expect(panel.hidden).toBe(false);
+    expect(panel.dataset.inputModality).toBe("pointer");
+  });
+
   it("moves Ordered list to Task with ArrowRight", () => {
     const { app, root } = makeApp("one");
     selectTrailingEmptyParagraph(app);
@@ -1843,9 +1916,33 @@ describe("bounded writing controls", () => {
     const panel = root.querySelector<HTMLElement>(".mm-empty-line-popup")!;
     const items = insertPopupItems(root);
     expect(panel.hidden).toBe(false);
+    expect(panel.dataset.inputModality).toBe("keyboard");
     expect(document.activeElement).toBe(items[0]);
     expect(app.view.state.doc.textContent).toBe("one");
     expect(editMessages(messages)).toHaveLength(before);
+  });
+
+  it("keeps slash popup focus in keyboard modality and restores hover on pointermove", () => {
+    const { app, root, messages } = makeApp("one");
+    prepareTrailingEmptyParagraph(app, messages);
+
+    expect(dispatchTextInput(app, "/")).toBe(true);
+
+    const panel = root.querySelector<HTMLElement>(".mm-empty-line-popup")!;
+    const items = insertPopupItems(root);
+
+    expect(panel.dataset.inputModality).toBe("keyboard");
+    expect(document.activeElement).toBe(items[0]);
+
+    dispatchPopupKey(panel, "ArrowDown");
+
+    expect(panel.dataset.inputModality).toBe("keyboard");
+    expect(document.activeElement).toBe(items[2]);
+
+    items[5]!.dispatchEvent(new Event("pointermove", { bubbles: true }));
+
+    expect(panel.dataset.inputModality).toBe("pointer");
+    expect(document.activeElement).toBe(items[2]);
   });
 
   it("consumes slash when a shared Insert block command is committed", () => {
