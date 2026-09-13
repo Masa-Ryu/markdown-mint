@@ -302,7 +302,7 @@ async function readMetrics(page, rootSelector) {
     };
     const typeOf = (element) => {
       if (element.matches(".markdown-alert")) return "alert";
-      if (element.matches("details")) return "details";
+      if (element.matches("details, .mm-details-node")) return "details";
       if (element.matches(".table-of-contents")) return "toc";
       if (element.matches("dl")) return "description";
       if (element.matches(".mm-code-block")) return "code";
@@ -329,7 +329,7 @@ async function readMetrics(page, rootSelector) {
       if (host.matches(".mm-alert-node-view"))
         return host.querySelector(".markdown-alert");
       if (host.matches(".mm-rendered-node"))
-        return host.firstElementChild ?? host;
+        return host.querySelector(":scope > *") ?? host;
       return host;
     };
     const describe = (host, display) => {
@@ -337,6 +337,7 @@ async function readMetrics(page, rootSelector) {
       const displayStyle = getComputedStyle(display);
       return {
         type: typeOf(display),
+        separateDisplay: host !== display,
         host: {
           className: String(host.className),
           rect: host.getBoundingClientRect().toJSON(),
@@ -364,17 +365,30 @@ async function readMetrics(page, rootSelector) {
       )
       .map(({ host, display }) => describe(host, display));
     const containers = Array.from(
-      root?.querySelectorAll("details, .markdown-alert, blockquote") ?? [],
+      root?.querySelectorAll(
+        "details, .mm-details-node, .markdown-alert, blockquote",
+      ) ?? [],
     ).map((container) => {
       const children = Array.from(container.children).filter(visible);
-      const summary = container.matches("details")
-        ? container.querySelector(":scope > summary")
+      const structuredDetails = container.matches(".mm-details-node");
+      const isDetails = structuredDetails || container.matches("details");
+      const summary = isDetails
+        ? container.querySelector(
+            ":scope > summary, :scope > .mm-details-header",
+          )
         : null;
-      const bodyChildren = children.filter((child) => child !== summary);
+      const body = structuredDetails
+        ? container.querySelector(":scope > .mm-details-body")
+        : null;
+      const bodyChildren = structuredDetails
+        ? visible(body)
+          ? Array.from(body.children).filter(visible)
+          : []
+        : children.filter((child) => child !== summary);
       const last = bodyChildren.at(-1);
       const style = getComputedStyle(container);
       return {
-        kind: container.matches("details")
+        kind: isDetails
           ? "details"
           : container.matches(".markdown-alert")
             ? "alert"
@@ -388,9 +402,11 @@ async function readMetrics(page, rootSelector) {
         lastMarginBottom: last
           ? parsePx(getComputedStyle(last).marginBlockEnd)
           : null,
-        summaryMarginBottom: summary
-          ? parsePx(getComputedStyle(summary).marginBlockEnd)
-          : null,
+        summaryBodyGap:
+          summary && bodyChildren[0]
+            ? bodyChildren[0].getBoundingClientRect().top -
+              summary.getBoundingClientRect().bottom
+            : null,
         bodyCount: bodyChildren.length,
       };
     });
@@ -441,7 +457,7 @@ function assertBlockMargins(metrics, testCase, mode) {
         `${testCase.name} ${mode} ${block.type} end margin`,
       );
     }
-    if (mode === "rich") {
+    if (mode === "rich" && block.separateDisplay) {
       assertClose(
         block.display.marginStart,
         0,
@@ -502,9 +518,9 @@ function assertLayout(metrics, testCase, mode) {
       `${testCase.name} ${mode} ${container.kind} terminal padding`,
       1.25,
     );
-    if (container.kind === "details" && container.summaryMarginBottom != null)
+    if (container.kind === "details" && container.summaryBodyGap != null)
       assert.ok(
-        container.summaryMarginBottom > 0,
+        container.summaryBodyGap > 0,
         `${testCase.name} ${mode} details summary/body gap disappeared`,
       );
   }

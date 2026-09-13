@@ -54,6 +54,40 @@ afterEach(() => {
 });
 
 describe("installModalSubmitShortcut", () => {
+  it("guards unflagged composition keys and the immediate compositionend Enter", async () => {
+    const root = document.createElement("div");
+    document.body.append(root);
+    const { form, input } = appendInsertDialog(root, "profile-feature");
+    const requestSubmit = replaceRequestSubmit(form);
+    const now = vi.spyOn(Date, "now").mockReturnValue(1000);
+    const dispose = installModalSubmitShortcut(root, NON_MAC_PLATFORM);
+    const enter = () =>
+      input.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "Enter",
+          ctrlKey: true,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    try {
+      input.dispatchEvent(new Event("compositionstart", { bubbles: true }));
+      enter();
+      await flushShortcutSubmit();
+      expect(requestSubmit).not.toHaveBeenCalled();
+      input.dispatchEvent(new Event("compositionend", { bubbles: true }));
+      enter();
+      await flushShortcutSubmit();
+      expect(requestSubmit).not.toHaveBeenCalled();
+      now.mockReturnValue(1060);
+      enter();
+      await flushShortcutSubmit();
+      expect(requestSubmit).toHaveBeenCalledTimes(1);
+    } finally {
+      dispose();
+      now.mockRestore();
+    }
+  });
   it("submits each insertion/editing modal with Ctrl+Enter on Windows/Linux", async () => {
     const kinds: InsertDialogKind[] = [
       "link",

@@ -93,33 +93,355 @@ The webview regression suite covers these flows, including CRLF and
 save/reload round trips. Live VS Code and operating-system IME behavior remain
 manual checks.
 
-Double-clicking an Alert card in the Rich Editor opens the existing Profile
-Feature dialog in Edit mode. The dialog initializes the Alert type and body
-from the current source, uses **Update** to change the same raw Alert block,
-and returns focus to the Alert body textarea. Toolbar insertion continues to
-use the same dialog in Insert mode with its existing defaults. Type-only edits
-replace only the `[!TYPE]` marker, preserving lazy continuation lines and
-other source bytes; body edits use the existing Alert body writer. An Alert
-edit is rejected if the document, profile, or editing state changed while the
-dialog was open.
+Alert bodies remain directly editable on a single click. The header and body
+both open the existing Profile Feature dialog on a double click; Alert type
+and detailed body changes are made there. A single click on the header does not
+open a picker or dialog. The dialog flushes the native textarea before taking
+its edit snapshot, retains stale-target and composition/conflict guards, and
+restores the body caret after Cancel or Update.
 
-## Code block vertical boundary navigation
+## Alert body focus and modal editing (0.0.37)
 
-In the Rich Editor, plain `ArrowUp` leaves a code block only when
-`EditorView.endOfTextblock("up")` reports that the caret is on the first visual
-row. This keeps ordinary movement within later logical lines and wrapped rows.
-The destination is found with a text-only ProseMirror selection search, so
-paragraphs, headings, list items, blockquotes, and adjacent code blocks receive
-an editable caret rather than a leaf-node selection. An adjacent Alert focuses
-its existing body textarea. Shift/Ctrl/Cmd/Alt, composition, non-empty
-selections, language/menu controls, and expanded-code modal focus are left to
-their existing handlers.
+The Alert NodeView still uses a ProseMirror `NodeSelection` for block-boundary
+navigation. Focusing its native textarea adds the `mm-alert-body-focused`
+visual state, which suppresses only the selected-node outline while the body
+has focus; blur removes that state. Opening the edit dialog uses a separate
+`mm-alert-dialog-open` state so the background Alert does not show a blue block
+outline while the dialog is active.
 
-The webview suite covers these guards, document immutability, nested containers,
-and selection-only navigation. Visual first-row/wrap behavior and the real
-operating-system IME candidate UI require confirmation in a live VS Code
-Extension Development Host; the package/native checks below do not replace
-that manual geometry check.
+The old single-click type picker, select, and **Edit source…** action are no
+longer rendered. Physical header clicks are inert, while a zero-detail
+synthetic click from programmatic or assistive-technology activation, keyboard
+Enter/Space, or a header/body double click uses the existing Alert edit dialog.
+The physical clicks that precede a double click remain inert. Cancel restores
+the original body selection without a host edit. Update changes the existing
+Alert in place, preserving marker/body source behavior and the existing
+stale-document, conflict, recovery, and composition protections.
+
+## Alert header activation semantics (0.0.38)
+
+The Alert header remains a focusable `role="button"` with the accessible name
+`Edit Alert`. Physical mouse clicks use their nonzero `MouseEvent.detail` and
+remain inert, including the clicks that precede a double click. A zero-detail
+synthetic click, Enter, or Space uses the same guarded edit-dialog path. An
+already-open dialog absorbs the follow-up synthetic event so it cannot flush or
+open a second dialog.
+
+## Rendered block editing and selection (0.0.39)
+
+Math and Mermaid rendered blocks no longer show a persistent source label. Their
+NodeView is focusable with an accessible Edit Math or Edit Mermaid name; a
+physical single click keeps normal selection behavior, while a double click or
+Enter/Space reuses the existing guarded Profile Feature edit dialog. Double
+clicks and keyboard events from links, buttons, inputs, selects, and textareas
+inside a renderer are left to those controls.
+
+Details and Code NodeViews select the whole ProseMirror node when their outer
+padding, Details header whitespace, Code header whitespace, or line numbers are
+clicked. Details toggles, summary controls, body content, Code text, language
+controls, menus, and Copy/Expand/More actions retain their existing behavior.
+The nearest nested Details owns its padding event and stops it before an outer
+NodeView can observe it. Selection transactions set `addToHistory: false`, so
+selection alone emits no host edit or dirty state; standard ProseMirror
+Delete/Backspace then removes the selected block and the host-backed Undo/Redo
+path restores its exact source.
+
+## Details scanner inline token boundaries (0.0.36)
+
+Details range discovery now asks markdown-it's inline tokenizer which source
+fragments are actual `html_inline` tokens. It accepts a candidate only when the
+complete token is a `<details>` or `</details>` tag. A `<span>` token therefore
+consumes its quoted attributes as one unit; strings such as `title="</details>"`
+or `data-open="<details>"` cannot close or nest the surrounding block. The same
+token boundary keeps link destinations and titles, image alt labels, entities,
+and escaped punctuation out of the Details stack. `code_inline` tokens are
+opaque. HTML comments remain atomic, while a real Details token after a comment
+terminator on the same line remains discoverable.
+
+The position wrapper records `state.pos` when markdown-it emits each inline HTML
+token; it does not rebuild or normalize the HTML. Image-label child tokenization
+is intentionally outside the enclosing state, so an alt label containing
+`</details>` is not promoted to a candidate. The existing block analysis still
+provides the paragraph, fence, raw HTML, quote, list, heading, and math ranges,
+and the configured GitHub, GitLab, and CommonMark parser is used for every
+inline context. The caller's `html` option is restored after the temporary scan.
+
+Summary splitting uses the same actual boundary tokens to locate `</summary>`.
+Consequently an inline attribute containing `</summary>` cannot truncate a
+summary source, while a real Details/summary token inside a summary still marks
+that header unsupported. Profile-aware cached ranges and immutable-node WeakMap
+entries continue to serve rendering, serialization, and direct heading edits.
+All source bytes, tag spelling, attribute order, quote style, entities, unknown
+HTML, separators, and LF/CRLF/CR endings remain source-preserving.
+
+Core regressions cover double and single quoted attributes, `>` and `&quot;`,
+opening/closing strings together, inline summary attributes, link titles,
+image alt text, all three profiles, and a caller parser whose HTML option starts
+disabled. The earlier block-context, raw HTML type 1–7, nested Details, escape
+parity, Math/table, 80+ Details cache, heading-ID/TOC, Alert, Code, and cursor
+regressions remain in the suite. The browser regression opens a structured
+Details containing Details-like strings in summary and body HTML attributes,
+toggles it without edits, single-click edits the summary, types in the body,
+and compares every saved source byte. The inline HTML is rendered safely and no
+dialog is opened.
+
+Final 0.0.36 verification includes the latest main integration from 0.0.35.
+The core suite has 566 tests across 33 files; 31 new cases cover this inline
+boundary fix and all earlier Details regressions remain enabled. `npm run
+compile`, `npm test`, `npm run lint` (zero errors, 49 warnings), `npm run
+format:check`, `npm run test:browser:blocks` (16 groups plus the five required
+fixtures on Rich, Dedicated Preview and native-preview surfaces), `npm run
+test:browser:spacing` (37 cases on each surface), `npm run test:extension`
+(isolated installed VS Code, exit 0), `npm run package` (96-file 0.0.36 VSIX,
+4.76 MB, bundled formatter verification), and `git diff --check` passed. Real
+OS Japanese IME candidate UI, cross-region selection/copy/cut, zoom, and
+visible native Undo/Redo remain manual checks.
+
+Final 0.0.37 verification adds the Alert body/header click matrix and visual
+outline assertions to the existing suite. The targeted Alert webview tests and
+the full browser Alert flow cover single-click body editing, single-click
+header inertness, body/header double-click dialog reuse, latest textarea input
+flushing, Cancel/Update focus restoration, and absence of the picker controls.
+
+Final 0.0.38 verification adds physical versus synthetic header activation,
+Enter/Space keyboard activation, and duplicate-dialog suppression assertions.
+
+Final 0.0.39 verification adds rendered Math/Mermaid double-click and
+Enter/Space dialog activation, source-label absence, interactive-child guards,
+and Details/Code padding, header, line-number, nested-selection, deletion, and
+host-Undo checks. The unit suite has 591 tests across 33 files. `npm run
+compile`, `npm test`, `npm run lint` (zero errors, 48 existing warnings),
+`npm run format:check`, `npm run test:browser:blocks` (17 interaction groups
+plus the five required fixtures on Rich, Dedicated Preview and native-preview
+surfaces), `npm run test:browser:spacing` (37 cases on each surface),
+`npm run test:extension` (isolated installed VS Code, exit 0), `npm run
+package` (96-file 0.0.39 VSIX, 4.76 MB, bundled formatter verification), and
+`git diff --check` passed. Real OS Japanese IME candidate UI and cross-region
+selection/copy/cut remain manual checks.
+
+## Details scanner block contexts (0.0.35)
+
+Details discovery uses the configured profile's markdown-it block parser before
+examining inline syntax. Each inline token supplies a bounded source range:
+unmatched backticks cannot reach a later heading, list, quote, fence or HTML
+block. The scanner no longer approximates paragraph boundaries with blank lines.
+The rule that exposes Details wrappers and their summaries runs only during this
+analysis pass; normal Markdown parsing retains its existing rules. Real nested
+Details remain transparent, including when wrappers have no intervening blank
+lines. Original offsets are mapped across LF, CRLF and CR without rewriting source.
+
+This follows [CommonMark block-before-inline precedence](https://spec.commonmark.org/0.31.2/#precedence)
+and the [seven HTML block types](https://spec.commonmark.org/0.31.2/#html-blocks).
+Types 1 (script/pre/style/textarea), 3 (processing instructions), 4 (declarations),
+5 (CDATA), and ordinary type 6/7 HTML blocks are opaque to Details discovery.
+Type 2 comments are consumed atomically; the existing supported case of real
+Details markup after a comment terminator on the same line remains supported.
+Only Details wrappers and summaries within an open Details are exposed instead
+of treating the complete wrapper as a type 6 HTML block. Type 6/7 content stays
+opaque until the blank-line boundary supplied by markdown-it; an outer closer
+inside that region cannot close a structured Details and remains preserved raw.
+Raw HTML is never rebuilt as an HTML tree for serialization.
+
+Tests compare the installed markdown-it 14.3.1 token maps, including ordered
+lists starting at one versus two, setext headings, and type 7 HTML that cannot
+interrupt a paragraph. Existing escape parity, remaining delimiter runs, comments,
+code spans, fenced code and all source-preservation regressions remain intact.
+The core reuses its profile-configured parser and passes detected tag ranges
+directly to the Details splitter. A bounded source/profile cache shares these
+parts with rendering, serialization and header editing, including profile math
+blocks. Immutable node attributes also retain parts through a WeakMap, so a
+document exceeding the bounded cache does not rescan each Details during redraw.
+Wrapper depth is local to markdown-it's recursive quote/list tokenization.
+A source boundary before an edited Details or after unchanged raw HTML
+is retained rather than supplemented with a blank line; existing CR and mixed
+blank separators are recognized independently of generated line endings.
+
+The real-browser regression opens an unmatched-backtick paragraph followed by a
+Details containing a script string with `</details>`. It opens/closes the Details
+without an edit message, single-clicks and types into the summary, and types
+directly into the body. Each save is compared with exact expected Markdown,
+including `data-test="keep"`, the complete inert script, and unchanged separators.
+The script is not executed. The screenshot is
+`output/playwright/block-editing/details-unmatched-backtick-raw-script.png`.
+
+An instrumented local check found zero additional scanner calls on two renders
+of documents containing 100/300 sibling Details or 60/100/140 nested Details.
+The 100/140-level renders took about 28/35 ms, comparable with 27/34 ms before
+this change. The five required fixtures took about 1.1–6.2 ms for an uncached
+parse plus unchanged serialization; these are local observations, not timing
+thresholds in the regression suite.
+
+Final 0.0.35 verification includes latest main `a8afcdd` and its save/recovery
+changes. Alert composition/rebase integration retains accepted input and is
+covered by three additional synchronization tests. The Details change adds 48
+core cases (all previous 44 remain unchanged), nine profile-aware NodeView
+cases, and one real-browser workflow. An 80-Details fixture checks exact edits
+after visiting another large document, without relying on implementation details
+or timing assertions. `npm run compile`, `npm test` (535 tests in 33 files),
+`npm run lint` (zero errors, 49 existing warnings), `npm run format:check`,
+`npm run test:browser:blocks` (15 groups plus five required fixtures on three
+surfaces), `npm run test:browser:spacing` (37 cases on each of three surfaces),
+and `npm run test:extension` (installed VS Code, exit 0) passed.
+`npm run package` produced `markdown-mint-0.0.35.vsix` (96 files, 4.76 MB) and
+passed bundled formatter verification. `git diff --check` passed.
+
+Real OS Japanese IME candidate UI, cross-region selection/copy/cut, zoom and
+visible native Undo/Redo remain manual checks. Synthetic composition and browser
+keyboard checks do not establish those results. PR #23 remains a draft.
+
+## Details scanner escaped syntax (0.0.34)
+
+The scanner checks consecutive backslashes immediately before a candidate
+backtick or `<`: odd counts escape that character, while even counts leave it
+available as syntax. Only the escaped character is consumed, so the remaining
+backticks in a run can still start a shorter code span. Escaped comment openers
+and Details tags remain ordinary Markdown text; an escaped closing tag in a
+Details body cannot close its outer block.
+
+This follows [CommonMark 0.31.2 backslash escapes](https://spec.commonmark.org/0.31.2/#backslash-escapes)
+and was checked against the installed markdown-it 14.3.1 CommonMark parser.
+Backslashes inside already-open code or HTML comments remain literal, so they
+do not prevent a real closing delimiter. Code-span matching also stops at blank
+lines, respecting [block-before-inline precedence](https://spec.commonmark.org/0.31.2/#precedence):
+the supplied even-backslash example contains separate paragraphs, not one code
+span spanning the intervening Details. CRLF remains a single line ending.
+
+The implementation adds one small parity helper and bounds the existing code
+delimiter search. It retains sequential consumption of fences, code spans, and
+real comments, with no new Markdown parser or whole-document exclusion pass.
+Original source bytes, tags, attributes, and line endings remain preserved.
+
+There are 29 additional core cases covering odd/even backslashes, escaped
+comment/tag openers, escaped outer closers, remaining delimiter runs, literal
+backslashes inside code/comments, and single versus blank LF/CRLF/CR boundaries.
+Existing nested Details, quoted attributes, malformed fallback, long code spans,
+fences, comments, and round-trip tests remain intact. The browser regression
+edits a Details summary by single click and types directly into its body between
+escaped backtick paragraphs, checking exact saved Markdown and quoted attributes.
+
+The 2026-09-12 verification on main `5372934` plus this change passed
+`npm run compile`, `npm test` (463 tests in 33 files), `npm run lint` (zero errors,
+33 existing warnings), `npm run format:check`, `npm run test:browser:blocks`
+(14 groups, including all five required documents on three surfaces),
+`npm run test:browser:spacing` (37 cases per surface), and
+`npm run test:extension` (installed VS Code, exit 0). The browser run saved
+93 screenshots, including `details-escaped-backticks.png`. The previous Alert
+conflict, expanded-code caret, code/comment exclusion, and heading/TOC tests also
+passed. The version is 0.0.34; OS IME, cross-region clipboard, zoom, and visible
+native Undo/Redo checks remain the manual boundaries documented below.
+`npm run package` produced `markdown-mint-0.0.34.vsix` (96 files, 4.75 MB) and
+passed standalone bundled-formatter verification. `git diff --check` passed.
+
+## Direct block editing and navigation (0.0.32–0.0.33)
+
+Code keeps its editable ProseMirror contentDOM, language search/custom names,
+metadata-removal confirmation, copy, line numbers, highlight, wrap, and expand
+controls. Clicking the language label once opens the chooser; chooser arrows
+stay in the candidate list. A language-only change preserves the original fence,
+line endings, body whitespace, and metadata.
+
+Alert keeps its native textarea and source-preserving marker/body writer. Its
+outer ProseMirror NodeSelection identifies the owning Alert while the native
+textarea owns the character selection. Body input continues through the same
+host synchronization, recovery, clipboard, and Undo/Redo path. Moving focus
+alone creates no edit. The textarea measures its height after attachment and
+when its width changes so wrapped body text remains visible.
+
+Details uses a structured `details` node with the same ProseMirror body surface
+as ordinary paragraphs, lists, nested Details, and code. The arrow button alone
+toggles visibility; a single click on the summary opens a one-line input,
+including while collapsed. Enter commits, Escape cancels only this draft, and
+blur/Tab commit without reclaiming the explicitly chosen focus. Empty summaries
+are preserved. Existing summary HTML/Markdown is edited as source so decoration
+and unknown attributes are retained. The original opening/summary/closing tags
+and a nested source snapshot preserve untouched body bytes and nested blocks.
+Malformed or unsupported summary structures remain raw, source-preserving
+rendered blocks; they do not gain a misleading flattened body editor.
+
+Details expansion is local display state, independent of the Markdown `open`
+attribute. Header/body updates and unrelated rerenders keep that state. Closing
+an active body moves its selection to the owning block and focus to the visible
+arrow. Header sessions validate the live target, profile, source, and editability;
+removed/conflicting targets retain the heading draft in a copyable dialog.
+
+Math and Mermaid keep their renderers and existing diagram controls. Their
+small header labels open the existing source dialog with **Update**, which
+updates that block rather than inserting another. Cancelling and unchanged
+submissions emit no edit. Fence metadata and unchanged source delimiters are
+preserved; conflicting external updates leave the source draft visible.
+
+`bodyNavigation.ts` transfers a plain collapsed caret in both directions among
+ordinary text, code, Alert, and open Details bodies. Closed Details and rendered
+atoms provide a block-selection stop without opening or editing. Horizontal
+movement crosses only the first/last character boundary. Vertical movement uses
+ProseMirror layout coordinates and a temporary styled textarea layout mirror,
+including wrapping, font metrics, width, line height, and scrolling. A retained
+horizontal target survives short intermediate rows and resets on other keys,
+mouse input, or typing. Existing table keys, modified arrows, selection ranges,
+IME candidate keys, and expanded-code controls keep their own handlers.
+Document-edge caret targets use the existing transient paragraph mechanism:
+only typing commits them to Markdown or host history.
+
+Validation is recorded separately for real Chromium keyboard/mouse/layout
+checks and VS Code native APIs. `npm run test:browser:blocks` covers header
+clicks, cancel/unchanged edits, selection retention, exact source updates,
+bidirectional boundaries, wrapped Alert rows, focus, nested/closed Details,
+and rendered-block passage. It also loads `md/common-test.md`,
+`md/github-test.md`, `md/github-test-class-B.md`, `md/gitlab-test.md`, and
+`md/gitlab-test-class-B.md` in rich, dedicated preview, and the native CSS
+fixture, saving screenshots in `output/playwright/block-editing/`.
+
+The final 0.0.32 verification on 2026-09-12 passed `npm run compile`,
+`npm test` (383 tests in 29 files), `npm run lint` (zero errors; 33 existing
+`no-explicit-any` warnings), `npm run format:check`, `npm run test:extension`
+(installed VS Code, exit 0), and `npm run package` (bundled formatter verified).
+The browser block suite passed 11 interaction groups including 15 fixture/surface
+checks; the spacing suite passed 37 cases on each of three surfaces. The run
+saved 89 block screenshots, including focused views of the affected blocks in
+all five required documents. The artifact is `markdown-mint-0.0.32.vsix`.
+
+The 0.0.33 conflict transition immediately makes Alert textareas read-only
+without blurring their selection. Text already accepted by the native input,
+including a delayed composition commit, is flushed into the local Markdown and
+recovery draft while host synchronization stays paused. A rejected older edit
+cannot overwrite that newer recovery draft. Expanded code retains vertical
+movement within displayed rows and traps only an attempted exit at the edges.
+Details scanning consumes code and real HTML comments in source order, so a
+literal `<!--` inside code cannot hide its closing tag. Heading IDs use document
+root and position, preserving the body parse cache while keeping repeated and
+nested Details headings, rendered HTML, rich attributes, and TOC links unique.
+TOCs also refresh when an edit changes the document's headings.
+
+Regression coverage includes a focused Alert receiving `edit-rejected` and
+subsequent real keyboard input, Chromium protocol composition around rejection,
+native caret positions across the middle and edges of expanded code, literal
+comment markers mixed with real comments in inline/fenced code, and identical
+Details bodies with nested headings and live TOC updates. Chromium protocol
+composition checks supplement synthetic unit events; they do not verify an
+operating-system IME candidate window.
+
+The final 0.0.33 verification on 2026-09-12 passed `npm run compile`, `npm test`
+(429 tests in 33 files), `npm run lint` (zero errors; 33 existing warnings),
+`npm run format:check`, `npm run test:extension` (installed VS Code, exit 0),
+and `npm run package` (bundled formatter verified). The browser block suite
+passed 13 groups, including the five required documents on three surfaces,
+and saved 92 screenshots. The spacing suite passed 37 cases per surface.
+The artifact is `markdown-mint-0.0.33.vsix`. This final verification includes
+main commit `81f03c1`, retaining its color-literal decorations and initial-load
+starter fix alongside the heading/TOC and Alert changes.
+
+The initial native run exposed an unrelated test-fixture race: an unsaved
+plaintext CodeLens fixture appeared as a new tab during a later profile check.
+Using a saved `.txt` fixture in the isolated workspace removes that asynchronous
+tab while retaining strict tab-count, index, active-source, and plaintext
+CodeLens assertions. Fresh native runs passed after that harness correction.
+
+Manual checks still required: actual Japanese OS IME candidate windows and
+compositionend key ordering in VS Code; browser zoom/font scaling across
+mixed scripts; native cross-region drag/copy/cut between an Alert textarea and
+the outer ProseMirror document; and repeated Undo/Redo of header/body changes
+through the visible Extension Host UI. Synthetic composition events and the
+native API acceptance suite do not establish those manual observations.
 
 - Toolbar buttons and selects use the editor or widget foreground paired with
   their surface background. Primary and secondary dialog actions use their
@@ -576,6 +898,28 @@ The 0.0.5 and earlier evidence above remains historical.
   guards are reused. A committed command consumes the transient trigger; Escape,
   Tab, and outside cancellation materialize one literal slash; stale document,
   profile, mode, IME, and destroy paths discard it.
+
+## 0.0.40 top-level block boundary caret
+
+- Plain, collapsed ArrowLeft/Right and visual-line ArrowUp/Down navigation
+  between direct children of the document uses a virtual
+  `BlockBoundarySelection`. The selection maps with document transactions,
+  does not serialize, and is rendered by an absolute Decoration widget so
+  block layout and source separators do not change while navigating.
+- Boundary traversal preserves BodyNavigation's visual-row and desired-X
+  state, keeps closed Details closed, treats Math/Mermaid and other rendered
+  blocks as existing atomic stops, and leaves table cell arrows, list content,
+  modifiers, and composition navigation to their established handlers. Top-
+  level table edges use the same boundary before or after the table.
+- Printable text, `/`, Enter, composition input, and paste materialize one
+  ordinary paragraph at the selected boundary and then continue through the
+  existing ProseMirror input path. Backspace/Delete (including modified forms)
+  are no-ops at a boundary; materialized edits remain normal host-backed
+  Undo/Redo operations.
+- Unit and Chromium checks cover bidirectional Code/Alert/Details traversal,
+  wrapped Alert rows, desired-X preservation, atomic and closed rendered
+  blocks, table edges, modifiers, composition setup, source/host/dirty/history
+  invariants, paragraph and slash insertion, and all five display fixtures.
 
 ## Explicit limits
 

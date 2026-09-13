@@ -175,7 +175,7 @@ describe("profile feature catalog and source", () => {
     ).toBeNull();
   });
 
-  it("parses generated blocks as the expected source-preserving raw atoms", () => {
+  it("parses generated blocks as the expected source-preserving nodes", () => {
     const cases: Array<
       [ProfileFeatureId, "github" | "gitlab", ProfileFeatureValues, string]
     > = [
@@ -196,7 +196,9 @@ describe("profile feature catalog and source", () => {
       const source = buildProfileFeatureSource(feature, values, profile);
       expect(source).toBeTruthy();
       const node = parseMarkdown(source!, profile).doc.firstChild;
-      expect(node?.type.name).toBe("raw_block");
+      expect(node?.type.name).toBe(
+        feature === "details" ? "details" : "raw_block",
+      );
       expect(node?.attrs.kind).toBe(kind);
     }
   });
@@ -263,7 +265,7 @@ describe("profile feature insertion commands", () => {
       body: "body",
     }).state;
     expect(tableState.doc.firstChild?.type.name).toBe("table");
-    expect(tableState.doc.child(1)?.type.name).toBe("raw_block");
+    expect(tableState.doc.child(1)?.type.name).toBe("details");
     expect(tableState.doc.child(1)?.attrs.kind).toBe("details");
 
     let listState = selectText(stateFrom("- one\n- two"), "one");

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import * as path from "node:path";
 import * as vscode from "vscode";
 
@@ -254,6 +254,7 @@ export async function run(): Promise<void> {
   const profileTabIndexBefore =
     profileGroupBefore.tabs.indexOf(profileTabBefore);
   const profileTabCountBefore = profileGroupBefore.tabs.length;
+  const profileTabsBefore = profileGroupBefore.tabs.map((tab) => tab.label);
   const profileTextBefore = document.getText();
   const profileDiskBefore = await readFile(filePath, "utf8");
 
@@ -306,7 +307,11 @@ export async function run(): Promise<void> {
     profileGroupAfter,
     "the source group remains after profile changes",
   );
-  assert.equal(profileGroupAfter.tabs.length, profileTabCountBefore);
+  assert.equal(
+    profileGroupAfter.tabs.length,
+    profileTabCountBefore,
+    `profile changes must preserve tabs: ${JSON.stringify(profileTabsBefore)} -> ${JSON.stringify(profileGroupAfter.tabs.map((tab) => tab.label))}`,
+  );
   const profileTabAfter = profileGroupAfter.activeTab;
   assert.ok(
     profileTabAfter,
@@ -448,10 +453,12 @@ async function runCodeLensAcceptance(
     "Markdown Mint to activate from onLanguage:markdown",
   );
 
-  const plainDocument = await vscode.workspace.openTextDocument({
-    language: "plaintext",
-    content: "Plain text has no Markdown Mint CodeLens.\n",
-  });
+  // A dirty untitled model can surface as a tab asynchronously after this
+  // check, contaminating later assertions that profile changes preserve tabs.
+  const plainPath = path.join(path.dirname(filePath), "plain-text.txt");
+  await writeFile(plainPath, "Plain text has no Markdown Mint CodeLens.\n");
+  const plainDocument = await vscode.workspace.openTextDocument(plainPath);
+  assert.equal(plainDocument.languageId, "plaintext");
   assert.equal(
     (await codeLensesFor(plainDocument.uri)).length,
     0,

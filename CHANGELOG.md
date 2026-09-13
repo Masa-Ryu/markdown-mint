@@ -1,6 +1,94 @@
 # Changelog
 
-## Unreleased
+## 0.0.40
+
+- Add a virtual, keyboard-only caret between top-level blocks. Plain horizontal
+  and visual-line vertical navigation now crosses Code, Alert, Details,
+  rendered blocks, tables, and paragraphs through an intermediate boundary
+  without changing Markdown, dirty state, or undo history.
+- Materialize one real paragraph only when text, Enter, composition input, or
+  paste begins at a boundary. Existing direct editing, atomic block selection,
+  table navigation, slash insertion, and source-preserving serialization remain
+  intact.
+
+## 0.0.39
+
+- Remove the persistent Math/Mermaid source labels. Rendered Math and Mermaid
+  blocks now open the existing edit dialog on double click or Enter/Space,
+  while interactive descendants keep their own controls.
+- Select Details and Code nodes from their non-editing padding, headers, or
+  line numbers without adding history or dirty state. Body text and existing
+  controls retain direct editing, and standard Delete/Backspace removes the
+  selected node for host-backed Undo/Redo restoration.
+
+## 0.0.38
+
+- Keep physical Alert header mouse clicks inert while making the accessible
+  `role="button"` activation work for synthetic clicks, Enter, and Space.
+- Ignore duplicate synthetic activation after keyboard opening so one dialog
+  and one source flush are performed.
+
+## 0.0.37
+
+- Keep Alert bodies directly editable on a single click while opening the
+  existing Alert editor dialog from a body or header double click.
+- Remove the single-click Alert type picker and suppress the block selection
+  outline while the native body editor or its dialog is active. Flush the
+  latest textarea value before opening the dialog and restore body focus after
+  it closes. Preserve physical mouse single-click inertness while supporting
+  keyboard and assistive-technology activation of the accessible header.
+
+## 0.0.36
+
+- Use markdown-it inline tokens when finding Details tags. Details-like text in
+  general HTML attributes, link destinations/titles, image alt text, comments,
+  code spans, and escaped text no longer changes Details ranges or nesting.
+- Keep real `html_inline` Details wrappers, nested Details, source attributes,
+  inline HTML, summary markup, and profile-aware serialization intact.
+
+## 0.0.35
+
+- Detect Details within markdown-it block contexts so unmatched backticks cannot
+  consume later blocks and raw HTML, including script, style, pre and textarea,
+  cannot supply false closing or nested Details tags.
+- Reuse profile-aware Details ranges during rendering and direct edits. Retain
+  original attributes, raw HTML, nesting, LF/CRLF/CR and adjacent source
+  separators when changing a summary or body.
+- Integrate the latest synchronization/recovery changes from main while retaining
+  accepted Alert input during rejected edits and deferred composition rebases.
+
+## 0.0.34
+
+- Keep Details directly editable when surrounding Markdown contains escaped
+  backticks, HTML comment openers, or Details tags. Respect backslash parity,
+  remaining backticks after an escape, and paragraph boundaries while retaining
+  literal code/comment content and exact Markdown source.
+
+## 0.0.33
+
+- Make focused Alert bodies read-only immediately after a synchronization
+  conflict, retaining accepted text and delayed composition input in recovery.
+- Preserve movement between displayed rows inside expanded code blocks while
+  preventing vertical movement into the background document at their edges.
+- Recognize Details around literal HTML comment markers in inline and fenced
+  code, while excluding real comments in source order.
+- Allocate heading anchors by document position so cached identical Details
+  bodies have unique HTML, rich-editor, and TOC targets; refresh TOCs after edits.
+
+## 0.0.32
+
+- Keep code and Alert bodies directly editable; use single-click language/type
+  labels and preserve source whitespace, fences, metadata, and body selections.
+- Edit Details headings inline with independent disclosure controls and a
+  structured, directly editable body. Preserve original tags, attributes,
+  nested source, local expansion state, IME input, and conflicting drafts.
+- Edit existing Math/Mermaid source from their header labels without inserting
+  duplicate blocks or losing focus after an update.
+- Move in both directions between editable bodies with plain arrows, including
+  wrapped Alert rows, persistent horizontal caret positions, closed/rendered
+  block stops, and document-end caret targets that do not dirty Markdown.
+
+## Earlier unreleased changes
 
 - Improved the Rich Editor's empty-line Insert block menu with explicit Bullet
   list and Ordered list labels, two-dimensional keyboard navigation that skips
@@ -83,7 +171,7 @@
   paragraphs at their boundaries; native textarea composition and host history
   commands remain protected.
 
-- Added double-click Alert editing through the existing Profile Feature dialog.
+- Added Alert source editing through the existing Profile Feature dialog.
   Insert and Edit modes now share the dialog, preserve the existing Alert body,
   update the same raw Alert block, and keep lazy continuation source unchanged
   when only the Alert type changes.

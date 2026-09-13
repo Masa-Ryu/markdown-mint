@@ -93,7 +93,7 @@ describe("Markdown semantic fixture coverage", () => {
     const html = renderMarkdownDocument(snapshot.doc, "github", snapshot);
 
     expect(countKind(snapshot.doc, "raw_block", "alert")).toBe(5);
-    expect(countKind(snapshot.doc, "raw_block", "details")).toBe(2);
+    expect(countKind(snapshot.doc, "details", "details")).toBe(2);
     expect(countKind(snapshot.doc, "raw_block", "math-block")).toBe(2);
     expect(countKind(snapshot.doc, "raw_inline", "math_inline")).toBe(1);
     expect(countKind(snapshot.doc, "raw_inline", "emoji")).toBe(4);

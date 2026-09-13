@@ -28,6 +28,12 @@ import warningTriangleAsset from "../../assets/warning-triangle.svg?raw";
 import alertOctagonAsset from "../../assets/alert-octagon.svg?raw";
 import alertCommentAsset from "../../assets/alert-comment.svg?raw";
 import { parseAlertSource } from "./alerts";
+import {
+  detailsTagRanges,
+  parseDetailsSource as splitDetailsSource,
+  type DetailsSourceParts,
+  type DetailsTagRange,
+} from "./details";
 export {
   alertSourceWithBody,
   alertSourceWithType,
@@ -111,7 +117,8 @@ export interface RenderContext {
   headingSlugs?: Map<string, number>;
   footnoteRefs?: Map<string, number>;
   footnoteNumbers?: Map<string, number>;
-  headingIds?: WeakMap<PMNode, string>;
+  /** Heading ids belong to positions within a rendering root, not node identity. */
+  headingIds?: WeakMap<PMNode, Map<number, string>>;
   /** Optional document position for detached NodeView render calls. */
   nodePosition?: number;
   /** Hosts may provide richer renderers without coupling core to a webview. */
@@ -328,6 +335,46 @@ const baseNodes: Record<string, NodeSpec> = {
   },
   raw_block: rawBlockSpec,
   raw_inline: rawInlineSpec,
+  details: {
+    group: "block",
+    content: "block+",
+    defining: true,
+    isolating: true,
+    attrs: {
+      source: { default: "" },
+      kind: { default: "details" },
+      summarySource: { default: "" },
+      sourceProfile: { default: "github" },
+    },
+    toDOM: (node) => [
+      "div",
+      {
+        "data-mm-details-source": serializeDetails(node),
+        "data-mm-details-profile": node.attrs.sourceProfile,
+      },
+      ["div", { contenteditable: "false" }, node.attrs.summarySource],
+      ["div", { "data-mm-details-content": "true" }, 0],
+    ],
+    parseDOM: [
+      {
+        tag: "div[data-mm-details-source]",
+        contentElement: "[data-mm-details-content]",
+        getAttrs: (dom) => {
+          const source =
+            (dom as HTMLElement).getAttribute("data-mm-details-source") ?? "";
+          const sourceProfile = ((dom as HTMLElement).getAttribute(
+            "data-mm-details-profile",
+          ) ?? "github") as Profile;
+          return {
+            source,
+            summarySource:
+              parseDetailsSource(source, sourceProfile)?.summary ?? "",
+            sourceProfile,
+          };
+        },
+      },
+    ],
+  },
 };
 
 const marks: Record<string, MarkSpec> = {
@@ -455,6 +502,7 @@ type KnownNodeTypes = {
   hard_break: NodeType;
   raw_block: NodeType;
   raw_inline: NodeType;
+  details: NodeType;
   bullet_list: NodeType;
   ordered_list: NodeType;
   list_item: NodeType;
@@ -1692,6 +1740,10 @@ interface DetailsRange {
   end: number;
 }
 
+interface DetectedDetails extends DetailsRange {
+  tags: DetailsTagRange[];
+}
+
 function detailsFenceRanges(source: string): DetailsRange[] {
   const lines = sourceLines(source);
   const ranges: DetailsRange[] = [];
@@ -1713,33 +1765,39 @@ function detailsFenceRanges(source: string): DetailsRange[] {
   return ranges;
 }
 
-function detectDetails(source: string): DetailsRange[] {
-  const fenceRanges = detailsFenceRanges(source);
-  const insideFence = (offset: number): boolean =>
-    fenceRanges.some((range) => offset >= range.start && offset < range.end);
-  const ranges: DetailsRange[] = [];
+function detectDetails(source: string, parser: MarkdownIt): DetectedDetails[] {
+  const ranges: DetectedDetails[] = [];
   const stack: number[] = [];
-  const tags = /<\/?details\b[^>]*>/gi;
-  let match: RegExpExecArray | null;
-  while ((match = tags.exec(source)) != null) {
-    const offset = match.index;
-    if (insideFence(offset)) continue;
+  const tags = detailsTagRanges(source, parser);
+  let firstTag = 0;
+  for (let tagIndex = 0; tagIndex < tags.length; tagIndex += 1) {
+    const tag = tags[tagIndex]!;
+    const offset = tag.start;
     const lineStart =
       Math.max(
         source.lastIndexOf("\n", offset),
         source.lastIndexOf("\r", offset),
       ) + 1;
     const prefix = source.slice(lineStart, offset);
-    if (!match[0]!.startsWith("</") && prefix.trim() !== "") continue;
-    if (match[0]!.startsWith("</")) {
+    if (!tag.closing && stack.length === 0 && prefix.trim() !== "") continue;
+    if (tag.closing) {
       if (stack.length === 0) continue;
       const start = stack.pop()!;
       if (stack.length === 0) {
-        let end = offset + match[0]!.length;
+        let end = tag.end;
         end += source.slice(end).match(/^(?:\r\n|\n|\r)/)?.[0].length ?? 0;
-        ranges.push({ start, end });
+        ranges.push({
+          start,
+          end,
+          tags: tags.slice(firstTag, tagIndex + 1).map((candidate) => ({
+            start: candidate.start - start,
+            end: candidate.end - start,
+            closing: candidate.closing,
+          })),
+        });
       }
     } else {
+      if (stack.length === 0) firstTag = tagIndex;
       stack.push(offset);
     }
   }
@@ -1790,14 +1848,14 @@ function isFootnoteDefinitionBlock(value: string): boolean {
 
 function parseInternal(source: string, profile: Profile): MarkdownSnapshot {
   const footnoteScan = scanFootnotes(source);
-  const details = detectDetails(source);
+  const md = createMarkdownIt(profile);
+  const details = detectDetails(source, md);
   // Keep footnote definition lines visible to markdown-it so its reference
   // tokens can be converted to source-preserving footnote atoms. The parser
   // already treats ordinary definition lines as non-rendering; only details
   // need masking to prevent their interior from becoming separate blocks.
   const maskedSource = maskRanges(source, details);
   const parserSource = maskEscapedDollars(maskedSource);
-  const md = createMarkdownIt(profile);
   const tokens = md.parse(parserSource, {}) as unknown as MarkdownToken[];
   const offsets = lineOffsets(parserSource);
   const roots = tokens
@@ -1807,7 +1865,7 @@ function parseInternal(source: string, profile: Profile): MarkdownSnapshot {
     tokenIndex?: number;
     token?: MarkdownToken;
     start: number;
-    detail?: DetailsRange;
+    detail?: DetectedDetails;
   }> = roots.map((tokenIndex) => {
     const token = tokens[tokenIndex]!;
     return {
@@ -1832,10 +1890,18 @@ function parseInternal(source: string, profile: Profile): MarkdownSnapshot {
       const detail = event.detail;
       const body = source.slice(detail.start, detail.end);
       const separator = source.slice(detail.end, nextStart);
-      const node = nodeTypes.raw_block.create({
-        source: body,
-        kind: "details",
-      });
+      const parts = cachedDetailsParts(body, profile, detail.tags, md);
+      const node = parts
+        ? nodeTypes.details.create(
+            {
+              source: body,
+              summarySource: parts.summary,
+              sourceProfile: profile,
+            },
+            detailsBodySnapshot(parts.body, profile).doc.content,
+          )
+        : nodeTypes.raw_block.create({ source: body, kind: "details" });
+      if (parts) detailsPartsByAttrs.set(node.attrs, parts);
       nodes.push(node);
       blocks.push({
         node,
@@ -2232,6 +2298,106 @@ function serializeTableCell(node: PMNode): string {
   return value || " ";
 }
 
+// Details keep a nested snapshot so an edited paragraph does not regenerate
+// untouched code, unknown HTML, nested Details, or their original separators.
+const detailsBodySnapshots = new Map<string, MarkdownSnapshot>();
+const detailsPartsCache = new Map<string, DetailsSourceParts | null>();
+const detailsPartsByAttrs = new WeakMap<
+  PMNode["attrs"],
+  DetailsSourceParts | null
+>();
+
+function cachedDetailsParts(
+  source: string,
+  profile: Profile,
+  tags?: readonly DetailsTagRange[],
+  parser?: MarkdownIt,
+): DetailsSourceParts | null {
+  const key = `${profile}\u0000${source}`;
+  if (detailsPartsCache.has(key)) return detailsPartsCache.get(key)!;
+  const resolvedParser = parser ?? createMarkdownIt(profile);
+  const parts = splitDetailsSource(
+    source,
+    tags ?? detailsTagRanges(source, resolvedParser),
+    resolvedParser,
+  );
+  if (detailsPartsCache.size >= 64)
+    detailsPartsCache.delete(detailsPartsCache.keys().next().value!);
+  detailsPartsCache.set(key, parts);
+  return parts;
+}
+
+/** Reuse the same block contexts during parsing, display and direct edits. */
+export function parseDetailsSource(
+  source: string,
+  profile: Profile = "github",
+): DetailsSourceParts | null {
+  return cachedDetailsParts(source, profile);
+}
+
+/** Immutable attributes retain parsed ranges even in documents above cache size. */
+export function detailsSourceParts(node: PMNode): DetailsSourceParts | null {
+  if (detailsPartsByAttrs.has(node.attrs))
+    return detailsPartsByAttrs.get(node.attrs)!;
+  const parts = parseDetailsSource(
+    String(node.attrs.source ?? ""),
+    node.attrs.sourceProfile as Profile,
+  );
+  detailsPartsByAttrs.set(node.attrs, parts);
+  return parts;
+}
+
+function detailsBodySnapshot(
+  source: string,
+  profile: Profile,
+): MarkdownSnapshot {
+  const key = `${profile}\u0000${source}`;
+  let snapshot = detailsBodySnapshots.get(key);
+  if (!snapshot) {
+    snapshot = parseInternal(source, profile);
+    if (detailsBodySnapshots.size >= 64)
+      detailsBodySnapshots.delete(detailsBodySnapshots.keys().next().value!);
+    detailsBodySnapshots.set(key, snapshot);
+  }
+  return snapshot;
+}
+
+function serializeDetails(node: PMNode): string {
+  const source = String(node.attrs.source ?? "");
+  const parts = detailsSourceParts(node);
+  if (!parts) return source;
+  const snapshot = detailsBodySnapshot(
+    parts.body,
+    node.attrs.sourceProfile as Profile,
+  );
+  let body = node.content.eq(snapshot.doc.content)
+    ? parts.body
+    : serializeMarkdown(
+        schema.topNodeType.create(null, node.content),
+        snapshot,
+      );
+  if (
+    !node.content.eq(snapshot.doc.content) &&
+    !snapshot.blocks?.length &&
+    body
+  ) {
+    const ending = parts.body.includes("\r\n") ? "\r\n" : "\n";
+    // An empty body has no block snapshots. Retain its original whitespace,
+    // then give the first typed paragraph valid Markdown block boundaries.
+    const prefix = parts.body.endsWith(`${ending}${ending}`)
+      ? parts.body
+      : parts.body + `${ending}${ending}`;
+    body = prefix + body + `${ending}${ending}`;
+  }
+  return (
+    parts.beforeSummary +
+    String(node.attrs.summarySource ?? parts.summary) +
+    parts.afterSummary +
+    body +
+    parts.closing
+  );
+}
+
 function serializeBlock(node: PMNode, tableCell = false): string {
   switch (node.type.name) {
     case "paragraph":
@@ -2258,6 +2424,8 @@ function serializeBlock(node: PMNode, tableCell = false): string {
     }
     case "raw_block":
       return String(node.attrs.source ?? "").replace(/(?:\r\n|\n|\r)+$/, "");
+    case "details":
+      return serializeDetails(node).replace(/(?:\r\n|\n|\r)+$/, "");
     case "bullet_list":
       return childrenOf(node)
         .map((item) => serializeListItem(item, "- "))
@@ -2608,6 +2776,7 @@ function sourceMatches(
 }
 
 function normalisedRaw(node: PMNode): string {
+  if (node.type.name === "details") return serializeDetails(node);
   if (node.type.name === "raw_block" || node.type.name === "raw_inline")
     return String(node.attrs.source ?? "");
   return "";
@@ -2627,6 +2796,38 @@ function sourceNeedsExactCanonicalPreservation(source: string): boolean {
     /!\[[^\]]*\]\([^)]*\)\{(?:width|height)=/i.test(source) ||
     /:[a-zA-Z0-9_+-]+:/.test(source)
   );
+}
+
+/** An info-string edit must not reserialize code or its original fence. */
+function codeInfoOnlySource(
+  node: PMNode,
+  previous: MarkdownBlockSnapshot,
+): string | null {
+  if (
+    node.type.name !== "code_block" ||
+    previous.node.type !== node.type ||
+    !node.content.eq(previous.node.content)
+  )
+    return null;
+  const opening = previous.source.match(
+    /^( {0,3}(?:`{3,}|~{3,}))([^\r\n]*)(?:\r\n|\r|\n|$)/,
+  );
+  if (
+    !opening ||
+    opening[2]!.trim() !== String(previous.node.attrs.params ?? "")
+  )
+    return null;
+  const params = String(node.attrs.params ?? "");
+  if (
+    /[\r\n]/.test(params) ||
+    (opening[1]!.includes("`") && params.includes("`"))
+  )
+    return null;
+  const info = opening[2]!;
+  const leading = info.match(/^[\t ]*/)?.[0] ?? "";
+  const trailing = info.slice(leading.length).match(/[\t ]*$/)?.[0] ?? "";
+  const end = opening[1]!.length + info.length;
+  return opening[1] + leading + params + trailing + previous.source.slice(end);
 }
 
 export function serializeMarkdown(
@@ -2649,7 +2850,7 @@ export function serializeMarkdown(
       .map((node) => serializeBlock(node))
       .join("\n\n");
     const last = children[children.length - 1];
-    if (last?.type.name === "raw_block") {
+    if (last?.type.name === "raw_block" || last?.type.name === "details") {
       const rawEnding = lineBreakSuffix(String(last.attrs.source ?? ""));
       if (rawEnding) {
         const ending = rawEnding.includes("\r\n")
@@ -2695,10 +2896,38 @@ export function serializeMarkdown(
 
     const samePosition = blocks[index];
     const insertion = !samePosition || nextMatchedPrevious[index] === index;
-    if (index > 0 && !output.endsWith(`${ending}${ending}`)) {
+    const codeInfoSource =
+      !insertion && samePosition && codeInfoOnlySource(node, samePosition);
+    if (codeInfoSource) {
+      output += codeInfoSource;
+      continue;
+    }
+    // Details can interrupt paragraphs, and a raw HTML block can end directly
+    // before a paragraph. Preserve those existing adjacent source boundaries
+    // when their preceding block is unchanged. Existing blank separators can
+    // also use CR or mixed endings, independently of the generated line ending.
+    const previousNode = blocks[index - 1]?.node;
+    const preservedSourceBoundary =
+      !insertion &&
+      matches.get(index - 1) === index - 1 &&
+      ((node.type.name === "details" &&
+        samePosition?.node.type.name === "details") ||
+        (node.type.name === "paragraph" &&
+          samePosition?.node.type.name === "paragraph" &&
+          previousNode?.type.name === "raw_block" &&
+          previousNode.attrs.kind === "html") ||
+        /(?:\r\n|\r(?!\n)|\n)[\t ]*(?:\r\n?|\n)$/.test(output));
+    if (
+      index > 0 &&
+      !preservedSourceBoundary &&
+      !output.endsWith(`${ending}${ending}`)
+    ) {
       output += output.endsWith(ending) ? ending : `${ending}${ending}`;
     }
-    const generated = toLineEnding(serializeBlock(node), ending);
+    const generated =
+      node.type.name === "details"
+        ? serializeBlock(node)
+        : toLineEnding(serializeBlock(node), ending);
     output += generated;
     if (!insertion && samePosition) {
       // Markdown-it's map includes the final line ending in a block body,
@@ -2837,7 +3066,7 @@ interface RenderState extends RenderContext {
   headingSlugs: Map<string, number>;
   footnoteRefs: Map<string, number>;
   footnoteNumbers: Map<string, number>;
-  headingIds: WeakMap<PMNode, string>;
+  headingIds: WeakMap<PMNode, Map<number, string>>;
 }
 
 type RenderInput = RenderContext | MarkdownSnapshot | PMNode | undefined;
@@ -2906,7 +3135,8 @@ function createRenderState(profile: Profile, input?: RenderInput): RenderState {
     headingSlugs: context.headingSlugs ?? new Map<string, number>(),
     footnoteRefs: context.footnoteRefs ?? new Map<string, number>(),
     footnoteNumbers: context.footnoteNumbers ?? new Map<string, number>(),
-    headingIds: context.headingIds ?? new WeakMap<PMNode, string>(),
+    headingIds:
+      context.headingIds ?? new WeakMap<PMNode, Map<number, string>>(),
   };
   if (document) state.document = document;
   if (snapshot) state.snapshot = snapshot;
@@ -2944,20 +3174,37 @@ function slugBase(value: string): string {
   return normalized || "section";
 }
 
-function headingId(node: PMNode, state: RenderState): string {
-  const existing = state.headingIds.get(node);
+function headingId(
+  node: PMNode,
+  state: RenderState,
+  root: PMNode,
+  position: number,
+): string {
+  // Details body snapshots deliberately share immutable nodes. The rendering
+  // root and position identify an occurrence, including inside nested Details;
+  // separate source fragments get their own root without reusing these slots.
+  let positions = state.headingIds.get(root);
+  if (!positions) {
+    positions = new Map<number, string>();
+    state.headingIds.set(root, positions);
+  }
+  const existing = positions.get(position);
   if (existing) return existing;
   const base = slugBase(headingText(node));
   const count = state.headingSlugs.get(base) ?? 0;
   state.headingSlugs.set(base, count + 1);
   const id = count === 0 ? base : `${base}-${count}`;
-  state.headingIds.set(node, id);
+  positions.set(position, id);
   return id;
 }
 
 function prepareHeadingIds(node: PMNode, state: RenderState): void {
-  if (node.type.name === "heading") headingId(node, state);
-  node.forEach((child) => prepareHeadingIds(child, state));
+  if (node.type.name === "heading") headingId(node, state, node, 0);
+  const contentStart = node.type.name === "doc" ? 0 : 1;
+  node.descendants((child, position) => {
+    if (child.type.name === "heading")
+      headingId(child, state, node, position + contentStart);
+  });
 }
 
 function footnoteLabelFromSource(source: string): string {
@@ -3196,22 +3443,18 @@ function renderDescriptionList(source: string, state: RenderState): string {
   return parts.join("");
 }
 
-function collectHeadings(node: PMNode, result: PMNode[] = []): PMNode[] {
-  if (node.type.name === "heading") result.push(node);
-  node.forEach((child) => collectHeadings(child, result));
-  return result;
-}
-
 function renderToc(state: RenderState): string {
-  const headings = state.document ? collectHeadings(state.document) : [];
-  if (headings.length === 0) return "";
-  const items = headings
-    .map(
-      (heading) =>
-        `<li class="toc-level-${Number(heading.attrs.level) || 1}"><a href="#${escapeHtml(headingId(heading, state))}">${renderInline(heading, state)}</a></li>`,
-    )
-    .join("");
-  return `<nav class="table-of-contents" aria-label="Table of contents"><ul>${items}</ul></nav>`;
+  const root = state.document;
+  if (!root) return "";
+  const items: string[] = [];
+  root.descendants((heading, position) => {
+    if (heading.type.name === "heading")
+      items.push(
+        `<li class="toc-level-${Number(heading.attrs.level) || 1}"><a href="#${escapeHtml(headingId(heading, state, root, position))}">${renderInline(heading, state)}</a></li>`,
+      );
+  });
+  if (items.length === 0) return "";
+  return `<nav class="table-of-contents" aria-label="Table of contents"><ul>${items.join("")}</ul></nav>`;
 }
 
 function collectFootnoteReferences(node: PMNode, state: RenderState): void {
@@ -3252,22 +3495,58 @@ function renderFootnotes(state: RenderState): string {
   return `<section class="footnotes" aria-label="Footnotes"><ol>${items}</ol></section>`;
 }
 
-function renderNode(node: PMNode, state: RenderState): string {
+function childrenWithPositions(
+  node: PMNode,
+  position: number,
+): Array<{ node: PMNode; position: number }> {
+  const children: Array<{ node: PMNode; position: number }> = [];
+  const contentStart = position + (node.type.name === "doc" ? 0 : 1);
+  node.forEach((child, offset) => {
+    children.push({ node: child, position: contentStart + offset });
+  });
+  return children;
+}
+
+function renderChildren(
+  node: PMNode,
+  state: RenderState,
+  root: PMNode,
+  position: number,
+  separator = "",
+): string {
+  return childrenWithPositions(node, position)
+    .map((child) => renderNode(child.node, state, root, child.position))
+    .join(separator);
+}
+
+function renderNode(
+  node: PMNode,
+  state: RenderState,
+  root: PMNode,
+  position: number,
+): string {
   switch (node.type.name) {
     case "paragraph":
       return `<p>${renderInline(node, state)}</p>`;
     case "heading": {
       const level = Math.max(1, Math.min(6, Number(node.attrs.level) || 1));
-      return `<h${level} id="${escapeHtml(headingId(node, state))}">${renderInline(node, state)}</h${level}>`;
+      return `<h${level} id="${escapeHtml(headingId(node, state, root, position))}">${renderInline(node, state)}</h${level}>`;
     }
     case "blockquote":
-      return `<blockquote>${childrenOf(node)
-        .map((child) => renderNode(child, state))
-        .join("\n")}</blockquote>`;
+      return `<blockquote>${renderChildren(node, state, root, position, "\n")}</blockquote>`;
     case "horizontal_rule":
       return "<hr>";
     case "code_block":
       return renderCodeBlock(node, state);
+    case "details": {
+      const parts = detailsSourceParts(node);
+      const summary = renderInlineSource(
+        String(node.attrs.summarySource ?? ""),
+        state.profile,
+        state,
+      );
+      return `<details${parts?.open ? " open" : ""}><summary>${summary}</summary>${renderChildren(node, state, root, position, "\n")}</details>`;
+    }
     case "raw_inline":
       return renderRawInline(node, state);
     case "raw_block": {
@@ -3313,9 +3592,7 @@ function renderNode(node: PMNode, state: RenderState): string {
         (item) => item.attrs.checked != null,
       );
       const className = taskList ? ` class="contains-task-list"` : "";
-      return `<${ordered ? "ol" : "ul"}${start}${className}>${childrenOf(node)
-        .map((child) => renderNode(child, state))
-        .join("")}</${ordered ? "ol" : "ul"}>`;
+      return `<${ordered ? "ol" : "ul"}${start}${className}>${renderChildren(node, state, root, position)}</${ordered ? "ol" : "ul"}>`;
     }
     case "list_item": {
       const task = node.attrs.checked as TaskState;
@@ -3324,49 +3601,47 @@ function renderNode(node: PMNode, state: RenderState): string {
           ? ""
           : `<input type="checkbox" disabled${task === true ? " checked" : ""}${task === "mixed" ? ' data-task-state="mixed" aria-checked="mixed"' : ""}> `;
       const className = task == null ? "" : ` class="task-list-item"`;
-      return `<li${className}>${checkbox}${childrenOf(node)
-        .map((child) => renderNode(child, state))
-        .join("")}</li>`;
+      return `<li${className}>${checkbox}${renderChildren(node, state, root, position)}</li>`;
     }
     case "table": {
-      const rows = childrenOf(node);
+      const rows = childrenWithPositions(node, position);
       if (rows.length === 0) return "<table></table>";
-      const renderRow = (row: PMNode): string =>
-        `<tr>${childrenOf(row)
+      const renderRow = (row: { node: PMNode; position: number }): string =>
+        `<tr>${childrenWithPositions(row.node, row.position)
           .map((cell) => {
-            const tag = cell.type.name === "table_header" ? "th" : "td";
-            const alignment = cell.attrs.alignment;
+            const tag = cell.node.type.name === "table_header" ? "th" : "td";
+            const alignment = cell.node.attrs.alignment;
             const style = alignment
               ? ` style="text-align:${escapeHtml(alignment)}"`
               : "";
-            return `<${tag}${style}>${childrenOf(cell)
-              .map((child) => renderNode(child, state))
-              .join("")}</${tag}>`;
+            return `<${tag}${style}>${renderChildren(cell.node, state, root, cell.position)}</${tag}>`;
           })
           .join("")}</tr>`;
       const head = rows.filter(
-        (row) => row.child(0)?.type.name === "table_header",
+        (row) => row.node.child(0)?.type.name === "table_header",
       );
       const body = rows.filter(
-        (row) => row.child(0)?.type.name !== "table_header",
+        (row) => row.node.child(0)?.type.name !== "table_header",
       );
       return `<table>${head.length ? `<thead>${head.map(renderRow).join("")}</thead>` : ""}${body.length ? `<tbody>${body.map(renderRow).join("")}</tbody>` : ""}</table>`;
     }
     case "table_row":
-      return `<tr>${childrenOf(node)
-        .map((child) => renderNode(child, state))
-        .join("")}</tr>`;
+      return `<tr>${renderChildren(node, state, root, position)}</tr>`;
     case "table_cell":
-      return `<td>${childrenOf(node)
-        .map((child) => renderNode(child, state))
-        .join("")}</td>`;
+      return `<td>${renderChildren(node, state, root, position)}</td>`;
     case "table_header":
-      return `<th>${childrenOf(node)
-        .map((child) => renderNode(child, state))
-        .join("")}</th>`;
+      return `<th>${renderChildren(node, state, root, position)}</th>`;
     default:
       return escapeHtml(node.textContent);
   }
+}
+
+/** Render summary source with the same sanitisation policy as the preview. */
+export function renderDetailsSummaryHtml(
+  source: string,
+  profile: Profile = "github",
+): string {
+  return renderInlineSource(source, profile);
 }
 
 function renderInlineSource(
@@ -3413,7 +3688,7 @@ export function headingAnchorIds(
   const anchors: HeadingAnchor[] = [];
   doc.descendants((node, position) => {
     if (node.type.name === "heading")
-      anchors.push({ position, id: headingId(node, state) });
+      anchors.push({ position, id: headingId(node, state, doc, position) });
     return true;
   });
   return anchors;
@@ -3429,14 +3704,39 @@ export function renderNodeHtml(
   if (node.type.name === "doc") {
     state.document = node;
     prepareHeadingIds(node, state);
-    return (
-      childrenOf(node)
-        .map((child) => renderNode(child, state))
-        .join("\n") + renderFootnotes(state)
-    );
+    return renderChildren(node, state, node, 0, "\n") + renderFootnotes(state);
   }
+  let root = node;
+  let position = 0;
+  if (state.document) {
+    const suppliedPosition = state.nodePosition;
+    if (
+      suppliedPosition !== undefined &&
+      Number.isInteger(suppliedPosition) &&
+      suppliedPosition >= 0 &&
+      suppliedPosition < state.document.content.size &&
+      state.document.nodeAt(suppliedPosition) === node
+    ) {
+      root = state.document;
+      position = suppliedPosition;
+    } else if (suppliedPosition === undefined) {
+      // Without an explicit position the first occurrence is the only one an
+      // individual render call can identify. NodeViews supply getPos().
+      state.document.descendants((child, childPosition) => {
+        if (root === state.document) return false;
+        if (child === node) {
+          root = state.document!;
+          position = childPosition;
+          return false;
+        }
+        return true;
+      });
+    }
+    prepareHeadingIds(state.document, state);
+  }
+  if (root !== state.document) prepareHeadingIds(root, state);
   registerFootnoteReferencesBeforeNode(state.document, node, state);
-  return renderNode(node, state);
+  return renderNode(node, state, root, position);
 }
 
 /** Render a PM document with profile-aware anchors, atoms, and footnotes. */
@@ -3448,11 +3748,7 @@ export function renderMarkdownDocument(
   const state = createRenderState(profile, input ?? doc);
   state.document = doc;
   prepareHeadingIds(doc, state);
-  return (
-    childrenOf(doc)
-      .map((child) => renderNode(child, state))
-      .join("\n") + renderFootnotes(state)
-  );
+  return renderChildren(doc, state, doc, 0, "\n") + renderFootnotes(state);
 }
 
 /** Render an arbitrary Markdown source fragment using the shared renderer. */
@@ -3468,9 +3764,8 @@ export function renderSourceFragment(
   const document = snapshot.doc;
   prepareHeadingIds(document, state);
   return (
-    childrenOf(document)
-      .map((child) => renderNode(child, state))
-      .join("\n") + (input ? "" : renderFootnotes(state))
+    renderChildren(document, state, document, 0, "\n") +
+    (input ? "" : renderFootnotes(state))
   );
 }
 

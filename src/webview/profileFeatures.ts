@@ -300,7 +300,11 @@ function parsedFeatureNodes(
   if (definition.kind === "inline") return nodes;
   if (nodes.length !== 1) return null;
   const node = nodes[0]!;
-  if (node.type.name !== "raw_block") return null;
+  if (
+    node.type.name !== "raw_block" &&
+    !(definition.id === "details" && node.type.name === "details")
+  )
+    return null;
   // A parser recovery node or a prematurely closed details range must never
   // turn the requested snippet into different source. Requiring an exact raw
   // source also keeps fenced literal details bodies source-preserving.
