@@ -951,6 +951,16 @@ The 0.0.5 and earlier evidence above remains historical.
   format check still reports the pre-existing warning in
   `tests/browser/block-editing.test.mjs`, which is outside this change.
 
+## 0.0.42 toolbar block-context selection boundaries
+
+- Block quote and Code block active state now uses the shared ancestor chain of
+  the complete ProseMirror selection. A cursor keeps the existing behavior;
+  ranges crossing a normal paragraph or a separate same-type block are
+  inactive, while nested content sharing an outer blockquote remains active.
+- Regression coverage includes same-block and cross-block blockquote ranges,
+  blockquote-to-paragraph ranges, same-block and cross-block code ranges, and
+  nested blockquotes with a shared outer ancestor.
+
 ## Explicit limits
 
 Paste/drop image asset copying is optional follow-up work. Native IME and visual

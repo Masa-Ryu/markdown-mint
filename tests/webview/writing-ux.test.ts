@@ -705,6 +705,125 @@ describe("bounded writing controls", () => {
     nodeApp.app.destroy();
   });
 
+  it("requires a shared blockquote ancestor for range active state", () => {
+    const sameBlock = makeApp("> first line\n> second line");
+    const sameDoc = sameBlock.app.view.state.doc;
+    const firstLine = firstTextRange(
+      sameDoc,
+      (node) => node.text?.includes("first line") ?? false,
+    );
+    const secondLine = firstTextRange(
+      sameDoc,
+      (node) => node.text?.includes("second line") ?? false,
+    );
+    sameBlock.app.view.dispatch(
+      sameBlock.app.view.state.tr.setSelection(
+        TextSelection.create(sameDoc, firstLine.from, secondLine.to),
+      ),
+    );
+    expect(quoteButton(sameBlock.root).getAttribute("aria-pressed")).toBe(
+      "true",
+    );
+
+    const separateBlocks = makeApp("> quote A\n\nnormal\n\n> quote B");
+    const separateDoc = separateBlocks.app.view.state.doc;
+    const quoteA = firstTextRange(
+      separateDoc,
+      (node) => node.text === "quote A",
+    );
+    const quoteB = firstTextRange(
+      separateDoc,
+      (node) => node.text === "quote B",
+    );
+    separateBlocks.app.view.dispatch(
+      separateBlocks.app.view.state.tr.setSelection(
+        TextSelection.create(separateDoc, quoteA.from, quoteB.to),
+      ),
+    );
+    expect(quoteButton(separateBlocks.root).getAttribute("aria-pressed")).toBe(
+      "false",
+    );
+
+    const quoteToNormal = makeApp("> quote\n\nnormal");
+    const quoteToNormalDoc = quoteToNormal.app.view.state.doc;
+    const quote = firstTextRange(
+      quoteToNormalDoc,
+      (node) => node.text === "quote",
+    );
+    const normal = firstTextRange(
+      quoteToNormalDoc,
+      (node) => node.text === "normal",
+    );
+    quoteToNormal.app.view.dispatch(
+      quoteToNormal.app.view.state.tr.setSelection(
+        TextSelection.create(quoteToNormalDoc, quote.from, normal.to),
+      ),
+    );
+    expect(quoteButton(quoteToNormal.root).getAttribute("aria-pressed")).toBe(
+      "false",
+    );
+  });
+
+  it("requires a shared code block ancestor for range active state", () => {
+    const sameBlock = makeApp("```text\nfirst line\nsecond line\n```");
+    const sameDoc = sameBlock.app.view.state.doc;
+    const firstLine = firstTextRange(
+      sameDoc,
+      (node) => node.text?.includes("first line") ?? false,
+    );
+    const secondLine = firstTextRange(
+      sameDoc,
+      (node) => node.text?.includes("second line") ?? false,
+    );
+    sameBlock.app.view.dispatch(
+      sameBlock.app.view.state.tr.setSelection(
+        TextSelection.create(sameDoc, firstLine.from, secondLine.to),
+      ),
+    );
+    expect(
+      sameBlock.root
+        .querySelector<HTMLButtonElement>('[data-testid="toolbar-code-block"]')
+        ?.getAttribute("aria-pressed"),
+    ).toBe("true");
+
+    const separateBlocks = makeApp(
+      "```text\ncode A\n```\n\nnormal\n\n```text\ncode B\n```",
+    );
+    const separateDoc = separateBlocks.app.view.state.doc;
+    const codeA = firstTextRange(
+      separateDoc,
+      (node) => node.text?.includes("code A") ?? false,
+    );
+    const codeB = firstTextRange(
+      separateDoc,
+      (node) => node.text?.includes("code B") ?? false,
+    );
+    separateBlocks.app.view.dispatch(
+      separateBlocks.app.view.state.tr.setSelection(
+        TextSelection.create(separateDoc, codeA.from, codeB.to),
+      ),
+    );
+    expect(
+      separateBlocks.root
+        .querySelector<HTMLButtonElement>('[data-testid="toolbar-code-block"]')
+        ?.getAttribute("aria-pressed"),
+    ).toBe("false");
+  });
+
+  it("keeps blockquote active when a range shares an outer nested blockquote", () => {
+    const { app, root } = makeApp("> outer\n>\n> > inner A\n>\n> > inner B");
+    const doc = app.view.state.doc;
+    const innerA = firstTextRange(doc, (node) => node.text === "inner A");
+    const innerB = firstTextRange(doc, (node) => node.text === "inner B");
+
+    app.view.dispatch(
+      app.view.state.tr.setSelection(
+        TextSelection.create(doc, innerA.from, innerB.to),
+      ),
+    );
+    expect(quoteButton(root).getAttribute("aria-pressed")).toBe("true");
+  });
+
   it("toggles block quote through mousedown and click while preserving the cursor", () => {
     const { app, root } = makeApp("hello");
     const quote = quoteButton(root);

@@ -37,16 +37,15 @@ export function isToolbarMarkActive(
 }
 
 function hasAncestor(selection: Selection, nodeName: string): boolean {
-  const hasAncestorAt = (resolved: Selection["$from"]): boolean => {
-    for (let depth = resolved.depth; depth > 0; depth -= 1)
-      if (resolved.node(depth).type.name === nodeName) return true;
-    return false;
-  };
-
-  return (
-    hasAncestorAt(selection.$from) &&
-    (selection.empty || hasAncestorAt(selection.$to))
-  );
+  // A range is active only when its endpoints share the target block
+  // context. Checking both endpoint chains independently would also match
+  // separate blockquotes or code blocks of the same type.
+  const sharedDepth = selection.empty
+    ? selection.$from.depth
+    : selection.$from.sharedDepth(selection.to);
+  for (let depth = sharedDepth; depth > 0; depth -= 1)
+    if (selection.$from.node(depth).type.name === nodeName) return true;
+  return false;
 }
 
 function isSelectedNode(selection: Selection, nodeName: string): boolean {

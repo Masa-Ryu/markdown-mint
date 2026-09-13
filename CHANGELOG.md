@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.0.42
+
+- Restrict Block quote and Code block toolbar active state to selections that
+  share the target block ancestor. Ranges across separate same-type blocks or
+  a normal paragraph are inactive, while nested selections sharing an outer
+  blockquote remain active.
+
 ## 0.0.41
 
 - Unify the main and selection toolbar's semantic active state from the current
