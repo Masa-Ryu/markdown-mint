@@ -845,9 +845,9 @@ export function createAlertNodeView(
       )
     )
       view.dispatch(
-        view.state.tr.setSelection(
-          NodeSelection.create(view.state.doc, position),
-        ),
+        view.state.tr
+          .setSelection(NodeSelection.create(view.state.doc, position))
+          .setMeta("addToHistory", false),
       );
   });
   bodyEditor.addEventListener("blur", () => setBodyFocused(false));

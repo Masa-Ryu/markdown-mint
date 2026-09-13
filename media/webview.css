@@ -524,6 +524,28 @@ textarea:focus-visible {
 .mm-rich-panel .ProseMirror-gapcursor:after {
   border-top-color: var(--vscode-editorCursor-foreground, #aeafad);
 }
+.mm-rich-panel .mm-block-boundary-cursor {
+  display: none;
+  pointer-events: none;
+  position: absolute;
+}
+.mm-rich-panel .mm-block-boundary-cursor::after {
+  content: "";
+  display: block;
+  position: absolute;
+  top: -2px;
+  height: 1.2em;
+  border-left: 1px solid var(--vscode-editorCursor-foreground, #aeafad);
+  animation: mm-block-boundary-cursor-blink 1.1s steps(2, start) infinite;
+}
+.mm-rich-panel .ProseMirror-focused .mm-block-boundary-cursor {
+  display: block;
+}
+@keyframes mm-block-boundary-cursor-blink {
+  to {
+    visibility: hidden;
+  }
+}
 
 .mm-rich-panel .selectedCell {
   background: color-mix(

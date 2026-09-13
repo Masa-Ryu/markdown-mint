@@ -140,6 +140,20 @@ async function noEdits(page, before, label) {
   assert.equal(after.dirty, false, `${label}: document became dirty`);
 }
 
+async function expectBoundary(page, label) {
+  const state = await selection(page);
+  assert.equal(
+    state.kind,
+    "BlockBoundarySelection",
+    `${label}: missing boundary selection`,
+  );
+  assert.equal(
+    await page.locator(".mm-block-boundary-cursor").count(),
+    1,
+    `${label}: virtual caret was not rendered`,
+  );
+}
+
 async function testCodeHeader(page) {
   const body = "  const value = 1;  \n\tconsole.log(value);\n";
   const source = blocks("Before", fence("ts title=example", body), "After");
@@ -479,6 +493,8 @@ async function testHorizontalNavigation(page) {
   const before = await saved(page);
   await caret(page, `${rich} > p:first-child`, -1);
   await page.keyboard.press("ArrowRight");
+  await expectBoundary(page, "paragraph -> code boundary");
+  await page.keyboard.press("ArrowRight");
   assert.equal(
     (await selection(page)).parent,
     "code_block",
@@ -486,8 +502,12 @@ async function testHorizontalNavigation(page) {
   );
   assert.equal((await selection(page)).offset, 0);
   await page.keyboard.press("ArrowLeft");
+  await expectBoundary(page, "code -> paragraph boundary");
+  await page.keyboard.press("ArrowLeft");
   assert.equal((await selection(page)).text, "Before", "code -> paragraph");
   await caret(page, ".mm-code-block-pre code", -1);
+  await page.keyboard.press("ArrowRight");
+  await expectBoundary(page, "code -> Alert boundary");
   await page.keyboard.press("ArrowRight");
   assert.equal(
     (await selection(page)).active,
@@ -496,14 +516,20 @@ async function testHorizontalNavigation(page) {
   );
   assert.equal((await selection(page)).inputStart, 0);
   await page.keyboard.press("ArrowLeft");
+  await expectBoundary(page, "Alert -> code boundary");
+  await page.keyboard.press("ArrowLeft");
   assert.equal((await selection(page)).parent, "code_block", "Alert -> code");
   await caret(page, alertBody, -1);
+  await page.keyboard.press("ArrowRight");
+  await expectBoundary(page, "Alert -> Details boundary");
   await page.keyboard.press("ArrowRight");
   assert.equal(
     (await selection(page)).text,
     "Details body",
     "Alert -> open Details body",
   );
+  await page.keyboard.press("ArrowLeft");
+  await expectBoundary(page, "Details -> Alert boundary");
   await page.keyboard.press("ArrowLeft");
   assert.equal(
     (await selection(page)).active,
@@ -512,7 +538,11 @@ async function testHorizontalNavigation(page) {
   );
   await caret(page, ".mm-details-body > p", -1);
   await page.keyboard.press("ArrowRight");
+  await expectBoundary(page, "Details -> paragraph boundary");
+  await page.keyboard.press("ArrowRight");
   assert.equal((await selection(page)).text, "After", "Details -> paragraph");
+  await page.keyboard.press("ArrowLeft");
+  await expectBoundary(page, "paragraph -> Details boundary");
   await page.keyboard.press("ArrowLeft");
   assert.equal(
     (await selection(page)).text,
@@ -522,6 +552,54 @@ async function testHorizontalNavigation(page) {
   await noEdits(page, before, "bidirectional horizontal navigation");
   await page.keyboard.type("X");
   await expectSource(page, source.replace("Details body", "Details bodyX"));
+
+  const insertionSource = blocks("Before", fence("ts", "code"), "After");
+  await load(page, insertionSource);
+  await caret(page, ".mm-code-block-pre code", -1);
+  await page.keyboard.press("ArrowRight");
+  await expectBoundary(page, "boundary before paragraph insertion");
+  await page.keyboard.type("X");
+  await expectSource(page, blocks("Before", fence("ts", "code"), "X", "After"));
+  await page.keyboard.press(undoShortcut);
+  await expectSource(page, insertionSource);
+  await page.keyboard.press(
+    process.platform === "darwin" ? "Meta+Shift+z" : "Control+y",
+  );
+  await expectSource(page, blocks("Before", fence("ts", "code"), "X", "After"));
+  await load(page, insertionSource);
+  await caret(page, ".mm-code-block-pre code", -1);
+  await page.keyboard.press("ArrowRight");
+  await expectBoundary(page, "boundary before paste");
+  await page.evaluate(() => {
+    const clipboard = new DataTransfer();
+    clipboard.setData("text/plain", "Pasted");
+    window.markdownMint.view.dom.dispatchEvent(
+      new ClipboardEvent("paste", {
+        bubbles: true,
+        cancelable: true,
+        clipboardData: clipboard,
+      }),
+    );
+  });
+  await expectSource(
+    page,
+    blocks("Before", fence("ts", "code"), "Pasted", "After"),
+  );
+  await load(page, insertionSource);
+  await caret(page, ".mm-code-block-pre code", -1);
+  await page.keyboard.press("ArrowRight");
+  await expectBoundary(page, "boundary before slash input");
+  await page.keyboard.type("/");
+  await page.waitForTimeout(150);
+  const slashState = await page.evaluate(() => ({
+    popupHidden: document.querySelector("#mm-empty-line-insert-popup")?.hidden,
+    paragraphText:
+      window.markdownMint.view.state.selection.$from.parent.textContent,
+  }));
+  assert.equal(slashState.popupHidden, false, "boundary slash did not open Insert block");
+  assert.equal(slashState.paragraphText, "", "slash popup changed paragraph text");
+  await page.keyboard.press("Escape");
+  await expectSource(page, blocks("Before", fence("ts", "code"), "/", "After"));
 }
 
 async function testWrappedVerticalNavigation(page) {
@@ -561,12 +639,16 @@ async function testWrappedVerticalNavigation(page) {
   assert.equal((await selection(page)).active, "mm-alert-body-editor");
   await caret(page, `:nth-match(${alertBody}, 1)`, body.length - 3);
   await page.keyboard.press("ArrowDown");
+  await expectBoundary(page, "last Alert row -> code boundary");
+  await page.keyboard.press("ArrowDown");
   state = await selection(page);
   assert.equal(
     state.parent,
     "code_block",
     "last displayed Alert row Down did not enter code",
   );
+  await page.keyboard.press("ArrowUp");
+  await expectBoundary(page, "code -> Alert boundary");
   await page.keyboard.press("ArrowUp");
   assert.equal(
     (await selection(page)).active,
@@ -575,6 +657,8 @@ async function testWrappedVerticalNavigation(page) {
   );
   await caret(page, `:nth-match(${alertBody}, 1)`, 3);
   await page.keyboard.press("ArrowUp");
+  await expectBoundary(page, "first Alert row -> paragraph boundary");
+  await page.keyboard.press("ArrowUp");
   assert.equal(
     (await selection(page)).text,
     "Previous paragraph with enough text",
@@ -582,6 +666,8 @@ async function testWrappedVerticalNavigation(page) {
   );
   await noEdits(page, before, "vertical boundary navigation");
   await caret(page, `:nth-match(${alertBody}, 1)`, -1);
+  await page.keyboard.press("ArrowDown");
+  await expectBoundary(page, "final Alert boundary before code typing");
   await page.keyboard.press("ArrowDown");
   await page.keyboard.type("Z");
   await page.waitForFunction(() =>
@@ -681,10 +767,14 @@ async function testVerticalGoalAndEmptyEdges(page) {
         ).left,
     );
     await page.keyboard.press("ArrowDown");
+    await expectBoundary(page, "code -> short block boundary");
+    await page.keyboard.press("ArrowDown");
     const short = await selection(page);
     if (middle.startsWith(">"))
       assert.equal(short.inputStart, 1, "short Alert must clamp to its end");
     else assert.equal(short.offset, 1, "short paragraph must clamp to its end");
+    await page.keyboard.press("ArrowDown");
+    await expectBoundary(page, "short block -> code boundary");
     await page.keyboard.press("ArrowDown");
     const afterX = await page.evaluate(
       () =>
@@ -697,6 +787,8 @@ async function testVerticalGoalAndEmptyEdges(page) {
       Math.abs(afterX - originalX) <= 8,
       `vertical goal lost through short body: ${originalX}px -> ${afterX}px`,
     );
+    await page.keyboard.press("ArrowUp");
+    await page.keyboard.press("ArrowUp");
     await page.keyboard.press("ArrowUp");
     await page.keyboard.press("ArrowUp");
     assert.equal(
@@ -817,9 +909,12 @@ async function testRenderedTraversal(page) {
   const kinds = [];
   for (let index = 0; index < 4; index += 1) {
     await page.keyboard.press("ArrowRight");
-    const state = await selection(page);
-    kinds.push(state.nodeKind ?? state.parent);
-    assert.equal(state.dialogs, 0, "arrow traversal opened a source dialog");
+    await expectBoundary(page, `rendered block ${index} boundary`);
+    kinds.push("boundary");
+    await page.keyboard.press("ArrowRight");
+    const entered = await selection(page);
+    kinds.push(entered.nodeKind ?? entered.parent);
+    assert.equal(entered.dialogs, 0, "arrow traversal opened a source dialog");
     assert.equal(
       await page
         .locator(".mm-details-node")
@@ -834,8 +929,11 @@ async function testRenderedTraversal(page) {
     "After",
     `rendered blocks trapped the caret: ${kinds.join(", ")}`,
   );
-  for (let index = 0; index < 4; index += 1)
+  for (let index = 0; index < 4; index += 1) {
     await page.keyboard.press("ArrowLeft");
+    await expectBoundary(page, `reverse rendered block ${index} boundary`);
+    await page.keyboard.press("ArrowLeft");
+  }
   assert.equal((await selection(page)).text, "Before");
   await noEdits(
     page,

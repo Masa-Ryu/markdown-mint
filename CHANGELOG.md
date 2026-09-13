@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.0.40
+
+- Add a virtual, keyboard-only caret between top-level blocks. Plain horizontal
+  and visual-line vertical navigation now crosses Code, Alert, Details,
+  rendered blocks, tables, and paragraphs through an intermediate boundary
+  without changing Markdown, dirty state, or undo history.
+- Materialize one real paragraph only when text, Enter, composition input, or
+  paste begins at a boundary. Existing direct editing, atomic block selection,
+  table navigation, slash insertion, and source-preserving serialization remain
+  intact.
+
 ## 0.0.39
 
 - Remove the persistent Math/Mermaid source labels. Rendered Math and Mermaid

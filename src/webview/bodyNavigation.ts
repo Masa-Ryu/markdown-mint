@@ -1,6 +1,7 @@
 import type { Node as PMNode } from "prosemirror-model";
 import { NodeSelection, Selection, TextSelection } from "prosemirror-state";
 import type { EditorView } from "prosemirror-view";
+import { BlockBoundarySelection, isBlockBoundary } from "./blockBoundary";
 
 type Direction = -1 | 1;
 type CaretRect = { left: number; top: number; bottom: number };
@@ -180,8 +181,9 @@ export class BodyNavigation {
     const vertical = event.key === "ArrowUp" || event.key === "ArrowDown";
     if (!vertical) this.resetGoal();
     let moved = false;
-    if (selection instanceof NodeSelection && selection.node.isBlock) {
-      if (selection.node.type.spec.tableRole) return false;
+    if (selection instanceof BlockBoundarySelection) {
+      moved = this.moveFromBoundary(selection.head, direction, vertical);
+    } else if (selection instanceof NodeSelection && selection.node.isBlock) {
       moved = this.moveFromBlock(
         selection.from,
         selection.node,
@@ -333,10 +335,42 @@ export class BodyNavigation {
     vertical: boolean,
   ): boolean {
     const doc = this.view.state.doc;
+    // Top-level block edges are virtual stops. Keeping this as a selection
+    // avoids the transient paragraph that older navigation used as a caret
+    // target, so crossing a boundary never edits the document.
+    if (isBlockBoundary(doc, position) && doc.nodeAt(position) === block) {
+      const boundary = direction < 0 ? position : position + block.nodeSize;
+      return this.selectBoundary(boundary);
+    }
     let cursor = direction < 0 ? position : position + block.nodeSize;
+    const origin = doc.resolve(position);
+    const originOuterPosition = origin.depth ? origin.before(1) : position;
+    const originOuterBlock = origin.depth ? origin.node(1) : block;
     while (cursor >= 0 && cursor <= doc.content.size) {
       let selection = Selection.findFrom(doc.resolve(cursor), direction);
       if (!selection) break;
+      // A nested textblock may have a valid Selection.findFrom result in the
+      // next top-level node. Stop at the outer block first so the same
+      // virtual boundary is used for Details, lists, and blockquotes.
+      const candidate = selection.$from;
+      const candidatePosition = candidate.depth
+        ? candidate.before(1)
+        : selection.from;
+      const candidateBlock = candidate.depth
+        ? candidate.node(1)
+        : doc.nodeAt(selection.from);
+      if (
+        origin.depth > 0 &&
+        (candidatePosition !== originOuterPosition ||
+          candidateBlock !== originOuterBlock)
+      ) {
+        const boundary =
+          direction < 0
+            ? originOuterPosition
+            : originOuterPosition + originOuterBlock.nodeSize;
+        if (isBlockBoundary(doc, boundary))
+          return this.selectBoundary(boundary);
+      }
       // A collapsed structured Details remains one visible stop, regardless
       // of the depth of the hidden text position found by ProseMirror.
       for (let depth = 1; depth <= selection.$from.depth; depth += 1) {
@@ -359,7 +393,11 @@ export class BodyNavigation {
         }
         const editor = this.alertEditor(selection.from);
         if (editor) {
-          this.view.dispatch(this.view.state.tr.setSelection(selection));
+          this.view.dispatch(
+            this.view.state.tr
+              .setSelection(selection)
+              .setMeta("addToHistory", false),
+          );
           editor.focus({ preventScroll: true });
           let offset = direction < 0 ? editor.value.length : 0;
           if (vertical && this.goalX !== undefined) {
@@ -396,13 +434,94 @@ export class BodyNavigation {
       (outerBlock.type.name === "details" ||
         (resolved.depth === 0 && block.type.name !== "paragraph"))
     ) {
-      // Transient blanks are a top-level document facility. Never insert one
-      // inside the final Details/list merely because its last code leaf ended.
+      const boundary = outerPosition + outerBlock.nodeSize;
+      if (isBlockBoundary(doc, boundary)) return this.selectBoundary(boundary);
+      // Preserve the old escape hatch for malformed or non-top-level states.
       const moved = this.exitDocument(outerPosition, outerBlock);
       if (moved) this.view.focus();
       return moved;
     }
     return false;
+  }
+
+  private moveFromBoundary(
+    position: number,
+    direction: Direction,
+    vertical: boolean,
+  ): boolean {
+    const doc = this.view.state.doc;
+    if (!isBlockBoundary(doc, position)) return false;
+    let cursor = position;
+    while (cursor >= 0 && cursor <= doc.content.size) {
+      let selection = Selection.findFrom(doc.resolve(cursor), direction);
+      if (!selection) return false;
+      // A collapsed structured Details remains one visible stop, regardless
+      // of the depth of the hidden text position found by ProseMirror.
+      for (let depth = 1; depth <= selection.$from.depth; depth += 1) {
+        if (selection.$from.node(depth).type.name !== "details") continue;
+        const container = selection.$from.before(depth);
+        const dom = this.view.nodeDOM(container);
+        if (
+          dom instanceof HTMLElement &&
+          dom.dataset.mmDetailsOpen === "false"
+        ) {
+          selection = NodeSelection.create(doc, container);
+          break;
+        }
+      }
+      if (selection instanceof NodeSelection) {
+        const dom = this.view.nodeDOM(selection.from);
+        if (dom instanceof HTMLElement && dom.hidden) {
+          cursor = direction < 0 ? selection.from : selection.to;
+          continue;
+        }
+        const editor = this.alertEditor(selection.from);
+        if (editor) {
+          this.view.dispatch(
+            this.view.state.tr
+              .setSelection(selection)
+              .setMeta("addToHistory", false),
+          );
+          editor.focus({ preventScroll: true });
+          let offset = direction < 0 ? editor.value.length : 0;
+          if (vertical && this.goalX !== undefined) {
+            offset =
+              withTextareaLayout(editor, (caret) =>
+                caretOnRow(
+                  editor.value.length,
+                  caret,
+                  caret(offset).top,
+                  this.goalX!,
+                ),
+              ) ?? offset;
+          }
+          const safeOffset = textareaCaret(editor.value, offset);
+          editor.setSelectionRange(safeOffset, safeOffset);
+          editor.scrollIntoView?.({ block: "nearest" });
+          return true;
+        }
+      } else if (
+        selection instanceof TextSelection &&
+        vertical &&
+        this.goalX !== undefined
+      ) {
+        selection = this.textSelectionAtX(selection);
+      }
+      this.select(selection);
+      return true;
+    }
+    return false;
+  }
+
+  private selectBoundary(position: number): boolean {
+    const doc = this.view.state.doc;
+    if (!isBlockBoundary(doc, position)) return false;
+    try {
+      this.select(new BlockBoundarySelection(doc.resolve(position)));
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   private textSelectionAtX(selection: TextSelection): TextSelection {
@@ -434,9 +553,10 @@ export class BodyNavigation {
   }
 
   private select(selection: Selection): void {
-    this.view.dispatch(
-      this.view.state.tr.setSelection(selection).scrollIntoView(),
-    );
+    const transaction = this.view.state.tr
+      .setSelection(selection)
+      .setMeta("addToHistory", false);
+    this.view.dispatch(transaction.scrollIntoView());
     this.view.focus();
   }
 }

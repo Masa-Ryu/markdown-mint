@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { NodeSelection, TextSelection } from "prosemirror-state";
+import { BlockBoundarySelection } from "../../src/webview/blockBoundary";
 import {
   parseMarkdown,
   renderMarkdown,
@@ -58,7 +59,7 @@ function setup(markdown: string) {
 }
 
 describe("body navigation selection handoff", () => {
-  it("keeps a document-end Details exit transient and outside its structured body", () => {
+  it("keeps a document-end Details boundary virtual until text is entered", () => {
     const source =
       "<details open>\n<summary>End</summary>\n\nLast body\n\n</details>";
     const { app, messages, select, key } = setup(source);
@@ -66,14 +67,24 @@ describe("body navigation selection handoff", () => {
     select("Last body", "end");
     expect(key("ArrowRight").defaultPrevented).toBe(true);
     expect(app.view.state.doc.firstChild).toBe(details);
-    expect(app.view.state.doc.lastChild?.type.name).toBe("paragraph");
-    expect(app.view.state.selection.$from.depth).toBe(1);
+    expect(app.view.state.doc.lastChild).toBe(details);
+    expect(app.view.state.selection).toBeInstanceOf(BlockBoundarySelection);
     expect(
       messages.filter(
         (message) => (message as { type?: unknown }).type === "edit",
       ),
     ).toEqual([]);
-    app.view.dispatch(app.view.state.tr.insertText("New tail"));
+    expect(
+      app.view.someProp("handleTextInput", (handler) =>
+        handler(
+          app.view,
+          app.view.state.selection.from,
+          app.view.state.selection.to,
+          "New tail",
+          () => app.view.state.tr,
+        ),
+      ),
+    ).toBe(true);
     expect(
       messages.filter(
         (message) => (message as { type?: unknown }).type === "edit",
@@ -102,6 +113,8 @@ describe("body navigation selection handoff", () => {
       ].join("\n\n"),
     );
     select("Before", "end");
+    key("ArrowRight");
+    expect(app.view.state.selection).toBeInstanceOf(BlockBoundarySelection);
     key("ArrowRight");
     expect(app.view.state.selection.$from.parent.textContent).toBe("Inside");
     select("Inside", "end");
@@ -136,9 +149,13 @@ describe("body navigation selection handoff", () => {
     const original = app.view.state.doc;
     select("Before", "end");
     expect(key("ArrowRight").defaultPrevented).toBe(true);
+    expect(app.view.state.selection).toBeInstanceOf(BlockBoundarySelection);
+    key("ArrowRight");
     expect(app.view.state.selection.$from.parent.type.name).toBe("code_block");
     expect(app.view.state.selection.$from.parentOffset).toBe(0);
     select("code", "end");
+    key("ArrowRight");
+    expect(app.view.state.selection).toBeInstanceOf(BlockBoundarySelection);
     key("ArrowRight");
     const textarea = root.querySelector<HTMLTextAreaElement>(
       ".mm-alert-body-editor",
@@ -151,16 +168,24 @@ describe("body navigation selection handoff", () => {
     );
     textarea.setSelectionRange(textarea.value.length, textarea.value.length);
     key("ArrowRight", {}, textarea);
+    expect(app.view.state.selection).toBeInstanceOf(BlockBoundarySelection);
+    key("ArrowRight");
     expect(app.view.state.selection.$from.parent.textContent).toBe("After");
     expect(app.view.state.selection.$from.parentOffset).toBe(0);
+    key("ArrowLeft");
+    expect(app.view.state.selection).toBeInstanceOf(BlockBoundarySelection);
     key("ArrowLeft");
     expect(document.activeElement).toBe(textarea);
     expect(textarea.selectionStart).toBe(textarea.value.length);
     textarea.setSelectionRange(0, 0);
     key("ArrowLeft", {}, textarea);
+    expect(app.view.state.selection).toBeInstanceOf(BlockBoundarySelection);
+    key("ArrowLeft");
     expect(app.view.state.selection.$from.parent.textContent).toBe("code");
     expect(app.view.state.selection.$from.parentOffset).toBe(4);
     select("code", "start");
+    key("ArrowLeft");
+    expect(app.view.state.selection).toBeInstanceOf(BlockBoundarySelection);
     key("ArrowLeft");
     expect(app.view.state.selection.$from.parent.textContent).toBe("Before");
     expect(app.view.state.doc).toBe(original);
@@ -178,25 +203,37 @@ describe("body navigation selection handoff", () => {
     const original = app.view.state.doc;
     select("Before", "end");
     key("ArrowRight");
+    expect(app.view.state.selection).toBeInstanceOf(BlockBoundarySelection);
+    key("ArrowRight");
     expect(app.view.state.selection).toBeInstanceOf(NodeSelection);
     expect((app.view.state.selection as NodeSelection).node.attrs.kind).toBe(
       "math-block",
     );
     key("ArrowRight");
+    expect(app.view.state.selection).toBeInstanceOf(BlockBoundarySelection);
+    key("ArrowRight");
     expect(app.view.state.selection).toBeInstanceOf(NodeSelection);
     expect((app.view.state.selection as NodeSelection).node.attrs.kind).toBe(
       "protected-fence",
     );
+    key("ArrowRight");
+    expect(app.view.state.selection).toBeInstanceOf(BlockBoundarySelection);
     key("ArrowRight");
     expect(app.view.state.selection.$from.parent.textContent).toBe("After");
     key("ArrowLeft");
+    expect(app.view.state.selection).toBeInstanceOf(BlockBoundarySelection);
+    key("ArrowLeft");
     expect((app.view.state.selection as NodeSelection).node.attrs.kind).toBe(
       "protected-fence",
     );
     key("ArrowLeft");
+    expect(app.view.state.selection).toBeInstanceOf(BlockBoundarySelection);
+    key("ArrowLeft");
     expect((app.view.state.selection as NodeSelection).node.attrs.kind).toBe(
       "math-block",
     );
+    key("ArrowLeft");
+    expect(app.view.state.selection).toBeInstanceOf(BlockBoundarySelection);
     key("ArrowLeft");
     expect(app.view.state.selection.$from.parent.textContent).toBe("Before");
     expect(root.querySelector("dialog[open]")).toBeNull();
@@ -257,8 +294,12 @@ describe("body navigation selection handoff", () => {
     expect(app.view.state.selection.$from.parent.type.name).toBe("code_block");
     boundary.mockReturnValue(true);
     expect(key("ArrowDown").defaultPrevented).toBe(true);
+    expect(app.view.state.selection).toBeInstanceOf(BlockBoundarySelection);
+    key("ArrowDown");
     expect(app.view.state.selection.$from.parent.textContent).toBe("After");
     expect(key("ArrowUp").defaultPrevented).toBe(true);
+    expect(app.view.state.selection).toBeInstanceOf(BlockBoundarySelection);
+    key("ArrowUp");
     expect(app.view.state.selection.$from.parent.type.name).toBe("code_block");
     expect(boundary).toHaveBeenCalledWith("down");
     expect(boundary).toHaveBeenCalledWith("up");

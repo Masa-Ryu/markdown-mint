@@ -61,6 +61,11 @@ import {
 } from "./starter";
 import { createWritingInputRules } from "./input-rules";
 import { BodyNavigation } from "./bodyNavigation";
+import {
+  BlockBoundarySelection,
+  createBlockBoundaryPlugin,
+  isBlockBoundary,
+} from "./blockBoundary";
 import { blockSourceEditor } from "./blockSourceEditing";
 import { createDetailsNodeView } from "./detailsNodeView";
 import {
@@ -541,6 +546,11 @@ function selectionTouchesTable(selection: Selection): boolean {
 }
 
 function selectionForDocument(selection: Selection, doc: PMNode): Selection {
+  if (selection instanceof BlockBoundarySelection) {
+    const position = Math.max(0, Math.min(selection.head, doc.content.size));
+    if (isBlockBoundary(doc, position))
+      return new BlockBoundarySelection(doc.resolve(position));
+  }
   if (selection instanceof CellSelection) {
     try {
       return CellSelection.create(
@@ -2602,6 +2612,8 @@ export class MarkdownEditorApp {
           createRenderedNodeView(node, view, getPos, () => this.profile),
       },
       handleDOMEvents: {
+        beforeinput: (view, event) =>
+          this.handleBoundaryBeforeInput(view, event as InputEvent),
         keydown: (_view, event) => {
           const keyboardEvent = event as KeyboardEvent;
           // Let the browser/IME commit composition text without allowing the
@@ -2798,10 +2810,11 @@ export class MarkdownEditorApp {
     const plugins: Plugin[] = [
       createStarterPlugin(starterState),
       createWritingInputRules(this.schema),
+      createBlockBoundaryPlugin(),
       createRenderingPlugin(() => this.profile),
+      keymap(this.createKeymap()),
       tableEditing(),
       createTableNumberingPlugin(),
-      keymap(this.createKeymap()),
       keymap(baseKeymap),
       new Plugin({
         key: editorPluginKey,
@@ -2809,6 +2822,7 @@ export class MarkdownEditorApp {
           decorations: () => null,
           handleKeyDown: (_view, event) => this.handleAppKeyDown(event),
           handleTextInput: (view, from, to, text) =>
+            this.handleBoundaryTextInput(view, from, to, text) ||
             this.handleInsertBlockSlash(view, from, to, text),
         },
       }),
@@ -2842,6 +2856,10 @@ export class MarkdownEditorApp {
       "Mod-`": commandForMark("code", this.schema),
       Enter: (state, dispatch) => {
         if (this.composing) return false;
+        if (state.selection instanceof BlockBoundarySelection) {
+          if (dispatch) this.materializeBoundary(state.selection.head);
+          return true;
+        }
         const context = tableContext(state.selection);
         return context
           ? this.moveToNextTableRow(state, context, dispatch)
@@ -2852,6 +2870,12 @@ export class MarkdownEditorApp {
       "Mod-y": () => this.sendHostCommand("redo"),
       "Mod-Shift-z": () => this.sendHostCommand("redo"),
       "Mod-s": () => this.sendSaveCommand(),
+      Backspace: (state) => state.selection instanceof BlockBoundarySelection,
+      Delete: (state) => state.selection instanceof BlockBoundarySelection,
+      "Mod-Backspace": (state) =>
+        state.selection instanceof BlockBoundarySelection,
+      "Mod-Delete": (state) =>
+        state.selection instanceof BlockBoundarySelection,
       Tab: (state, dispatch) =>
         isInTable(state)
           ? goToNextCell(1)(state, dispatch)
@@ -2865,7 +2889,14 @@ export class MarkdownEditorApp {
             ? liftListItem(listItem)(state, dispatch)
             : false,
       Escape: (state, dispatch) => this.exitTable(state, dispatch),
-      ArrowDown: (state, dispatch) => this.exitTableAtEnd(state, dispatch),
+      ArrowLeft: (state, dispatch) =>
+        this.exitTableAtStart(state, dispatch, "horiz"),
+      ArrowRight: (state, dispatch) =>
+        this.exitTableAtEnd(state, dispatch, "horiz"),
+      ArrowUp: (state, dispatch) =>
+        this.exitTableAtStart(state, dispatch, "vert"),
+      ArrowDown: (state, dispatch) =>
+        this.exitTableAtEnd(state, dispatch, "vert"),
     };
     return map;
   }
@@ -2998,6 +3029,88 @@ export class MarkdownEditorApp {
     return true;
   }
 
+  private handleBoundaryTextInput(
+    view: EditorView,
+    from: number,
+    to: number,
+    text: string,
+  ): boolean {
+    const selection = view.state.selection;
+    if (
+      !(selection instanceof BlockBoundarySelection) ||
+      selection.from !== from ||
+      selection.to !== to ||
+      !text
+    )
+      return false;
+    if (text === "/") {
+      if (!this.materializeBoundary(selection.head)) return false;
+      const paragraphSelection = this.view.state.selection;
+      if (
+        this.handleInsertBlockSlash(
+          view,
+          paragraphSelection.from,
+          paragraphSelection.to,
+          text,
+        )
+      )
+        return true;
+      // A missing slash popup anchor falls back to the ordinary text path.
+      this.dispatchTransaction(this.view.state.tr.insertText(text));
+      this.view.focus();
+      return true;
+    }
+    return this.materializeBoundary(selection.head, text);
+  }
+
+  private handleBoundaryBeforeInput(
+    view: EditorView,
+    event: InputEvent,
+  ): boolean {
+    if (
+      event.inputType !== "insertCompositionText" ||
+      !(view.state.selection instanceof BlockBoundarySelection)
+    )
+      return false;
+    // Keep the browser's composition transaction alive. The paragraph is
+    // created before the native composition text arrives, so IME input takes
+    // the ordinary ProseMirror text path without losing its first update.
+    this.materializeBoundary(view.state.selection.head);
+    return false;
+  }
+
+  private materializeBoundary(position: number, text = ""): boolean {
+    const state = this.view.state;
+    const selection = state.selection;
+    const paragraph = this.schema.nodes.paragraph;
+    const starter = getStarterState(state);
+    if (
+      !(selection instanceof BlockBoundarySelection) ||
+      selection.head !== position ||
+      !paragraph ||
+      !isBlockBoundary(state.doc, position) ||
+      (starter?.active && starter.untouched) ||
+      !this.canEditBlock()
+    )
+      return false;
+    let transaction: Transaction;
+    try {
+      transaction = state.tr.insert(position, paragraph.create());
+      const textPosition = position + 1;
+      if (text) transaction = transaction.insertText(text, textPosition);
+      transaction = transaction
+        .setSelection(
+          TextSelection.create(transaction.doc, textPosition + text.length),
+        )
+        .scrollIntoView();
+    } catch {
+      return false;
+    }
+    this.dispatchTransaction(transaction);
+    this.view.focus();
+    return true;
+  }
+
   private handleAppKeyDown(event: KeyboardEvent): boolean {
     if (
       event.altKey &&
@@ -3012,7 +3125,12 @@ export class MarkdownEditorApp {
       first?.focus();
       return true;
     }
-    if (this.navigation.handleKeyDown(event, this.composing)) return true;
+    const starter = getStarterState(this.view.state);
+    if (
+      !(starter?.active && starter.untouched) &&
+      this.navigation.handleKeyDown(event, this.composing)
+    )
+      return true;
     // ProseMirror's `Mod` keymap covers the normal path. Keep an explicit
     // platform-aware fallback for hosts that stop the keymap event while a
     // webview command is pending (and for embedded test hosts).
@@ -3061,11 +3179,19 @@ export class MarkdownEditorApp {
   private exitTableAtEnd(
     state: EditorState,
     dispatch?: (tr: Transaction) => void,
+    axis: "horiz" | "vert" = "vert",
   ): boolean {
     if (!(state.selection instanceof TextSelection) || !state.selection.empty)
       return false;
     const context = tableContext(state.selection);
-    if (!context || context.rect.bottom < context.map.height) return false;
+    if (!context) return false;
+    if (
+      axis === "vert"
+        ? context.rect.bottom < context.map.height
+        : context.rect.right < context.map.width ||
+          context.rect.bottom < context.map.height
+    )
+      return false;
     if (
       state.selection.$from.parentOffset <
       state.selection.$from.parent.content.size
@@ -3078,6 +3204,49 @@ export class MarkdownEditorApp {
     const cellContentEnd = context.cellPos + cell.nodeSize - 1;
     if (state.selection.from < cellContentEnd - 1) return false;
     return this.moveSelectionAfterTable(state, context, dispatch);
+  }
+
+  private exitTableAtStart(
+    state: EditorState,
+    dispatch?: (tr: Transaction) => void,
+    axis: "horiz" | "vert" = "vert",
+  ): boolean {
+    if (!(state.selection instanceof TextSelection) || !state.selection.empty)
+      return false;
+    const context = tableContext(state.selection);
+    if (!context) return false;
+    if (
+      axis === "vert"
+        ? context.rect.top !== 0
+        : context.rect.left !== 0 || context.rect.top !== 0
+    )
+      return false;
+    // Only the first direct textblock in the first cell can leave the table.
+    // Other paragraphs and wrapped rows keep the table's native navigation.
+    if (state.selection.$from.before() !== context.cellPos + 1) return false;
+    if (state.selection.$from.parentOffset !== 0) return false;
+    if (axis === "vert") {
+      try {
+        if (!this.view.endOfTextblock("up")) return false;
+      } catch {
+        return false;
+      }
+    }
+    const tablePosition = context.tableStart - 1;
+    if (
+      state.doc.resolve(tablePosition).depth !== 0 ||
+      !isBlockBoundary(state.doc, tablePosition)
+    )
+      return false;
+    const target = new BlockBoundarySelection(state.doc.resolve(tablePosition));
+    if (!dispatch) return true;
+    dispatch(
+      state.tr
+        .setSelection(target)
+        .setMeta("addToHistory", false)
+        .scrollIntoView(),
+    );
+    return true;
   }
 
   private moveSelectionAfterTable(
@@ -3107,6 +3276,21 @@ export class MarkdownEditorApp {
     const blockEnd = position + node.nodeSize;
     let transaction = state.tr;
     let target: Selection;
+    // Leave a virtual stop between top-level blocks. This keeps table exits
+    // and the final rendered block on the same non-mutating navigation graph
+    // as BodyNavigation.
+    if (
+      state.doc.resolve(position).depth === 0 &&
+      isBlockBoundary(state.doc, blockEnd)
+    ) {
+      target = new BlockBoundarySelection(state.doc.resolve(blockEnd));
+      transaction = transaction
+        .setSelection(target)
+        .setMeta("addToHistory", false)
+        .scrollIntoView();
+      if (dispatch) dispatch(transaction);
+      return true;
+    }
     try {
       target = Selection.near(
         state.doc.resolve(Math.min(blockEnd, state.doc.content.size)),
@@ -8663,6 +8847,12 @@ export class MarkdownEditorApp {
 
   private handlePaste(view: EditorView, event: ClipboardEvent): boolean {
     if (!event.clipboardData) return false;
+    if (view.state.selection instanceof BlockBoundarySelection) {
+      // Materialize the insertion point, then let ProseMirror's native paste
+      // pipeline handle the clipboard payload and its MIME-specific parsing.
+      this.materializeBoundary(view.state.selection.head);
+      return false;
+    }
     const context = tableContext(view.state.selection);
     if (!context) return false;
     if (this.profile === "commonmark") {

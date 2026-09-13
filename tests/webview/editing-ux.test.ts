@@ -4,6 +4,7 @@ import {
   type EditorState,
   type Transaction,
 } from "prosemirror-state";
+import { BlockBoundarySelection } from "../../src/webview/blockBoundary";
 import { Fragment } from "prosemirror-model";
 import {
   createEditorApp,
@@ -98,6 +99,104 @@ afterEach(() => {
 });
 
 describe("table exit and blank-space editing", () => {
+  it("keeps top-level table edges on virtual boundaries", () => {
+    const source = "Before\n\n| A | B |\n| --- | --- |\n| C | D |\n\nAfter";
+    const { app, messages } = makeApp(source);
+    let tablePosition = -1;
+    let firstCellPosition = -1;
+    let lastCellPosition = -1;
+    const cellPositions: number[] = [];
+    app.view.state.doc.descendants((node, offset) => {
+      if (node.type.spec.tableRole === "table") tablePosition = offset;
+      if (
+        (node.type.spec.tableRole === "cell" ||
+          node.type.spec.tableRole === "header_cell") &&
+        firstCellPosition < 0
+      )
+        firstCellPosition = offset;
+      if (
+        node.type.spec.tableRole === "cell" ||
+        node.type.spec.tableRole === "header_cell"
+      ) {
+        cellPositions.push(offset);
+        lastCellPosition = offset;
+      }
+    });
+    expect(tablePosition).toBeGreaterThanOrEqual(0);
+    expect(firstCellPosition).toBeGreaterThanOrEqual(0);
+    expect(lastCellPosition).toBeGreaterThanOrEqual(0);
+    expect(cellPositions).toHaveLength(4);
+    const firstPosition = firstCellPosition + 2;
+    app.view.dispatch(
+      app.view.state.tr.setSelection(
+        TextSelection.create(app.view.state.doc, firstPosition),
+      ),
+    );
+    const original = app.view.state.doc;
+    const beforeEdits = edits(messages).length;
+    const firstArrow = new KeyboardEvent("keydown", {
+      key: "ArrowLeft",
+      bubbles: true,
+      cancelable: true,
+    });
+    app.view.dom.dispatchEvent(firstArrow);
+    expect(firstArrow.defaultPrevented).toBe(true);
+    expect(app.view.state.selection).toBeInstanceOf(BlockBoundarySelection);
+    expect(app.view.state.selection.from).toBe(tablePosition);
+
+    // A first-column cell in a later row still belongs to the table's native
+    // horizontal navigation; only the table's top-left edge is a boundary.
+    app.view.dispatch(
+      app.view.state.tr.setSelection(
+        TextSelection.create(app.view.state.doc, cellPositions[2]! + 2),
+      ),
+    );
+    const interiorArrow = new KeyboardEvent("keydown", {
+      key: "ArrowLeft",
+      bubbles: true,
+      cancelable: true,
+    });
+    app.view.dom.dispatchEvent(interiorArrow);
+    expect(app.view.state.selection).not.toBeInstanceOf(BlockBoundarySelection);
+
+    app.view.dispatch(
+      app.view.state.tr.setSelection(
+        TextSelection.create(app.view.state.doc, firstPosition),
+      ),
+    );
+    const topArrow = new KeyboardEvent("keydown", {
+      key: "ArrowUp",
+      bubbles: true,
+      cancelable: true,
+    });
+    app.view.dom.dispatchEvent(topArrow);
+    expect(topArrow.defaultPrevented).toBe(true);
+    expect(app.view.state.selection).toBeInstanceOf(BlockBoundarySelection);
+    expect(app.view.state.selection.from).toBe(tablePosition);
+
+    const lastCellNode = app.view.state.doc.nodeAt(lastCellPosition)!;
+    app.view.dispatch(
+      app.view.state.tr.setSelection(
+        TextSelection.near(
+          app.view.state.doc.resolve(
+            lastCellPosition + lastCellNode.nodeSize - 1,
+          ),
+          -1,
+        ),
+      ),
+    );
+    const finalArrow = new KeyboardEvent("keydown", {
+      key: "ArrowRight",
+      bubbles: true,
+      cancelable: true,
+    });
+    app.view.dom.dispatchEvent(finalArrow);
+    expect(finalArrow.defaultPrevented).toBe(true);
+    expect(app.view.state.selection).toBeInstanceOf(BlockBoundarySelection);
+    expect(app.view.state.doc).toBe(original);
+    expect(edits(messages)).toHaveLength(beforeEdits);
+  });
+
   it("leaves a final table through ArrowDown without serializing its trailing target", () => {
     const { app, root, messages } = makeApp("Before");
     app.view.dispatch(
@@ -145,15 +244,24 @@ describe("table exit and blank-space editing", () => {
     );
 
     expect(edits(messages)).toHaveLength(beforeArrow);
-    expect(app.view.state.selection.$from.parent.type.name).toBe("paragraph");
-    expect(app.view.state.selection.$from.node(-1).type.name).toBe("doc");
-    expect(app.view.state.doc.lastChild?.type.name).toBe("paragraph");
+    expect(app.view.state.selection).toBeInstanceOf(BlockBoundarySelection);
+    expect(app.view.state.doc.lastChild?.type.name).toBe("table");
     const source = root.querySelector<HTMLTextAreaElement>(
       ".mm-source-textarea",
     )!;
     expect(source.value).not.toMatch(/\n\s*$/);
 
-    app.view.dispatch(app.view.state.tr.insertText("After table"));
+    expect(
+      app.view.someProp("handleTextInput", (handler) =>
+        handler(
+          app.view,
+          app.view.state.selection.from,
+          app.view.state.selection.to,
+          "After table",
+          () => app.view.state.tr,
+        ),
+      ),
+    ).toBe(true);
     expect(edits(messages)).toHaveLength(beforeArrow + 1);
     expect(String(edits(messages).at(-1)?.markdown)).toContain("After table");
   });
@@ -216,8 +324,8 @@ describe("table exit and blank-space editing", () => {
         app.view.dispatch(transaction),
       ),
     ).toBe(true);
-    expect(app.view.state.selection.$from.node(-1).type.name).toBe("doc");
-    expect(app.view.state.doc.lastChild?.type.name).toBe("paragraph");
+    expect(app.view.state.selection).toBeInstanceOf(BlockBoundarySelection);
+    expect(app.view.state.doc.lastChild?.type.name).toBe("table");
   });
 
   it("places temporary blank lines below content without an edit and discards them on a return click", () => {

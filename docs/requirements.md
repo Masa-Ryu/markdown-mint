@@ -897,6 +897,28 @@ The 0.0.5 and earlier evidence above remains historical.
   Tab, and outside cancellation materialize one literal slash; stale document,
   profile, mode, IME, and destroy paths discard it.
 
+## 0.0.40 top-level block boundary caret
+
+- Plain, collapsed ArrowLeft/Right and visual-line ArrowUp/Down navigation
+  between direct children of the document uses a virtual
+  `BlockBoundarySelection`. The selection maps with document transactions,
+  does not serialize, and is rendered by an absolute Decoration widget so
+  block layout and source separators do not change while navigating.
+- Boundary traversal preserves BodyNavigation's visual-row and desired-X
+  state, keeps closed Details closed, treats Math/Mermaid and other rendered
+  blocks as existing atomic stops, and leaves table cell arrows, list content,
+  modifiers, and composition navigation to their established handlers. Top-
+  level table edges use the same boundary before or after the table.
+- Printable text, `/`, Enter, composition input, and paste materialize one
+  ordinary paragraph at the selected boundary and then continue through the
+  existing ProseMirror input path. Backspace/Delete (including modified forms)
+  are no-ops at a boundary; materialized edits remain normal host-backed
+  Undo/Redo operations.
+- Unit and Chromium checks cover bidirectional Code/Alert/Details traversal,
+  wrapped Alert rows, desired-X preservation, atomic and closed rendered
+  blocks, table edges, modifiers, composition setup, source/host/dirty/history
+  invariants, paragraph and slash insertion, and all five display fixtures.
+
 ## Explicit limits
 
 Paste/drop image asset copying is optional follow-up work. Native IME and visual
