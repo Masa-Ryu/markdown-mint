@@ -2939,7 +2939,7 @@ function isBlankSpacerNode(node: PMNode | undefined): boolean {
   );
 }
 
-function isBlankSpacingNode(node: PMNode | undefined): boolean {
+export function isBlankSpacingNode(node: PMNode | undefined): boolean {
   return isEmptyParagraph(node) || isBlankSpacerNode(node);
 }
 

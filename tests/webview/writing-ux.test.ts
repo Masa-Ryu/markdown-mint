@@ -2059,7 +2059,15 @@ describe("bounded writing controls", () => {
 
     expect(root.querySelector<HTMLElement>(".mm-empty-line-popup")).toBe(panel);
     expect(panel.hidden).toBe(false);
-    expect(gap.getAttribute("aria-expanded")).toBe("true");
+    expect(gap.getAttribute("aria-expanded")).toBe("false");
+    expect(
+      root.querySelector<HTMLButtonElement>(".mm-empty-line-insert")?.hidden,
+    ).toBe(false);
+    expect(
+      root
+        .querySelector<HTMLButtonElement>(".mm-empty-line-insert")
+        ?.getAttribute("aria-expanded"),
+    ).toBe("true");
     expect(root.querySelectorAll(".mm-block-gap-insert")).toHaveLength(1);
     expect(app.view.state.doc.childCount).toBe(3);
     expect(app.view.state.doc.child(1)?.type.name).toBe("paragraph");

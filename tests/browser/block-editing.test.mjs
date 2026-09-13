@@ -143,6 +143,27 @@ async function noEdits(page, before, label) {
   assert.equal(after.dirty, false, `${label}: document became dirty`);
 }
 
+async function insertionAffordances(page) {
+  return page.evaluate(() => {
+    const isVisible = (element) => {
+      const style = getComputedStyle(element);
+      const rect = element.getBoundingClientRect();
+      return (
+        !element.hidden &&
+        style.display !== "none" &&
+        style.visibility !== "hidden" &&
+        rect.width > 0 &&
+        rect.height > 0
+      );
+    };
+    const visibleCount = (selector) =>
+      Array.from(document.querySelectorAll(selector)).filter(isVisible).length;
+    const emptyLine = visibleCount(".mm-empty-line-insert");
+    const blockGap = visibleCount(".mm-block-gap-insert");
+    return { emptyLine, blockGap, totalPlus: emptyLine + blockGap };
+  });
+}
+
 async function testCodeHeader(page) {
   const body = "  const value = 1;  \n\tconsole.log(value);\n";
   const source = blocks("Before", fence("ts title=example", body), "After");
@@ -637,6 +658,11 @@ async function testBlockGapInsertion(page) {
   const gap = page.locator(".mm-block-gap-insert");
   await gap.waitFor({ state: "visible" });
   assert.equal(await gap.count(), 1);
+  assert.deepEqual(await insertionAffordances(page), {
+    emptyLine: 0,
+    blockGap: 1,
+    totalPlus: 1,
+  });
   const visibleMetrics = await initialBlocks.evaluateAll((elements) =>
     elements.map((element) => {
       const rect = element.getBoundingClientRect();
@@ -663,7 +689,16 @@ async function testBlockGapInsertion(page) {
   const popup = page.locator("#mm-empty-line-insert-popup");
   await gap.click();
   await popup.waitFor({ state: "visible" });
-  assert.equal(await gap.getAttribute("aria-expanded"), "true");
+  assert.deepEqual(await insertionAffordances(page), {
+    emptyLine: 1,
+    blockGap: 0,
+    totalPlus: 1,
+  });
+  assert.equal(
+    await page.locator(".mm-empty-line-insert").getAttribute("aria-expanded"),
+    "true",
+  );
+  assert.equal(await gap.getAttribute("aria-expanded"), "false");
   const transient = await selection(page);
   assert.equal(transient.kind, "TextSelection");
   assert.equal(transient.parent, "paragraph");
@@ -674,6 +709,159 @@ async function testBlockGapInsertion(page) {
   const committed = await saved(page);
   assert.equal(committed.edits, before.edits + 1);
   assert.match(committed.markdown, /Before[\s\S]*```[\s\S]*```[\s\S]*After/);
+}
+
+async function testInsertionAffordanceOwnership(page) {
+  const tableSource = "| H1 | H2 |\n| --- | --- |\n| A1 | A2 |";
+  const authored = `${fence("ts", "code")}\n\n\n${tableSource}`;
+
+  // A source-authored empty paragraph owns both adjacent direct-child
+  // boundaries. Hovering either side must not create a second plus.
+  await load(page, authored);
+  assert.deepEqual(await richDocumentShape(page), {
+    types: ["code_block", "paragraph", "table"],
+    emptyParagraphs: 1,
+  });
+  assert.equal(await page.locator(".mm-empty-line-insert").count(), 1);
+  assert.equal(await page.locator(".mm-block-gap-insert").count(), 1);
+  await caret(page, `${rich} > p`, 0);
+  await page.locator(".mm-empty-line-insert").waitFor({ state: "visible" });
+  const authoredBefore = await saved(page);
+  const authoredEmpty = page.locator(`${rich} > p`);
+  const authoredEmptyBox = await authoredEmpty.boundingBox();
+  assert.ok(
+    authoredEmptyBox,
+    "source-authored empty paragraph has no geometry",
+  );
+  for (const y of [
+    authoredEmptyBox.y - 2,
+    authoredEmptyBox.y + authoredEmptyBox.height / 2,
+    authoredEmptyBox.y + authoredEmptyBox.height + 2,
+  ]) {
+    await page.mouse.move(authoredEmptyBox.x + 4, y);
+    await settle(page);
+    assert.deepEqual(
+      await insertionAffordances(page),
+      { emptyLine: 1, blockGap: 0, totalPlus: 1 },
+      `source-authored empty paragraph lost ownership at y=${y}`,
+    );
+  }
+  await noEdits(page, authoredBefore, "source-authored empty paragraph hover");
+
+  // A block-gap click materializes a transient paragraph without a host edit;
+  // that paragraph immediately becomes the only visible insertion owner and
+  // remains so while the existing Insert Block popup is open or cancelled.
+  const pureGap = blocks(fence("ts", "code"), tableSource);
+  await load(page, pureGap);
+  const transientBefore = await saved(page);
+  const pureBlocks = page.locator(`${rich} > *`);
+  const previousBox = await pureBlocks.nth(0).boundingBox();
+  const nextBox = await pureBlocks.nth(1).boundingBox();
+  assert.ok(previousBox && nextBox, "pure Code/Table gap has no geometry");
+  const pureGapY =
+    ((previousBox?.y ?? 0) + (previousBox?.height ?? 0) + (nextBox?.y ?? 0)) /
+    2;
+  await page.mouse.move(20, pureGapY);
+  const gap = page.locator(".mm-block-gap-insert");
+  await gap.waitFor({ state: "visible" });
+  assert.deepEqual(await insertionAffordances(page), {
+    emptyLine: 0,
+    blockGap: 1,
+    totalPlus: 1,
+  });
+  await gap.click();
+  const popup = page.locator("#mm-empty-line-insert-popup");
+  await popup.waitFor({ state: "visible" });
+  assert.deepEqual(await insertionAffordances(page), {
+    emptyLine: 1,
+    blockGap: 0,
+    totalPlus: 1,
+  });
+  assert.equal((await selection(page)).parent, "paragraph");
+  assert.equal((await selection(page)).text, "");
+  await noEdits(page, transientBefore, "transient block-gap paragraph");
+  await page.keyboard.press("Escape");
+  await settle(page);
+  assert.deepEqual(await insertionAffordances(page), {
+    emptyLine: 1,
+    blockGap: 0,
+    totalPlus: 1,
+  });
+  await noEdits(
+    page,
+    transientBefore,
+    "cancelled transient block-gap paragraph",
+  );
+
+  // BBS remains an internal navigation state: it owns insertion through the
+  // virtual caret, so neither plus affordance is exposed.
+  await load(page, pureGap);
+  await caret(page, ".mm-code-block-pre code", -1);
+  await page.keyboard.press("ArrowDown");
+  assert.equal((await selection(page)).kind, "BlockBoundarySelection");
+  assert.deepEqual(await insertionAffordances(page), {
+    emptyLine: 0,
+    blockGap: 0,
+    totalPlus: 0,
+  });
+  assert.equal(
+    await page.locator(".mm-block-boundary-cursor").isVisible(),
+    true,
+  );
+
+  // A pure Code/Table gap still has one block-gap owner and still opens the
+  // existing insertion menu. The click remains a no-edit transient action.
+  await load(page, pureGap);
+  const pureBefore = await saved(page);
+  const pureInitialBlocks = page.locator(`${rich} > *`);
+  const pureFirst = await pureInitialBlocks.nth(0).boundingBox();
+  const pureSecond = await pureInitialBlocks.nth(1).boundingBox();
+  assert.ok(pureFirst && pureSecond, "Code/Table blocks lost geometry");
+  const codeTableGapY =
+    ((pureFirst?.y ?? 0) + (pureFirst?.height ?? 0) + (pureSecond?.y ?? 0)) / 2;
+  await page.mouse.move(20, codeTableGapY);
+  await page.locator(".mm-block-gap-insert").waitFor({ state: "visible" });
+  assert.deepEqual(await insertionAffordances(page), {
+    emptyLine: 0,
+    blockGap: 1,
+    totalPlus: 1,
+  });
+  await page.locator(".mm-block-gap-insert").click();
+  await popup.waitFor({ state: "visible" });
+  assert.deepEqual(await insertionAffordances(page), {
+    emptyLine: 1,
+    blockGap: 0,
+    totalPlus: 1,
+  });
+  await noEdits(page, pureBefore, "Code/Table block-gap popup");
+  await page.keyboard.press("Escape");
+
+  // Large source blank runs contain bounded empty paragraphs plus one raw
+  // blank-spacer atom. None of their adjacent structural boundaries is a
+  // second block-gap insertion point.
+  const largeBlankRun = `Before${"\n".repeat(1_000)}After`;
+  await load(page, largeBlankRun);
+  const largeShape = await richDocumentShape(page);
+  assert.ok(largeShape.emptyParagraphs > 0);
+  assert.ok(largeShape.types.includes("raw_block"));
+  const largeBefore = await saved(page);
+  await caret(page, `${rich} > p:nth-of-type(2)`, 0);
+  await page.locator(".mm-empty-line-insert").waitFor({ state: "visible" });
+  const spacer = page.locator(".mm-rich-panel .mm-blank-spacer");
+  await spacer.waitFor();
+  await spacer.scrollIntoViewIfNeeded();
+  const spacerBox = await spacer.boundingBox();
+  assert.ok(spacerBox, "blank spacer has no geometry");
+  await page.mouse.move(spacerBox.x + 4, spacerBox.y + spacerBox.height / 2);
+  await settle(page);
+  assert.deepEqual(await insertionAffordances(page), {
+    emptyLine: 1,
+    blockGap: 0,
+    totalPlus: 1,
+  });
+  assert.equal(await page.locator(".mm-empty-line-insert").count(), 1);
+  assert.equal(await page.locator(".mm-block-gap-insert").count(), 1);
+  await noEdits(page, largeBefore, "blank-spacer hover");
 }
 
 async function testProfileFeaturesAtStructuralBoundary(page) {
@@ -2999,6 +3187,7 @@ async function main() {
       testHorizontalNavigation,
       testInsertAffordances,
       testBlockGapInsertion,
+      testInsertionAffordanceOwnership,
       testProfileFeaturesAtStructuralBoundary,
       testStructuralBoundaryNavigationAndInsertion,
       testStructuralDocumentEdges,

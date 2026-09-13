@@ -123,6 +123,7 @@ import {
   isValidCodeLanguageIdentifier,
   replaceCodeLanguageIdentifier,
 } from "../core/visualRendering";
+import { isBlankSpacingNode } from "../core";
 import { mergeMarkdownSnapshots } from "../shared/threeWayMerge";
 
 export type DocumentProfile = "github" | "gitlab" | "commonmark";
@@ -3253,18 +3254,26 @@ export class MarkdownEditorApp {
     this.dispatchTransaction(transaction);
     if (!openPopup) return true;
 
-    const nextLayout = this.blockGapLayoutAt(position) ?? layout;
-    if (!nextLayout || !this.captureWritingPopupSelection()) {
+    if (!layout || !this.captureWritingPopupSelection()) {
       this.discardTransientBlanksInState();
       this.clearBlockGapInsert();
       return false;
     }
-    this.showBlockGapInsert(nextLayout, position);
+    // The newly inserted paragraph now owns this area. Reuse the existing
+    // empty-line button as the popup anchor so the transient paragraph cannot
+    // leave both insertion affordances visible at once.
+    this.updateEmptyLineInsert(this.view.state.selection);
+    if (this.emptyLineButton.hidden) {
+      this.discardTransientBlanksInState();
+      this.clearBlockGapInsert();
+      return false;
+    }
+    this.clearBlockGapInsert();
     if (
       !this.openWritingPopup(
         this.insertPopup,
-        this.blockGapButton,
-        this.blockGapButton,
+        this.insertPopupToggle,
+        this.emptyLineButton,
       )
     ) {
       this.discardTransientBlanksInState();
@@ -6445,8 +6454,17 @@ export class MarkdownEditorApp {
       index += 1
     ) {
       const previous = this.view.state.doc.child(index);
+      const next = this.view.state.doc.child(index + 1);
       const boundary = position + previous.nodeSize;
       if (!isBlockBoundary(this.view.state.doc, boundary)) {
+        position = boundary;
+        continue;
+      }
+      // Blank-spacing nodes already own this visual area through the
+      // empty-line affordance (or source-preserving spacer representation).
+      // Keep block-gap candidates structural so the two reusable buttons can
+      // never overlap around the same direct-child blank run.
+      if (isBlankSpacingNode(previous) || isBlankSpacingNode(next)) {
         position = boundary;
         continue;
       }
