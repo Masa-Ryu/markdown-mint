@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.0.45
+
+- Commit only the paragraph typed after clicking below the final Rich editor
+  block. Generated transient spacing is removed in the same edit, preserving
+  LF/CRLF block separators and host undo behavior.
+
 ## 0.0.44
 
 - Preserve strong, emphasis, strikethrough, combined marks, link destinations,

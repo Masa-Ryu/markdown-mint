@@ -3370,6 +3370,15 @@ export class MarkdownEditorApp {
 
   private dispatchTransaction(tr: Transaction): void {
     const oldSelection = this.view.state.selection;
+    const rootTransientMeta = tr.getMeta(TRANSIENT_BLANK_META) as
+      TransientBlankTransactionMeta | undefined;
+    // Extend the user's first edit with removal of the untouched generated
+    // paragraphs. Keeping the cleanup in this transaction makes the edit
+    // atomic for the host's Markdown undo history and avoids serializing the
+    // click distance as authored blank lines.
+    const committedTransient =
+      rootTransientMeta?.kind !== "append" &&
+      this.commitTransientBlanksInTransaction(tr);
     const applied = this.view.state.applyTransaction(tr);
     const transactions = applied.transactions;
     const editTarget = this.profileFeatureEditTarget;
@@ -3400,6 +3409,8 @@ export class MarkdownEditorApp {
     }
 
     this.view.updateState(applied.state);
+    if (committedTransient && applied.transactions.length > 0)
+      this.transientBlanks = null;
 
     if (appendMeta?.kind === "append") {
       let from = Number(appendMeta.from);
@@ -3510,6 +3521,46 @@ export class MarkdownEditorApp {
       this.updateToolbarState(oldSelection, this.view.state.selection, {
         revealTableToolbar: selectionSet || docChanged || discardedTransient,
       });
+  }
+
+  private commitTransientBlanksInTransaction(tr: Transaction): boolean {
+    const range = this.transientBlanks;
+    if (!range) return false;
+    const generated = this.transientBlankNodes();
+    if (generated.length === 0) return false;
+
+    const mappedRange: TransientBlankRange = {
+      from: tr.mapping.map(range.from, 1),
+      to: tr.mapping.map(range.to, -1),
+      count: range.count,
+    };
+    const generatedNodes = new Set(generated.map(({ node }) => node));
+    const nodes = topLevelRangeNodes(tr.doc, mappedRange);
+    const hasAuthoredContent = nodes.some(
+      ({ node }) =>
+        !generatedNodes.has(node) ||
+        node.type.name !== "paragraph" ||
+        node.content.size > 0,
+    );
+    if (!hasAuthoredContent) return false;
+
+    const removable = nodes.filter(
+      ({ node }) =>
+        generatedNodes.has(node) &&
+        node.type.name === "paragraph" &&
+        node.content.size === 0,
+    );
+    try {
+      for (let index = removable.length - 1; index >= 0; index -= 1) {
+        const node = removable[index]!;
+        tr.delete(node.from, node.to);
+      }
+    } catch {
+      // Leave the original transaction untouched when a malformed mapping
+      // cannot safely address the generated nodes.
+      return false;
+    }
+    return true;
   }
 
   private mapTransientBlankRange(tr: Transaction): void {
