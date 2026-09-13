@@ -18,6 +18,17 @@
   active state only for an explicit `NodeSelection`; insert-only commands keep
   no persistent state, and CommonMark-disabled controls remain inactive.
 
+- Delegate ordinary ArrowUp and ArrowDown movement inside ProseMirror
+  textblocks, including syntax-highlighted and wrapped Code blocks, to the
+  browser's native caret and scrolling behavior. Markdown Mint still uses
+  `endOfTextblock()` to place a virtual boundary only at the first or last
+  displayed row, preserving the desired horizontal column when crossing
+  blocks.
+- Add a repeated Chromium regression fixture for multiline JavaScript, blank
+  rows, viewport scrolling, wrapped lines, reverse movement, and unchanged
+  Markdown/history state. Expanded Code, Alert textarea navigation, table
+  navigation, and atomic block boundaries remain on their existing paths.
+
 ## 0.0.40
 
 - Add a virtual, keyboard-only caret between top-level blocks. Plain horizontal

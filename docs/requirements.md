@@ -921,6 +921,19 @@ The 0.0.5 and earlier evidence above remains historical.
   blocks, table edges, modifiers, composition setup, source/host/dirty/history
   invariants, paragraph and slash insertion, and all five display fixtures.
 
+## 0.0.42 toolbar block-context selection boundaries
+
+- Block quote and Code block active state now uses the shared ancestor chain of
+  the complete ProseMirror selection. A cursor keeps the existing behavior;
+  ranges crossing a normal paragraph or a separate same-type block are
+  inactive, while nested content sharing an outer blockquote remains active.
+- Regression coverage includes same-block and cross-block blockquote ranges,
+  blockquote-to-paragraph ranges, same-block and cross-block code ranges, and
+  nested blockquotes with a shared outer ancestor.
+- `npm run compile`, `npm test` (609 tests across 34 files), and `npm run lint`
+  passed; lint retains the repository's existing 48 `any` warnings. The
+  verified package is `markdown-mint-0.0.42.vsix` with 96 files.
+
 ## 0.0.41 toolbar semantic active state
 
 - The main toolbar derives persistent active state from one current
@@ -951,15 +964,25 @@ The 0.0.5 and earlier evidence above remains historical.
   format check still reports the pre-existing warning in
   `tests/browser/block-editing.test.mjs`, which is outside this change.
 
-## 0.0.42 toolbar block-context selection boundaries
+## 0.0.41 native Code vertical movement
 
-- Block quote and Code block active state now uses the shared ancestor chain of
-  the complete ProseMirror selection. A cursor keeps the existing behavior;
-  ranges crossing a normal paragraph or a separate same-type block are
-  inactive, while nested content sharing an outer blockquote remains active.
-- Regression coverage includes same-block and cross-block blockquote ranges,
-  blockquote-to-paragraph ranges, same-block and cross-block code ranges, and
-  nested blockquotes with a shared outer ancestor.
+The editor owns only the transition out of a textblock. For a collapsed,
+unmodified ArrowUp or ArrowDown, `EditorView.endOfTextblock()` remains the
+boundary decision. When it reports an interior displayed row, the webview
+returns `false` without calling `preventDefault()`, allowing the browser and
+ProseMirror DOM selection to retain native visual-row, syntax-highlight span,
+wrapping, and scroll behavior. At the first or last row, the existing
+`BlockBoundarySelection` path runs and reuses the captured desired X column for
+the adjacent block. Alert textareas and table keymaps keep their separate
+native/navigation handlers.
+
+The browser regression uses the JavaScript `greet` fixture from a 180–190px
+viewport, measures each code-block selection offset and caret visibility while
+the stage scrolls, walks through a blank line in both directions, verifies the
+virtual boundary, and repeats the sequence 20 times at two viewport widths.
+A second case enables Code line wrapping and verifies three visual rows remain
+native interior movement. The focused run passed in Chromium; native VS Code
+zoom, font loading, and operating-system IME candidate UI remain manual checks.
 
 ## Explicit limits
 
