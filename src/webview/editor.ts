@@ -3057,6 +3057,7 @@ export class MarkdownEditorApp {
         this.insertPopup,
         this.insertPopupToggle,
         this.emptyLineButton,
+        "keyboard",
       )
     ) {
       this.slashTrigger = null;

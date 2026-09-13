@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.0.48
+
+- Prevent Insert popup items from showing simultaneous keyboard-focus and
+  stale-pointer hover backgrounds. Track popup input modality so `+` and `/`
+  keyboard opening and Arrow/Home/End navigation use keyboard styling, while
+  actual pointer movement restores normal hover feedback.
+
 ## 0.0.47
 
 - Apply authoritative terminal whitespace changes to the Rich document instead

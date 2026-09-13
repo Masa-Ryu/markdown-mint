@@ -1894,13 +1894,13 @@ describe("bounded writing controls", () => {
     const panel = root.querySelector<HTMLElement>(".mm-empty-line-popup")!;
     const items = insertPopupItems(root);
     expect(panel.hidden).toBe(false);
-    expect(panel.dataset.inputModality).toBe("pointer");
+    expect(panel.dataset.inputModality).toBe("keyboard");
     expect(document.activeElement).toBe(items[0]);
     expect(app.view.state.doc.textContent).toBe("one");
     expect(editMessages(messages)).toHaveLength(before);
   });
 
-  it("switches the slash popup to keyboard modality when navigation starts", () => {
+  it("keeps slash popup focus in keyboard modality and restores hover on pointermove", () => {
     const { app, root, messages } = makeApp("one");
     prepareTrailingEmptyParagraph(app, messages);
 
@@ -1908,9 +1908,18 @@ describe("bounded writing controls", () => {
 
     const panel = root.querySelector<HTMLElement>(".mm-empty-line-popup")!;
     const items = insertPopupItems(root);
+
+    expect(panel.dataset.inputModality).toBe("keyboard");
+    expect(document.activeElement).toBe(items[0]);
+
     dispatchPopupKey(panel, "ArrowDown");
 
     expect(panel.dataset.inputModality).toBe("keyboard");
+    expect(document.activeElement).toBe(items[2]);
+
+    items[5]!.dispatchEvent(new Event("pointermove", { bubbles: true }));
+
+    expect(panel.dataset.inputModality).toBe("pointer");
     expect(document.activeElement).toBe(items[2]);
   });
 

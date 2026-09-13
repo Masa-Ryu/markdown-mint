@@ -1056,9 +1056,9 @@ zoom, font loading, and operating-system IME candidate UI remain manual checks.
   pointer left over another item cannot add a second hover background. A real
   `pointermove` or `pointerdown` inside the popup returns it to pointer
   modality. Opening with a mouse click starts in pointer modality; ArrowDown
-  and keyboard Enter/Space activation start in keyboard modality; slash opens
-  with pointer styling until menu navigation begins. Closing removes the
-  modality state before the next open.
+  and keyboard Enter/Space activation start in keyboard modality; slash also
+  opens in keyboard modality. Closing removes the modality state before the
+  next open.
 - Writing-UX regression coverage verifies keyboard hover suppression state,
   pointer restoration, keyboard opening, Enter/Space activation, slash
   navigation, popup reopen reset, and the existing two-column navigation
