@@ -103,7 +103,7 @@ These shortcuts apply while the rich editing surface is focused. Use **Ctrl** on
 | Redo | Ctrl/Cmd+Shift+Z |
 | Next / previous table cell | Tab / Shift+Tab |
 | Indent / outdent a list item | Tab / Shift+Tab |
-| Focus the formatting popover after selecting text | Alt+F10 |
+| Focus the formatting popover after selecting text | Tab |
 
 To find extension commands, open the Command Palette and search for **Markdown Mint**.
 

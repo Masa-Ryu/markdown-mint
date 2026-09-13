@@ -516,7 +516,7 @@ outside the automated evidence.
 - At paragraph starts, typing `#` through `######`, `>`, `-`/`+`/`*`, or a
   positive `N.` followed by a space applies the matching heading, quote, or
   list block. A non-empty text selection shows the formatting popover
-  automatically; `Alt+F10` moves keyboard focus into it.
+  automatically; `Tab` moves keyboard focus into it.
 - Theme colors and VS Code Markdown preview font family, size, and line height
   remain the source for the writing surface.
 
@@ -531,8 +531,8 @@ Arial 14 and Georgia 20 typography cases, and representative H1–H6,
 blockquote, list, task, table, and code content had matching block and cell
 metrics in all six comparisons. The browser interaction pass also covered the
 compact toolbar at 500px (one row) and 320px (two rows), selection Bold with a
-single edit, opening the selection formatting popover with Alt+F10 and
-committing it from the keyboard, paragraph-start heading/list markers
+single edit, entering the selection formatting popover with Tab and committing
+it from the keyboard, paragraph-start heading/list markers
 including NBSP-delivered terminators, empty-line Insert followed by modal
 cancel with zero edits, keyboard table insertion with a 2×3 result, a row
 addition followed by Undo back to three rows, and a one-edit link action on

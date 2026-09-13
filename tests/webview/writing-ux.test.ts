@@ -744,6 +744,18 @@ describe("bounded writing controls", () => {
       "Inline code selection",
       "Link selection",
     ]);
+    expect(selectionButtons.map((button) => button.dataset.testid)).toEqual([
+      "selection-bold",
+      "selection-italic",
+      "selection-strike",
+      "selection-code",
+      "selection-link",
+    ]);
+    const tooltip = root.querySelector<HTMLElement>(".mm-tooltip")!;
+    bold.dispatchEvent(new Event("pointerover", { bubbles: true }));
+    expect(tooltip.hidden).toBe(true);
+    bold.dispatchEvent(new FocusEvent("focusin", { bubbles: true }));
+    expect(tooltip.hidden).toBe(true);
 
     const down = new MouseEvent("mousedown", {
       bubbles: true,
@@ -894,8 +906,8 @@ describe("bounded writing controls", () => {
     expect(editMessages(messages)).toHaveLength(before);
   });
 
-  it("opens the selection toolbar with Alt+F10 and keeps GFM-only strike disabled in CommonMark", () => {
-    const { app, root } = makeApp("hello world", "commonmark");
+  it("does not intercept Alt+F10 or move focus into the selection toolbar", () => {
+    const { app, root, messages } = makeApp("hello world", "commonmark");
     setSelectionGeometry(app);
     app.view.dispatch(
       app.view.state.tr.setSelection(
@@ -907,6 +919,9 @@ describe("bounded writing controls", () => {
       '[data-testid="selection-strike"]',
     )!;
     expect(strike.disabled).toBe(true);
+    expect(floating.hidden).toBe(false);
+    app.view.focus();
+    const firstEnabled = floating.querySelector("button:not(:disabled)");
     const event = new KeyboardEvent("keydown", {
       key: "F10",
       altKey: true,
@@ -914,10 +929,10 @@ describe("bounded writing controls", () => {
       cancelable: true,
     });
     app.view.dom.dispatchEvent(event);
-    expect(event.defaultPrevented).toBe(true);
-    expect(document.activeElement).toBe(
-      floating.querySelector("button:not(:disabled)"),
-    );
+    expect(event.defaultPrevented).toBe(false);
+    expect(document.activeElement).toBe(app.view.dom);
+    expect(document.activeElement).not.toBe(firstEnabled);
+    expect(editMessages(messages)).toHaveLength(0);
   });
 
   it("navigates the Insert block popup as a wrapping two-column grid", () => {

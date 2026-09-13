@@ -3113,10 +3113,6 @@ export class MarkdownEditorApp {
   }
 
   private handleAppKeyDown(event: KeyboardEvent): boolean {
-    if (event.altKey && event.key === "F10" && this.focusSelectionToolbar()) {
-      event.preventDefault();
-      return true;
-    }
     const starter = getStarterState(this.view.state);
     if (
       !(starter?.active && starter.untouched) &&
