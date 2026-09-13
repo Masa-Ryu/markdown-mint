@@ -225,7 +225,11 @@ export class BodyNavigation {
           return true;
         }
         moved = this.moveFromBlock(position, block, direction, vertical);
-      } else if (vertical) moved = this.moveWithinTextblock(direction);
+      }
+      // Interior vertical motion belongs to the browser. It keeps the native
+      // caret's visual-row and scroll behavior, including wrapped and
+      // decorated code. We only take over when endOfTextblock() confirms that
+      // the next arrow would leave this textblock.
     }
     if (moved) event.preventDefault();
     return moved;
@@ -291,40 +295,6 @@ export class BodyNavigation {
       if (rect.bottom > rect.top) this.goalX = rect.left;
     } catch {
       /* No layout: preserve the native/default edge placement. */
-    }
-  }
-
-  private moveWithinTextblock(direction: Direction): boolean {
-    if (this.goalX === undefined) return false;
-    const { selection } = this.view.state;
-    try {
-      const rect = this.view.coordsAtPos(selection.head);
-      let low = direction < 0 ? selection.$from.start() : selection.head + 1;
-      let high = direction < 0 ? selection.head : selection.$from.end();
-      while (low < high) {
-        const mid = Math.floor((low + high) / 2);
-        const top = this.view.coordsAtPos(mid).top;
-        if (direction < 0 ? top < rect.top - 1 : top <= rect.top + 1)
-          low = mid + 1;
-        else high = mid;
-      }
-      const rowPosition =
-        direction < 0 ? Math.max(selection.$from.start(), low - 1) : low;
-      const row = this.view.coordsAtPos(rowPosition);
-      if (Math.abs(row.top - rect.top) < 1) return false;
-      const found = this.view.posAtCoords({
-        left: this.goalX,
-        top: (row.top + row.bottom) / 2,
-      });
-      if (!found || found.pos === selection.head) return false;
-      const resolved = this.view.state.doc.resolve(found.pos);
-      if (!resolved.sameParent(selection.$from)) return false;
-      const next = this.view.coordsAtPos(found.pos);
-      if (Math.abs(next.top - rect.top) < 1) return false;
-      this.select(TextSelection.create(this.view.state.doc, found.pos));
-      return true;
-    } catch {
-      return false;
     }
   }
 
