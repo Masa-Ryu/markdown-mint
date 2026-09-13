@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.0.45
+
+- Add a hover-only top-level block-gap `+` affordance that reuses the existing
+  Insert block popup without changing layout or Markdown until a block is
+  committed. Add `Mod+Enter` and `Mod+Shift+Enter` transient paragraph
+  shortcuts for insertion after and before the current top-level block while
+  keeping ordinary arrow navigation on actual targets only.
+
 ## 0.0.44
 
 - Preserve strong, emphasis, strikethrough, combined marks, link destinations,

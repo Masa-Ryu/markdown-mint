@@ -2,7 +2,7 @@
   "name": "markdown-mint",
   "displayName": "Markdown Mint",
   "description": "A visual Markdown editor for VS Code with rich table editing, GitHub/GitLab profiles, Mermaid, math, and auto-formatting.",
-  "version": "0.0.44",
+  "version": "0.0.45",
   "publisher": "masa-ryu",
   "icon": "images/icon.png",
   "license": "MIT",

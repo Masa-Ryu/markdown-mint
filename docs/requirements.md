@@ -1074,6 +1074,27 @@ covered by the unit and Chromium block-navigation regressions, including the
 five required Markdown fixtures on Rich, dedicated Preview, and native-preview
 surfaces.
 
+## Current top-level block-gap insertion invariant
+
+Navigation and insertion remain separate. Hovering the visual gap between
+adjacent direct children of the ProseMirror document reveals one reusable
+`.mm-block-gap-insert` button. Its position is derived from the direct-child
+document positions and `view.nodeDOM(position)` rectangles, not from inferred
+Markdown or nested DOM structure. The button is an absolute overlay, so
+showing or hiding it does not change block margins, paragraph positions, scroll
+height, or document layout. Gaps inside list items, blockquotes, table cells,
+and Details bodies remain outside this affordance's scope.
+
+Clicking the gap button inserts one `meaningful: false` transient empty
+paragraph at the boundary, places the caret there, and opens the existing
+Insert block popup with its existing items. The transient paragraph is omitted
+from the serialized source and does not create a host edit, dirty state,
+autosave, or undo entry until typing or an Insert block command makes it
+meaningful. `Mod+Enter` creates the same transient paragraph after the current
+top-level block, while `Mod+Shift+Enter` creates it before; these shortcuts
+place the caret without opening a second popup. Ordinary arrow keys continue to
+move directly between actual targets and never stop on the transient boundary.
+
 ## Explicit limits
 
 Paste/drop image asset copying is optional follow-up work. Native IME and visual

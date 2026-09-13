@@ -289,6 +289,27 @@ function setSelectionGeometry(app: MarkdownEditorApp): void {
   });
 }
 
+function setElementRect(
+  element: Element,
+  rect: { top: number; bottom: number; left: number; width?: number },
+): void {
+  const width = rect.width ?? 640;
+  Object.defineProperty(element, "getBoundingClientRect", {
+    configurable: true,
+    value: () => ({
+      top: rect.top,
+      bottom: rect.bottom,
+      left: rect.left,
+      right: rect.left + width,
+      width,
+      height: rect.bottom - rect.top,
+      x: rect.left,
+      y: rect.top,
+      toJSON: () => ({}),
+    }),
+  });
+}
+
 beforeEach(() => {
   document.body.replaceChildren();
   if (typeof Range !== "undefined" && !Range.prototype.getClientRects)
@@ -1943,6 +1964,191 @@ describe("bounded writing controls", () => {
     ).toBe(true);
     expect(editMessages(messages)).toHaveLength(before + 1);
     app.view.dom.dispatchEvent(new Event("compositionend", { bubbles: true }));
+  });
+
+  it("shows one reusable top-level block-gap button without shifting blocks", () => {
+    const { app, root, messages } = makeApp("one\n\ntwo\n\nthree");
+    const stage = root.querySelector<HTMLElement>(".mm-stage")!;
+    const blocks = Array.from(
+      root.querySelectorAll<HTMLElement>(".ProseMirror > *"),
+    );
+    expect(blocks).toHaveLength(3);
+    setElementRect(stage, { top: 0, bottom: 500, left: 0, width: 800 });
+    setElementRect(blocks[0]!, { top: 20, bottom: 40, left: 60 });
+    setElementRect(blocks[1]!, { top: 80, bottom: 100, left: 60 });
+    setElementRect(blocks[2]!, { top: 140, bottom: 160, left: 60 });
+    const before = blocks.map((block) => {
+      const { top, bottom, left } = block.getBoundingClientRect();
+      return { top, bottom, left };
+    });
+    const scrollHeight = stage.scrollHeight;
+
+    const move = (clientY: number): void => {
+      stage.dispatchEvent(
+        new MouseEvent("pointermove", {
+          bubbles: true,
+          cancelable: true,
+          clientX: 100,
+          clientY,
+        }),
+      );
+    };
+    const gap = root.querySelector<HTMLButtonElement>(".mm-block-gap-insert")!;
+    expect(gap.hidden).toBe(true);
+    move(60);
+    expect(gap.hidden).toBe(false);
+    expect(gap.dataset.position).toBe(
+      String(topLevelNodeStart(app.view.state.doc, 1)),
+    );
+    expect(root.querySelectorAll(".mm-block-gap-insert")).toHaveLength(1);
+
+    move(120);
+    expect(gap.hidden).toBe(false);
+    expect(gap.dataset.position).toBe(
+      String(topLevelNodeStart(app.view.state.doc, 2)),
+    );
+    expect(
+      blocks.map((block) => {
+        const { top, bottom, left } = block.getBoundingClientRect();
+        return { top, bottom, left };
+      }),
+    ).toEqual(before);
+    expect(stage.scrollHeight).toBe(scrollHeight);
+    expect(editMessages(messages)).toHaveLength(0);
+  });
+
+  it("opens the existing Insert block popup from a gap without sending an edit", () => {
+    const source = "one\n\ntwo";
+    const { app, root, messages } = makeApp(source);
+    const stage = root.querySelector<HTMLElement>(".mm-stage")!;
+    const blocks = Array.from(
+      root.querySelectorAll<HTMLElement>(".ProseMirror > *"),
+    );
+    expect(blocks).toHaveLength(2);
+    setElementRect(stage, { top: 0, bottom: 500, left: 0, width: 800 });
+    setElementRect(blocks[0]!, { top: 20, bottom: 40, left: 60 });
+    setElementRect(blocks[1]!, { top: 80, bottom: 100, left: 60 });
+    stage.dispatchEvent(
+      new MouseEvent("pointermove", {
+        bubbles: true,
+        cancelable: true,
+        clientX: 100,
+        clientY: 60,
+      }),
+    );
+    const gap = root.querySelector<HTMLButtonElement>(".mm-block-gap-insert")!;
+    const panel = root.querySelector<HTMLElement>(".mm-empty-line-popup")!;
+    const beforeEdits = editMessages(messages).length;
+    gap.dispatchEvent(
+      new MouseEvent("mousedown", { bubbles: true, cancelable: true }),
+    );
+    gap.click();
+
+    expect(root.querySelector<HTMLElement>(".mm-empty-line-popup")).toBe(panel);
+    expect(panel.hidden).toBe(false);
+    expect(gap.getAttribute("aria-expanded")).toBe("true");
+    expect(root.querySelectorAll(".mm-block-gap-insert")).toHaveLength(1);
+    expect(app.view.state.doc.childCount).toBe(3);
+    expect(app.view.state.doc.child(1)?.type.name).toBe("paragraph");
+    expect(app.view.state.doc.child(1)?.content.size).toBe(0);
+    expect(app.view.state.selection.empty).toBe(true);
+    expect(app.view.state.selection.$from.parent.type.name).toBe("paragraph");
+    expect(
+      (app as unknown as { currentMarkdown: () => string }).currentMarkdown(),
+    ).toBe(source);
+    expect((app as unknown as { dirty: boolean }).dirty).toBe(false);
+    expect(editMessages(messages)).toHaveLength(beforeEdits);
+
+    const code = insertPopupItems(root)[4]!;
+    code.click();
+    expect(editMessages(messages)).toHaveLength(beforeEdits + 1);
+    expect(editMessages(messages).at(-1)?.markdown).toContain("```");
+  });
+
+  it("only detects gaps between direct document children", () => {
+    const { root } = makeApp("> inner one\n>\n> inner two\n\nafter");
+    const stage = root.querySelector<HTMLElement>(".mm-stage")!;
+    const topLevel = Array.from(
+      root.querySelectorAll<HTMLElement>(".ProseMirror > *"),
+    );
+    const nested = Array.from(
+      root.querySelectorAll<HTMLElement>(".ProseMirror blockquote > p"),
+    );
+    expect(topLevel).toHaveLength(2);
+    expect(nested).toHaveLength(2);
+    setElementRect(stage, { top: 0, bottom: 500, left: 0, width: 800 });
+    setElementRect(topLevel[0]!, { top: 20, bottom: 160, left: 60 });
+    setElementRect(topLevel[1]!, { top: 220, bottom: 240, left: 60 });
+    setElementRect(nested[0]!, { top: 40, bottom: 60, left: 80 });
+    setElementRect(nested[1]!, { top: 100, bottom: 120, left: 80 });
+    const gap = root.querySelector<HTMLButtonElement>(".mm-block-gap-insert")!;
+
+    stage.dispatchEvent(
+      new MouseEvent("pointermove", {
+        bubbles: true,
+        cancelable: true,
+        clientY: 80,
+      }),
+    );
+    expect(gap.hidden).toBe(true);
+    stage.dispatchEvent(
+      new MouseEvent("pointermove", {
+        bubbles: true,
+        cancelable: true,
+        clientY: 180,
+      }),
+    );
+    expect(gap.hidden).toBe(false);
+  });
+
+  it("creates transient top-level paragraphs before and after with Mod-Enter", () => {
+    const source = "one\n\ntwo";
+    const after = makeApp(source);
+    after.app.view.dispatch(
+      after.app.view.state.tr.setSelection(
+        TextSelection.create(
+          after.app.view.state.doc,
+          paragraphTextPosition(after.app.view.state.doc, 0, 3),
+        ),
+      ),
+    );
+    const afterKey = dispatchEditorKey(after.app, "Enter", { ctrlKey: true });
+    expect(afterKey.defaultPrevented).toBe(true);
+    expect(after.app.view.state.doc.childCount).toBe(3);
+    expect(after.app.view.state.doc.child(1)?.content.size).toBe(0);
+    expect(
+      (
+        after.app as unknown as { currentMarkdown: () => string }
+      ).currentMarkdown(),
+    ).toBe(source);
+    expect(editMessages(after.messages)).toHaveLength(0);
+
+    const before = makeApp(source);
+    before.app.view.dispatch(
+      before.app.view.state.tr.setSelection(
+        TextSelection.create(
+          before.app.view.state.doc,
+          paragraphTextPosition(before.app.view.state.doc, 1, 0),
+        ),
+      ),
+    );
+    const beforeKey = dispatchEditorKey(before.app, "Enter", {
+      ctrlKey: true,
+      shiftKey: true,
+    });
+    expect(beforeKey.defaultPrevented).toBe(true);
+    expect(before.app.view.state.doc.childCount).toBe(3);
+    expect(before.app.view.state.doc.child(1)?.content.size).toBe(0);
+    expect(
+      (
+        before.app as unknown as { currentMarkdown: () => string }
+      ).currentMarkdown(),
+    ).toBe(source);
+    expect(editMessages(before.messages)).toHaveLength(0);
+
+    dispatchTextInput(after.app, "x");
+    expect(editMessages(after.messages)).toHaveLength(1);
+    expect(after.app.view.state.doc.child(1)?.textContent).toBe("x");
   });
 
   it("offers Insert beside a top-level empty paragraph without mutating Markdown until a command is committed", () => {

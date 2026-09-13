@@ -579,6 +579,110 @@ async function testInsertAffordances(page) {
   );
 }
 
+async function testBlockGapInsertion(page) {
+  const source = blocks("Before", fence("ts", "code"), "After");
+  await load(page, source);
+  const before = await saved(page);
+  const initialBlocks = page.locator(`${rich} > *`);
+  assert.equal(await initialBlocks.count(), 3);
+  const initialMetrics = await initialBlocks.evaluateAll((elements) =>
+    elements.map((element) => {
+      const rect = element.getBoundingClientRect();
+      return {
+        top: rect.top,
+        bottom: rect.bottom,
+        left: rect.left,
+        width: rect.width,
+        height: rect.height,
+      };
+    }),
+  );
+  const stage = page.locator(".mm-stage");
+  const initialScrollHeight = await stage.evaluate(
+    (element) => element.scrollHeight,
+  );
+  const first = await initialBlocks.nth(0).boundingBox();
+  const second = await initialBlocks.nth(1).boundingBox();
+  assert.ok(first && second, "top-level block geometry was unavailable");
+  const gapY = ((first?.y ?? 0) + (first?.height ?? 0) + (second?.y ?? 0)) / 2;
+  await page.mouse.move(20, gapY);
+  const gap = page.locator(".mm-block-gap-insert");
+  await gap.waitFor({ state: "visible" });
+  assert.equal(await gap.count(), 1);
+  const visibleMetrics = await initialBlocks.evaluateAll((elements) =>
+    elements.map((element) => {
+      const rect = element.getBoundingClientRect();
+      return {
+        top: rect.top,
+        bottom: rect.bottom,
+        left: rect.left,
+        width: rect.width,
+        height: rect.height,
+      };
+    }),
+  );
+  assert.deepEqual(
+    visibleMetrics,
+    initialMetrics,
+    "showing the gap button shifted a top-level block",
+  );
+  assert.equal(
+    await stage.evaluate((element) => element.scrollHeight),
+    initialScrollHeight,
+    "showing the gap button changed scroll height",
+  );
+
+  const popup = page.locator("#mm-empty-line-insert-popup");
+  await gap.click();
+  await popup.waitFor({ state: "visible" });
+  assert.equal(await gap.getAttribute("aria-expanded"), "true");
+  const transient = await selection(page);
+  assert.equal(transient.kind, "TextSelection");
+  assert.equal(transient.parent, "paragraph");
+  assert.equal(transient.text, "");
+  await noEdits(page, before, "block-gap click");
+
+  await popup.getByRole("menuitem", { name: "Code block" }).click();
+  const committed = await saved(page);
+  assert.equal(committed.edits, before.edits + 1);
+  assert.match(committed.markdown, /Before[\s\S]*```[\s\S]*```[\s\S]*After/);
+
+  const shortcutAfter =
+    process.platform === "darwin" ? "Meta+Enter" : "Control+Enter";
+  const shortcutBefore =
+    process.platform === "darwin" ? "Meta+Shift+Enter" : "Control+Shift+Enter";
+  const shortcutSource = blocks("Before", "After");
+  await load(page, shortcutSource);
+  await caret(page, `${rich} > p:first-child`, -1);
+  await page.keyboard.press(shortcutAfter);
+  assert.equal((await selection(page)).text, "");
+  assert.equal((await selection(page)).parent, "paragraph");
+  await noEdits(page, await saved(page), "Mod-Enter transient paragraph");
+  assert.equal(await popup.isHidden(), true);
+  await page.keyboard.type("Inserted");
+  await expectSource(page, blocks("Before", "Inserted", "After"));
+
+  await load(page, shortcutSource);
+  await caret(page, `${rich} > p:last-child`, 0);
+  await page.keyboard.press(shortcutBefore);
+  assert.equal((await selection(page)).text, "");
+  assert.equal((await selection(page)).parent, "paragraph");
+  await noEdits(page, await saved(page), "Mod-Shift-Enter transient paragraph");
+  assert.equal(await popup.isHidden(), true);
+
+  const alertSource = blocks("Before", alert("Alert body"), "After");
+  await load(page, alertSource);
+  const alertEditor = page.locator(alertBody);
+  await alertEditor.focus();
+  await alertEditor.evaluate((element) => {
+    element.setSelectionRange(element.value.length, element.value.length);
+  });
+  await page.keyboard.press(shortcutAfter);
+  assert.equal((await selection(page)).text, "");
+  assert.equal((await selection(page)).parent, "paragraph");
+  await noEdits(page, await saved(page), "Alert Mod-Enter transient paragraph");
+}
+
 async function testDirectVerticalBlockNavigation(page) {
   const source = blocks("Paragraph A", "Paragraph B");
   await load(page, source);
@@ -2207,6 +2311,7 @@ async function main() {
       testAlertConflict,
       testHorizontalNavigation,
       testInsertAffordances,
+      testBlockGapInsertion,
       testDirectVerticalBlockNavigation,
       testArrowDocumentEdges,
       testWrappedVerticalNavigation,

@@ -254,6 +254,12 @@ interface TransientBlankRange {
   count: number;
 }
 
+interface BlockGapLayout {
+  position: number;
+  previousRect: DOMRect;
+  nextRect: DOMRect;
+}
+
 interface TransientBlankTransactionMeta {
   kind: "append" | "discard";
   from?: number;
@@ -2359,6 +2365,11 @@ export class MarkdownEditorApp {
   private selectionToolbarProfile: DocumentProfile | null = null;
   private selectionToolbar!: HTMLElement;
   private emptyLineButton!: HTMLButtonElement;
+  private blockGapButton!: HTMLButtonElement;
+  private blockGapPosition: number | null = null;
+  private blockGapDocument: PMNode | null = null;
+  private blockGapDocumentGeneration = -1;
+  private blockGapProfile: DocumentProfile | null = null;
   private transientBlanks: TransientBlankRange | null = null;
   private stageBlankClickHandled = false;
   private destroyed = false;
@@ -2406,6 +2417,18 @@ export class MarkdownEditorApp {
     this.updateWritingToolbarState();
   private readonly writingToolbarScrollHandler = (): void =>
     this.updateWritingToolbarState();
+  private readonly blockGapPointerMoveHandler = (event: PointerEvent): void =>
+    this.updateBlockGapFromPointer(event);
+  private readonly blockGapPointerOverHandler = (event: PointerEvent): void =>
+    this.updateBlockGapFromPointer(event);
+  private readonly blockGapPointerLeaveHandler = (): void => {
+    if (
+      this.blockGapButton?.matches(":focus") ||
+      this.activePopupToggle === this.blockGapButton
+    )
+      return;
+    this.clearBlockGapInsert();
+  };
   private readonly writingPointerDownHandler = (event: PointerEvent): void => {
     this.requestTableToolbarReveal(event.target);
     const active = this.activePopup;
@@ -2445,7 +2468,7 @@ export class MarkdownEditorApp {
   private readonly writingKeyDownHandler = (event: KeyboardEvent): void => {
     if (event.key !== "Escape" || !this.activePopup) return;
     const returnFocus = this.popupReturnFocus ?? this.activePopupToggle;
-    const returnToEditor = returnFocus === this.emptyLineButton;
+    const returnToEditor = this.isInsertPopupAnchor(returnFocus);
     this.closeWritingPopups("cancel");
     if (returnToEditor) this.view.focus();
     else returnFocus?.focus();
@@ -2517,7 +2540,12 @@ export class MarkdownEditorApp {
     this.stage.append(richPanel, previewPanel, sourcePanel);
     this.selectionToolbar = this.buildSelectionToolbar();
     this.emptyLineButton = this.buildEmptyLineButton();
-    this.stage.append(this.selectionToolbar, this.emptyLineButton);
+    this.blockGapButton = this.buildBlockGapButton();
+    this.stage.append(
+      this.selectionToolbar,
+      this.emptyLineButton,
+      this.blockGapButton,
+    );
     this.root.append(this.stage);
     this.compatibilityEl = makeElement("span", {
       class: "mm-compatibility",
@@ -2590,6 +2618,8 @@ export class MarkdownEditorApp {
                 {
                   canEdit: () => this.canEditBlock(),
                   composition: (active) => this.handleBlockComposition(active),
+                  onBlockGapShortcut: (direction, position) =>
+                    this.insertTransientBlockGapAroundNode(position, direction),
                   canPreserveLocalInput: () =>
                     this.initialized &&
                     !this.previewOnly &&
@@ -2709,6 +2739,12 @@ export class MarkdownEditorApp {
       true,
     );
     this.stage.addEventListener("click", this.stageBlankClickHandler);
+    this.stage.addEventListener("pointermove", this.blockGapPointerMoveHandler);
+    this.stage.addEventListener("pointerover", this.blockGapPointerOverHandler);
+    this.stage.addEventListener(
+      "pointerleave",
+      this.blockGapPointerLeaveHandler,
+    );
     window.addEventListener("resize", this.writingToolbarResizeHandler);
     this.stage.addEventListener("scroll", this.writingToolbarScrollHandler, {
       passive: true,
@@ -2763,6 +2799,18 @@ export class MarkdownEditorApp {
       true,
     );
     this.stage.removeEventListener("click", this.stageBlankClickHandler);
+    this.stage.removeEventListener(
+      "pointermove",
+      this.blockGapPointerMoveHandler,
+    );
+    this.stage.removeEventListener(
+      "pointerover",
+      this.blockGapPointerOverHandler,
+    );
+    this.stage.removeEventListener(
+      "pointerleave",
+      this.blockGapPointerLeaveHandler,
+    );
     document.removeEventListener(
       "selectionchange",
       this.tableSelectionChangeHandler,
@@ -2771,6 +2819,7 @@ export class MarkdownEditorApp {
     document.removeEventListener("focusin", this.writingFocusInHandler);
     document.removeEventListener("keydown", this.writingKeyDownHandler);
     this.closeWritingPopups();
+    this.clearBlockGapInsert();
     this.closeEmojiPicker();
     this.closeProfileFeatureDialog();
     this.transientBlanks = null;
@@ -2863,6 +2912,10 @@ export class MarkdownEditorApp {
           ? this.gfmUnavailable(dispatch)
           : commandForMark("strike", this.schema)(state, dispatch),
       "Mod-`": commandForMark("code", this.schema),
+      "Mod-Shift-Enter": (state, dispatch) =>
+        this.insertTransientBlockGapFromSelection(state, "before", dispatch),
+      "Mod-Enter": (state, dispatch) =>
+        this.insertTransientBlockGapFromSelection(state, "after", dispatch),
       Enter: (state, dispatch) => {
         if (this.editSelectedInlineMath(state, dispatch)) return true;
         if (this.composing) return false;
@@ -3147,6 +3200,145 @@ export class MarkdownEditorApp {
     return true;
   }
 
+  private createTransientBlockGapTransaction(
+    position: number,
+  ): Transaction | null {
+    const state = this.view.state;
+    const paragraph = this.schema.nodes.paragraph;
+    const starter = getStarterState(state);
+    if (
+      !paragraph ||
+      !this.canEditBlock() ||
+      this.transientBlanks ||
+      (starter?.active && starter.untouched) ||
+      !Number.isInteger(position) ||
+      !isBlockBoundary(state.doc, position)
+    )
+      return null;
+    try {
+      const transaction = state.tr.insert(position, paragraph.create());
+      const to = position + paragraph.create().nodeSize;
+      return transaction
+        .setSelection(TextSelection.create(transaction.doc, position + 1))
+        .setMeta("addToHistory", false)
+        .setMeta(TRANSIENT_BLANK_META, {
+          kind: "append",
+          from: position,
+          to,
+          count: 1,
+          meaningful: false,
+        } satisfies TransientBlankTransactionMeta)
+        .scrollIntoView();
+    } catch {
+      return null;
+    }
+  }
+
+  private transientBlockGapPosition(
+    state: EditorState,
+    direction: "before" | "after",
+  ): number | null {
+    const selection = state.selection;
+    if (selection instanceof BlockBoundarySelection) return selection.head;
+    if (
+      selection instanceof NodeSelection &&
+      selection.$from.depth === 0 &&
+      (selection.node.isBlock || selection.node.isAtom)
+    )
+      return direction === "before" ? selection.from : selection.to;
+    if (
+      selection instanceof NodeSelection &&
+      selection.$from.depth === 1 &&
+      selection.node.isInline &&
+      selection.node.isAtom &&
+      selection.$from.parent.isTextblock
+    )
+      return direction === "before"
+        ? selection.$from.before(1)
+        : selection.$from.after(1);
+    if (
+      !(selection instanceof TextSelection) ||
+      !selection.empty ||
+      selection.$from.depth !== 1 ||
+      !selection.$from.parent.isTextblock
+    )
+      return null;
+    const parent = selection.$from.parent;
+    if (direction === "before" && selection.$from.parentOffset === 0)
+      return selection.$from.before(1);
+    if (
+      direction === "after" &&
+      selection.$from.parentOffset === parent.content.size
+    )
+      return selection.$from.after(1);
+    return null;
+  }
+
+  private insertTransientBlockGapFromSelection(
+    state: EditorState,
+    direction: "before" | "after",
+    dispatch?: (tr: Transaction) => void,
+  ): boolean {
+    if (state !== this.view.state) return false;
+    const position = this.transientBlockGapPosition(state, direction);
+    if (position === null) return false;
+    const transaction = this.createTransientBlockGapTransaction(position);
+    if (!transaction) return false;
+    if (dispatch) dispatch(transaction);
+    return true;
+  }
+
+  private insertTransientBlockGap(
+    position: number,
+    openPopup = false,
+  ): boolean {
+    const state = this.view.state;
+    if (
+      openPopup &&
+      (position <= 0 ||
+        position >= state.doc.content.size ||
+        !this.blockGapStateIsCurrent(position))
+    )
+      return false;
+    const layout = openPopup ? this.blockGapLayoutAt(position) : null;
+    const transaction = this.createTransientBlockGapTransaction(position);
+    if (!transaction) return false;
+    this.view.focus();
+    this.dispatchTransaction(transaction);
+    if (!openPopup) return true;
+
+    const nextLayout = this.blockGapLayoutAt(position) ?? layout;
+    if (!nextLayout || !this.captureWritingPopupSelection()) {
+      this.discardTransientBlanksInState();
+      this.clearBlockGapInsert();
+      return false;
+    }
+    this.showBlockGapInsert(nextLayout, position);
+    if (
+      !this.openWritingPopup(
+        this.insertPopup,
+        this.blockGapButton,
+        this.blockGapButton,
+      )
+    ) {
+      this.discardTransientBlanksInState();
+      this.clearBlockGapInsert();
+      return false;
+    }
+    return true;
+  }
+
+  private insertTransientBlockGapAroundNode(
+    position: number,
+    direction: "before" | "after",
+  ): boolean {
+    const node = this.view.state.doc.nodeAt(position);
+    if (!node || !isBlockBoundary(this.view.state.doc, position)) return false;
+    const boundary =
+      direction === "before" ? position : position + node.nodeSize;
+    return this.insertTransientBlockGap(boundary);
+  }
+
   private handleAppKeyDown(event: KeyboardEvent): boolean {
     const starter = getStarterState(this.view.state);
     if (
@@ -3160,6 +3352,15 @@ export class MarkdownEditorApp {
     const modifier = isMac() ? event.metaKey : event.ctrlKey;
     if (!modifier || event.altKey) return false;
     const key = event.key.toLowerCase();
+    if (key === "enter") {
+      const handled = this.insertTransientBlockGapFromSelection(
+        this.view.state,
+        event.shiftKey ? "before" : "after",
+        (transaction) => this.view.dispatch(transaction),
+      );
+      if (handled) event.preventDefault();
+      return handled;
+    }
     if (key === "z") {
       event.preventDefault();
       return this.sendHostCommand(event.shiftKey ? "redo" : "undo");
@@ -3920,6 +4121,10 @@ export class MarkdownEditorApp {
         (element.dataset.gfmOnly === "true" && this.profile === "commonmark");
     }
     const blockEditingDisabled = !this.canEditBlock();
+    if (this.blockGapButton) {
+      this.blockGapButton.disabled = !this.canUseBlockGapInsert();
+      if (this.blockGapButton.disabled) this.clearBlockGapInsert();
+    }
     for (const control of this.root.querySelectorAll<
       | HTMLButtonElement
       | HTMLInputElement
@@ -3977,6 +4182,7 @@ export class MarkdownEditorApp {
     }
     if (editingDisabled && this.emptyLineButton)
       this.emptyLineButton.hidden = true;
+    if (editingDisabled && this.blockGapButton) this.clearBlockGapInsert();
     this.updateTableToolbar();
     this.updateToolbarActiveState(selection);
   }
@@ -5637,7 +5843,7 @@ export class MarkdownEditorApp {
       if (event.key === "Escape") {
         event.preventDefault();
         const returnFocus = this.popupReturnFocus ?? button;
-        const returnToEditor = returnFocus === this.emptyLineButton;
+        const returnToEditor = this.isInsertPopupAnchor(returnFocus);
         this.closeWritingPopups("cancel");
         if (returnToEditor) this.view.focus();
         else returnFocus.focus();
@@ -5704,6 +5910,43 @@ export class MarkdownEditorApp {
 
     this.stage.append(panel);
     return button;
+  }
+
+  private buildBlockGapButton(): HTMLButtonElement {
+    const button = makeElement("button", {
+      type: "button",
+      class: "mm-block-gap-insert",
+      "data-tooltip": "Insert block between blocks",
+      "aria-label": "Insert block between blocks",
+      "aria-haspopup": "menu",
+      "aria-expanded": "false",
+      hidden: "true",
+    }) as HTMLButtonElement;
+    button.textContent = "+";
+    if (this.insertPopup?.id)
+      button.setAttribute("aria-controls", this.insertPopup.id);
+    button.addEventListener("mousedown", (event) => {
+      // Keep the existing editor selection so the transient paragraph is
+      // created from the PM boundary rather than from browser focus.
+      event.preventDefault();
+    });
+    button.addEventListener("click", () => {
+      const position = this.blockGapPosition;
+      if (
+        position === null ||
+        !this.blockGapStateIsCurrent(position) ||
+        !this.blockGapLayoutAt(position)
+      )
+        return;
+      this.insertTransientBlockGap(position, true);
+    });
+    return button;
+  }
+
+  private isInsertPopupAnchor(
+    anchor: HTMLElement | null,
+  ): anchor is HTMLButtonElement {
+    return anchor === this.emptyLineButton || anchor === this.blockGapButton;
   }
 
   private captureWritingPopupSelection(): boolean {
@@ -5849,10 +6092,10 @@ export class MarkdownEditorApp {
     // opened from the empty-line affordance stay beside its anchor while the
     // document scrolls.
     popup.dataset.floating = "true";
-    if (anchor === this.emptyLineButton)
+    if (this.isInsertPopupAnchor(anchor))
       anchor.setAttribute("aria-expanded", "true");
     this.positionWritingPopup();
-    if (anchor === this.emptyLineButton) this.focusPopupItem(popup, 0);
+    if (this.isInsertPopupAnchor(anchor)) this.focusPopupItem(popup, 0);
     return true;
   }
 
@@ -5863,8 +6106,10 @@ export class MarkdownEditorApp {
       this.materializeSlashTrigger();
       return;
     }
+    const gapPopupOpen = this.activePopupToggle === this.blockGapButton;
     this.slashTrigger = null;
     this.clearWritingPopupState();
+    if (gapPopupOpen) this.clearBlockGapInsert();
   }
 
   private clearWritingPopupState(): void {
@@ -5879,7 +6124,7 @@ export class MarkdownEditorApp {
       active.style.removeProperty("top");
       this.activePopupToggle?.setAttribute("aria-expanded", "false");
     }
-    if (anchor === this.emptyLineButton)
+    if (this.isInsertPopupAnchor(anchor))
       anchor.setAttribute("aria-expanded", "false");
     this.activePopup = null;
     this.activePopupToggle = null;
@@ -6201,6 +6446,195 @@ export class MarkdownEditorApp {
     return true;
   }
 
+  private canUseBlockGapInsert(): boolean {
+    const starter = getStarterState(this.view.state);
+    return (
+      this.canEditBlock() &&
+      !(starter?.active && starter.untouched) &&
+      (!this.transientBlanks || this.activePopupToggle === this.blockGapButton)
+    );
+  }
+
+  private blockGapLayouts(): BlockGapLayout[] {
+    if (!this.view || !this.initialized || this.view.state.doc.childCount < 2)
+      return [];
+    const layouts: BlockGapLayout[] = [];
+    let position = 0;
+    for (
+      let index = 0;
+      index < this.view.state.doc.childCount - 1;
+      index += 1
+    ) {
+      const previous = this.view.state.doc.child(index);
+      const boundary = position + previous.nodeSize;
+      if (!isBlockBoundary(this.view.state.doc, boundary)) {
+        position = boundary;
+        continue;
+      }
+      const previousDOM = this.view.nodeDOM(position);
+      const nextDOM = this.view.nodeDOM(boundary);
+      if (previousDOM instanceof Element && nextDOM instanceof Element) {
+        const previousRect = previousDOM.getBoundingClientRect();
+        const nextRect = nextDOM.getBoundingClientRect();
+        const finiteRect = (rect: DOMRect): boolean =>
+          Number.isFinite(rect.left) &&
+          Number.isFinite(rect.top) &&
+          Number.isFinite(rect.bottom);
+        if (
+          previousDOM.isConnected &&
+          nextDOM.isConnected &&
+          finiteRect(previousRect) &&
+          finiteRect(nextRect)
+        )
+          layouts.push({
+            position: boundary,
+            previousRect,
+            nextRect,
+          });
+      }
+      position = boundary;
+    }
+    return layouts;
+  }
+
+  private blockGapLayoutAt(position: number): BlockGapLayout | null {
+    return (
+      this.blockGapLayouts().find((layout) => layout.position === position) ??
+      null
+    );
+  }
+
+  private blockGapLayoutForPointer(clientY: number): BlockGapLayout | null {
+    if (!Number.isFinite(clientY)) return null;
+    let closest: BlockGapLayout | null = null;
+    let closestDistance = Infinity;
+    for (const layout of this.blockGapLayouts()) {
+      const gapTop = layout.previousRect.bottom;
+      const gapBottom = layout.nextRect.top;
+      const gapHeight = gapBottom - gapTop;
+      const hitTop = gapHeight > 0 ? gapTop - 4 : (gapTop + gapBottom) / 2 - 5;
+      const hitBottom =
+        gapHeight > 0 ? gapBottom + 4 : (gapTop + gapBottom) / 2 + 5;
+      if (clientY < hitTop || clientY > hitBottom) continue;
+      const center = (hitTop + hitBottom) / 2;
+      const distance = Math.abs(clientY - center);
+      if (distance < closestDistance) {
+        closest = layout;
+        closestDistance = distance;
+      }
+    }
+    return closest;
+  }
+
+  private showBlockGapInsert(
+    layout: BlockGapLayout,
+    position = layout.position,
+  ): void {
+    if (!this.blockGapButton || !this.stage || !this.view) return;
+    const stageRect = this.stage.getBoundingClientRect();
+    const buttonRect = this.blockGapButton.getBoundingClientRect();
+    const width = buttonRect.width || 20;
+    const height = buttonRect.height || 20;
+    const contentLeft = Math.min(
+      layout.previousRect.left,
+      layout.nextRect.left,
+    );
+    const centerY = (layout.previousRect.bottom + layout.nextRect.top) / 2;
+    const left = Math.max(
+      this.stage.scrollLeft + 2,
+      contentLeft - stageRect.left + this.stage.scrollLeft - width - 6,
+    );
+    const top = Math.max(
+      this.stage.scrollTop + 4,
+      centerY - stageRect.top + this.stage.scrollTop - height / 2,
+    );
+    this.blockGapPosition = position;
+    this.blockGapDocument = this.view.state.doc;
+    this.blockGapDocumentGeneration = this.documentGeneration;
+    this.blockGapProfile = this.profile;
+    this.blockGapButton.hidden = false;
+    this.blockGapButton.disabled = false;
+    this.blockGapButton.setAttribute("aria-hidden", "false");
+    this.blockGapButton.dataset.position = String(position);
+    this.blockGapButton.style.left = `${Math.round(left)}px`;
+    this.blockGapButton.style.top = `${Math.round(top)}px`;
+  }
+
+  private blockGapStateIsCurrent(position = this.blockGapPosition): boolean {
+    return Boolean(
+      position !== null &&
+      this.blockGapDocument === this.view.state.doc &&
+      this.blockGapDocumentGeneration === this.documentGeneration &&
+      this.blockGapProfile === this.profile &&
+      this.blockGapButton &&
+      !this.blockGapButton.hidden,
+    );
+  }
+
+  private clearBlockGapInsert(): void {
+    this.blockGapPosition = null;
+    this.blockGapDocument = null;
+    this.blockGapDocumentGeneration = -1;
+    this.blockGapProfile = null;
+    if (!this.blockGapButton) return;
+    this.blockGapButton.hidden = true;
+    this.blockGapButton.disabled = true;
+    this.blockGapButton.setAttribute("aria-hidden", "true");
+    if (this.activePopupToggle !== this.blockGapButton)
+      this.blockGapButton.setAttribute("aria-expanded", "false");
+    this.blockGapButton.removeAttribute("data-position");
+    this.blockGapButton.style.removeProperty("left");
+    this.blockGapButton.style.removeProperty("top");
+  }
+
+  private updateBlockGapFromPointer(event: PointerEvent): void {
+    if (event.pointerType === "touch") return;
+    const target = event.target;
+    if (!(target instanceof Node) || !this.stage.contains(target)) return;
+    const element = target instanceof Element ? target : target.parentElement;
+    if (this.activePopup) {
+      if (
+        this.activePopupToggle === this.blockGapButton &&
+        element &&
+        (this.activePopup.contains(element) ||
+          this.blockGapButton.contains(element))
+      )
+        return;
+      return;
+    }
+    if (
+      element?.closest(
+        ".mm-block-gap-insert, .mm-popup-panel, .mm-table-toolbar, .mm-selection-toolbar, button, input, textarea, select",
+      )
+    ) {
+      if (!element.closest(".mm-block-gap-insert")) this.clearBlockGapInsert();
+      return;
+    }
+    if (!this.canUseBlockGapInsert()) {
+      this.clearBlockGapInsert();
+      return;
+    }
+    const layout = this.blockGapLayoutForPointer(event.clientY);
+    if (layout) this.showBlockGapInsert(layout);
+    else this.clearBlockGapInsert();
+  }
+
+  private updateBlockGapInsert(): void {
+    if (!this.blockGapButton || !this.stage || !this.view) return;
+    const position = this.blockGapPosition;
+    if (
+      position === null ||
+      !this.blockGapStateIsCurrent(position) ||
+      !this.canUseBlockGapInsert()
+    ) {
+      this.clearBlockGapInsert();
+      return;
+    }
+    const layout = this.blockGapLayoutAt(position);
+    if (layout) this.showBlockGapInsert(layout, position);
+    else this.clearBlockGapInsert();
+  }
+
   private canUseEmptyLineInsert(selection: Selection): boolean {
     const parent = selection.$from.parent;
     const starter = getStarterState(this.view.state);
@@ -6256,6 +6690,7 @@ export class MarkdownEditorApp {
     this.updateToolbarActiveState(this.view.state.selection);
     this.updateSelectionToolbar(this.view.state.selection);
     this.updateEmptyLineInsert(this.view.state.selection);
+    this.updateBlockGapInsert();
     this.positionWritingPopup();
   }
 
@@ -7589,6 +8024,7 @@ export class MarkdownEditorApp {
     });
     this.updateSelectionToolbar(selection);
     this.updateEmptyLineInsert(selection);
+    this.updateBlockGapInsert();
     this.positionWritingPopup();
   }
 
@@ -8553,6 +8989,7 @@ export class MarkdownEditorApp {
       this.closeEmojiPicker();
       this.transientBlanks = null;
       this.documentGeneration += 1;
+      this.clearBlockGapInsert();
     }
 
     this.profile = message.profile;
