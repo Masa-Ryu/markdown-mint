@@ -5430,10 +5430,25 @@ export class MarkdownEditorApp {
       hidden: "true",
     });
     toolbar.addEventListener("keydown", (event) => {
-      if (event.key !== "Escape") return;
+      if (event.key === "Escape") {
+        event.preventDefault();
+        this.clearSelectionToolbarSelection();
+        this.view.focus();
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const enabledButtons = Array.from(
+        toolbar.querySelectorAll<HTMLButtonElement>("button:not(:disabled)"),
+      );
+      const current = enabledButtons.indexOf(
+        document.activeElement as HTMLButtonElement,
+      );
+      if (current < 0 || !enabledButtons.length) return;
       event.preventDefault();
-      this.clearSelectionToolbarSelection();
-      this.view.focus();
+      const delta = event.shiftKey ? -1 : 1;
+      const next =
+        (current + delta + enabledButtons.length) % enabledButtons.length;
+      enabledButtons[next]?.focus();
     });
     const addMarkButton = (
       label: string,

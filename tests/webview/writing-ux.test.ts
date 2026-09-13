@@ -210,6 +210,20 @@ function dispatchEditorKey(
   return event;
 }
 
+function dispatchFocusedKey(
+  key: string,
+  options: KeyboardEventInit = {},
+): KeyboardEvent {
+  const event = new KeyboardEvent("keydown", {
+    key,
+    ...options,
+    bubbles: true,
+    cancelable: true,
+  });
+  document.activeElement?.dispatchEvent(event);
+  return event;
+}
+
 function hostDocument(
   markdown: string,
   version: number,
@@ -1212,6 +1226,102 @@ describe("bounded writing controls", () => {
     expect(document.activeElement).not.toBe(strike);
     expect(editMessages(messages)).toHaveLength(0);
     strike.click();
+    expect(editMessages(messages)).toHaveLength(0);
+  });
+
+  it.each(["github", "gitlab"] as const)(
+    "cycles through every enabled Selection Toolbar button for %s",
+    (profile) => {
+      const { app, root, messages } = makeApp("hello world", profile);
+      const selection = TextSelection.create(app.view.state.doc, 1, 6);
+      app.view.dispatch(app.view.state.tr.setSelection(selection));
+      const floating = root.querySelector<HTMLElement>(
+        ".mm-selection-toolbar",
+      )!;
+      const buttons = Array.from(
+        floating.querySelectorAll<HTMLButtonElement>("button:not(:disabled)"),
+      );
+      expect(buttons.map((button) => button.dataset.testid)).toEqual([
+        "selection-bold",
+        "selection-italic",
+        "selection-strike",
+        "selection-code",
+        "selection-link",
+      ]);
+
+      app.view.focus();
+      const firstTab = dispatchEditorKey(app, "Tab");
+      expect(firstTab.defaultPrevented).toBe(true);
+      expect(document.activeElement).toBe(buttons[0]);
+
+      for (let index = 0; index < buttons.length; index += 1) {
+        const tab = dispatchFocusedKey("Tab");
+        expect(tab.defaultPrevented).toBe(true);
+        expect(document.activeElement).toBe(
+          buttons[(index + 1) % buttons.length],
+        );
+        expect(floating.contains(document.activeElement)).toBe(true);
+        expect(app.view.state.selection.from).toBe(selection.from);
+        expect(app.view.state.selection.to).toBe(selection.to);
+      }
+
+      expect(document.activeElement).toBe(buttons[0]);
+      const backward = dispatchFocusedKey("Tab", { shiftKey: true });
+      expect(backward.defaultPrevented).toBe(true);
+      expect(document.activeElement).toBe(buttons[buttons.length - 1]);
+      expect(app.view.state.selection.from).toBe(selection.from);
+      expect(app.view.state.selection.to).toBe(selection.to);
+      expect(editMessages(messages)).toHaveLength(0);
+    },
+  );
+
+  it("cycles around disabled Strike in the CommonMark Selection Toolbar", () => {
+    const { app, root, messages } = makeApp("hello world", "commonmark");
+    const selection = TextSelection.create(app.view.state.doc, 1, 6);
+    app.view.dispatch(app.view.state.tr.setSelection(selection));
+    const floating = root.querySelector<HTMLElement>(".mm-selection-toolbar")!;
+    const strike = root.querySelector<HTMLButtonElement>(
+      '[data-testid="selection-strike"]',
+    )!;
+    const enabledButtons = Array.from(
+      floating.querySelectorAll<HTMLButtonElement>("button:not(:disabled)"),
+    );
+    expect(strike.disabled).toBe(true);
+    expect(enabledButtons.map((button) => button.dataset.testid)).toEqual([
+      "selection-bold",
+      "selection-italic",
+      "selection-code",
+      "selection-link",
+    ]);
+
+    app.view.focus();
+    dispatchEditorKey(app, "Tab");
+    expect(document.activeElement).toBe(enabledButtons[0]);
+
+    const expectedForward = [
+      "selection-italic",
+      "selection-code",
+      "selection-link",
+      "selection-bold",
+    ];
+    for (const testId of expectedForward) {
+      const tab = dispatchFocusedKey("Tab");
+      expect(tab.defaultPrevented).toBe(true);
+      expect(document.activeElement).toBe(
+        floating.querySelector(`[data-testid="${testId}"]`),
+      );
+      expect(document.activeElement).not.toBe(strike);
+      expect(floating.contains(document.activeElement)).toBe(true);
+    }
+
+    const backward = dispatchFocusedKey("Tab", { shiftKey: true });
+    expect(backward.defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(
+      floating.querySelector('[data-testid="selection-link"]'),
+    );
+    expect(document.activeElement).not.toBe(strike);
+    expect(app.view.state.selection.from).toBe(selection.from);
+    expect(app.view.state.selection.to).toBe(selection.to);
     expect(editMessages(messages)).toHaveLength(0);
   });
 
