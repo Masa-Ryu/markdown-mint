@@ -596,8 +596,16 @@ async function testHorizontalNavigation(page) {
     paragraphText:
       window.markdownMint.view.state.selection.$from.parent.textContent,
   }));
-  assert.equal(slashState.popupHidden, false, "boundary slash did not open Insert block");
-  assert.equal(slashState.paragraphText, "", "slash popup changed paragraph text");
+  assert.equal(
+    slashState.popupHidden,
+    false,
+    "boundary slash did not open Insert block",
+  );
+  assert.equal(
+    slashState.paragraphText,
+    "",
+    "slash popup changed paragraph text",
+  );
   await page.keyboard.press("Escape");
   await expectSource(page, blocks("Before", fence("ts", "code"), "/", "After"));
 }
