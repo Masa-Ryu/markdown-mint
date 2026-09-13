@@ -12,6 +12,8 @@ import {
   alertSourceParts,
   alertSourceWithBody,
   alertSourceWithType,
+  MAX_MATERIALIZED_EMPTY_PARAGRAPHS,
+  type Profile,
 } from "../../src/core/index";
 
 function replaceTopLevel(
@@ -25,10 +27,26 @@ function replaceTopLevel(
   return schema.topNodeType.create(null, children);
 }
 
+function removeTopLevel(
+  snapshot: ReturnType<typeof parseMarkdown>,
+  index: number,
+): PMNode {
+  const children = childrenOf(snapshot.doc);
+  children.splice(index, 1);
+  return schema.topNodeType.create(null, children);
+}
+
 function childrenOf(node: PMNode): PMNode[] {
   const children: PMNode[] = [];
   node.forEach((child) => children.push(child));
   return children;
+}
+
+function reparseMarkdown(source: string, profile: Profile = "github") {
+  // parseMarkdown keeps a one-entry cache for render/compatibility sharing.
+  // Evict the target source so round-trip assertions exercise a real parse.
+  parseMarkdown("cache-bust", profile);
+  return parseMarkdown(source, profile);
 }
 
 function replaceText(doc: PMNode, value: string, replacement: string): PMNode {
@@ -80,6 +98,328 @@ describe("Markdown core", () => {
     expect(serializeMarkdown(snapshot.doc, snapshot)).toBe(source);
     expect(snapshot.lineEnding).toBe("crlf");
   });
+
+  it.each([
+    {
+      name: "LF",
+      source: "one\n\n\n\ntwo",
+      ending: "\n",
+    },
+    {
+      name: "CRLF",
+      source: "one\r\n\r\n\r\n\r\ntwo",
+      ending: "\r\n",
+    },
+  ])(
+    "materializes source-authored blank lines for $name",
+    ({ source, ending }) => {
+      const snapshot = parseMarkdown(source);
+      const children = childrenOf(snapshot.doc);
+
+      expect(
+        children.filter(
+          (node) => node.type.name === "paragraph" && node.content.size === 0,
+        ),
+      ).toHaveLength(2);
+      expect(serializeMarkdown(snapshot.doc, snapshot)).toBe(source);
+      expect(serializeMarkdown(snapshot.doc)).toBe(source);
+
+      const serialized = serializeMarkdown(snapshot.doc, snapshot);
+      expect(serialized).toBe(source);
+      expect(serialized.match(new RegExp(ending, "g"))?.length).toBe(4);
+      expect(reparseMarkdown(serialized, "github").doc.eq(snapshot.doc)).toBe(
+        true,
+      );
+    },
+  );
+
+  it("roundtrips empty paragraphs authored by the Rich document", () => {
+    const document = schema.topNodeType.create(null, [
+      schema.nodes.paragraph!.create(null, schema.text("one")),
+      schema.nodes.paragraph!.create(),
+      schema.nodes.paragraph!.create(),
+      schema.nodes.paragraph!.create(null, schema.text("two")),
+    ]);
+
+    const serialized = serializeMarkdown(document);
+    expect(serialized).toBe("one\n\n\n\ntwo");
+    expect(reparseMarkdown(serialized).doc.eq(document)).toBe(true);
+  });
+
+  it("renders materialized empty paragraphs as one visible line", () => {
+    expect(renderMarkdown("one\n\n\ntwo")).toContain(
+      "<p>one</p>\n<p><br></p>\n<p>two</p>",
+    );
+  });
+
+  it("keeps the empty source starter document to one paragraph", () => {
+    const snapshot = parseMarkdown("");
+    expect(snapshot.doc.childCount).toBe(1);
+    expect(snapshot.doc.firstChild?.type.name).toBe("paragraph");
+    expect(serializeMarkdown(snapshot.doc, snapshot)).toBe("");
+  });
+
+  it("preserves a source-authored separator when a neighboring block changes", () => {
+    const source = "one\n\n\n\ntwo";
+    const snapshot = parseMarkdown(source);
+    const changed = replaceTopLevel(
+      snapshot,
+      3,
+      schema.nodes.paragraph!.create(null, schema.text("changed")),
+    );
+
+    const serialized = serializeMarkdown(changed, snapshot);
+    expect(serialized).toBe("one\n\n\n\nchanged");
+    expect(parseMarkdown(serialized).doc.eq(changed)).toBe(true);
+  });
+
+  it("preserves CRLF source-authored separators when a neighboring block changes", () => {
+    const source = "one\r\n\r\n\r\n\r\ntwo";
+    const snapshot = parseMarkdown(source);
+    const changed = replaceTopLevel(
+      snapshot,
+      3,
+      schema.nodes.paragraph!.create(null, schema.text("changed")),
+    );
+
+    const serialized = serializeMarkdown(changed, snapshot);
+    expect(serialized).toBe("one\r\n\r\n\r\n\r\nchanged");
+    expect(reparseMarkdown(serialized).doc.eq(changed)).toBe(true);
+  });
+
+  it.each([
+    {
+      name: "LF",
+      source: "one\n\n \n\t\ntwo",
+      first: " \n",
+      second: "\t\n",
+    },
+    {
+      name: "CRLF",
+      source: "one\r\n\r\n \r\n\t\r\ntwo",
+      first: " \r\n",
+      second: "\t\r\n",
+    },
+    {
+      name: "mixed line endings",
+      source: "one\n\r\n \n\t\r\ntwo",
+      first: " \n",
+      second: "\t\r\n",
+    },
+  ])(
+    "keeps distinct source slices for consecutive materialized blanks after editing the first ($name)",
+    ({ source, second }) => {
+      const snapshot = parseMarkdown(source);
+      expect(childrenOf(snapshot.doc)[1]?.type.name).toBe("paragraph");
+      expect(childrenOf(snapshot.doc)[2]?.type.name).toBe("paragraph");
+
+      const edited = replaceTopLevel(
+        snapshot,
+        1,
+        schema.nodes.paragraph!.create(null, schema.text("x")),
+      );
+      const serialized = serializeMarkdown(edited, snapshot);
+
+      expect(serialized.match(new RegExp(second, "g"))?.length).toBe(1);
+      expect(reparseMarkdown(serialized).doc.eq(edited)).toBe(true);
+    },
+  );
+
+  it.each([
+    {
+      name: "LF",
+      source: "one\n\n \n\t\ntwo",
+      first: " \n",
+      second: "\t\n",
+    },
+    {
+      name: "CRLF",
+      source: "one\r\n\r\n \r\n\t\r\ntwo",
+      first: " \r\n",
+      second: "\t\r\n",
+    },
+    {
+      name: "mixed line endings",
+      source: "one\n\r\n \n\t\r\ntwo",
+      first: " \n",
+      second: "\t\r\n",
+    },
+  ])(
+    "keeps the second source slice when the first materialized blank is deleted ($name)",
+    ({ source, first, second }) => {
+      const snapshot = parseMarkdown(source);
+      const edited = removeTopLevel(snapshot, 1);
+      const serialized = serializeMarkdown(edited, snapshot);
+
+      expect(serialized).toContain(second);
+      expect(serialized).not.toContain(first);
+      expect(reparseMarkdown(serialized).doc.eq(edited)).toBe(true);
+    },
+  );
+
+  it.each([
+    {
+      name: "LF",
+      source: "one\n\n \n\t\ntwo",
+      first: " \n",
+      second: "\t\n",
+    },
+    {
+      name: "CRLF",
+      source: "one\r\n\r\n \r\n\t\r\ntwo",
+      first: " \r\n",
+      second: "\t\r\n",
+    },
+    {
+      name: "mixed line endings",
+      source: "one\n\r\n \n\t\r\ntwo",
+      first: " \n",
+      second: "\t\r\n",
+    },
+  ])(
+    "keeps distinct source slices when editing or deleting the second materialized blank ($name)",
+    ({ source, first, second }) => {
+      const snapshot = parseMarkdown(source);
+      const edited = replaceTopLevel(
+        snapshot,
+        2,
+        schema.nodes.paragraph!.create(null, schema.text("x")),
+      );
+      const editedSource = serializeMarkdown(edited, snapshot);
+      expect(editedSource.match(new RegExp(first, "g"))?.length).toBe(1);
+      expect(reparseMarkdown(editedSource).doc.eq(edited)).toBe(true);
+
+      const deleted = removeTopLevel(snapshot, 2);
+      const deletedSource = serializeMarkdown(deleted, snapshot);
+      expect(deletedSource).toContain(first);
+      expect(deletedSource).not.toContain(second);
+      expect(reparseMarkdown(deletedSource).doc.eq(deleted)).toBe(true);
+    },
+  );
+
+  it("keeps leading and trailing empty paragraphs editable", () => {
+    const leading = parseMarkdown("\n\none");
+    const leadingEdit = replaceTopLevel(
+      leading,
+      0,
+      schema.nodes.paragraph!.create(null, schema.text("zero")),
+    );
+    expect(serializeMarkdown(leadingEdit, leading)).toBe("zero\n\n\none");
+    expect(
+      parseMarkdown(serializeMarkdown(leadingEdit, leading)).doc.eq(
+        leadingEdit,
+      ),
+    ).toBe(true);
+
+    const trailing = parseMarkdown("one\n\n\n");
+    const trailingEdit = replaceTopLevel(
+      trailing,
+      2,
+      schema.nodes.paragraph!.create(null, schema.text("two")),
+    );
+    expect(serializeMarkdown(trailingEdit, trailing)).toBe("one\n\n\ntwo");
+    expect(
+      parseMarkdown(serializeMarkdown(trailingEdit, trailing)).doc.eq(
+        trailingEdit,
+      ),
+    ).toBe(true);
+  });
+
+  it.each(["\n\none", "one\n\n\n", "\n\none\n\n\ntwo\n\n"])(
+    "preserves leading and trailing blank paragraph shape for %j",
+    (source) => {
+      const snapshot = parseMarkdown(source);
+      const serialized = serializeMarkdown(snapshot.doc);
+
+      expect(serialized).toBe(source);
+      expect(serializeMarkdown(snapshot.doc, snapshot)).toBe(source);
+      expect(parseMarkdown(serialized).doc.eq(snapshot.doc)).toBe(true);
+    },
+  );
+
+  it.each([
+    ["\none", 1],
+    ["\n\none", 2],
+    ["\r\none", 1],
+    ["\r\n\r\none", 2],
+    ["\n", 1],
+    ["\n\n", 2],
+    ["\n\n\n", 3],
+    ["\r\n", 1],
+    ["\r\n\r\n", 2],
+  ] as const)(
+    "materializes %d leading or blank-only line endings in %j",
+    (source, expectedEmptyParagraphs) => {
+      const snapshot = parseMarkdown(source);
+      const children = childrenOf(snapshot.doc);
+
+      expect(
+        children.filter(
+          (node) => node.type.name === "paragraph" && node.content.size === 0,
+        ),
+      ).toHaveLength(expectedEmptyParagraphs);
+      expect(serializeMarkdown(snapshot.doc)).toBe(source);
+      expect(serializeMarkdown(snapshot.doc, snapshot)).toBe(source);
+      expect(reparseMarkdown(source).doc.eq(snapshot.doc)).toBe(true);
+    },
+  );
+
+  it("bounds a huge blank run without changing its source-preserving slice", () => {
+    const source = `one${"\n".repeat(100_000)}two`;
+    const snapshot = parseMarkdown(source);
+    const children = childrenOf(snapshot.doc);
+    const emptyParagraphs = children.filter(
+      (node) => node.type.name === "paragraph" && node.content.size === 0,
+    );
+    const spacers = children.filter(
+      (node) =>
+        node.type.name === "raw_block" && node.attrs.kind === "blank-spacer",
+    );
+
+    expect(emptyParagraphs).toHaveLength(MAX_MATERIALIZED_EMPTY_PARAGRAPHS);
+    expect(spacers).toHaveLength(1);
+    expect(snapshot.doc.childCount).toBe(MAX_MATERIALIZED_EMPTY_PARAGRAPHS + 3);
+    expect(serializeMarkdown(snapshot.doc)).toBe(source);
+    expect(
+      reparseMarkdown(serializeMarkdown(snapshot.doc)).doc.eq(snapshot.doc),
+    ).toBe(true);
+    const changed = replaceTopLevel(
+      snapshot,
+      children.length - 1,
+      schema.nodes.paragraph!.create(null, schema.text("changed")),
+    );
+    const changedSource = serializeMarkdown(changed, snapshot);
+    expect(changedSource).toBe(source.replace(/two$/u, "changed"));
+    expect(parseMarkdown(changedSource).doc.eq(changed)).toBe(true);
+  });
+
+  it.each([
+    ["table", "| A |\n| --- |\n| one |\n\n\n\ntwo"],
+    ["code", "```ts\none\n```\n\n\n\ntwo"],
+    ["Alert", "> [!NOTE]\n> one\n\n\n\ntwo"],
+    [
+      "Details",
+      "<details open>\n<summary>Info</summary>\n\nbody\n\n</details>\n\n\n\ntwo",
+    ],
+    ["list", "- one\n- two\n\n\n\ntwo"],
+    ["heading", "# one\n\n\n\ntwo"],
+  ] as const)(
+    "uses the same blank separator rule after %s",
+    (_name, source) => {
+      const snapshot = parseMarkdown(source, "github");
+      const emptyParagraphs = childrenOf(snapshot.doc).filter(
+        (node) => node.type.name === "paragraph" && node.content.size === 0,
+      );
+
+      expect(emptyParagraphs).toHaveLength(2);
+      expect(serializeMarkdown(snapshot.doc, snapshot)).toBe(source);
+      expect(
+        reparseMarkdown(serializeMarkdown(snapshot.doc), "github").doc.eq(
+          snapshot.doc,
+        ),
+      ).toBe(true);
+    },
+  );
 
   it("reuses untouched top-level blocks when a neighboring block changes", () => {
     const source = 'before\n\n<div data-x="1">raw</div>\n\n# after\n';
@@ -686,6 +1026,16 @@ $$
     ).rejects.toThrow(/formatting was skipped/i);
   });
 
+  it("leaves blank-line normalization to explicit formatting", async () => {
+    const source = "one\n\n\n\ntwo";
+    const snapshot = parseMarkdown(source);
+
+    expect(serializeMarkdown(snapshot.doc, snapshot)).toBe(source);
+    const formatted = await formatMarkdown(source);
+    expect(formatted).not.toMatch(/\n{3,}/u);
+    expect(parseMarkdown(formatted).doc.childCount).toBe(2);
+  });
+
   it("handles a long document with linear source matching", () => {
     const paragraphs = Array.from(
       { length: 5000 },
@@ -740,6 +1090,88 @@ $$
     const serialized = serializeMarkdown(moved, snapshot);
     expect(serialized).toBe("A\n\nA\n\nB\n");
     expect(parseMarkdown(serialized).doc.eq(moved)).toBe(true);
+  });
+
+  it("does not let fingerprint fallback cross a future identity anchor", () => {
+    const snapshot = parseMarkdown("A\n\nB\n\nC\n");
+    const original = childrenOf(snapshot.doc);
+    const clonedC = schema.nodeFromJSON(original[2]!.toJSON());
+    expect(clonedC).not.toBe(original[2]);
+    const moved = schema.topNodeType.create(null, [
+      original[0]!,
+      clonedC,
+      original[1]!,
+    ]);
+
+    const serialized = serializeMarkdown(moved, snapshot);
+
+    expect(serialized).toBe("A\n\nC\n\nB\n");
+    expect(reparseMarkdown(serialized).doc.eq(moved)).toBe(true);
+  });
+
+  it.each([
+    {
+      name: "before the next identity anchor",
+      current: (original: PMNode[], clone: PMNode) => [
+        original[0]!,
+        clone,
+        original[1]!,
+        original[2]!,
+      ],
+      expected: "A\n\nC\n\nB\n\nC\n",
+    },
+    {
+      name: "after the previous identity anchor",
+      current: (original: PMNode[], clone: PMNode) => [
+        original[0]!,
+        original[1]!,
+        clone,
+        original[2]!,
+      ],
+      expected: "A\n\nB\n\nC\n\nC\n",
+    },
+  ])(
+    "keeps cloned duplicate insertions ordered $name",
+    ({ current, expected }) => {
+      const snapshot = parseMarkdown("A\n\nB\n\nC\n");
+      const original = childrenOf(snapshot.doc);
+      const clonedC = schema.nodeFromJSON(original[2]!.toJSON());
+      expect(clonedC).not.toBe(original[2]);
+      const moved = schema.topNodeType.create(null, current(original, clonedC));
+
+      const serialized = serializeMarkdown(moved, snapshot);
+
+      expect(serialized).toBe(expected);
+      expect(reparseMarkdown(serialized).doc.eq(moved)).toBe(true);
+    },
+  );
+
+  it("does not rescan invalid fingerprint prefixes for blocked clones", () => {
+    const duplicateCount = 2_500;
+    const source =
+      [
+        ...Array.from({ length: duplicateCount }, () => "duplicate"),
+        "left anchor",
+        "right anchor",
+        "duplicate",
+      ].join("\n\n") + "\n";
+    const snapshot = parseMarkdown(source);
+    const original = childrenOf(snapshot.doc);
+    const leftIndex = duplicateCount;
+    const rightIndex = duplicateCount + 1;
+    const clones = Array.from({ length: duplicateCount }, () =>
+      schema.nodeFromJSON(original[0]!.toJSON()),
+    );
+    expect(clones[0]).not.toBe(original[0]);
+    const moved = schema.topNodeType.create(null, [
+      original[leftIndex]!,
+      ...clones,
+      original[rightIndex]!,
+    ]);
+
+    const serialized = serializeMarkdown(moved, snapshot);
+
+    expect(reparseMarkdown(serialized).doc.eq(moved)).toBe(true);
   });
 
   it("bounds user supplied link and image destinations", () => {

@@ -3483,6 +3483,15 @@ export class MarkdownEditorApp {
 
   private dispatchTransaction(tr: Transaction): void {
     const oldSelection = this.view.state.selection;
+    const rootTransientMeta = tr.getMeta(TRANSIENT_BLANK_META) as
+      TransientBlankTransactionMeta | undefined;
+    // Extend the user's first edit with removal of the untouched generated
+    // paragraphs. Keeping the cleanup in this transaction makes the edit
+    // atomic for the host's Markdown undo history and avoids serializing the
+    // click distance as authored blank lines.
+    const committedTransient =
+      rootTransientMeta?.kind !== "append" &&
+      this.commitTransientBlanksInTransaction(tr);
     const applied = this.view.state.applyTransaction(tr);
     const transactions = applied.transactions;
     const editTarget = this.profileFeatureEditTarget;
@@ -3513,6 +3522,8 @@ export class MarkdownEditorApp {
     }
 
     this.view.updateState(applied.state);
+    if (committedTransient && applied.transactions.length > 0)
+      this.transientBlanks = null;
 
     if (appendMeta?.kind === "append") {
       let from = Number(appendMeta.from);
@@ -3555,8 +3566,9 @@ export class MarkdownEditorApp {
         // while its trailing paragraph remains omitted from the source.
         transientOnly = appendMeta.meaningful !== true;
       } else if (hasContent) {
-        // The first edit in a generated paragraph commits the paragraph and
-        // all of the generated spacing around it as user-authored content.
+        // The transaction already removed untouched generated paragraphs;
+        // only the edited target remains authored content. Clear the marker
+        // so the target is serialized normally from now on.
         this.transientBlanks = null;
       } else if (
         transactions.some(
@@ -3623,6 +3635,46 @@ export class MarkdownEditorApp {
       this.updateToolbarState(oldSelection, this.view.state.selection, {
         revealTableToolbar: selectionSet || docChanged || discardedTransient,
       });
+  }
+
+  private commitTransientBlanksInTransaction(tr: Transaction): boolean {
+    const range = this.transientBlanks;
+    if (!range) return false;
+    const generated = this.transientBlankNodes();
+    if (generated.length === 0) return false;
+
+    const mappedRange: TransientBlankRange = {
+      from: tr.mapping.map(range.from, 1),
+      to: tr.mapping.map(range.to, -1),
+      count: range.count,
+    };
+    const generatedNodes = new Set(generated.map(({ node }) => node));
+    const nodes = topLevelRangeNodes(tr.doc, mappedRange);
+    const hasAuthoredContent = nodes.some(
+      ({ node }) =>
+        !generatedNodes.has(node) ||
+        node.type.name !== "paragraph" ||
+        node.content.size > 0,
+    );
+    if (!hasAuthoredContent) return false;
+
+    const removable = nodes.filter(
+      ({ node }) =>
+        generatedNodes.has(node) &&
+        node.type.name === "paragraph" &&
+        node.content.size === 0,
+    );
+    try {
+      for (let index = removable.length - 1; index >= 0; index -= 1) {
+        const node = removable[index]!;
+        tr.delete(node.from, node.to);
+      }
+    } catch {
+      // Leave the original transaction untouched when a malformed mapping
+      // cannot safely address the generated nodes.
+      return false;
+    }
+    return true;
   }
 
   private mapTransientBlankRange(tr: Transaction): void {
@@ -8843,12 +8895,10 @@ export class MarkdownEditorApp {
     const scrollTop = stage?.scrollTop ?? 0;
 
     // A TextDocument event can repeat the authoritative source after an edit
-    // acknowledgement. Parsing that source again is unsafe because the PM
-    // document may contain transient empty paragraphs that Markdown does not
-    // encode. Keep the exact EditorState when the source and profile are the
-    // same. A terminal-whitespace-only normalization is also safe when both
-    // sources parse to the same semantic document (for example VS Code's
-    // trimFinalNewlines participant).
+    // acknowledgement. Keep the exact EditorState when the source and profile
+    // are the same. Any different authoritative source is parsed and applied
+    // below, including terminal whitespace changes, so TextDocument remains
+    // the sole source of truth.
     let currentMarkdown: string | null = null;
     if (!this.parseError) {
       try {
@@ -8863,41 +8913,6 @@ export class MarkdownEditorApp {
       currentMarkdown !== null &&
       previousProfile === message.profile &&
       currentMarkdown === message.markdown;
-    let normalizedSnapshot: ParseResult | undefined;
-    if (
-      !forceReparse &&
-      !preserveState &&
-      currentMarkdown !== null &&
-      previousProfile === message.profile
-    ) {
-      const trimTerminalWhitespace = (value: string): string =>
-        value.replace(/[ \t]*(?:\r\n|\r|\n)*$/g, "");
-      const localTrimmed = trimTerminalWhitespace(currentMarkdown);
-      const incomingTrimmed = trimTerminalWhitespace(message.markdown);
-      const differsOnlyAtTerminalWhitespace =
-        localTrimmed === incomingTrimmed &&
-        currentMarkdown !== message.markdown;
-      if (differsOnlyAtTerminalWhitespace) {
-        try {
-          const incoming = this.core.parseMarkdown(
-            message.markdown,
-            message.profile,
-          );
-          const local = this.core.parseMarkdown(
-            currentMarkdown,
-            message.profile,
-          );
-          if (incoming.doc.eq(local.doc)) {
-            preserveState = true;
-            normalizedSnapshot = incoming;
-          }
-        } catch {
-          // A source normalization error must fall through to the regular
-          // authoritative reparse below.
-        }
-      }
-    }
-
     const abortedAlertEdit =
       this.profileFeatureEditTarget !== null &&
       (!preserveState || message.mode === "preview");
@@ -8936,9 +8951,6 @@ export class MarkdownEditorApp {
       this.setMode("preview", false, { refreshPreview: false });
 
     if (preserveState) {
-      if (normalizedSnapshot)
-        this.previousSnapshot =
-          normalizedSnapshot.snapshot ?? normalizedSnapshot;
       this.view.setProps({ editable: () => !this.previewOnly });
       this.parseError = null;
       this.serializationError = null;

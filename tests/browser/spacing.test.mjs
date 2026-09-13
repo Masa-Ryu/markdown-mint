@@ -592,6 +592,76 @@ async function loadPreview(page) {
   );
 }
 
+async function readParagraphGeometry(page, rootSelector) {
+  return page.evaluate((selector) => {
+    const root = document.querySelector(selector);
+    return Array.from(root?.children ?? [])
+      .filter((child) => child.matches("p"))
+      .map((paragraph) => ({
+        text: paragraph.textContent ?? "",
+        rect: paragraph.getBoundingClientRect().toJSON(),
+        lineHeight: Number.parseFloat(getComputedStyle(paragraph).lineHeight),
+      }));
+  }, rootSelector);
+}
+
+function assertMaterializedBlankGeometry(geometry, mode) {
+  assert.equal(geometry.length, 3, `${mode} paragraph count`);
+  assert.deepEqual(
+    geometry.map((paragraph) => paragraph.text),
+    ["one", "", "two"],
+    `${mode} paragraph content`,
+  );
+  const contentHeight = geometry[0].rect.height;
+  const blankHeight = geometry[1].rect.height;
+  assert.ok(blankHeight > 0, `${mode} empty paragraph has no height`);
+  assertClose(blankHeight, contentHeight, `${mode} empty paragraph height`);
+  assertClose(
+    blankHeight,
+    geometry[1].lineHeight,
+    `${mode} empty paragraph line height`,
+  );
+}
+
+async function testMaterializedBlankGeometry(page) {
+  const source = "one\n\n\ntwo";
+  await loadRich(page);
+  await deliver(page, source, "github");
+  const rich = await readParagraphGeometry(page, ".mm-rich-panel .ProseMirror");
+  assertMaterializedBlankGeometry(rich, "rich");
+
+  await loadPreview(page);
+  await deliver(page, source, "github");
+  const preview = await readParagraphGeometry(
+    page,
+    ".mm-preview-panel .markdown-body",
+  );
+  assertMaterializedBlankGeometry(preview, "dedicated preview");
+
+  await page.goto(
+    `${baseUrl}/native.html?fixture=spacing&case=materialized-blank`,
+    { waitUntil: "domcontentloaded" },
+  );
+  await page.waitForSelector('[data-testid="native-content"]');
+  await settle(page);
+  const native = await readParagraphGeometry(
+    page,
+    '[data-testid="native-content"]',
+  );
+  assertMaterializedBlankGeometry(native, "native preview");
+
+  for (const [mode, geometry] of [
+    ["dedicated preview", preview],
+    ["native preview", native],
+  ]) {
+    assertClose(
+      geometry[1].rect.height,
+      rich[1].rect.height,
+      `${mode} and rich empty paragraph height`,
+    );
+  }
+}
+
 async function testSurface(page, mode, testCases) {
   const rootSelector =
     mode === "rich"
@@ -913,6 +983,7 @@ async function main() {
       deviceScaleFactor: 1,
     });
 
+    await testMaterializedBlankGeometry(page);
     await loadRich(page);
     await testSurface(page, "rich", [...spacingCases, ...edgeCases]);
     await testStaleRenderedMetadata(page);

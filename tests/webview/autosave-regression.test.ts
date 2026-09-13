@@ -190,37 +190,66 @@ describe("autosave and authoritative snapshot regressions", () => {
     expectNoConflict(root);
   });
 
-  it("preserves the empty paragraph through trimFinalNewlines and permits the next input without a snapshot re-enqueue", () => {
-    const { app, messages, root } = makeApp("# Autosave\n\nBody");
-    const selection = addTrailingEmptyParagraph(app);
-    const edit = lastEdit(messages);
-    expect(edit.markdown).toMatch(/\n\n$/u);
-    app.receiveDocument(
-      hostDocument(edit.markdown, 2, {
-        operationId: edit.operationId,
-        reason: "ack",
-      }),
-    );
-    const beforeTrimCount = edits(messages).length;
-    const stateBeforeTrim = app.view.state;
-    const trimmed = edit.markdown.replace(/\n+$/u, "\n");
-    expect(trimmed).not.toBe(edit.markdown);
+  it.each([
+    {
+      name: "LF with one remaining terminal empty paragraph",
+      initial: "one\n\n\n",
+      authoritative: "one\n\n",
+      afterInput: "one\n\nnext",
+    },
+    {
+      name: "LF with all terminal empty paragraphs removed",
+      initial: "one\n\n\n\n",
+      authoritative: "one\n",
+      afterInput: "onenext\n",
+    },
+    {
+      name: "CRLF with one remaining terminal empty paragraph",
+      initial: "one\r\n\r\n\r\n",
+      authoritative: "one\r\n\r\n",
+      afterInput: "one\r\n\r\nnext",
+    },
+    {
+      name: "CRLF with all terminal empty paragraphs removed",
+      initial: "one\r\n\r\n\r\n\r\n",
+      authoritative: "one\r\n",
+      afterInput: "onenext\r\n",
+    },
+  ])(
+    "applies authoritative terminal whitespace changes for $name",
+    ({ initial, authoritative, afterInput }) => {
+      const { app, messages, root } = makeApp(initial);
+      app.view.dispatch(
+        app.view.state.tr.setSelection(TextSelection.atEnd(app.view.state.doc)),
+      );
+      const beforeUpdate = app.view.state;
+      const beforeEditCount = edits(messages).length;
 
-    app.receiveDocument(hostDocument(trimmed, 3, { reason: "external" }));
+      app.receiveDocument(
+        hostDocument(authoritative, 2, { reason: "external" }),
+      );
 
-    expect(app.view.state).toBe(stateBeforeTrim);
-    expect(app.view.state.selection.eq(selection)).toBe(true);
-    expectEmptyParagraphCaret(app);
-    expect(edits(messages)).toHaveLength(beforeTrimCount);
-    expectNoConflict(root);
+      expect(app.view.state).not.toBe(beforeUpdate);
+      parseMarkdown("cache-bust", "github");
+      expect(
+        app.view.state.doc.eq(parseMarkdown(authoritative, "github").doc),
+      ).toBe(true);
+      expect(app.view.state.selection.from).toBeLessThanOrEqual(
+        app.view.state.doc.content.size,
+      );
+      expect(app.view.state.selection.$from.parent.type.name).toBe("paragraph");
+      expect(edits(messages)).toHaveLength(beforeEditCount);
+      expectNoConflict(root);
 
-    app.view.dispatch(app.view.state.tr.insertText("Next"));
-
-    const next = edits(messages).at(-1);
-    expect(edits(messages)).toHaveLength(beforeTrimCount + 1);
-    expect(next?.baseVersion).toBe(3);
-    expect(next?.markdown).toContain("Next");
-  });
+      app.view.dispatch(app.view.state.tr.insertText("next"));
+      const edit = lastEdit(messages);
+      expect(edit.baseVersion).toBe(2);
+      expect(edit.markdown).toBe(afterInput);
+      expect(edit.markdown.replace(/\r\n|\r/g, "\n")).not.toMatch(/\n{3,}/u);
+      if (authoritative.includes("\r\n"))
+        expect(edit.markdown.replace(/\r\n/g, "")).not.toContain("\n");
+    },
+  );
 
   it("keeps the caret for terminal single-space cleanup while applying semantic hard-break and code whitespace changes", () => {
     const cleanup = makeApp("Body");
@@ -231,7 +260,6 @@ describe("autosave and authoritative snapshot regressions", () => {
     const localSpaceEdit = lastEdit(cleanup.messages);
     expect(cleanup.app.view.state.doc.textContent).toBe("Body ");
     const caret = cleanup.app.view.state.selection;
-    const stateBeforeCleanup = cleanup.app.view.state;
     cleanup.app.receiveDocument(
       hostDocument(localSpaceEdit.markdown, 2, {
         operationId: localSpaceEdit.operationId,
@@ -241,9 +269,16 @@ describe("autosave and authoritative snapshot regressions", () => {
     cleanup.app.receiveDocument(
       hostDocument("Body", 3, { reason: "external" }),
     );
-    expect(cleanup.app.view.state).toBe(stateBeforeCleanup);
-    expect(cleanup.app.view.state.selection.eq(caret)).toBe(true);
-    expect(cleanup.app.view.state.doc.textContent).toBe("Body ");
+    expect(cleanup.app.view.state.doc).toEqual(
+      parseMarkdown("Body", "github").doc,
+    );
+    expect(cleanup.app.view.state.selection.from).toBeLessThanOrEqual(
+      cleanup.app.view.state.doc.content.size,
+    );
+    expect(cleanup.app.view.state.selection.from).toBeLessThanOrEqual(
+      caret.from,
+    );
+    expect(cleanup.app.view.state.doc.textContent).toBe("Body");
     expect(edits(cleanup.messages)).toHaveLength(1);
 
     const hardBreak = makeApp("Body");
