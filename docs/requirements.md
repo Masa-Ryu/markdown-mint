@@ -563,8 +563,10 @@ The 0.0.5 and earlier evidence above remains historical.
 
 - The empty-paragraph `+` affordance opens one shared **Insert block** popup.
   Its visible labels are **Bullet list**, **Ordered list**, **Task**, **Quote**,
-  **Code**, **Table**, and **Horizontal rule**, while the existing icons,
-  tooltips, profile gating, mouse commands, and table dialog are preserved.
+  **Code**, **Table**, **Image**, and **Horizontal rule**. Image reuses the
+  existing image dialog and popup saved-selection path; popup items keep their
+  accessible labels without per-item tooltips, while the existing icons,
+  profile gating, mouse commands, and table dialog are preserved.
 - The popup follows its two-column row-major layout for ArrowLeft/Right
   (`±1`) and ArrowUp/Down (`±2`) with modulo wrapping. Disabled profile items
   are skipped using the same delta; Home and End select the first and last

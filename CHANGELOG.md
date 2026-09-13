@@ -6,7 +6,9 @@
   list and Ordered list labels, two-dimensional keyboard navigation that skips
   profile-disabled items, and a transient `/` trigger for the same popup.
   Canceling the slash menu restores and materializes one literal slash, while
-  committed commands consume it without adding a slash-only edit.
+  committed commands consume it without adding a slash-only edit. The popup
+  also includes Image through the existing image dialog and saved-selection
+  path, with accessible item labels and no redundant item tooltips.
 
 - Improved TextDocument-authoritative synchronization and save handling. Exact
   edit bases now survive queued input, delayed or duplicate acknowledgements,

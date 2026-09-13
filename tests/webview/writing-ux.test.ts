@@ -349,12 +349,27 @@ describe("bounded writing controls", () => {
       "blockquote",
       "code-block",
       "table",
+      "image",
       "divider",
     ]);
+    const menuItems = Array.from(
+      popup.querySelectorAll<HTMLButtonElement>('button[role="menuitem"]'),
+    );
+    expect(menuItems.every((item) => !item.hasAttribute("data-tooltip"))).toBe(
+      true,
+    );
+    expect(menuItems.map((item) => item.getAttribute("aria-label"))).toEqual([
+      "Bullet list",
+      "Ordered list",
+      "Task list",
+      "Block quote",
+      "Code block",
+      "Insert table",
+      "Insert image",
+      "Horizontal rule",
+    ]);
     expect(
-      Array.from(
-        popup.querySelectorAll<HTMLButtonElement>('button[role="menuitem"]'),
-      ).map(
+      menuItems.map(
         (item) =>
           item
             .querySelector<HTMLElement>(".mm-toolbar-button-label")
@@ -367,6 +382,7 @@ describe("bounded writing controls", () => {
       "Quote",
       "Code",
       "Table",
+      "Image",
       "Horizontal rule",
     ]);
   });
@@ -753,13 +769,13 @@ describe("bounded writing controls", () => {
     dispatchPopupKey(panel, "ArrowRight");
     expect(document.activeElement).toBe(items[2]);
 
-    items[6]!.focus();
+    items[7]!.focus();
     dispatchPopupKey(panel, "ArrowDown");
     expect(document.activeElement).toBe(items[1]);
 
     items[0]!.focus();
     dispatchPopupKey(panel, "ArrowLeft");
-    expect(document.activeElement).toBe(items[6]);
+    expect(document.activeElement).toBe(items[7]);
     dispatchPopupKey(panel, "ArrowRight");
     expect(document.activeElement).toBe(items[0]);
   });
@@ -786,10 +802,22 @@ describe("bounded writing controls", () => {
       [1, 3],
       [2, 4],
       [3, 5],
-      [6, 1],
+      [4, 6],
+      [5, 7],
+      [6, 0],
+      [7, 1],
     ] as Array<[number, number]>) {
       items[from]!.focus();
       dispatchPopupKey(panel, "ArrowDown");
+      expect(document.activeElement).toBe(items[to]);
+    }
+
+    for (const [from, to] of [
+      [6, 4],
+      [7, 5],
+    ] as Array<[number, number]>) {
+      items[from]!.focus();
+      dispatchPopupKey(panel, "ArrowUp");
       expect(document.activeElement).toBe(items[to]);
     }
   });
@@ -815,7 +843,97 @@ describe("bounded writing controls", () => {
     dispatchPopupKey(panel, "Home");
     expect(document.activeElement).toBe(items[0]);
     dispatchPopupKey(panel, "End");
-    expect(document.activeElement).toBe(items[6]);
+    expect(document.activeElement).toBe(items[7]);
+  });
+
+  it("opens the existing Image dialog from the plus popup and applies at the saved position", () => {
+    const { app, root, messages } = makeApp("one");
+    prepareTrailingEmptyParagraph(app, messages);
+    const before = editMessages(messages).length;
+    const { panel } = openEmptyLinePopup(root);
+    const imageButton = insertPopupItems(root)[6]!;
+
+    imageButton.click();
+
+    const dialog = root.querySelector<HTMLDialogElement>(
+      '[aria-labelledby="mm-image-dialog-title"]',
+    )!;
+    expect(dialog.open).toBe(true);
+    expect(panel.hidden).toBe(true);
+    expect(editMessages(messages)).toHaveLength(before);
+    expect(imageButton.getAttribute("aria-label")).toBe("Insert image");
+    expect(imageButton.hasAttribute("data-tooltip")).toBe(false);
+
+    const [pathInput, altInput] = Array.from(
+      dialog.querySelectorAll<HTMLInputElement>("input"),
+    );
+    pathInput!.value = "./images/from-plus.png";
+    altInput!.value = "from plus";
+    dialog.querySelector<HTMLButtonElement>('button[type="submit"]')!.click();
+
+    expect(app.view.state.doc.lastChild?.firstChild?.type.name).toBe("image");
+    expect(app.view.state.doc.lastChild?.firstChild?.attrs).toMatchObject({
+      src: "./images/from-plus.png",
+      alt: "from plus",
+    });
+    expect(editMessages(messages)).toHaveLength(before + 1);
+    expect(editMessages(messages).at(-1)?.markdown).toBe(
+      "one\n\n![from plus](./images/from-plus.png)",
+    );
+  });
+
+  it("opens Image from slash, consumes the trigger, and applies at the saved position", () => {
+    const { app, root, messages } = makeApp("one");
+    prepareTrailingEmptyParagraph(app, messages);
+    const before = editMessages(messages).length;
+
+    expect(dispatchTextInput(app, "/")).toBe(true);
+    const items = insertPopupItems(root);
+    items[6]!.click();
+
+    const dialog = root.querySelector<HTMLDialogElement>(
+      '[aria-labelledby="mm-image-dialog-title"]',
+    )!;
+    expect(dialog.open).toBe(true);
+    expect(app.view.state.doc.textContent).toBe("one");
+    expect(app.view.state.doc.textContent).not.toContain("/");
+    expect(editMessages(messages)).toHaveLength(before);
+
+    const [pathInput, altInput] = Array.from(
+      dialog.querySelectorAll<HTMLInputElement>("input"),
+    );
+    pathInput!.value = "https://example.com/from-slash.png";
+    altInput!.value = "from slash";
+    dialog.querySelector<HTMLButtonElement>('button[type="submit"]')!.click();
+
+    expect(app.view.state.doc.lastChild?.firstChild?.type.name).toBe("image");
+    expect(app.view.state.doc.lastChild?.firstChild?.attrs).toMatchObject({
+      src: "https://example.com/from-slash.png",
+      alt: "from slash",
+    });
+    expect(app.view.state.doc.textContent).not.toContain("/");
+    expect(editMessages(messages)).toHaveLength(before + 1);
+    expect(editMessages(messages).at(-1)?.markdown).toBe(
+      "one\n\n![from slash](https://example.com/from-slash.png)",
+    );
+  });
+
+  it("cancels the Image dialog without creating an unnecessary edit", () => {
+    const { app, root, messages } = makeApp("one");
+    prepareTrailingEmptyParagraph(app, messages);
+    const before = editMessages(messages).length;
+    expect(dispatchTextInput(app, "/")).toBe(true);
+    insertPopupItems(root)[6]!.click();
+
+    const dialog = root.querySelector<HTMLDialogElement>(
+      '[aria-labelledby="mm-image-dialog-title"]',
+    )!;
+    dialog.querySelector<HTMLButtonElement>('button[type="button"]')!.click();
+
+    expect(dialog.open).toBe(false);
+    expect(app.view.state.doc.textContent).toBe("one");
+    expect(app.view.state.doc.textContent).not.toContain("/");
+    expect(editMessages(messages)).toHaveLength(before);
   });
 
   it("opens the same Insert block popup from slash without editing first", () => {

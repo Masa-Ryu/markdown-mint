@@ -5227,7 +5227,6 @@ export class MarkdownEditorApp {
         type: "button",
         class: "mm-tool-button",
         role: "menuitem",
-        "data-tooltip": title,
         "aria-label": title,
         ...(testId ? { "data-testid": testId } : {}),
       }) as HTMLButtonElement;
@@ -5303,6 +5302,13 @@ export class MarkdownEditorApp {
       "table",
     );
     tableButton.dataset.gfmOnly = "true";
+    addMenuButton(
+      "Image",
+      "Insert image",
+      () => this.insertImage(),
+      undefined,
+      "image",
+    );
     addMenuButton(
       "Horizontal rule",
       "Horizontal rule",
