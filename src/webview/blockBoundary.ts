@@ -91,7 +91,7 @@ export function isBlockBoundary(doc: PMNode, position: number): boolean {
   }
 }
 
-/** Draw the virtual caret without inserting a paragraph or changing layout. */
+/** Draw a virtual one-line insertion slot without mutating the document. */
 export function createBlockBoundaryPlugin(): Plugin {
   return new Plugin({
     props: {

@@ -16,6 +16,7 @@ import {
   type ProfileFeatureProfile,
   type ProfileFeatureValues,
 } from "../../src/webview/profileFeatures";
+import { BlockBoundarySelection } from "../../src/webview/blockBoundary";
 import {
   parseMarkdown,
   renderMarkdownDocument,
@@ -92,6 +93,23 @@ function run(
   expect(ran).toBe(true);
   if (!dispatched) throw new Error("profile feature command did not dispatch");
   return { state: state.apply(dispatched), transactions: [dispatched] };
+}
+
+function boundaryState(
+  state: EditorState,
+  childIndex: number,
+): { state: EditorState; position: number } {
+  let position = 0;
+  for (let index = 0; index < childIndex; index += 1)
+    position += state.doc.child(index).nodeSize;
+  return {
+    state: state.apply(
+      state.tr.setSelection(
+        new BlockBoundarySelection(state.doc.resolve(position)),
+      ),
+    ),
+    position,
+  };
 }
 
 describe("profile feature catalog and source", () => {
@@ -205,6 +223,123 @@ describe("profile feature catalog and source", () => {
 });
 
 describe("profile feature insertion commands", () => {
+  it("inserts every block feature directly at a structural boundary", () => {
+    const source = "```text\ncode\n```\n\n| A | B |\n| --- | --- |\n| a | b |";
+    const cases: Array<{
+      profile: "github" | "gitlab";
+      feature: ProfileFeatureId;
+      values: ProfileFeatureValues;
+      kind: string;
+      nodeType?: string;
+    }> = [
+      {
+        profile: "github",
+        feature: "alert",
+        values: { body: "Alert body" },
+        kind: "alert",
+      },
+      {
+        profile: "github",
+        feature: "details",
+        values: { summary: "More", body: "Details body" },
+        kind: "details",
+        nodeType: "details",
+      },
+      {
+        profile: "github",
+        feature: "math",
+        values: { expression: "x^2" },
+        kind: "math-block",
+      },
+      {
+        profile: "github",
+        feature: "mermaid",
+        values: { source: "graph TD\nA-->B" },
+        kind: "protected-fence",
+      },
+      {
+        profile: "gitlab",
+        feature: "gitlab-toc",
+        values: {},
+        kind: "gitlab-toc",
+      },
+      {
+        profile: "gitlab",
+        feature: "gitlab-description-list",
+        values: { term: "Term", definition: "Definition" },
+        kind: "gitlab-description-list",
+      },
+    ];
+
+    for (const entry of cases) {
+      const initial = stateFrom(source, entry.profile);
+      const selected = boundaryState(initial, 1);
+      expect(selected.state.selection).toBeInstanceOf(BlockBoundarySelection);
+      let dispatchCount = 0;
+      let dispatched: Transaction | undefined;
+      const command = createProfileFeatureCommand(
+        core,
+        entry.profile,
+        entry.feature,
+        entry.values,
+      );
+      expect(
+        command(selected.state, (transaction) => {
+          dispatchCount += 1;
+          dispatched = transaction;
+        }),
+      ).toBe(true);
+      expect(dispatchCount).toBe(1);
+      if (!dispatched) throw new Error("profile feature did not dispatch");
+
+      const next = selected.state.apply(dispatched);
+      expect(next.doc.childCount).toBe(3);
+      expect(next.doc.child(0).type.name).toBe("code_block");
+      expect(next.doc.child(1).type.name).toBe(entry.nodeType ?? "raw_block");
+      expect(next.doc.child(1).attrs.kind).toBe(entry.kind);
+      expect(next.doc.child(2).type.name).toBe("table");
+      expect(next.selection).toBeInstanceOf(NodeSelection);
+      expect(next.selection.from).toBe(selected.position);
+      if (!(next.selection instanceof NodeSelection))
+        throw new Error("profile feature did not select the inserted block");
+      expect(next.selection.node.attrs.kind).toBe(entry.kind);
+    }
+  });
+
+  it("inserts block features at the structural document start and end", () => {
+    const finalInitial = stateFrom("```text\ncode\n```", "github");
+    const final = finalInitial.apply(
+      finalInitial.tr.setSelection(
+        new BlockBoundarySelection(
+          finalInitial.doc.resolve(finalInitial.doc.content.size),
+        ),
+      ),
+    );
+    const finalResult = run(final, "github", "alert", {
+      body: "At the end",
+    });
+    expect(finalResult.state.doc.childCount).toBe(2);
+    expect(finalResult.state.doc.child(0).type.name).toBe("code_block");
+    expect(finalResult.state.doc.child(1).attrs.kind).toBe("alert");
+    expect(finalResult.state.doc.child(1).type.name).toBe("raw_block");
+    expect(finalResult.state.selection).toBeInstanceOf(NodeSelection);
+
+    const startInitial = stateFrom("```text\ncode\n```", "github");
+    const start = startInitial.apply(
+      startInitial.tr.setSelection(
+        new BlockBoundarySelection(startInitial.doc.resolve(0)),
+      ),
+    );
+    const startResult = run(start, "github", "details", {
+      summary: "At the start",
+      body: "Details body",
+    });
+    expect(startResult.state.doc.childCount).toBe(2);
+    expect(startResult.state.doc.child(0).type.name).toBe("details");
+    expect(startResult.state.doc.child(1).type.name).toBe("code_block");
+    expect(startResult.state.selection).toBeInstanceOf(NodeSelection);
+  });
+
   it("inserts a block and places the caret in the following paragraph", () => {
     const state = selectText(stateFrom("before\n\nAfter"), "before");
     const result = run(state, "github", "alert", { body: "body" });

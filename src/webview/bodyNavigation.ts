@@ -4,7 +4,72 @@ import type { EditorView } from "prosemirror-view";
 import { BlockBoundarySelection, isBlockBoundary } from "./blockBoundary";
 
 type Direction = -1 | 1;
+type NavigationResult = "unhandled" | "handled-no-move" | "moved";
 type CaretRect = { left: number; top: number; bottom: number };
+
+export interface NavigationTarget {
+  position: number;
+  node: PMNode;
+}
+
+const structuralNodeTypes = new Set([
+  "code_block",
+  "details",
+  "horizontal_rule",
+  "raw_block",
+]);
+
+/** Classify an actual navigation target without treating every PM block alike. */
+export function isStructuralNavigationTarget(node: PMNode): boolean {
+  if (structuralNodeTypes.has(node.type.name)) return true;
+  if (node.type.spec.tableRole === "table") return true;
+  if (
+    node.type.name === "paragraph" &&
+    node.childCount === 1 &&
+    node.firstChild?.type.name === "image"
+  )
+    return true;
+  // Keep future raw/protected atomic block nodes structural without making
+  // ordinary paragraphs, headings, lists, or blockquotes structural merely
+  // because they belong to the `block` group.
+  return Boolean(
+    node.type.spec.atom && node.type.spec.group?.split(/\s+/).includes("block"),
+  );
+}
+
+/** Only adjacent structural actual targets expose a virtual insertion gap. */
+export function shouldStopAtStructuralGap(
+  previous: NavigationTarget | null,
+  next: NavigationTarget | null,
+): boolean {
+  return Boolean(
+    previous &&
+    next &&
+    previous.position + previous.node.nodeSize === next.position &&
+    isStructuralNavigationTarget(previous.node) &&
+    isStructuralNavigationTarget(next.node),
+  );
+}
+
+/** Return an insertion edge only for the first or last structural document child. */
+export function structuralDocumentEdgeFor(
+  origin: NavigationTarget | null,
+  direction: Direction,
+  position: number,
+  doc: PMNode,
+): number | null {
+  if (!origin || !isBlockBoundary(doc, origin.position)) return null;
+  if (!isStructuralNavigationTarget(origin.node)) return null;
+  if (
+    direction > 0 &&
+    position === doc.content.size &&
+    origin.position + origin.node.nodeSize === doc.content.size
+  )
+    return position;
+  if (direction < 0 && position === 0 && origin.position === 0) return position;
+  return null;
+}
+
 const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 
 function textareaCaret(value: string, offset: number): number {
@@ -148,10 +213,7 @@ export class BodyNavigation {
       this.resetGoal();
   };
 
-  constructor(
-    private readonly view: EditorView,
-    private readonly exitDocument: (position: number, node: PMNode) => boolean,
-  ) {
+  constructor(private readonly view: EditorView) {
     view.dom.addEventListener("pointerdown", this.resetGoal, true);
     view.dom.addEventListener("input", this.resetGoal, true);
     view.dom.addEventListener("keydown", this.resetForKey, true);
@@ -180,11 +242,14 @@ export class BodyNavigation {
       event.key === "ArrowUp" || event.key === "ArrowLeft" ? -1 : 1;
     const vertical = event.key === "ArrowUp" || event.key === "ArrowDown";
     if (!vertical) this.resetGoal();
-    let moved = false;
+    let result: NavigationResult = "unhandled";
     if (selection instanceof BlockBoundarySelection) {
-      moved = this.moveFromBoundary(selection.head, direction, vertical);
-    } else if (selection instanceof NodeSelection && selection.node.isBlock) {
-      moved = this.moveFromBlock(
+      result = this.moveFromBoundary(selection.head, direction, vertical);
+    } else if (
+      selection instanceof NodeSelection &&
+      (selection.node.isBlock || selection.node.isAtom)
+    ) {
+      result = this.moveFromBlock(
         selection.from,
         selection.node,
         direction,
@@ -224,15 +289,15 @@ export class BodyNavigation {
           event.preventDefault();
           return true;
         }
-        moved = this.moveFromBlock(position, block, direction, vertical);
+        result = this.moveFromBlock(position, block, direction, vertical);
       }
       // Interior vertical motion belongs to the browser. It keeps the native
       // caret's visual-row and scroll behavior, including wrapped and
       // decorated code. We only take over when endOfTextblock() confirms that
       // the next arrow would leave this textblock.
     }
-    if (moved) event.preventDefault();
-    return moved;
+    if (result !== "unhandled") event.preventDefault();
+    return result !== "unhandled";
   }
 
   moveFromTextarea(
@@ -256,7 +321,7 @@ export class BodyNavigation {
       this.resetGoal();
       if (editor.selectionStart !== (step < 0 ? 0 : editor.value.length))
         return false;
-      return this.moveFromBlock(position, block, step, false);
+      return this.moveFromBlock(position, block, step, false) !== "unhandled";
     }
     return (
       withTextareaLayout(editor, (caret) => {
@@ -264,7 +329,9 @@ export class BodyNavigation {
         this.goalX ??= current.left;
         const edge = caret(step < 0 ? 0 : editor.value.length);
         if (Math.abs(current.top - edge.top) < 1)
-          return this.moveFromBlock(position, block, step, true);
+          return (
+            this.moveFromBlock(position, block, step, true) !== "unhandled"
+          );
         let low = step < 0 ? 0 : editor.selectionStart + 1;
         let high = step < 0 ? editor.selectionStart : editor.value.length;
         while (low < high) {
@@ -288,6 +355,51 @@ export class BodyNavigation {
     );
   }
 
+  /**
+   * Leave an existing insertion boundary in one key press. Table navigation
+   * uses this entry point because its keymap runs before the editor's general
+   * keydown handler.
+   */
+  moveVerticallyFromBoundary(
+    position: number,
+    direction: Direction,
+    goalPosition?: number,
+  ): boolean {
+    if (!isBlockBoundary(this.view.state.doc, position)) return false;
+    if (goalPosition !== undefined) this.captureGoal(goalPosition);
+    return this.moveFromBoundary(position, direction, true) !== "unhandled";
+  }
+
+  /**
+   * Arrow navigation from a block edge shares the same actual-target graph as
+   * the editor-level handler. A boundary is exposed only for adjacent
+   * structural top-level targets.
+   */
+  moveFromBlockEdge(
+    position: number,
+    direction: Direction,
+    vertical: boolean,
+    goalPosition?: number,
+  ): boolean {
+    if (vertical && goalPosition !== undefined) this.captureGoal(goalPosition);
+    return (
+      this.moveFromPosition(
+        position,
+        direction,
+        vertical,
+        this.targetAtBlockEdge(position, direction),
+      ) !== "unhandled"
+    );
+  }
+
+  moveVerticallyFromBlockEdge(
+    position: number,
+    direction: Direction,
+    goalPosition?: number,
+  ): boolean {
+    return this.moveFromBlockEdge(position, direction, true, goalPosition);
+  }
+
   private captureGoal(position: number): void {
     if (this.goalX !== undefined) return;
     try {
@@ -298,133 +410,128 @@ export class BodyNavigation {
     }
   }
 
+  private targetForBlock(
+    position: number,
+    block: PMNode,
+  ): NavigationTarget | null {
+    const doc = this.view.state.doc;
+    try {
+      const resolved = doc.resolve(position);
+      if (resolved.depth === 0) {
+        const direct = doc.nodeAt(position);
+        return direct === block ? { position, node: direct } : null;
+      }
+      return {
+        position: resolved.before(1),
+        node: resolved.node(1),
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  private targetAtBlockEdge(
+    position: number,
+    direction: Direction,
+  ): NavigationTarget | null {
+    const doc = this.view.state.doc;
+    if (!isBlockBoundary(doc, position)) return null;
+    try {
+      const resolved = doc.resolve(position);
+      const node = direction > 0 ? resolved.nodeBefore : resolved.nodeAfter;
+      if (!node) return null;
+      return {
+        position: direction > 0 ? position - node.nodeSize : position,
+        node,
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  private targetForSelection(selection: Selection): NavigationTarget | null {
+    const doc = this.view.state.doc;
+    try {
+      if (selection.$from.depth === 0) {
+        const node = doc.nodeAt(selection.from);
+        return node ? { position: selection.from, node } : null;
+      }
+      return {
+        position: selection.$from.before(1),
+        node: selection.$from.node(1),
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  private structuralBoundaryFor(
+    origin: NavigationTarget | null,
+    candidate: NavigationTarget | null,
+    direction: Direction,
+  ): number | null {
+    const previous = direction < 0 ? candidate : origin;
+    const next = direction < 0 ? origin : candidate;
+    if (!shouldStopAtStructuralGap(previous, next)) return null;
+    return next!.position;
+  }
+
   private moveFromBlock(
     position: number,
     block: PMNode,
     direction: Direction,
     vertical: boolean,
-  ): boolean {
+  ): NavigationResult {
     const doc = this.view.state.doc;
-    // Top-level block edges are virtual stops. Keeping this as a selection
-    // avoids the transient paragraph that older navigation used as a caret
-    // target, so crossing a boundary never edits the document.
-    if (isBlockBoundary(doc, position) && doc.nodeAt(position) === block) {
-      const boundary = direction < 0 ? position : position + block.nodeSize;
-      return this.selectBoundary(boundary);
-    }
-    let cursor = direction < 0 ? position : position + block.nodeSize;
     const origin = doc.resolve(position);
-    const originOuterPosition = origin.depth ? origin.before(1) : position;
-    const originOuterBlock = origin.depth ? origin.node(1) : block;
-    while (cursor >= 0 && cursor <= doc.content.size) {
-      let selection = Selection.findFrom(doc.resolve(cursor), direction);
-      if (!selection) break;
-      // A nested textblock may have a valid Selection.findFrom result in the
-      // next top-level node. Stop at the outer block first so the same
-      // virtual boundary is used for Details, lists, and blockquotes.
-      const candidate = selection.$from;
-      const candidatePosition = candidate.depth
-        ? candidate.before(1)
-        : selection.from;
-      const candidateBlock = candidate.depth
-        ? candidate.node(1)
-        : doc.nodeAt(selection.from);
-      if (
-        origin.depth > 0 &&
-        (candidatePosition !== originOuterPosition ||
-          candidateBlock !== originOuterBlock)
-      ) {
-        const boundary =
-          direction < 0
-            ? originOuterPosition
-            : originOuterPosition + originOuterBlock.nodeSize;
-        if (isBlockBoundary(doc, boundary))
-          return this.selectBoundary(boundary);
-      }
-      // A collapsed structured Details remains one visible stop, regardless
-      // of the depth of the hidden text position found by ProseMirror.
-      for (let depth = 1; depth <= selection.$from.depth; depth += 1) {
-        if (selection.$from.node(depth).type.name !== "details") continue;
-        const container = selection.$from.before(depth);
-        const dom = this.view.nodeDOM(container);
-        if (
-          dom instanceof HTMLElement &&
-          dom.dataset.mmDetailsOpen === "false"
-        ) {
-          selection = NodeSelection.create(doc, container);
-          break;
-        }
-      }
-      if (selection instanceof NodeSelection) {
-        const dom = this.view.nodeDOM(selection.from);
-        if (dom instanceof HTMLElement && dom.hidden) {
-          cursor = direction < 0 ? selection.from : selection.to;
-          continue;
-        }
-        const editor = this.alertEditor(selection.from);
-        if (editor) {
-          this.view.dispatch(
-            this.view.state.tr
-              .setSelection(selection)
-              .setMeta("addToHistory", false),
-          );
-          editor.focus({ preventScroll: true });
-          let offset = direction < 0 ? editor.value.length : 0;
-          if (vertical && this.goalX !== undefined) {
-            offset =
-              withTextareaLayout(editor, (caret) =>
-                caretOnRow(
-                  editor.value.length,
-                  caret,
-                  caret(offset).top,
-                  this.goalX!,
-                ),
-              ) ?? offset;
-          }
-          const safeOffset = textareaCaret(editor.value, offset);
-          editor.setSelectionRange(safeOffset, safeOffset);
-          editor.scrollIntoView?.({ block: "nearest" });
-          return true;
-        }
-      } else if (
-        selection instanceof TextSelection &&
-        vertical &&
-        this.goalX !== undefined
-      ) {
-        selection = this.textSelectionAtX(selection);
-      }
-      this.select(selection);
-      return true;
-    }
-    const resolved = doc.resolve(position);
-    const outerBlock = resolved.depth ? resolved.node(1) : block;
-    const outerPosition = resolved.depth ? resolved.before(1) : position;
+    let cursor = direction < 0 ? position : position + block.nodeSize;
+    // An inline atom that occupies its paragraph is already the complete
+    // displayed target. Skip the caret positions around its wrapper in every
+    // direction so the next key reaches the adjacent actual block.
     if (
-      direction > 0 &&
-      (outerBlock.type.name === "details" ||
-        (resolved.depth === 0 && block.type.name !== "paragraph"))
-    ) {
-      const boundary = outerPosition + outerBlock.nodeSize;
-      if (isBlockBoundary(doc, boundary)) return this.selectBoundary(boundary);
-      // Preserve the old escape hatch for malformed or non-top-level states.
-      const moved = this.exitDocument(outerPosition, outerBlock);
-      if (moved) this.view.focus();
-      return moved;
-    }
-    return false;
+      block.isInline &&
+      block.isAtom &&
+      origin.parent.isTextblock &&
+      origin.parent.childCount === 1
+    )
+      cursor = direction < 0 ? origin.before() : origin.after();
+    return this.moveFromPosition(
+      cursor,
+      direction,
+      vertical,
+      this.targetForBlock(position, block),
+    );
   }
 
   private moveFromBoundary(
     position: number,
     direction: Direction,
     vertical: boolean,
-  ): boolean {
+  ): NavigationResult {
+    if (!isBlockBoundary(this.view.state.doc, position)) return "unhandled";
+    return this.moveFromPosition(position, direction, vertical, null);
+  }
+
+  private moveFromPosition(
+    position: number,
+    direction: Direction,
+    vertical: boolean,
+    origin: NavigationTarget | null,
+  ): NavigationResult {
     const doc = this.view.state.doc;
-    if (!isBlockBoundary(doc, position)) return false;
     let cursor = position;
     while (cursor >= 0 && cursor <= doc.content.size) {
       let selection = Selection.findFrom(doc.resolve(cursor), direction);
-      if (!selection) return false;
+      if (!selection) {
+        const documentEdge = structuralDocumentEdgeFor(
+          origin,
+          direction,
+          direction > 0 ? doc.content.size : 0,
+          doc,
+        );
+        if (documentEdge !== null) return this.selectBoundary(documentEdge);
+        break;
+      }
       // A collapsed structured Details remains one visible stop, regardless
       // of the depth of the hidden text position found by ProseMirror.
       for (let depth = 1; depth <= selection.$from.depth; depth += 1) {
@@ -439,12 +546,29 @@ export class BodyNavigation {
           break;
         }
       }
+      selection = this.atomicInlineSelection(selection);
       if (selection instanceof NodeSelection) {
         const dom = this.view.nodeDOM(selection.from);
         if (dom instanceof HTMLElement && dom.hidden) {
           cursor = direction < 0 ? selection.from : selection.to;
           continue;
         }
+      }
+      if (
+        selection instanceof TextSelection &&
+        vertical &&
+        this.goalX !== undefined
+      )
+        selection = this.textSelectionAtX(selection);
+
+      const boundary = this.structuralBoundaryFor(
+        origin,
+        this.targetForSelection(selection),
+        direction,
+      );
+      if (boundary !== null) return this.selectBoundary(boundary);
+
+      if (selection instanceof NodeSelection) {
         const editor = this.alertEditor(selection.from);
         if (editor) {
           this.view.dispatch(
@@ -468,29 +592,31 @@ export class BodyNavigation {
           const safeOffset = textareaCaret(editor.value, offset);
           editor.setSelectionRange(safeOffset, safeOffset);
           editor.scrollIntoView?.({ block: "nearest" });
-          return true;
+          return "moved";
         }
-      } else if (
-        selection instanceof TextSelection &&
-        vertical &&
-        this.goalX !== undefined
-      ) {
-        selection = this.textSelectionAtX(selection);
       }
-      this.select(selection);
-      return true;
+      return this.select(selection);
     }
-    return false;
+    return "handled-no-move";
   }
 
-  private selectBoundary(position: number): boolean {
-    const doc = this.view.state.doc;
-    if (!isBlockBoundary(doc, position)) return false;
+  /** A paragraph containing only an atom is one displayed atomic target. */
+  private atomicInlineSelection(selection: Selection): Selection {
+    if (!(selection instanceof TextSelection) || !selection.empty)
+      return selection;
+    const parent = selection.$from.parent;
+    const atom = parent.childCount === 1 ? parent.firstChild : null;
+    if (
+      !parent.isTextblock ||
+      !atom?.isAtom ||
+      !["image", "raw_inline"].includes(atom.type.name) ||
+      atom.type.spec.selectable === false
+    )
+      return selection;
     try {
-      this.select(new BlockBoundarySelection(doc.resolve(position)));
-      return true;
+      return NodeSelection.create(this.view.state.doc, selection.$from.start());
     } catch {
-      return false;
+      return selection;
     }
   }
 
@@ -522,11 +648,22 @@ export class BodyNavigation {
       : null;
   }
 
-  private select(selection: Selection): void {
+  private selectBoundary(position: number): NavigationResult {
+    const doc = this.view.state.doc;
+    if (!isBlockBoundary(doc, position)) return "unhandled";
+    try {
+      return this.select(new BlockBoundarySelection(doc.resolve(position)));
+    } catch {
+      return "unhandled";
+    }
+  }
+
+  private select(selection: Selection): NavigationResult {
     const transaction = this.view.state.tr
       .setSelection(selection)
       .setMeta("addToHistory", false);
     this.view.dispatch(transaction.scrollIntoView());
     this.view.focus();
+    return "moved";
   }
 }

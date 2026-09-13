@@ -1,6 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { NodeSelection, TextSelection } from "prosemirror-state";
-import { BlockBoundarySelection } from "../../src/webview/blockBoundary";
 import {
   parseMarkdown,
   renderMarkdown,
@@ -8,6 +7,7 @@ import {
   serializeMarkdown,
 } from "../../src/core";
 import { PROTOCOL_VERSION } from "../../src/shared/protocol";
+import { BlockBoundarySelection } from "../../src/webview/blockBoundary";
 import {
   createEditorApp,
   type EditorInitialDocument,
@@ -990,14 +990,6 @@ describe("rich editor rendering", () => {
       ".mm-alert-body-editor",
     )!;
     expect(intoAlert.defaultPrevented).toBe(true);
-    expect(app.view.state.selection).toBeInstanceOf(BlockBoundarySelection);
-    paragraphs[0]!.dispatchEvent(
-      new KeyboardEvent("keydown", {
-        bubbles: true,
-        cancelable: true,
-        key: "ArrowRight",
-      }),
-    );
     expect(document.activeElement).toBe(bodyEditor);
     expect(bodyEditor.selectionStart).toBe(0);
     expect(bodyEditor.selectionEnd).toBe(0);
@@ -1013,14 +1005,6 @@ describe("rich editor rendering", () => {
     });
     bodyEditor.dispatchEvent(outOfAlert);
     expect(outOfAlert.defaultPrevented).toBe(true);
-    expect(app.view.state.selection).toBeInstanceOf(BlockBoundarySelection);
-    app.view.dom.dispatchEvent(
-      new KeyboardEvent("keydown", {
-        bubbles: true,
-        cancelable: true,
-        key: "ArrowRight",
-      }),
-    );
     expect(app.view.state.selection.$from.parent.textContent).toBe("After");
 
     const last = paragraphs[1]!;
@@ -1043,14 +1027,6 @@ describe("rich editor rendering", () => {
     });
     last.dispatchEvent(backIntoAlert);
     expect(backIntoAlert.defaultPrevented).toBe(true);
-    expect(app.view.state.selection).toBeInstanceOf(BlockBoundarySelection);
-    last.dispatchEvent(
-      new KeyboardEvent("keydown", {
-        bubbles: true,
-        cancelable: true,
-        key: "ArrowLeft",
-      }),
-    );
     expect(document.activeElement).toBe(bodyEditor);
     expect(bodyEditor.selectionStart).toBe(bodyEditor.value.length);
     expect(bodyEditor.selectionEnd).toBe(bodyEditor.value.length);
@@ -1066,7 +1042,7 @@ describe("rich editor rendering", () => {
     expect(document.activeElement).toBe(bodyEditor);
     app.destroy();
   });
-  it("moves between consecutive alert bodies through virtual boundaries", () => {
+  it("uses a boundary stop between consecutive alert bodies", () => {
     const { app, root } = makeApp(
       "Before\n\n> [!NOTE]\n> First\n\n> [!TIP]\n> Second\n\nAfter",
     );
@@ -1088,7 +1064,9 @@ describe("rich editor rendering", () => {
     });
     first.dispatchEvent(right);
     expect(right.defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(app.view.dom);
     expect(app.view.state.selection).toBeInstanceOf(BlockBoundarySelection);
+
     app.view.dom.dispatchEvent(
       new KeyboardEvent("keydown", {
         bubbles: true,
@@ -1109,7 +1087,9 @@ describe("rich editor rendering", () => {
     });
     second.dispatchEvent(left);
     expect(left.defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(app.view.dom);
     expect(app.view.state.selection).toBeInstanceOf(BlockBoundarySelection);
+
     app.view.dom.dispatchEvent(
       new KeyboardEvent("keydown", {
         bubbles: true,
@@ -1123,12 +1103,23 @@ describe("rich editor rendering", () => {
     expect(app.view.state.selection).toBeInstanceOf(NodeSelection);
     app.destroy();
   });
-  it("keeps a final alert boundary virtual until typing", () => {
+  it("opens and closes the document-end boundary for a final Alert", () => {
     const source = "> [!NOTE]\n> End";
     const { app, root, messages } = makeApp(source);
     const bodyEditor = root.querySelector<HTMLTextAreaElement>(
       ".mm-alert-body-editor",
     )!;
+    Object.defineProperty(bodyEditor, "getBoundingClientRect", {
+      configurable: true,
+      value: () => ({
+        top: 0,
+        bottom: 40,
+        left: 0,
+        right: 320,
+        width: 320,
+        height: 40,
+      }),
+    });
     bodyEditor.focus();
     bodyEditor.setSelectionRange(
       bodyEditor.value.length,
@@ -1137,7 +1128,7 @@ describe("rich editor rendering", () => {
     const exit = new KeyboardEvent("keydown", {
       bubbles: true,
       cancelable: true,
-      key: "ArrowRight",
+      key: "ArrowDown",
     });
     bodyEditor.dispatchEvent(exit);
     expect(exit.defaultPrevented).toBe(true);
@@ -1148,23 +1139,46 @@ describe("rich editor rendering", () => {
       root.querySelector<HTMLTextAreaElement>(".mm-source-textarea")?.value,
     ).toBe(source);
     expect(app.view.state.selection).toBeInstanceOf(BlockBoundarySelection);
+    expect(app.view.state.selection.head).toBe(app.view.state.doc.content.size);
     expect(app.view.state.doc.lastChild?.type.name).toBe("raw_block");
 
-    expect(
-      app.view.someProp("handleTextInput", (handler) =>
-        handler(
-          app.view,
-          app.view.state.selection.from,
-          app.view.state.selection.to,
-          "Next",
-          () => app.view.state.tr,
-        ),
+    app.view.dom.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        bubbles: true,
+        cancelable: true,
+        key: "ArrowUp",
+      }),
+    );
+    expect(document.activeElement).toBe(bodyEditor);
+    expect(app.view.state.selection).toBeInstanceOf(NodeSelection);
+    expect(root.querySelector(".mm-block-boundary-cursor")).toBeNull();
+
+    bodyEditor.setSelectionRange(
+      bodyEditor.value.length,
+      bodyEditor.value.length,
+    );
+    bodyEditor.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        bubbles: true,
+        cancelable: true,
+        key: "ArrowDown",
+      }),
+    );
+    expect(app.view.state.selection).toBeInstanceOf(BlockBoundarySelection);
+    const handled = app.view.someProp("handleTextInput", (handler) =>
+      handler(
+        app.view,
+        app.view.state.selection.from,
+        app.view.state.selection.to,
+        "After alert",
+        () => app.view.state.tr,
       ),
-    ).toBe(true);
+    );
+    expect(handled).toBe(true);
     expect(
-      messages.filter((message: any) => message.type === "edit"),
-    ).toHaveLength(1);
-    expect((messages.at(-1) as any).markdown).toContain("Next");
+      root.querySelector<HTMLTextAreaElement>(".mm-source-textarea")?.value,
+    ).toContain("After alert");
+    expect(messages.filter(isEditMessage)).toHaveLength(1);
     app.destroy();
   });
   it("does not leave an alert while composing or while a selection is active", () => {
@@ -1566,8 +1580,6 @@ describe("code block vertical boundaries", () => {
 
     expect(endOfTextblock).toHaveBeenCalledWith("up");
     expect(event.defaultPrevented).toBe(true);
-    expect(app.view.state.selection).toBeInstanceOf(BlockBoundarySelection);
-    dispatchCodeKey(root, "ArrowUp");
     expect(app.view.state.selection.$from.parent.type.name).toBe("paragraph");
     expect(app.view.state.selection.$from.parent.textContent).toBe(
       "Before paragraph",
@@ -1607,8 +1619,6 @@ describe("code block vertical boundaries", () => {
     endOfTextblock.mockReturnValue(true);
     const firstRow = dispatchCodeKey(root, "ArrowUp");
     expect(firstRow.defaultPrevented).toBe(true);
-    expect(app.view.state.selection).toBeInstanceOf(BlockBoundarySelection);
-    dispatchCodeKey(root, "ArrowUp");
     expect(app.view.state.selection.$from.parent.type.name).toBe("paragraph");
     expect(app.view.state.selection.$from.parent.textContent).toBe("Before");
     expect(app.view.state.selection.from).toBe(codePosition - 1);
@@ -1631,8 +1641,6 @@ describe("code block vertical boundaries", () => {
 
     expect(event.defaultPrevented).toBe(true);
     expect(endOfTextblock).toHaveBeenCalledWith("down");
-    expect(app.view.state.selection).toBeInstanceOf(BlockBoundarySelection);
-    dispatchCodeKey(root, "ArrowDown");
     expect(app.view.state.selection.$from.parent.type.name).toBe("paragraph");
     expect(app.view.state.selection.$from.parent.textContent).toBe("After");
     expect(messages.filter(isEditMessage)).toHaveLength(0);
@@ -1654,7 +1662,13 @@ describe("code block vertical boundaries", () => {
     expect(consecutive.app.view.state.selection).toBeInstanceOf(
       BlockBoundarySelection,
     );
-    dispatchCodeKey(consecutive.root, "ArrowUp", 1);
+    consecutive.app.view.dom.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        bubbles: true,
+        cancelable: true,
+        key: "ArrowUp",
+      }),
+    );
     expect(consecutive.app.view.state.selection.$from.parent.type.name).toBe(
       "code_block",
     );
@@ -1695,7 +1709,7 @@ describe("code block vertical boundaries", () => {
     }
   });
 
-  it("leaves the document unchanged when no previous text position exists", () => {
+  it("opens a document-start boundary when no previous text position exists", () => {
     const { app, root, messages } = makeApp(
       ["```ts", "first", "second", "```"].join("\n"),
     );
@@ -1709,13 +1723,10 @@ describe("code block vertical boundaries", () => {
     const event = dispatchCodeKey(root, "ArrowUp");
 
     expect(event.defaultPrevented).toBe(true);
-    expect(app.view.state.selection).toBeInstanceOf(BlockBoundarySelection);
     expect(app.view.state.doc).toBe(originalDoc);
+    expect(app.view.state.selection).toBeInstanceOf(BlockBoundarySelection);
     expect(app.view.state.selection.head).toBe(0);
-    const second = dispatchCodeKey(root, "ArrowUp");
-    expect(second.defaultPrevented).toBe(false);
-    expect(app.view.state.selection.head).toBe(0);
-    expect(app.view.state.selection).not.toBe(originalSelection);
+    expect(app.view.state.selection.eq(originalSelection)).toBe(false);
     expect(messages.filter(isEditMessage)).toHaveLength(0);
     endOfTextblock.mockRestore();
     app.destroy();
@@ -1852,7 +1863,13 @@ describe("code block vertical boundaries", () => {
 
     expect(event.defaultPrevented).toBe(true);
     expect(app.view.state.selection).toBeInstanceOf(BlockBoundarySelection);
-    dispatchCodeKey(root, "ArrowUp");
+    app.view.dom.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        bubbles: true,
+        cancelable: true,
+        key: "ArrowUp",
+      }),
+    );
     expect(document.activeElement).toBe(body);
     expect(body.selectionStart).toBe(body.value.length);
     expect(app.view.state.selection).toBeInstanceOf(NodeSelection);

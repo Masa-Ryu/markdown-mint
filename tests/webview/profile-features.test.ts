@@ -10,6 +10,7 @@ import {
   createEditorApp,
   type MarkdownEditorApp,
 } from "../../src/webview/editor";
+import { BlockBoundarySelection } from "../../src/webview/blockBoundary";
 
 const apps: MarkdownEditorApp[] = [];
 
@@ -38,6 +39,16 @@ function featureButton(root: HTMLElement, id: string): HTMLButtonElement {
   return root.querySelector<HTMLButtonElement>(
     '[data-profile-feature="' + id + '"]',
   )!;
+}
+
+function selectBoundaryBetweenFirstTwoBlocks(app: MarkdownEditorApp): number {
+  const position = app.view.state.doc.child(0).nodeSize;
+  app.view.dispatch(
+    app.view.state.tr.setSelection(
+      new BlockBoundarySelection(app.view.state.doc.resolve(position)),
+    ),
+  );
+  return position;
 }
 
 function editCount(messages: unknown[]): number {
@@ -204,6 +215,112 @@ describe("profile feature toolbar", () => {
       expect(dialog.hidden).toBe(false);
       expect(dialog.hasAttribute("open")).toBe(false);
     }
+  });
+
+  it("inserts GitHub block features directly from a boundary without Enter", () => {
+    const source = "```text\ncode\n```\n\n| A | B |\n| --- | --- |\n| a | b |";
+    const cases: Array<{
+      id: "alert" | "details" | "math" | "mermaid";
+      configure: (dialog: HTMLDialogElement) => void;
+      sourcePart: string;
+      kind: string;
+      nodeType?: string;
+    }> = [
+      {
+        id: "alert",
+        configure: (dialog) => {
+          dialog.querySelector<HTMLTextAreaElement>(
+            '[data-feature-field="body"]',
+          )!.value = "Alert from boundary";
+        },
+        sourcePart: "> [!NOTE]\n> Alert from boundary",
+        kind: "alert",
+      },
+      {
+        id: "details",
+        configure: (dialog) => {
+          dialog.querySelector<HTMLInputElement>(
+            '[data-feature-field="title"]',
+          )!.value = "More";
+          dialog.querySelector<HTMLTextAreaElement>(
+            '[data-feature-field="body"]',
+          )!.value = "Details from boundary";
+        },
+        sourcePart:
+          "<details>\n<summary>More</summary>\n\nDetails from boundary\n\n</details>",
+        kind: "details",
+        nodeType: "details",
+      },
+      {
+        id: "math",
+        configure: (dialog) => {
+          dialog.querySelector<HTMLTextAreaElement>(
+            '[data-feature-field="body"]',
+          )!.value = "x^2";
+        },
+        sourcePart: "$$\nx^2\n$$",
+        kind: "math-block",
+      },
+      {
+        id: "mermaid",
+        configure: (dialog) => {
+          dialog.querySelector<HTMLTextAreaElement>(
+            '[data-feature-field="body"]',
+          )!.value = "graph TD\nA-->B";
+        },
+        sourcePart: "```mermaid\ngraph TD\nA-->B\n```",
+        kind: "protected-fence",
+      },
+    ];
+
+    for (const entry of cases) {
+      const { app, root, messages } = makeApp(source);
+      const position = selectBoundaryBetweenFirstTwoBlocks(app);
+      expect(app.view.state.selection).toBeInstanceOf(BlockBoundarySelection);
+      expect(app.view.state.selection.head).toBe(position);
+      const before = currentSource(app);
+
+      featureButton(root, entry.id).click();
+      const dialog = root.querySelector<HTMLDialogElement>(
+        '[data-feature-dialog="true"]',
+      )!;
+      entry.configure(dialog);
+      dialog.querySelector<HTMLButtonElement>('button[type="submit"]')!.click();
+
+      expect(currentSource(app)).toContain(entry.sourcePart);
+      expect(app.view.state.doc.childCount).toBe(3);
+      expect(app.view.state.doc.child(0).type.name).toBe("code_block");
+      expect(app.view.state.doc.child(1).type.name).toBe(
+        entry.nodeType ?? "raw_block",
+      );
+      expect(app.view.state.doc.child(1).attrs.kind).toBe(entry.kind);
+      expect(app.view.state.doc.child(2).type.name).toBe("table");
+      expect(editCount(messages)).toBe(1);
+      expect(before).not.toBe(currentSource(app));
+    }
+  });
+
+  it("cancels a boundary feature dialog without materializing a paragraph", () => {
+    const { app, root, messages } = makeApp(
+      "```text\ncode\n```\n\n| A | B |\n| --- | --- |\n| a | b |",
+    );
+    const position = selectBoundaryBetweenFirstTwoBlocks(app);
+    const before = currentSource(app);
+    const button = featureButton(root, "details");
+    button.click();
+    const dialog = root.querySelector<HTMLDialogElement>(
+      '[data-feature-dialog="true"]',
+    )!;
+    dialog
+      .querySelector<HTMLButtonElement>("button:not([type='submit'])")!
+      .click();
+
+    expect(currentSource(app)).toBe(before);
+    expect(editCount(messages)).toBe(0);
+    expect(app.sync.hasPending).toBe(false);
+    expect(app.view.state.doc.childCount).toBe(2);
+    expect(app.view.state.selection).toBeInstanceOf(BlockBoundarySelection);
+    expect(app.view.state.selection.head).toBe(position);
   });
 
   it("opens the existing Alert dialog in edit mode with the current values", () => {

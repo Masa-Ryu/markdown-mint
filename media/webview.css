@@ -452,7 +452,8 @@ textarea:focus-visible {
 .mm-floating-button[aria-pressed="true"] {
   background: var(--mm-control-active-background);
 }
-.mm-empty-line-insert {
+.mm-empty-line-insert,
+.mm-block-gap-insert {
   position: absolute;
   z-index: 6;
   width: 20px;
@@ -469,7 +470,9 @@ textarea:focus-visible {
   box-shadow: 0 3px 10px rgba(0, 0, 0, 0.22);
 }
 .mm-empty-line-insert:hover,
-.mm-empty-line-insert:focus-visible {
+.mm-empty-line-insert:focus-visible,
+.mm-block-gap-insert:hover,
+.mm-block-gap-insert:focus-visible {
   border-color: var(--mm-focus-border);
   background: var(--mm-control-hover-background);
 }
@@ -533,13 +536,16 @@ textarea:focus-visible {
   content: "";
   display: block;
   position: absolute;
-  top: -2px;
-  height: 1.2em;
+  top: 0;
+  height: 100%;
   border-left: 1px solid var(--vscode-editorCursor-foreground, #aeafad);
   animation: mm-block-boundary-cursor-blink 1.1s steps(2, start) infinite;
 }
 .mm-rich-panel .ProseMirror-focused .mm-block-boundary-cursor {
   display: block;
+  position: relative;
+  height: 1.6em;
+  height: 1lh;
 }
 @keyframes mm-block-boundary-cursor-blink {
   to {
@@ -1232,13 +1238,15 @@ body.vscode-high-contrast .mm-input-dialog,
 body.vscode-high-contrast .mm-popup-panel,
 body.vscode-high-contrast .mm-floating-toolbar,
 body.vscode-high-contrast .mm-empty-line-insert,
+body.vscode-high-contrast .mm-block-gap-insert,
 body.vscode-high-contrast-light .mm-table-toolbar,
 body.vscode-high-contrast-light .mm-table-grid,
 body.vscode-high-contrast-light .mm-emoji-grid,
 body.vscode-high-contrast-light .mm-input-dialog,
 body.vscode-high-contrast-light .mm-popup-panel,
 body.vscode-high-contrast-light .mm-floating-toolbar,
-body.vscode-high-contrast-light .mm-empty-line-insert {
+body.vscode-high-contrast-light .mm-empty-line-insert,
+body.vscode-high-contrast-light .mm-block-gap-insert {
   border-color: var(--mm-contrast-border);
 }
 
@@ -1253,7 +1261,8 @@ body.vscode-high-contrast-light .mm-empty-line-insert {
   .mm-input-dialog,
   .mm-popup-panel,
   .mm-floating-toolbar,
-  .mm-empty-line-insert {
+  .mm-empty-line-insert,
+  .mm-block-gap-insert {
     border-color: CanvasText;
   }
   button:hover:not(:disabled),
@@ -1264,6 +1273,8 @@ body.vscode-high-contrast-light .mm-empty-line-insert {
   .mm-popup-toggle[aria-expanded="true"],
   .mm-empty-line-insert:hover,
   .mm-empty-line-insert:focus-visible,
+  .mm-block-gap-insert:hover,
+  .mm-block-gap-insert:focus-visible,
   .mm-floating-button[aria-pressed="true"] {
     border-color: Highlight;
     background: Highlight;
@@ -1360,7 +1371,8 @@ body.vscode-high-contrast-light .mm-empty-line-insert {
     grid-template-columns: repeat(2, minmax(92px, 1fr));
     min-width: min(208px, calc(100vw - 12px));
   }
-  .mm-empty-line-insert {
+  .mm-empty-line-insert,
+  .mm-block-gap-insert {
     width: 20px;
     min-width: 20px;
     height: 20px;
