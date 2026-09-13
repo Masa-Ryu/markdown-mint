@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.0.47
+
+- Apply authoritative terminal whitespace changes to the Rich document instead
+  of retaining stale empty paragraphs. Keep source-authored blank-line shape
+  visible with a bounded, source-preserving spacer for oversized blank runs,
+  and align empty-paragraph preview geometry across Rich and native surfaces.
+
+## 0.0.46
+
+- Materialize source-authored surplus top-level blank lines as editable Rich
+  empty paragraphs while preserving their original LF/CRLF source slices.
+  Round-trip Rich-created blank paragraphs, explicit Format Markdown cleanup,
+  and transient trailing caret paragraphs without leaking generated spacing.
+
+## 0.0.45
+
+- Commit only the paragraph typed after clicking below the final Rich editor
+  block. Generated transient spacing is removed in the same edit, preserving
+  LF/CRLF block separators and host undo behavior.
+
 ## 0.0.44
 
 - Preserve strong, emphasis, strikethrough, combined marks, link destinations,

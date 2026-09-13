@@ -8,8 +8,10 @@ import { BlockBoundarySelection } from "../../src/webview/blockBoundary";
 import { Fragment } from "prosemirror-model";
 import {
   createEditorApp,
+  type DocumentMessage,
   type MarkdownEditorApp,
 } from "../../src/webview/editor";
+import { PROTOCOL_VERSION } from "../../src/shared/protocol";
 import { getStarterState } from "../../src/webview/starter";
 import {
   parseMarkdown,
@@ -69,6 +71,21 @@ function clickBlank(stage: HTMLElement, clientY: number): void {
       clientY,
     }),
   );
+}
+
+function authoritativeDocument(
+  markdown: string,
+  version: number,
+  options: Pick<DocumentMessage, "operationId" | "reason"> = {},
+): DocumentMessage {
+  return {
+    protocolVersion: PROTOCOL_VERSION,
+    type: "document",
+    markdown,
+    version,
+    profile: "github",
+    ...options,
+  };
 }
 
 beforeEach(() => {
@@ -374,6 +391,142 @@ describe("table exit and blank-space editing", () => {
       root.querySelector<HTMLTextAreaElement>(".mm-source-textarea")!.value,
     ).toContain("typed");
   });
+
+  it("commits only the typed transient paragraph and keeps two blocks after an authoritative reparse", () => {
+    const { app, root, messages } = makeApp("one");
+    const editor = root.querySelector<HTMLElement>(".ProseMirror")!;
+    const body = editor.querySelector<HTMLElement>("p")!;
+    body.getBoundingClientRect = () => rect(100, 124);
+    const stage = root.querySelector<HTMLElement>(".mm-stage")!;
+
+    clickBlank(stage, 320);
+    expect(app.view.state.doc.childCount).toBeGreaterThan(2);
+    expect(edits(messages)).toHaveLength(0);
+
+    app.view.dispatch(app.view.state.tr.insertText("next"));
+
+    const edit = edits(messages)[0]!;
+    expect(edit.markdown).toBe("one\n\nnext");
+    expect(edit.markdown).not.toMatch(/\n{3,}/u);
+    expect(app.view.state.doc.childCount).toBe(2);
+    expect(app.view.state.doc.child(0)?.textContent).toBe("one");
+    expect(app.view.state.doc.child(1)?.textContent).toBe("next");
+
+    app.receiveDocument(
+      authoritativeDocument(edit.markdown as string, 2, {
+        operationId: edit.operationId as string,
+        reason: "ack",
+      }),
+    );
+    expect(app.view.state.doc.childCount).toBe(2);
+
+    app.receiveDocument(
+      authoritativeDocument(edit.markdown as string, 3, {
+        reason: "recovery",
+      }),
+    );
+    expect(
+      app.view.state.doc.eq(parseMarkdown("one\n\nnext", "github").doc),
+    ).toBe(true);
+    expect(app.view.state.doc.childCount).toBe(2);
+  });
+
+  it("uses one host undo to remove the input and all generated blank paragraphs", () => {
+    const { app, root, messages } = makeApp("one");
+    const editor = root.querySelector<HTMLElement>(".ProseMirror")!;
+    const body = editor.querySelector<HTMLElement>("p")!;
+    body.getBoundingClientRect = () => rect(100, 124);
+    const stage = root.querySelector<HTMLElement>(".mm-stage")!;
+
+    clickBlank(stage, 320);
+    app.view.dispatch(app.view.state.tr.insertText("next"));
+    const edit = edits(messages)[0]!;
+    expect(app.view.state.doc.childCount).toBe(2);
+
+    app.receiveDocument(
+      authoritativeDocument(edit.markdown as string, 2, {
+        operationId: edit.operationId as string,
+        reason: "ack",
+      }),
+    );
+    const undo = new KeyboardEvent("keydown", {
+      bubbles: true,
+      cancelable: true,
+      ctrlKey: true,
+      key: "z",
+    });
+    app.view.dom.dispatchEvent(undo);
+    expect(undo.defaultPrevented).toBe(true);
+    const undoRequest = messages.at(-1) as Record<string, unknown>;
+    expect(undoRequest).toMatchObject({ type: "undo" });
+
+    app.receiveDocument(
+      authoritativeDocument("one", 3, {
+        operationId: String(undoRequest.operationId),
+        reason: "undo",
+      }),
+    );
+    expect(app.view.state.doc.eq(parseMarkdown("one", "github").doc)).toBe(
+      true,
+    );
+    expect(app.view.state.doc.childCount).toBe(1);
+    expect(
+      root.querySelector<HTMLTextAreaElement>(".mm-source-textarea")!.value,
+    ).toBe("one");
+  });
+
+  it("uses the snapshot line ending when committing transient space with CRLF", () => {
+    const { app, root, messages } = makeApp("one\r\n");
+    const editor = root.querySelector<HTMLElement>(".ProseMirror")!;
+    const body = editor.querySelector<HTMLElement>("p")!;
+    body.getBoundingClientRect = () => rect(100, 124);
+    const stage = root.querySelector<HTMLElement>(".mm-stage")!;
+
+    clickBlank(stage, 320);
+    app.view.dispatch(app.view.state.tr.insertText("next"));
+
+    const markdown = edits(messages)[0]!.markdown as string;
+    expect(markdown).toContain("one\r\n\r\nnext");
+    expect(markdown).not.toMatch(/(?:\r\n){3}/u);
+    expect(parseMarkdown(markdown, "github").doc.childCount).toBe(2);
+    expect(app.view.state.doc.childCount).toBe(2);
+  });
+
+  it.each([
+    {
+      name: "table",
+      source: "| A |\n| --- |\n| B |",
+      selector: "table",
+      firstType: "table",
+    },
+    {
+      name: "rendered alert",
+      source: "> [!NOTE]\n> Body",
+      selector: ".mm-alert-node-view",
+      firstType: "raw_block",
+    },
+  ])(
+    "commits one following paragraph after a transient range below a final $name block",
+    ({ source, selector, firstType }) => {
+      const { app, root, messages } = makeApp(source);
+      const editor = root.querySelector<HTMLElement>(".ProseMirror")!;
+      const lastBlock = editor.querySelector<HTMLElement>(selector)!;
+      lastBlock.getBoundingClientRect = () => rect(100, 124);
+      const stage = root.querySelector<HTMLElement>(".mm-stage")!;
+
+      clickBlank(stage, 320);
+      expect(app.view.state.doc.childCount).toBeGreaterThan(2);
+      app.view.dispatch(app.view.state.tr.insertText("next"));
+
+      const markdown = edits(messages)[0]!.markdown as string;
+      expect(markdown).toContain("next");
+      expect(markdown).not.toMatch(/(?:\r?\n){3,}/u);
+      expect(app.view.state.doc.childCount).toBe(2);
+      expect(app.view.state.doc.firstChild?.type.name).toBe(firstType);
+      expect(app.view.state.doc.lastChild?.type.name).toBe("paragraph");
+      expect(app.view.state.doc.lastChild?.textContent).toBe("next");
+    },
+  );
 
   it("preserves an untouched blank starter source when temporary space is cancelled", () => {
     const { app, root, messages } = makeApp("");

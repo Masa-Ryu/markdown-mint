@@ -96,6 +96,22 @@ body {
   margin: 0 0 1.15em;
 }
 
+/* A very large source blank run is represented by one source-preserving
+ * spacer atom after the bounded set of editable paragraphs. Keep that atom
+ * lightweight and at least one document line tall on every surface. */
+.markdown-body .mm-blank-spacer,
+.mm-document-content .mm-blank-spacer {
+  display: block;
+  width: 100%;
+  height: 1.6em;
+  height: 1lh;
+  min-height: 1.6em;
+  min-height: 1lh;
+  max-height: 12lh;
+  margin: 0;
+  pointer-events: none;
+}
+
 .markdown-body h1,
 .mm-document-content h1,
 .markdown-body h2,

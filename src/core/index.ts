@@ -53,6 +53,13 @@ export { serializeCodeBlockMarkdown } from "./codeBlockSerialization";
 /** The Markdown dialect used by the editor and preview. */
 export type Profile = "github" | "gitlab" | "commonmark";
 
+/**
+ * Maximum number of source-authored empty paragraphs materialized for one
+ * blank run. The remainder stays in a source-preserving spacer atom so an
+ * untrusted document cannot allocate one PM/DOM node per newline.
+ */
+export const MAX_MATERIALIZED_EMPTY_PARAGRAPHS = 256;
+
 /** A diagnostic returned by {@link inspectCompatibility}. */
 export interface CompatibilityDiagnostic {
   message: string;
@@ -66,7 +73,11 @@ export interface CompatibilityDiagnostic {
 /** A source slice associated with an unchanged top-level ProseMirror node. */
 export interface MarkdownBlockSnapshot {
   node: PMNode;
-  /** The complete original slice, including the separator after this block. */
+  /**
+   * The source slice for this node and its boundary. Materialized empty
+   * paragraphs and bounded blank-spacer atoms carry the surplus line-ending
+   * slice that represents them.
+   */
   source: string;
   /** The part covered by the Markdown block token. */
   body: string;
@@ -731,9 +742,17 @@ function tokenLocation(
 }
 
 function markdownLineEnding(source: string): MarkdownSnapshot["lineEnding"] {
-  const crlf = (source.match(/\r\n/g) ?? []).length;
-  const lf = (source.match(/(?<!\r)\n/g) ?? []).length;
-  const cr = (source.match(/\r(?!\n)/g) ?? []).length;
+  let crlf = 0;
+  let lf = 0;
+  let cr = 0;
+  for (let index = 0; index < source.length; index += 1) {
+    if (source[index] === "\r") {
+      if (source[index + 1] === "\n") {
+        crlf += 1;
+        index += 1;
+      } else cr += 1;
+    } else if (source[index] === "\n") lf += 1;
+  }
   if (crlf === 0 && lf === 0 && cr === 0) return "none";
   if (crlf > 0 && lf === 0 && cr === 0) return "crlf";
   if (lf > 0 && crlf === 0 && cr === 0) return "lf";
@@ -1733,7 +1752,12 @@ function scanFootnotes(source: string): FootnoteScan {
 
 const documentMetadata = new WeakMap<
   PMNode,
-  { footnotes: FootnoteDefinition[]; source?: string }
+  {
+    footnotes: FootnoteDefinition[];
+    source?: string;
+    lineEnding?: MarkdownSnapshot["lineEnding"];
+    sourcePreservedNoOp?: boolean;
+  }
 >();
 
 /**
@@ -1855,7 +1879,12 @@ function isFootnoteDefinitionBlock(value: string): boolean {
   return hasDefinition;
 }
 
-function parseInternal(source: string, profile: Profile): MarkdownSnapshot {
+function parseInternal(
+  source: string,
+  profile: Profile,
+  materializeBlankParagraphs = true,
+  leadingStructuralLineEndings = 0,
+): MarkdownSnapshot {
   const footnoteScan = scanFootnotes(source);
   const md = createMarkdownIt(profile);
   const details = detectDetails(source, md);
@@ -1886,11 +1915,13 @@ function parseInternal(source: string, profile: Profile): MarkdownSnapshot {
   for (const detail of details) events.push({ start: detail.start, detail });
   events.sort((left, right) => left.start - right.start);
 
-  const nodes: PMNode[] = [];
-  const blocks: MarkdownBlockSnapshot[] = [];
+  const parsedBlocks: Array<{
+    node: PMNode;
+    block: MarkdownBlockSnapshot;
+    startOffset: number;
+    sourceEndOffset: number;
+  }> = [];
   const footnoteMap = footnoteScan.byLabel;
-  const leading =
-    events.length > 0 ? source.slice(0, events[0]!.start) : source;
   for (let eventIndex = 0; eventIndex < events.length; eventIndex += 1) {
     const event = events[eventIndex]!;
     const nextEvent = events[eventIndex + 1];
@@ -1911,16 +1942,20 @@ function parseInternal(source: string, profile: Profile): MarkdownSnapshot {
           )
         : nodeTypes.raw_block.create({ source: body, kind: "details" });
       if (parts) detailsPartsByAttrs.set(node.attrs, parts);
-      nodes.push(node);
-      blocks.push({
+      parsedBlocks.push({
         node,
-        source: body + separator,
-        body,
-        separator,
-        startLine: lineIndexAt(source, detail.start),
-        endLine:
-          lineIndexAt(source, Math.max(detail.start, detail.end - 1)) + 1,
-        kind: "details",
+        block: {
+          node,
+          source: body + separator,
+          body,
+          separator,
+          startLine: lineIndexAt(source, detail.start),
+          endLine:
+            lineIndexAt(source, Math.max(detail.start, detail.end - 1)) + 1,
+          kind: "details",
+        },
+        startOffset: detail.start,
+        sourceEndOffset: nextStart,
       });
       continue;
     }
@@ -1994,47 +2029,157 @@ function parseInternal(source: string, profile: Profile): MarkdownSnapshot {
     // editable prose. Its exact slice remains in the neighbouring separator
     // and the structured definition list on the snapshot.
     if (isFootnoteDefinitionBlock(bodyForDetection)) continue;
-    nodes.push(node);
-    blocks.push({
+    parsedBlocks.push({
       node,
-      source: body + separator,
-      body,
-      separator,
-      startLine: location.startLine,
-      endLine: location.endLine,
-      kind: node.type.name,
+      block: {
+        node,
+        source: body + separator,
+        body,
+        separator,
+        startLine: location.startLine,
+        endLine: location.endLine,
+        kind: node.type.name,
+      },
+      startOffset: location.start,
+      sourceEndOffset: nextStart,
     });
   }
   if (
-    nodes.length === 0 &&
+    parsedBlocks.length === 0 &&
     source.trim().length > 0 &&
     footnoteScan.definitions.length === 0
   ) {
     const raw = nodeTypes.raw_block.create({ source, kind: "unparsed" });
-    nodes.push(raw);
-    blocks.push({
+    parsedBlocks.push({
       node: raw,
-      source,
-      body: source,
-      separator: "",
-      startLine: 0,
-      endLine: offsets.length,
-      kind: "unparsed",
+      block: {
+        node: raw,
+        source,
+        body: source,
+        separator: "",
+        startLine: 0,
+        endLine: offsets.length,
+        kind: "unparsed",
+      },
+      startOffset: 0,
+      sourceEndOffset: source.length,
     });
+  }
+  const nodes: PMNode[] = [];
+  const blocks: MarkdownBlockSnapshot[] = [];
+  let leading =
+    parsedBlocks.length > 0
+      ? source.slice(0, parsedBlocks[0]!.startOffset)
+      : source;
+  const appendMaterializedBlankBoundary = (
+    parts: BlankBoundaryParts,
+    startOffset: number,
+  ): void => {
+    let line = lineIndexAt(source, startOffset);
+    for (const part of parts.empty) {
+      const block = materializedEmptyBlock(part, line);
+      nodes.push(block.node);
+      blocks.push(block);
+      line += lineEndingCount(part);
+    }
+    if (parts.overflow) {
+      const block = materializedBlankSpacerBlock(parts.overflow, line);
+      nodes.push(block.node);
+      blocks.push(block);
+    }
+  };
+
+  const blankOnly =
+    parsedBlocks.length === 0 &&
+    materializeBlankParagraphs &&
+    isLineEndingOnlySource(source) &&
+    lineEndingCount(source) > 0;
+  if (blankOnly) {
+    const parts = splitBlankBoundary(source, leadingStructuralLineEndings);
+    appendMaterializedBlankBoundary(parts, parts.structural.length);
+    leading = parts.structural;
+  }
+
+  if (parsedBlocks.length > 0 && materializeBlankParagraphs) {
+    const leadingCount = materializedEmptyCount(
+      leading,
+      leadingStructuralLineEndings,
+    );
+    if (leadingCount > 0) {
+      const parts = splitBlankBoundary(leading, leadingStructuralLineEndings);
+      appendMaterializedBlankBoundary(parts, parts.structural.length);
+      leading = parts.structural;
+    }
+
+    for (let index = 0; index < parsedBlocks.length; index += 1) {
+      const parsedBlock = parsedBlocks[index]!;
+      const nextBlock = parsedBlocks[index + 1];
+      const hasAdjacentNext =
+        nextBlock != null &&
+        parsedBlock.sourceEndOffset === nextBlock.startOffset;
+      const isTrailing =
+        nextBlock == null && parsedBlock.sourceEndOffset === source.length;
+      const structuralLineEndings = hasAdjacentNext ? 2 : isTrailing ? 1 : 0;
+      const bodySuffix = lineBreakSuffix(parsedBlock.block.body);
+      const boundary = bodySuffix + parsedBlock.block.separator;
+      const emptyCount =
+        structuralLineEndings > 0
+          ? materializedEmptyCount(boundary, structuralLineEndings)
+          : 0;
+      if (emptyCount > 0) {
+        const parts = splitBlankBoundary(boundary, structuralLineEndings);
+        const firstPart = parts.structural;
+        const firstSeparator = firstPart.slice(bodySuffix.length);
+        const block = {
+          ...parsedBlock.block,
+          source: parsedBlock.block.body + firstSeparator,
+          separator: firstSeparator,
+        };
+        nodes.push(parsedBlock.node);
+        blocks.push(block);
+        const boundaryStart =
+          parsedBlock.startOffset +
+          parsedBlock.block.body.length -
+          bodySuffix.length;
+        appendMaterializedBlankBoundary(
+          parts,
+          boundaryStart + firstPart.length,
+        );
+      } else {
+        nodes.push(parsedBlock.node);
+        blocks.push(parsedBlock.block);
+      }
+    }
+  } else {
+    for (const parsedBlock of parsedBlocks) {
+      nodes.push(parsedBlock.node);
+      blocks.push(parsedBlock.block);
+    }
   }
   const doc = schema.topNodeType.create(
     null,
     nodes.length > 0 ? nodes : [emptyParagraph()],
   );
-  documentMetadata.set(doc, { footnotes: footnoteScan.definitions, source });
-  const last = blocks[blocks.length - 1];
+  const lineEnding = markdownLineEnding(source);
+  documentMetadata.set(doc, {
+    footnotes: footnoteScan.definitions,
+    source,
+    lineEnding,
+    sourcePreservedNoOp: blocks.some(
+      (block) =>
+        block.kind === "empty-paragraph" || block.kind === "blank-spacer",
+    ),
+  });
+  const last = parsedBlocks[parsedBlocks.length - 1]?.block;
   const trailing = last
     ? source.slice(
         last.startLine == null
           ? source.length
           : offsetForLine(offsets, last.endLine, source.length),
       )
-    : source;
+    : nodes.length > 0
+      ? ""
+      : source;
   return {
     doc,
     source,
@@ -2042,7 +2187,7 @@ function parseInternal(source: string, profile: Profile): MarkdownSnapshot {
     blocks,
     leading,
     trailing,
-    lineEnding: markdownLineEnding(source),
+    lineEnding,
     footnotes: footnoteScan.definitions,
   };
 }
@@ -2064,7 +2209,7 @@ export function parseMarkdown(
 
   const frontSource = source.slice(frontmatter.start, frontmatter.end);
   const restSource = source.slice(frontmatter.end);
-  const rest = parseInternal(restSource, profile);
+  const rest = parseInternal(restSource, profile, true, 1);
   const front = nodeTypes.raw_block.create({
     source: frontSource,
     kind: "frontmatter",
@@ -2095,7 +2240,15 @@ export function parseMarkdown(
     footnotes: rest.footnotes ?? [],
     profile,
   };
-  documentMetadata.set(doc, { footnotes: snapshot.footnotes ?? [], source });
+  documentMetadata.set(doc, {
+    footnotes: snapshot.footnotes ?? [],
+    source,
+    lineEnding: snapshot.lineEnding,
+    sourcePreservedNoOp: blocks.some(
+      (block) =>
+        block.kind === "empty-paragraph" || block.kind === "blank-spacer",
+    ),
+  });
   latestParse = { source, profile, snapshot };
   return snapshot;
 }
@@ -2409,7 +2562,7 @@ function detailsBodySnapshot(
   const key = `${profile}\u0000${source}`;
   let snapshot = detailsBodySnapshots.get(key);
   if (!snapshot) {
-    snapshot = parseInternal(source, profile);
+    snapshot = parseInternal(source, profile, false);
     if (detailsBodySnapshots.size >= 64)
       detailsBodySnapshots.delete(detailsBodySnapshots.keys().next().value!);
     detailsBodySnapshots.set(key, snapshot);
@@ -2477,8 +2630,11 @@ function serializeBlock(node: PMNode, tableCell = false): string {
       // trailing blank line disappears when the document is reopened.
       return `${fence}${info}\n${content}\n${fence}`;
     }
-    case "raw_block":
-      return String(node.attrs.source ?? "").replace(/(?:\r\n|\n|\r)+$/, "");
+    case "raw_block": {
+      const source = String(node.attrs.source ?? "");
+      if (String(node.attrs.kind ?? "") === "blank-spacer") return source;
+      return source.replace(/(?:\r\n|\n|\r)+$/, "");
+    }
     case "details":
       return serializeDetails(node).replace(/(?:\r\n|\n|\r)+$/, "");
     case "bullet_list":
@@ -2532,6 +2688,64 @@ function serializeBlock(node: PMNode, tableCell = false): string {
   }
 }
 
+/**
+ * Serialize top-level blocks while giving empty paragraphs one line ending of
+ * their own. A regular block boundary is two line endings, so a document with
+ * one empty paragraph between two blocks has three rather than four. This is
+ * the inverse of parseInternal's surplus-line materialization rule.
+ */
+function serializeTopLevelChildren(
+  children: PMNode[],
+  ending: "\n" | "\r\n",
+): string {
+  if (children.length === 0) return "";
+  let output = "";
+  let index = 0;
+  while (index < children.length && isBlankSpacingNode(children[index])) {
+    const node = children[index]!;
+    output += isBlankSpacerNode(node) ? serializeBlock(node) : ending;
+    index += 1;
+  }
+  if (index >= children.length) return output;
+
+  output += serializeBlock(children[index]!);
+  index += 1;
+  while (index < children.length) {
+    let emptyCount = 0;
+    let spacer = "";
+    while (index < children.length && isBlankSpacingNode(children[index])) {
+      const node = children[index]!;
+      if (isBlankSpacerNode(node)) spacer += serializeBlock(node);
+      else emptyCount += 1;
+      index += 1;
+    }
+    if (emptyCount > 0 || spacer) {
+      if (index >= children.length) {
+        output += ending.repeat(emptyCount + 1) + spacer;
+        break;
+      }
+      output += ending.repeat(emptyCount + 2) + spacer;
+      output += serializeBlock(children[index]!);
+      index += 1;
+      continue;
+    }
+    output += `${ending}${ending}${serializeBlock(children[index]!)}`;
+    index += 1;
+  }
+  return output;
+}
+
+function appendGeneratedEmptyParagraph(
+  output: string,
+  ending: "\n" | "\r\n",
+  hasContentBefore: boolean,
+): string {
+  if (!hasContentBefore) return output + ending;
+  return output.endsWith(ending)
+    ? output + ending
+    : output + `${ending}${ending}`;
+}
+
 function serializeListItem(item: PMNode, marker: string): string {
   const task = item.attrs.checked;
   const content = childrenOf(item)
@@ -2549,6 +2763,184 @@ function serializeListItem(item: PMNode, marker: string): string {
 
 function lineBreakSuffix(value: string): string {
   return value.match(/(?:\r\n|\n|\r)+$/)?.[0] ?? "";
+}
+
+function trailingBlankLineEndings(value: string): number {
+  let start = value.length;
+  while (
+    start > 0 &&
+    (value[start - 1] === " " ||
+      value[start - 1] === "\t" ||
+      value[start - 1] === "\r" ||
+      value[start - 1] === "\n")
+  )
+    start -= 1;
+  return lineEndingCount(value.slice(start));
+}
+
+function lineEndingCount(value: string): number {
+  let count = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    const character = value[index];
+    if (character === "\r") {
+      if (value[index + 1] === "\n") index += 1;
+      count += 1;
+    } else if (character === "\n") count += 1;
+  }
+  return count;
+}
+
+function isBlankSource(value: string): boolean {
+  return value.length > 0 && /^[\t \r\n]*$/u.test(value);
+}
+
+/**
+ * A blank-only source made solely of line endings gets one editable paragraph
+ * per line ending. Whitespace-only starter sources retain their established
+ * single-paragraph shape so their source-preservation contract is unchanged.
+ */
+function isLineEndingOnlySource(value: string): boolean {
+  return /^(?:\r\n|\n|\r)+$/u.test(value);
+}
+
+/**
+ * Return the number of editable empty paragraphs represented by a source
+ * boundary. A regular block boundary consumes two line endings; the final
+ * terminator of a document consumes one, while leading blank lines have no
+ * structural line ending to consume.
+ */
+function materializedEmptyCount(
+  boundary: string,
+  structuralLineEndings: number,
+): number {
+  if (!isBlankSource(boundary)) return 0;
+  return Math.max(0, lineEndingCount(boundary) - structuralLineEndings);
+}
+
+/**
+ * Split a blank boundary into the regular structural part followed by one
+ * line-ending slice per materialized empty paragraph. Keeping the slices in
+ * the snapshot lets an edit preserve the original whitespace bytes around
+ * unchanged nodes instead of normalizing the source globally.
+ */
+interface BlankBoundaryParts {
+  /** The structural separator that remains attached to the preceding block. */
+  structural: string;
+  /** At most the bounded number of editable empty paragraph source slices. */
+  empty: string[];
+  /** The unmaterialized suffix, kept in one source-preserving spacer atom. */
+  overflow: string;
+}
+
+function splitBlankBoundary(
+  value: string,
+  structuralLineEndings: number,
+): BlankBoundaryParts {
+  const totalLineEndings = lineEndingCount(value);
+  const extraLineEndings = totalLineEndings - structuralLineEndings;
+  if (extraLineEndings <= 0)
+    return { structural: value, empty: [], overflow: "" };
+
+  const empty: string[] = [];
+  let endingIndex = 0;
+  let partStart = 0;
+  let structuralEnd = structuralLineEndings === 0 ? 0 : -1;
+  for (let index = 0; index < value.length; index += 1) {
+    const character = value[index];
+    let endingLength = 0;
+    if (character === "\r") {
+      endingLength = value[index + 1] === "\n" ? 2 : 1;
+    } else if (character === "\n") endingLength = 1;
+    if (endingLength === 0) continue;
+
+    endingIndex += 1;
+    const end = index + endingLength;
+    if (structuralLineEndings > 0 && endingIndex === structuralLineEndings) {
+      structuralEnd = end;
+      partStart = end;
+    } else if (
+      endingIndex > structuralLineEndings &&
+      empty.length < MAX_MATERIALIZED_EMPTY_PARAGRAPHS
+    ) {
+      empty.push(value.slice(partStart, end));
+      partStart = end;
+    }
+    index += endingLength - 1;
+    if (
+      empty.length === MAX_MATERIALIZED_EMPTY_PARAGRAPHS &&
+      extraLineEndings > MAX_MATERIALIZED_EMPTY_PARAGRAPHS
+    )
+      break;
+  }
+
+  if (structuralEnd < 0) return { structural: value, empty: [], overflow: "" };
+  const structural = value.slice(0, structuralEnd);
+  const remainder = value.slice(partStart);
+  if (empty.length < extraLineEndings) {
+    return { structural, empty, overflow: remainder };
+  }
+  if (empty.length > 0) empty[empty.length - 1] += remainder;
+  return { structural, empty, overflow: "" };
+}
+
+function materializedEmptyBlock(
+  value: string,
+  startLine: number,
+): MarkdownBlockSnapshot {
+  const node = emptyParagraph();
+  return {
+    node,
+    source: value,
+    body: "",
+    separator: value,
+    startLine,
+    endLine: startLine + lineEndingCount(value),
+    kind: "empty-paragraph",
+  };
+}
+
+function materializedBlankSpacerBlock(
+  value: string,
+  startLine: number,
+): MarkdownBlockSnapshot {
+  const node = nodeTypes.raw_block.create({
+    source: value,
+    kind: "blank-spacer",
+  });
+  return {
+    node,
+    source: value,
+    body: "",
+    separator: value,
+    startLine,
+    endLine: startLine + lineEndingCount(value),
+    kind: "blank-spacer",
+  };
+}
+
+function isMaterializedEmptyBlock(
+  block: MarkdownBlockSnapshot | undefined,
+): boolean {
+  return (
+    block?.kind === "empty-paragraph" &&
+    block.node.type.name === "paragraph" &&
+    block.node.content.size === 0
+  );
+}
+
+function isEmptyParagraph(node: PMNode | undefined): boolean {
+  return node?.type.name === "paragraph" && node.content.size === 0;
+}
+
+function isBlankSpacerNode(node: PMNode | undefined): boolean {
+  return (
+    node?.type.name === "raw_block" &&
+    String(node.attrs.kind ?? "") === "blank-spacer"
+  );
+}
+
+function isBlankSpacingNode(node: PMNode | undefined): boolean {
+  return isEmptyParagraph(node) || isBlankSpacerNode(node);
 }
 
 interface ReferenceDefinitionSnapshot {
@@ -2803,28 +3195,113 @@ function sourceMatches(
   // short paragraphs and this function runs after every edit; a quadratic LCS
   // matrix would turn a harmless keystroke into an avoidable memory spike.
   const candidates = new Map<string, number[]>();
+  const identityCandidates = new Map<PMNode, number[]>();
   for (let index = 0; index < previous.length; index += 1) {
-    const key = nodeFingerprint(previous[index]!.node);
+    const previousNode = previous[index]!.node;
+    const key = nodeFingerprint(previousNode);
     const list = candidates.get(key);
     if (list) list.push(index);
     else candidates.set(key, [index]);
+    const identities = identityCandidates.get(previousNode);
+    if (identities) identities.push(index);
+    else identityCandidates.set(previousNode, [index]);
   }
   const matches = new Map<number, number>();
+  const usedPrevious = new Set<number>();
+  const identityCursors = new Map<PMNode, number>();
+  const identityMatches = new Map<number, number>();
+  // ProseMirror preserves object identity for untouched nodes through a
+  // transaction. Prefer that identity before comparing fingerprints so
+  // consecutive source-authored empty paragraphs retain their own source
+  // slices even though their semantic node JSON is identical.
+  for (let index = 0; index < current.length; index += 1) {
+    const node = current[index]!;
+    const identities = identityCandidates.get(node);
+    if (!identities) continue;
+    let cursor = identityCursors.get(node) ?? 0;
+    while (cursor < identities.length && usedPrevious.has(identities[cursor]!))
+      cursor += 1;
+    if (cursor >= identities.length) {
+      identityCursors.set(node, cursor);
+      continue;
+    }
+    const candidate = identities[cursor]!;
+    identityCursors.set(node, cursor + 1);
+    identityMatches.set(index, candidate);
+  }
+  // A reordered document needs the old fingerprint matcher to retain its
+  // established source-order behavior. Identity is only safe when the
+  // untouched nodes still occur in previous-document order; otherwise an
+  // identity match could make a moved duplicate consume a distant source
+  // slice and leave the following blocks unmatched.
+  let previousIdentity = -1;
+  let identityOrderValid = true;
+  for (let index = 0; index < current.length; index += 1) {
+    const candidate = identityMatches.get(index);
+    if (candidate == null) continue;
+    if (candidate <= previousIdentity) {
+      identityOrderValid = false;
+      break;
+    }
+    previousIdentity = candidate;
+  }
+  const orderedIdentityMatches = identityOrderValid
+    ? identityMatches
+    : new Map<number, number>();
+  if (identityOrderValid) {
+    orderedIdentityMatches.forEach((candidate, index) => {
+      matches.set(index, candidate);
+      usedPrevious.add(candidate);
+    });
+  }
+  // Fingerprint matches must stay inside the interval delimited by the
+  // identity anchors. Without this upper bound, a new node can claim a
+  // source block belonging to a later anchor, producing a non-monotonic
+  // sequence such as 0, 2, 1. Keep a blocked candidate unconsumed so a later
+  // current node can still use it after the anchor.
+  const nextIdentityPrevious: Array<number | undefined> = new Array(
+    current.length,
+  );
+  let nextIdentity: number | undefined;
+  for (let index = current.length - 1; index >= 0; index -= 1) {
+    nextIdentityPrevious[index] = nextIdentity;
+    const candidate = orderedIdentityMatches.get(index);
+    if (candidate != null) nextIdentity = candidate;
+  }
   let previousCursor = -1;
   const cursors = new Map<string, number>();
   for (let index = 0; index < current.length; index += 1) {
+    const identityMatch = matches.get(index);
+    if (identityMatch != null) {
+      previousCursor = Math.max(previousCursor, identityMatch);
+      continue;
+    }
     const key = nodeFingerprint(current[index]!);
     const list = candidates.get(key);
     if (!list) continue;
     let cursor = cursors.get(key) ?? 0;
-    while (cursor < list.length && list[cursor]! <= previousCursor) cursor += 1;
+    while (
+      cursor < list.length &&
+      (list[cursor]! <= previousCursor || usedPrevious.has(list[cursor]!))
+    )
+      cursor += 1;
+    // Persist only candidates that are already behind the lower bound. The
+    // candidate at cursor may be blocked by the future anchor and must remain
+    // available for a later current node after that anchor.
+    cursors.set(key, cursor);
     if (cursor >= list.length) {
-      cursors.set(key, cursor);
       continue;
     }
     const candidate = list[cursor]!;
+    const nextIdentityPreviousIndex = nextIdentityPrevious[index];
+    if (
+      nextIdentityPreviousIndex != null &&
+      candidate >= nextIdentityPreviousIndex
+    )
+      continue;
     cursors.set(key, cursor + 1);
     matches.set(index, candidate);
+    usedPrevious.add(candidate);
     previousCursor = candidate;
   }
   return matches;
@@ -2973,18 +3450,25 @@ export function serializeMarkdown(
     const metadata = documentMetadata.get(doc);
     if (
       metadata?.source &&
-      sourceNeedsExactCanonicalPreservation(metadata.source)
+      (metadata.sourcePreservedNoOp ||
+        sourceNeedsExactCanonicalPreservation(metadata.source))
     )
       return metadata.source;
   }
   const children = childrenOf(doc);
   const blocks = previous?.blocks ?? [];
   if (blocks.length === 0) {
-    const serialized = children
-      .map((node) => serializeBlock(node))
-      .join("\n\n");
+    const metadata = documentMetadata.get(doc);
+    const ending: "\n" | "\r\n" =
+      previous?.lineEnding === "crlf" || metadata?.lineEnding === "crlf"
+        ? "\r\n"
+        : "\n";
+    const serialized = serializeTopLevelChildren(children, ending);
     const last = children[children.length - 1];
-    if (last?.type.name === "raw_block" || last?.type.name === "details") {
+    if (
+      (last?.type.name === "raw_block" && !isBlankSpacerNode(last)) ||
+      last?.type.name === "details"
+    ) {
       const rawEnding = lineBreakSuffix(String(last.attrs.source ?? ""));
       if (rawEnding) {
         const ending = rawEnding.includes("\r\n")
@@ -2995,8 +3479,6 @@ export function serializeMarkdown(
         return serialized + ending;
       }
     }
-    const metadata = documentMetadata.get(doc);
-    const ending = previous?.lineEnding === "crlf" ? "\r\n" : "\n";
     return appendFootnoteDefinitions(
       serialized,
       metadata?.footnotes ?? [],
@@ -3019,17 +3501,64 @@ export function serializeMarkdown(
     const matched = matches.get(index);
     if (matched !== undefined) nextPrevious = matched;
   }
+  const hasContentAfter: boolean[] = new Array(children.length);
+  let contentAfter = false;
+  for (let index = children.length - 1; index >= 0; index -= 1) {
+    hasContentAfter[index] = contentAfter;
+    if (!isBlankSpacingNode(children[index])) contentAfter = true;
+  }
   let output = leading;
+  let hasContentBefore = false;
   for (let index = 0; index < children.length; index += 1) {
     const node = children[index]!;
     const matched = matches.get(index);
     if (matched != null) {
-      output += blocks[matched]!.source;
+      const previousBlock = blocks[matched]!;
+      // A matched block's source normally includes the separator before the
+      // next previous block. If that previous suffix was deleted and this is
+      // now the current terminal block, retain only the block body; otherwise
+      // a removed block's separator would become a new trailing blank line.
+      output +=
+        !isBlankSpacingNode(node) &&
+        index === children.length - 1 &&
+        matched < blocks.length - 1
+          ? previousBlock.body
+          : previousBlock.source;
+      if (!isBlankSpacingNode(node)) hasContentBefore = true;
       continue;
     }
 
     const samePosition = blocks[index];
     const insertion = !samePosition || nextMatchedPrevious[index] === index;
+    if (isEmptyParagraph(node)) {
+      output = appendGeneratedEmptyParagraph(output, ending, hasContentBefore);
+      continue;
+    }
+    if (isBlankSpacerNode(node)) {
+      output += serializeBlock(node);
+      continue;
+    }
+    if (samePosition && isMaterializedEmptyBlock(samePosition)) {
+      let emptyParagraphsBefore = 0;
+      for (
+        let previousIndex = index - 1;
+        previousIndex >= 0 && isEmptyParagraph(children[previousIndex]);
+        previousIndex -= 1
+      )
+        emptyParagraphsBefore += 1;
+      const requiredLineEndings = hasContentBefore
+        ? 2 + emptyParagraphsBefore
+        : 0;
+      const existingLineEndings = trailingBlankLineEndings(output);
+      if (index > 0 && requiredLineEndings > existingLineEndings) {
+        output += ending.repeat(requiredLineEndings - existingLineEndings);
+      }
+      output += toLineEnding(serializeBlock(node), ending);
+      if (hasContentAfter[index]) output += `${ending}${ending}`;
+      else if (index < children.length - 1) output += ending;
+      hasContentBefore = true;
+      continue;
+    }
     if (previous && !insertion && samePosition) {
       const preservedInline = preserveRawInlineSourceSlice(
         node,
@@ -3052,6 +3581,17 @@ export function serializeMarkdown(
     // when their preceding block is unchanged. Existing blank separators can
     // also use CR or mixed endings, independently of the generated line ending.
     const previousNode = blocks[index - 1]?.node;
+    let emptyParagraphsBefore = 0;
+    for (
+      let previousIndex = index - 1;
+      previousIndex >= 0 && isEmptyParagraph(children[previousIndex]);
+      previousIndex -= 1
+    )
+      emptyParagraphsBefore += 1;
+    const requiredLineEndings = hasContentBefore
+      ? 2 + emptyParagraphsBefore
+      : 0;
+    const existingLineEndings = trailingBlankLineEndings(output);
     const preservedSourceBoundary =
       !insertion &&
       matches.get(index - 1) === index - 1 &&
@@ -3065,9 +3605,9 @@ export function serializeMarkdown(
     if (
       index > 0 &&
       !preservedSourceBoundary &&
-      !output.endsWith(`${ending}${ending}`)
+      requiredLineEndings > existingLineEndings
     ) {
-      output += output.endsWith(ending) ? ending : `${ending}${ending}`;
+      output += ending.repeat(requiredLineEndings - existingLineEndings);
     }
     const generated =
       node.type.name === "details"
@@ -3087,6 +3627,7 @@ export function serializeMarkdown(
     ) {
       output += ending;
     }
+    hasContentBefore = true;
   }
   if (children.length === 0 && previous?.trailing) output += previous.trailing;
   if (!previous) {
@@ -3680,7 +4221,9 @@ function renderNode(
 ): string {
   switch (node.type.name) {
     case "paragraph":
-      return `<p>${renderInline(node, state)}</p>`;
+      return node.content.size === 0
+        ? "<p><br></p>"
+        : `<p>${renderInline(node, state)}</p>`;
     case "heading": {
       const level = Math.max(1, Math.min(6, Number(node.attrs.level) || 1));
       return `<h${level} id="${escapeHtml(headingId(node, state, root, position))}">${renderInline(node, state)}</h${level}>`;
@@ -3705,6 +4248,8 @@ function renderNode(
     case "raw_block": {
       const source = String(node.attrs.source ?? "");
       const kind = String(node.attrs.kind ?? "unknown");
+      if (kind === "blank-spacer")
+        return '<div class="mm-blank-spacer" data-mm-blank-spacer="true" aria-hidden="true"></div>';
       if (kind === "html-comment" || /^\s*<!--[\s\S]*-->\s*$/.test(source))
         return "";
       if (kind === "alert") return renderAlert(source, state);
@@ -3959,6 +4504,7 @@ export function inspectCompatibility(
     "gitlab-description-list",
     "math-block",
     "protected-fence",
+    "blank-spacer",
   ]);
   for (const block of snapshot.blocks ?? []) {
     if (block.node.type.name !== "raw_block") continue;
@@ -4072,14 +4618,28 @@ function semanticNode(node: PMNode, codeContext = false): unknown {
   };
 }
 
-function semanticDocument(source: string, profile: Profile): string {
+function semanticDocument(
+  source: string,
+  profile: Profile,
+  ignoreTopLevelEmptyParagraphs = false,
+): string {
   const snapshot = parseMarkdown(source, profile);
-  return JSON.stringify(semanticNode(snapshot.doc));
+  if (!ignoreTopLevelEmptyParagraphs)
+    return JSON.stringify(semanticNode(snapshot.doc));
+  const children = childrenOf(snapshot.doc).filter(
+    (node) => !isBlankSpacingNode(node),
+  );
+  const document = schema.topNodeType.create(
+    null,
+    children.length > 0 ? children : [emptyParagraph()],
+  );
+  return JSON.stringify(semanticNode(document));
 }
 
 function protectedSources(snapshot: MarkdownSnapshot): string[] {
   const result: string[] = [];
   walk(snapshot.doc, (node) => {
+    if (isBlankSpacerNode(node)) return;
     const raw = normalisedRaw(node);
     if (raw) result.push(raw);
   });
@@ -4089,6 +4649,8 @@ function protectedSources(snapshot: MarkdownSnapshot): string[] {
 /**
  * Format Markdown with Prettier when available. If Prettier fails or changes
  * the PM structure/protected atoms, the original source is returned safely.
+ * Top-level empty paragraphs are spacing representation and may be removed by
+ * this explicit formatting operation.
  */
 export async function formatMarkdown(
   source: string,
@@ -4121,8 +4683,8 @@ export async function formatMarkdown(
       );
     }
     if (
-      semanticDocument(source, profile) !==
-      JSON.stringify(semanticNode(after.doc))
+      semanticDocument(source, profile, true) !==
+      semanticDocument(formatted, profile, true)
     ) {
       throw new Error(
         "Markdown formatting was skipped because the parsed document structure would change.",

@@ -48,7 +48,10 @@ async function load(page, source, profile = "github", mode = "rich") {
     [source, profile],
   );
   await page.waitForFunction(
-    (expected) => window.markdownMint.sourceEl.value === expected,
+    (expected) =>
+      window.__markdownMintHarness.document.markdown === expected &&
+      (expected.includes("\r\n") ||
+        window.markdownMint.sourceEl.value === expected),
     source,
   );
   await settle(page);
@@ -1721,6 +1724,210 @@ async function testLinkedInlineMathGenericSerializer(page) {
   ]);
 }
 
+async function richDocumentShape(page) {
+  return page.evaluate(() => {
+    const nodes = [];
+    window.markdownMint.view.state.doc.forEach((node) => nodes.push(node));
+    return {
+      types: nodes.map((node) => node.type.name),
+      emptyParagraphs: nodes.filter(
+        (node) => node.type.name === "paragraph" && node.content.size === 0,
+      ).length,
+    };
+  });
+}
+
+async function testBlankLineRoundTrip(page) {
+  await page.setViewportSize({ width: 960, height: 900 });
+
+  const authored = "one\n\n\n\ntwo";
+  await load(page, authored);
+  assert.deepEqual(await richDocumentShape(page), {
+    types: ["paragraph", "paragraph", "paragraph", "paragraph"],
+    emptyParagraphs: 2,
+  });
+  assert.equal(
+    await page
+      .locator(`${rich} > p`)
+      .evaluateAll((paragraphs) =>
+        paragraphs
+          .slice(1, -1)
+          .every((paragraph) => paragraph.getBoundingClientRect().height > 0),
+      ),
+    true,
+    "source-authored blank paragraphs are not visible in Rich",
+  );
+  assert.equal((await saved(page)).markdown, authored);
+
+  const authoredCrlf = "one\r\n\r\n\r\n\r\ntwo";
+  await load(page, authoredCrlf);
+  assert.deepEqual(await richDocumentShape(page), {
+    types: ["paragraph", "paragraph", "paragraph", "paragraph"],
+    emptyParagraphs: 2,
+  });
+  assert.equal((await saved(page)).markdown, authoredCrlf);
+
+  await load(page, "one");
+  await caret(page, `${rich} > p:first-child`, -1);
+  await page.keyboard.press("Enter");
+  await expectSource(page, "one\n\n");
+  await page.keyboard.press("Enter");
+  await expectSource(page, "one\n\n\n");
+  await page.keyboard.insertText("two");
+  const entered = "one\n\n\ntwo";
+  await expectSource(page, entered);
+  assert.deepEqual(await richDocumentShape(page), {
+    types: ["paragraph", "paragraph", "paragraph"],
+    emptyParagraphs: 1,
+  });
+
+  await load(page, entered);
+  assert.deepEqual(await richDocumentShape(page), {
+    types: ["paragraph", "paragraph", "paragraph"],
+    emptyParagraphs: 1,
+  });
+
+  const crlfStart = "one\r\n";
+  await load(page, crlfStart);
+  await caret(page, `${rich} > p:first-child`, -1);
+  await page.keyboard.press("Enter");
+  await expectSource(page, "one\r\n\r\n");
+  await page.keyboard.press("Enter");
+  await expectSource(page, "one\r\n\r\n\r\n");
+  await page.keyboard.insertText("two");
+  const enteredCrlf = "one\r\n\r\n\r\ntwo\r\n";
+  await expectSource(page, enteredCrlf);
+  assert.deepEqual(await richDocumentShape(page), {
+    types: ["paragraph", "paragraph", "paragraph"],
+    emptyParagraphs: 1,
+  });
+  assert.equal((await saved(page)).markdown.includes("\n"), true);
+  assert.equal((await saved(page)).markdown.includes("\r\n"), true);
+  assert.equal(
+    (await saved(page)).markdown.replace(/\r\n/g, "").includes("\n"),
+    false,
+  );
+  await load(page, enteredCrlf);
+  assert.deepEqual(await richDocumentShape(page), {
+    types: ["paragraph", "paragraph", "paragraph"],
+    emptyParagraphs: 1,
+  });
+
+  await load(page, "one");
+  const beforeClick = await saved(page);
+  const blockBox = await page.locator(`${rich} > p:first-child`).boundingBox();
+  const stageBox = await page.locator(".mm-stage").boundingBox();
+  assert.ok(blockBox && stageBox, "missing Rich block geometry");
+  const blockBottom = blockBox.y + blockBox.height;
+  const clickY = Math.min(blockBottom + 120, stageBox.y + stageBox.height - 12);
+  assert.ok(clickY > blockBottom, "Rich stage has no trailing click area");
+  await page.mouse.click(stageBox.x + 24, clickY);
+  await noEdits(page, beforeClick, "trailing blank click");
+  const clickedShape = await richDocumentShape(page);
+  assert.ok(
+    clickedShape.emptyParagraphs > 0,
+    "click did not create transient paragraphs",
+  );
+
+  await page.keyboard.insertText("two");
+  await expectSource(page, "one\n\ntwo");
+  assert.equal((await saved(page)).markdown.match(/\n{3,}/u), null);
+  assert.deepEqual(await richDocumentShape(page), {
+    types: ["paragraph", "paragraph"],
+    emptyParagraphs: 0,
+  });
+
+  await page.keyboard.press(undoShortcut);
+  await expectSource(page, "one");
+  assert.deepEqual(await richDocumentShape(page), {
+    types: ["paragraph"],
+    emptyParagraphs: 0,
+  });
+}
+
+async function testAuthoritativeTerminalWhitespace(page) {
+  const cases = [
+    {
+      initial: "one\n\n\n",
+      authoritative: "one\n\n",
+      afterInput: "one\n\nnext",
+      emptyParagraphs: 1,
+    },
+    {
+      initial: "one\n\n\n\n",
+      authoritative: "one\n",
+      afterInput: "onenext\n",
+      emptyParagraphs: 0,
+    },
+    {
+      initial: "one\r\n\r\n\r\n",
+      authoritative: "one\r\n\r\n",
+      afterInput: "one\r\n\r\nnext",
+      emptyParagraphs: 1,
+    },
+    {
+      initial: "one\r\n\r\n\r\n\r\n",
+      authoritative: "one\r\n",
+      afterInput: "onenext\r\n",
+      emptyParagraphs: 0,
+    },
+  ];
+
+  for (const testCase of cases) {
+    await load(page, testCase.initial);
+    await page.evaluate(
+      (markdown) =>
+        window.__markdownMintHarness.deliverExternal(markdown, "github"),
+      testCase.authoritative,
+    );
+    await page.waitForFunction(
+      (markdown) =>
+        window.__markdownMintHarness.document.markdown === markdown &&
+        !window.markdownMint.sync.hasPending,
+      testCase.authoritative,
+    );
+    await settle(page);
+
+    assert.deepEqual(await richDocumentShape(page), {
+      types: Array.from(
+        { length: testCase.emptyParagraphs + 1 },
+        () => "paragraph",
+      ),
+      emptyParagraphs: testCase.emptyParagraphs,
+    });
+    assert.equal(
+      await page.evaluate((markdown) => {
+        window.markdownMint.core.parseMarkdown("cache-bust", "github");
+        const authoritative = window.markdownMint.core.parseMarkdown(
+          markdown,
+          "github",
+        ).doc;
+        return window.markdownMint.view.state.doc.eq(authoritative);
+      }, testCase.authoritative),
+      true,
+      "Rich document diverged from the authoritative parse",
+    );
+    const caretValid = await page.evaluate(() => {
+      const { selection, doc } = window.markdownMint.view.state;
+      return (
+        selection.from >= 0 &&
+        selection.to <= doc.content.size &&
+        selection.$from.parent.type.name === "paragraph"
+      );
+    });
+    assert.equal(caretValid, true, "authoritative update lost a valid caret");
+
+    await caret(page, `${rich} > p:last-child`, -1);
+    await page.keyboard.insertText("next");
+    await expectSource(page, testCase.afterInput);
+    assert.equal(
+      testCase.afterInput.replace(/\r\n|\r/g, "\n").match(/\n{3,}/u),
+      null,
+      "deleted terminal blank paragraphs were regenerated",
+    );
+  }
+}
+
 async function testDocumentFixtures(page) {
   const fixtures = [
     ["common-test.md", "commonmark"],
@@ -1873,6 +2080,8 @@ async function main() {
       testMathAndMermaidHeaders,
       testAllMathSources,
       testLinkedInlineMathGenericSerializer,
+      testBlankLineRoundTrip,
+      testAuthoritativeTerminalWhitespace,
       testDocumentFixtures,
     ]) {
       if (
