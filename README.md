@@ -4,7 +4,7 @@
 
 Edit Markdown visually without giving up the `.md` file underneath.
 
-![](./images/demo1.gif)
+![markdown mint demo](./images/demo1.gif)
 
 ## Features
 
