@@ -3949,8 +3949,8 @@ export class MarkdownEditorApp {
     }
     this.updateProfileToolbar();
     // Normal selection visibility belongs to updateSelectionToolbar. This
-    // path may only force the toolbar closed when editing is unavailable.
-    if (this.selectionToolbar && editingDisabled) {
+    // path may only force the toolbar closed when the selection is ineligible.
+    if (this.selectionToolbar && !this.selectionToolbarEligible(selection)) {
       this.selectionToolbar.hidden = true;
       this.selectionToolbar.setAttribute("aria-hidden", "true");
       this.clearSelectionToolbarSelection();

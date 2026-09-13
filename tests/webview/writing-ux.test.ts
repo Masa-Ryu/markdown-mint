@@ -254,6 +254,29 @@ function acknowledgeLastEdit(
   );
 }
 
+function rejectLastEdit(
+  messages: unknown[],
+  currentMarkdown = "authoritative",
+  currentVersion = 2,
+): void {
+  const edit = editMessages(messages).at(-1);
+  if (!edit) throw new Error("Expected a pending edit");
+  window.dispatchEvent(
+    new MessageEvent("message", {
+      data: {
+        protocolVersion: PROTOCOL_VERSION,
+        type: "edit-rejected",
+        operationId: String(edit.operationId),
+        reason: "invalid",
+        message: "The edit could not be applied.",
+        currentMarkdown,
+        currentVersion,
+        draftMarkdown: String(edit.markdown),
+      },
+    }),
+  );
+}
+
 function setSelectionGeometry(app: MarkdownEditorApp): void {
   Object.defineProperty(app.view, "coordsAtPos", {
     configurable: true,
@@ -1210,6 +1233,115 @@ describe("bounded writing controls", () => {
     expect(floating.getAttribute("aria-hidden")).toBe("true");
     expect(floating.style.left).toBe(left);
     expect(floating.style.top).toBe(top);
+  });
+
+  it("keeps an eligible non-empty Selection Toolbar visible during a control refresh", () => {
+    const { app, root } = makeApp("hello world");
+    const floating = root.querySelector<HTMLElement>(".mm-selection-toolbar")!;
+    const internal = app as unknown as {
+      updateEditingControlState: () => void;
+    };
+    app.view.dispatch(
+      app.view.state.tr.setSelection(
+        TextSelection.create(app.view.state.doc, 1, 6),
+      ),
+    );
+    expect(floating.hidden).toBe(false);
+    expect(floating.getAttribute("aria-hidden")).toBe("false");
+
+    internal.updateEditingControlState();
+
+    expect(floating.hidden).toBe(false);
+    expect(floating.getAttribute("aria-hidden")).toBe("false");
+  });
+
+  it("hides and clears the Selection Toolbar through the conflict rejection path", () => {
+    const { app, root, messages } = makeApp("hello world");
+    const floating = root.querySelector<HTMLElement>(".mm-selection-toolbar")!;
+    const internal = app as unknown as {
+      conflict: boolean;
+      selectionToolbarSelection: unknown;
+      syncPaused: boolean;
+    };
+    app.view.dispatch(
+      app.view.state.tr.setSelection(
+        TextSelection.create(app.view.state.doc, 1, 6),
+      ),
+    );
+    expect(floating.hidden).toBe(false);
+    expect(internal.selectionToolbarSelection).not.toBeNull();
+
+    app.view.dispatch(
+      app.view.state.tr.insertText("!", app.view.state.doc.content.size - 1),
+    );
+    rejectLastEdit(messages);
+
+    expect(internal.conflict).toBe(true);
+    expect(internal.syncPaused).toBe(true);
+    expect(floating.hidden).toBe(true);
+    expect(floating.getAttribute("aria-hidden")).toBe("true");
+    expect(internal.selectionToolbarSelection).toBeNull();
+  });
+
+  it("force-hides a visible Selection Toolbar during a sync-paused control refresh", () => {
+    const { app, root } = makeApp("hello world");
+    const floating = root.querySelector<HTMLElement>(".mm-selection-toolbar")!;
+    const internal = app as unknown as {
+      selectionToolbarSelection: unknown;
+      syncPaused: boolean;
+      updateEditingControlState: () => void;
+    };
+    app.view.dispatch(
+      app.view.state.tr.setSelection(
+        TextSelection.create(app.view.state.doc, 1, 6),
+      ),
+    );
+    expect(floating.hidden).toBe(false);
+    expect(internal.selectionToolbarSelection).not.toBeNull();
+
+    internal.syncPaused = true;
+    internal.updateEditingControlState();
+
+    expect(floating.hidden).toBe(true);
+    expect(floating.getAttribute("aria-hidden")).toBe("true");
+    expect(internal.selectionToolbarSelection).toBeNull();
+  });
+
+  it("hides and clears the Selection Toolbar during composition and stays hidden after a collapsed composition", () => {
+    const { app, root } = makeApp("hello world");
+    const floating = root.querySelector<HTMLElement>(".mm-selection-toolbar")!;
+    const internal = app as unknown as {
+      selectionToolbarSelection: unknown;
+      updateEditingControlState: () => void;
+    };
+    app.view.dispatch(
+      app.view.state.tr.setSelection(
+        TextSelection.create(app.view.state.doc, 1, 6),
+      ),
+    );
+    expect(floating.hidden).toBe(false);
+    expect(internal.selectionToolbarSelection).not.toBeNull();
+
+    app.view.dom.dispatchEvent(
+      new Event("compositionstart", { bubbles: true }),
+    );
+    internal.updateEditingControlState();
+
+    expect(floating.hidden).toBe(true);
+    expect(floating.getAttribute("aria-hidden")).toBe("true");
+    expect(internal.selectionToolbarSelection).toBeNull();
+
+    app.view.dispatch(
+      app.view.state.tr.setSelection(
+        TextSelection.create(app.view.state.doc, 3),
+      ),
+    );
+    app.view.dom.dispatchEvent(new Event("compositionend", { bubbles: true }));
+
+    expect(app.view.state.selection.empty).toBe(true);
+    expect(floating.hidden).toBe(true);
+    expect(floating.getAttribute("aria-hidden")).toBe("true");
+    expect(internal.selectionToolbarSelection).toBeNull();
   });
 
   it("hides and clears the Selection Toolbar when editing is disabled", () => {
