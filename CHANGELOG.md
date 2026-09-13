@@ -27,6 +27,17 @@
   block. Generated transient spacing is removed in the same edit, preserving
   LF/CRLF block separators and host undo behavior.
 
+- Add a hover-only top-level block-gap `+` affordance that reuses the existing
+  Insert block popup without changing layout or Markdown until a block is
+  committed. Keep flow-to-flow and flow-to-structural arrow navigation direct,
+  and expose a boundary stop only between adjacent structural top-level
+  blocks. An active boundary decoration temporarily reserves one visual line
+  without changing the ProseMirror document, and first/last structural blocks
+  expose corresponding document-edge insertion boundaries; flow edges remain
+  handled no-ops. Profile block features now accept that
+  `BlockBoundarySelection` directly, so Alert, Details, Math, Mermaid, and
+  GitLab block features insert at the exact gap without a temporary paragraph.
+
 ## 0.0.44
 
 - Preserve strong, emphasis, strikethrough, combined marks, link destinations,

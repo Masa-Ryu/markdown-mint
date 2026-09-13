@@ -91,7 +91,7 @@ function editMessages(messages: unknown[]): Array<{ markdown: string }> {
 }
 
 describe("top-level block boundary navigation", () => {
-  it("walks code, Alert, Details and rendered blocks through virtual boundaries", () => {
+  it("walks code, Alert, Details and rendered blocks as actual arrow targets", () => {
     const source = [
       "Before",
       "",
@@ -118,7 +118,6 @@ describe("top-level block boundary navigation", () => {
     select("code", "end");
     key("ArrowRight");
     expect(app.view.state.selection).toBeInstanceOf(BlockBoundarySelection);
-    expect(root.querySelector(".mm-block-boundary-cursor")).not.toBeNull();
     key("ArrowRight");
     expect(app.view.state.selection).toBeInstanceOf(NodeSelection);
     expect((app.view.state.selection as NodeSelection).node.attrs.kind).toBe(
@@ -144,18 +143,13 @@ describe("top-level block boundary navigation", () => {
     expect(editMessages(messages)).toHaveLength(0);
   });
 
-  it("uses the same boundary for vertical movement and preserves desired X state", () => {
+  it("crosses the boundary directly for vertical movement and preserves desired X state", () => {
     const { app, select, key } = setup("Before\n\n```ts\ncode\n```\n\nAfter");
     const endOfTextblock = app.view.endOfTextblock.bind(app.view);
     app.view.endOfTextblock = () => true;
     select("code", "end");
     key("ArrowDown");
-    expect(app.view.state.selection).toBeInstanceOf(BlockBoundarySelection);
-    key("ArrowDown");
     expect(app.view.state.selection.$from.parent.textContent).toBe("After");
-    select("After", "start");
-    key("ArrowUp");
-    expect(app.view.state.selection).toBeInstanceOf(BlockBoundarySelection);
     key("ArrowUp");
     expect(app.view.state.selection.$from.parent.type.name).toBe("code_block");
     app.view.endOfTextblock = endOfTextblock;
@@ -197,12 +191,21 @@ describe("top-level block boundary navigation", () => {
     expect(editMessages(messages)).toHaveLength(0);
   });
 
-  it("materializes one paragraph for text and Enter, while boundary deletion is a no-op", () => {
+  it("keeps insertion affordances on explicit boundaries while arrows skip them", () => {
     const { app, messages, select, key } = setup(
       "Before\n\n```ts\ncode\n```\n\nAfter",
     );
     select("code", "end");
-    key("ArrowRight");
+    const boundaryPosition =
+      app.view.state.doc.child(0)!.nodeSize +
+      app.view.state.doc.child(1)!.nodeSize;
+    app.view.dispatch(
+      app.view.state.tr.setSelection(
+        new BlockBoundarySelection(
+          app.view.state.doc.resolve(boundaryPosition),
+        ),
+      ),
+    );
     expect(key("Backspace").defaultPrevented).toBe(true);
     expect(app.view.state.selection).toBeInstanceOf(BlockBoundarySelection);
     expect(
@@ -219,11 +222,52 @@ describe("top-level block boundary navigation", () => {
     expect(app.view.state.selection.$from.parent.textContent).toBe("Hello");
     expect(editMessages(messages).at(-1)?.markdown).toContain("Hello");
 
-    select("code", "end");
-    key("ArrowRight");
+    app.view.dispatch(
+      app.view.state.tr.setSelection(
+        new BlockBoundarySelection(
+          app.view.state.doc.resolve(boundaryPosition),
+        ),
+      ),
+    );
     key("Enter");
     expect(app.view.state.selection.$from.parent.type.name).toBe("paragraph");
     expect(app.view.state.selection.$from.parent.textContent).toBe("");
+  });
+
+  it("opens the shared Insert block popup from a boundary without editing first", () => {
+    const source = "Before\n\n```ts\ncode\n```\n\nAfter";
+    const { app, root, messages, select } = setup(source);
+    select("code", "end");
+    const boundaryPosition =
+      app.view.state.doc.child(0)!.nodeSize +
+      app.view.state.doc.child(1)!.nodeSize;
+    app.view.dispatch(
+      app.view.state.tr.setSelection(
+        new BlockBoundarySelection(
+          app.view.state.doc.resolve(boundaryPosition),
+        ),
+      ),
+    );
+    const originalDoc = app.view.state.doc;
+    const handled = app.view.someProp("handleTextInput", (handler) =>
+      handler(
+        app.view,
+        app.view.state.selection.from,
+        app.view.state.selection.to,
+        "/",
+        () => app.view.state.tr,
+      ),
+    );
+
+    expect(handled).toBe(true);
+    expect(app.view.state.doc).not.toBe(originalDoc);
+    expect(
+      (app as unknown as { currentMarkdown: () => string }).currentMarkdown(),
+    ).toBe(source);
+    expect(editMessages(messages)).toHaveLength(0);
+    expect(
+      root.querySelector<HTMLElement>(".mm-empty-line-popup")?.hidden,
+    ).toBe(false);
   });
 
   it("materializes before native composition input without duplicating text", () => {

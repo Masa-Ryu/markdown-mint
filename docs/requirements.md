@@ -7,16 +7,16 @@ evidence and native API evidence are recorded separately; browser-level
 composition events are covered by regression tests, while the real operating
 system IME candidate UI remains unverified.
 
-| Requirement | Intended behavior                                | Implementation and current evidence                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| ----------- | ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| R01         | Rich Markdown editing in VS Code                 | The dedicated editor uses the shared ProseMirror schema, Markdown parser, serializer, and commands. The host treats the VS Code `TextDocument` as the only source of truth. The 0.0.3 browser pass exercised toolbar word selection, list editing, code-language mouse editing, image loading, and source preservation after DOM observation and an edit. Rich IME behavior remains a manual check.                                                                                                                                                                                                                                                                                                                                              |
-| R02         | Buttons, toolbar, and menu actions               | The Mint toolbar keeps heading, B/I/S, inline code, link, image, list, table, format, undo, and redo actions as direct buttons. The **Source** button returns to VS Code's standard raw Markdown editor, and dedicated preview remains a command-palette command; the 0.0.3 native acceptance suite verified command registration and format execution.                                                                                                                                                                                                                                                                                                                                                                                          |
-| R03         | Direct mouse manipulation                        | ProseMirror selection, drag, image, and table interactions are wired in the webview editor. The 0.0.3 browser pass verified toolbar word selection, code-language mouse editing, image loading, and preservation of the raw relative image path after DOM observation and an edit.                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| R04         | Rectangular table selection and matrix clipboard | ProseMirror tables use a rectangular selection and matrix clipboard path, with Markdown round trips in the core tests. In the 0.0.3 evidence, a real 2×3 rectangle copy/paste preserved its dimensions and one Undo request restored the prior table in the browser harness; native VS Code resource Undo/Redo was verified independently.                                                                                                                                                                                                                                                                                                                                                                                                       |
-| R05         | Keyboard operations                              | Webview keymaps cover formatting, lists, tables, undo, redo, and navigation. Within a table, Enter moves to the next row in the same column and adds one row at the bottom when needed; Shift+Enter remains an in-cell hard break, and Tab/Shift+Tab retain cell navigation. Plain ArrowUp at the first visual row of a code block uses EditorView.endOfTextblock and moves to the previous editable textblock without changing the document; wrapped continuation rows, controls, modifiers, IME, and expanded-code focus remain guarded. Regression tests cover composition guards, Markdown round trips, and host-backed undo/redo; real operating system IME candidate behavior remains a manual check.                                      |
-| R06         | Identical editor and preview output              | The dedicated preview and native Markdown preview use the same profile-aware core rendering path and shared `media/document.css`; the package contributes that stylesheet and a MarkdownIt adapter to the built-in preview. In the 0.0.3 evidence, across two fixtures and three viewport/typography combinations covering widths 1100 and 500 with Arial 14 and Georgia 20 cases, actual bundled rich output, core HTML, and the installed VS Code `markdown.css`/shared CSS produced matching block and table-cell metrics. The dedicated preview switch was included. Native API checks separately verified headings, GitHub/CommonMark table behavior, and relative image resources. Typography values are copied from `markdown.preview.*`. |
-| R07         | GitHub and GitLab profiles                       | `github`, `gitlab`, and `commonmark` are validated protocol/profile values. Profile settings reach the editor, dedicated preview, and native adapter. The 0.0.3 native acceptance suite verified GitHub versus CommonMark table output; GitLab-specific fixtures remain a follow-up compatibility check.                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| R08         | Safe formatting and format-on-save               | Prettier runs with the bundled Markdown parser/plugin, after/before core validation, project `.prettierrc` JSON/YAML options, `.editorconfig` EOL settings, `.prettierignore`, and explicit extension option overrides. Save-time failures leave the source unchanged, write diagnostics to the Markdown Mint output channel, and use a standard VS Code error notification when user action is required. The VS Code auto-save setting is not changed by the extension.                                                                                                                                                                                                                                                                         |
+| Requirement | Intended behavior                                | Implementation and current evidence                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| ----------- | ------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| R01         | Rich Markdown editing in VS Code                 | The dedicated editor uses the shared ProseMirror schema, Markdown parser, serializer, and commands. The host treats the VS Code `TextDocument` as the only source of truth. The 0.0.3 browser pass exercised toolbar word selection, list editing, code-language mouse editing, image loading, and source preservation after DOM observation and an edit. Rich IME behavior remains a manual check.                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| R02         | Buttons, toolbar, and menu actions               | The Mint toolbar keeps heading, B/I/S, inline code, link, image, list, table, format, undo, and redo actions as direct buttons. The **Source** button returns to VS Code's standard raw Markdown editor, and dedicated preview remains a command-palette command; the 0.0.3 native acceptance suite verified command registration and format execution.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| R03         | Direct mouse manipulation                        | ProseMirror selection, drag, image, and table interactions are wired in the webview editor. The 0.0.3 browser pass verified toolbar word selection, code-language mouse editing, image loading, and preservation of the raw relative image path after DOM observation and an edit.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| R04         | Rectangular table selection and matrix clipboard | ProseMirror tables use a rectangular selection and matrix clipboard path, with Markdown round trips in the core tests. In the 0.0.3 evidence, a real 2×3 rectangle copy/paste preserved its dimensions and one Undo request restored the prior table in the browser harness; native VS Code resource Undo/Redo was verified independently.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| R05         | Keyboard operations                              | Webview keymaps cover formatting, lists, tables, undo, redo, and navigation. Within a table, Enter moves to the next row in the same column and adds one row at the bottom when needed; Shift+Enter remains an in-cell hard break, and Tab/Shift+Tab retain cell navigation. Plain ArrowLeft/Right/Up/Down use one actual-target graph: flow-to-flow and flow-to-structural transitions are direct, while only adjacent structural-to-structural targets expose one `BlockBoundarySelection` insertion stop. `EditorView.endOfTextblock` preserves native visual-row movement for interior text. Wrapped continuation rows, controls, modifiers, IME, and expanded-code focus remain guarded. Regression tests cover composition guards, Markdown round trips, and host-backed undo/redo; real operating system IME candidate behavior remains a manual check. |
+| R06         | Identical editor and preview output              | The dedicated preview and native Markdown preview use the same profile-aware core rendering path and shared `media/document.css`; the package contributes that stylesheet and a MarkdownIt adapter to the built-in preview. In the 0.0.3 evidence, across two fixtures and three viewport/typography combinations covering widths 1100 and 500 with Arial 14 and Georgia 20 cases, actual bundled rich output, core HTML, and the installed VS Code `markdown.css`/shared CSS produced matching block and table-cell metrics. The dedicated preview switch was included. Native API checks separately verified headings, GitHub/CommonMark table behavior, and relative image resources. Typography values are copied from `markdown.preview.*`.                                                                                                               |
+| R07         | GitHub and GitLab profiles                       | `github`, `gitlab`, and `commonmark` are validated protocol/profile values. Profile settings reach the editor, dedicated preview, and native adapter. The 0.0.3 native acceptance suite verified GitHub versus CommonMark table output; GitLab-specific fixtures remain a follow-up compatibility check.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| R08         | Safe formatting and format-on-save               | Prettier runs with the bundled Markdown parser/plugin, after/before core validation, project `.prettierrc` JSON/YAML options, `.editorconfig` EOL settings, `.prettierignore`, and explicit extension option overrides. Save-time failures leave the source unchanged, write diagnostics to the Markdown Mint output channel, and use a standard VS Code error notification when user action is required. The VS Code auto-save setting is not changed by the extension.                                                                                                                                                                                                                                                                                                                                                                                       |
 
 ## Quality requirements
 
@@ -84,10 +84,10 @@ updates are coalesced for a burst of native textarea input while source,
 recovery, and host synchronization remain immediate. An ArrowRight at the body
 end or ArrowLeft at the body start moves directly to a consecutive Alert body
 or adjacent text block; the reverse boundary moves from a paragraph into the
-Alert body. A final Alert receives a transient paragraph so moving out with an
-arrow does not change Markdown until text is entered. Textarea composition
-events, non-collapsed selections, and native host Undo/Redo commands keep their
-native behavior.
+Alert body. At the final Alert, an arrow is handled without changing the
+selection, document, or scroll position. Textarea composition events,
+non-collapsed selections, and native host Undo/Redo commands keep their native
+behavior.
 
 The webview regression suite covers these flows, including CRLF and
 save/reload round trips. Live VS Code and operating-system IME behavior remain
@@ -370,17 +370,31 @@ updates that block rather than inserting another. Cancelling and unchanged
 submissions emit no edit. Fence metadata and unchanged source delimiters are
 preserved; conflicting external updates leave the source draft visible.
 
-`bodyNavigation.ts` transfers a plain collapsed caret in both directions among
-ordinary text, code, Alert, and open Details bodies. Closed Details and rendered
-atoms provide a block-selection stop without opening or editing. Horizontal
-movement crosses only the first/last character boundary. Vertical movement uses
-ProseMirror layout coordinates and a temporary styled textarea layout mirror,
-including wrapping, font metrics, width, line height, and scrolling. A retained
-horizontal target survives short intermediate rows and resets on other keys,
-mouse input, or typing. Existing table keys, modified arrows, selection ranges,
-IME candidate keys, and expanded-code controls keep their own handlers.
-Document-edge caret targets use the existing transient paragraph mechanism:
-only typing commits them to Markdown or host history.
+`bodyNavigation.ts` transfers a plain collapsed caret in all four directions
+among ordinary text, code, Alert, and open Details bodies. Closed Details and
+rendered atoms are actual selection stops without opening or editing.
+`EditorView.endOfTextblock` keeps interior vertical movement native; when an
+arrow reaches a displayed textblock edge, the shared `Selection.findFrom`
+exploration crosses directly to the next or previous actual target. Horizontal
+and vertical code, Alert, and table edges use their first/last editable
+position, and table edge traversal is position-based at any container depth.
+`BlockBoundarySelection` remains unchanged for pointer and dedicated insertion
+UX (`+`, slash, Enter, and composition), but it is never created or retained
+as an ArrowLeft/Right/Up/Down stop. An atomic block itself remains one stop,
+empty paragraphs remain individual stops, and flow document edges are handled
+without moving or scrolling. When the first or last document child is
+structural, its corresponding document edge exposes a `BlockBoundarySelection`
+at position `0` or `doc.content.size`; arrows outward from that edge remain a
+handled no-op. While a boundary selection is active in the focused editor, its
+decoration reserves one visual line as a temporary insertion slot. Leaving it
+without input collapses that line immediately with no document edit; the slot
+is not a paragraph, transient paragraph, or Markdown blank line. Typing, Enter,
+or slash then turns the insertion position into meaningful editing, with slash
+reusing the existing Insert block popup. The vertical goal X is retained across
+short intermediate targets. A temporary styled textarea layout mirror handles
+Alert wrapping, font metrics, width, line height, and scrolling. Modified
+arrows, selection ranges, IME candidate keys, and expanded-code controls keep
+their own handlers. Navigation itself dispatches only selection transactions.
 
 Validation is recorded separately for real Chromium keyboard/mouse/layout
 checks and VS Code native APIs. `npm run test:browser:blocks` covers header
@@ -457,10 +471,11 @@ native API acceptance suite do not establish those manual observations.
 - When the caret or cell selection is inside a table, a nearby contextual
   toolbar stays above the active table and exposes row, column, alignment, and
   table deletion actions. It remains usable at narrow widths.
-- **Arrow Down** at the end of the last table cell and **Escape** both move the
-  caret into a writable paragraph after the table. That paragraph remains
-  transient while empty, so cancelling or leaving it does not add blank lines
-  to the Markdown source.
+- **Arrow Down** or **Arrow Right** at the end of the last table cell is handled
+  without creating a boundary or trailing paragraph. **Escape** retains its
+  separate writable-paragraph behavior, and that paragraph remains transient
+  while empty, so cancelling or leaving it does not add blank lines to the
+  Markdown source.
 - Clicking below the final document block positions the caret at the clicked
   height with temporary blank paragraphs. They are removed when unused, while
   the first typed character commits them and authored blank lines remain intact.
@@ -899,7 +914,7 @@ The 0.0.5 and earlier evidence above remains historical.
   Tab, and outside cancellation materialize one literal slash; stale document,
   profile, mode, IME, and destroy paths discard it.
 
-## 0.0.40 top-level block boundary caret
+## 0.0.40 historical top-level block boundary caret
 
 - Plain, collapsed ArrowLeft/Right and visual-line ArrowUp/Down navigation
   between direct children of the document uses a virtual
@@ -983,7 +998,7 @@ The 0.0.5 and earlier evidence above remains historical.
   format check still reports the pre-existing warning in
   `tests/browser/block-editing.test.mjs`, which is outside this change.
 
-## 0.0.41 native Code vertical movement
+## 0.0.41 historical native Code vertical movement
 
 The editor owns only the transition out of a textblock. For a collapsed,
 unmodified ArrowUp or ArrowDown, `EditorView.endOfTextblock()` remains the
@@ -1064,6 +1079,67 @@ zoom, font loading, and operating-system IME candidate UI remain manual checks.
   navigation, popup reopen reset, and the existing two-column navigation
   rules. The native operating-system pointer/IME visual behavior remains a
   manual check.
+
+## Current Arrow navigation invariant
+
+Plain collapsed ArrowLeft/Right/Up/Down navigation has one actual-target graph.
+Flow content consists of paragraphs (including empty and image-containing
+paragraphs unless the paragraph contains only an image), headings, blockquotes,
+and list/task-list containers. Structural targets are code blocks, tables,
+Alert/raw blocks, Details, horizontal rules, image-only paragraphs, and other
+raw/protected atomic blocks. The shared `isStructuralNavigationTarget()` and
+`shouldStopAtStructuralGap()` helpers classify the normalized actual targets;
+they do not use the generic `node.isBlock` flag.
+
+Flow-to-flow, flow-to-structural, and structural-to-flow transitions select the
+next actual target in one key. Only adjacent structural-to-structural targets
+expose one top-level `BlockBoundarySelection` stop. An arrow from that boundary
+selects the next actual target in one key and never creates another boundary.
+Collapsed Details and atomic blocks remain visible targets, while hidden content
+is skipped. The position-based graph works at arbitrary list, blockquote,
+Details, and table depth, but structural boundary stops are limited to direct
+children of the document. Interior vertical text movement remains native and
+keeps its visual row and goal X. At a document edge the arrow is handled with
+no move, selection change, scroll escape, edit, or transient paragraph.
+
+`BlockBoundarySelection` retains its insertion role for structural gaps and
+explicit non-arrow insertion paths. Typing materializes an ordinary paragraph,
+Enter materializes an empty paragraph, and `/` reuses the existing Insert block
+popup. The hover `+` affordance remains a separate, source-omitted transient
+insertion path.
+This invariant is covered by the unit and Chromium block-navigation
+regressions, including the five required Markdown fixtures on Rich, dedicated
+Preview, and native-preview surfaces.
+
+## Current top-level block-gap insertion invariant
+
+Navigation and insertion remain separate. Hovering the visual gap between
+adjacent direct children of the ProseMirror document reveals one reusable
+`.mm-block-gap-insert` button. Its position is derived from the direct-child
+document positions and `view.nodeDOM(position)` rectangles, not from inferred
+Markdown or nested DOM structure. The button is an absolute overlay, so
+showing or hiding it does not change block margins, paragraph positions, scroll
+height, or document layout. Gaps inside list items, blockquotes, table cells,
+and Details bodies remain outside this affordance's scope.
+
+Clicking the gap button inserts one `meaningful: false` transient empty
+paragraph at the boundary, places the caret there, and opens the existing
+Insert block popup with its existing items. The transient paragraph is omitted
+from the serialized source and does not create a host edit, dirty state,
+autosave, or undo entry until typing or an Insert block command makes it
+meaningful. Ordinary arrow keys continue to use the structural actual-target
+graph and do not stop on this mouse-created transient paragraph. Slash input at
+an existing boundary uses the same transient source-omission guard until the
+popup command is chosen.
+
+Profile block features use a separate direct insertion primitive. Alert,
+Details, Math, Mermaid, and GitLab block features accept a valid
+`BlockBoundarySelection` as their insertion target and insert at its exact
+top-level position. The command selects the inserted block without adding an
+implicit empty paragraph, so the existing dialog can be opened and committed
+without pressing Enter first. Dialog generation/profile and stale-document
+guards remain in force; Cancel leaves the boundary, ProseMirror document,
+source, and host edit count unchanged.
 
 ## Explicit limits
 
