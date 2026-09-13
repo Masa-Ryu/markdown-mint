@@ -1003,7 +1003,7 @@ A second case enables Code line wrapping and verifies three visual rows remain
 native interior movement. The focused run passed in Chromium; native VS Code
 zoom, font loading, and operating-system IME candidate UI remain manual checks.
 
-## Unreleased Math rendered-atom editing
+## 0.0.43 Math rendered-atom editing
 
 - The shared `MATH_FENCE_LANGUAGES` set and `isMathFenceLanguage(info)` helper
   keep parser, renderer, and source-editor recognition aligned for `math`,
@@ -1028,6 +1028,24 @@ zoom, font loading, and operating-system IME candidate UI remain manual checks.
   drafts. Chromium coverage exercises one document containing inline Math,
   display Math, and all four fenced aliases through single click, double click,
   Cancel, Update, body checks, and wrapper checks.
+
+## 0.0.44 linked inline Math mark preservation
+
+- Generic inline serialization groups every contiguous range with the same
+  link mark, including a range containing only one raw inline Math atom. Marks
+  shared by the link range are serialized around the link when possible, while
+  mixed surrounding link/mark shapes continue through the inner serializer.
+  Strong, emphasis, strikethrough, their combined forms, link titles, and
+  distinct destinations on identical Math sources are preserved by
+  parse/serialize/parse checks.
+- Math-only edits continue to use `preserveRawInlineSourceSlice()` so the
+  original Markdown nesting and line bytes remain intact. A generic edit to
+  neighboring paragraph text is tested separately and retains the Math source,
+  link, and marks. Linked image and hard-break branches are also covered by a
+  focused round-trip audit.
+- A Chromium flow double-clicks linked inline Math, updates `$x$` to `$y$`,
+  then edits surrounding text through the normal editor input path. The saved
+  source and PM node state retain the Math atom, strong mark, and link.
 
 ## Explicit limits
 

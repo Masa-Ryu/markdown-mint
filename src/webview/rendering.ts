@@ -525,6 +525,19 @@ export function createRenderedNodeView(
     onEditRequest(position, dom);
   };
   const handleClick = (event: Event): void => {
+    // A Math atom may be wrapped by a Markdown link mark. Keep a physical
+    // click on the atom available for NodeSelection/double-click editing
+    // instead of letting the ancestor link navigate on the first click.
+    const sourceEditor = blockSourceEditor(current);
+    const hasLinkMark = current.marks.some((mark) => mark.type.name === "link");
+    if (
+      inline &&
+      sourceEditor?.kind === "math" &&
+      hasLinkMark &&
+      (event as MouseEvent).detail > 0 &&
+      !isInteractiveTarget(event.target)
+    )
+      event.preventDefault();
     // A physical click remains a normal selection/operation. `detail === 0`
     // is the browser's keyboard/accessibility activation path.
     if ((event as MouseEvent).detail === 0) openEditor(event);

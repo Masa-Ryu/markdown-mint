@@ -2164,11 +2164,13 @@ function serializeInlineMarked(
   node: PMNode,
   table: boolean,
   ignoredLink?: Mark,
+  baseMarks: readonly Mark[] = [],
+  initialLineStart = true,
 ): string {
   const children = childrenOf(node);
   let output = "";
-  let lineStart = true;
-  let active: Mark[] = [];
+  let lineStart = initialLineStart;
+  let active: Mark[] = [...baseMarks];
   const delimiter = (mark: Mark): string => {
     if (mark.type.name === "strong") return "**";
     if (mark.type.name === "em") return "*";
@@ -2221,21 +2223,28 @@ function serializeInlineMarked(
         if (!nextLink || !nextLink.eq(childLink)) break;
         end += 1;
       }
-      if (end > index + 1) {
-        closeTo([]);
-        const inner = serializeInlineMarked(
-          node.copy(Fragment.fromArray(children.slice(index, end))),
-          table,
-          childLink,
-        );
-        const title = childLink.attrs.title
-          ? ` "${String(childLink.attrs.title).replace(/"/g, '\\"')}"`
-          : "";
-        output += `[${inner}](${escapeLinkDestination(childLink.attrs.href, table)}${title})`;
-        lineStart = false;
-        index = end - 1;
-        continue;
-      }
+      const groupTargets = children
+        .slice(index, end)
+        .map((entry) => regularMarks(entry));
+      const firstTarget = groupTargets[0] ?? [];
+      const surroundingMarks = firstTarget.filter((mark) =>
+        groupTargets.every((target) => target.some((entry) => entry.eq(mark))),
+      );
+      closeTo(surroundingMarks);
+      const inner = serializeInlineMarked(
+        node.copy(Fragment.fromArray(children.slice(index, end))),
+        table,
+        childLink,
+        surroundingMarks,
+        lineStart,
+      );
+      const title = childLink.attrs.title
+        ? ` "${String(childLink.attrs.title).replace(/"/g, '\\"')}"`
+        : "";
+      output += `[${inner}](${escapeLinkDestination(childLink.attrs.href, table)}${title})`;
+      lineStart = false;
+      index = end - 1;
+      continue;
     }
     if (child.isText) {
       const targetMarks = regularMarks(child);
@@ -2276,11 +2285,11 @@ function serializeInlineMarked(
       lineStart = value.endsWith("\n");
     } else {
       if (child.type.name === "hard_break") {
-        closeTo([]);
+        closeTo(regularMarks(child));
         output += "<br>";
         lineStart = false;
       } else if (child.type.name === "image") {
-        closeTo([]);
+        closeTo(regularMarks(child));
         const alt = String(child.attrs.alt ?? "").replace(/[[\]]/g, "\\$&");
         const title = child.attrs.title
           ? ` "${String(child.attrs.title).replace(/"/g, '\\"')}"`
@@ -2303,16 +2312,11 @@ function serializeInlineMarked(
         let raw = String(child.attrs.source ?? "");
         const code = child.marks.some((mark) => mark.type.name === "code");
         if (code) raw = serializeCodeSpan(raw, table);
-        const regular = child.marks.filter(
-          (mark) =>
-            mark.type.name === "strong" ||
-            mark.type.name === "em" ||
-            mark.type.name === "strike",
-        );
+        const regular = regularMarks(child);
         const link = child.marks.find(
           (mark) => mark.type.name === "link" && !ignoredLink?.eq(mark),
         );
-        closeTo(link ? [] : regular);
+        closeTo(regular);
         if (link) {
           const title = link.attrs.title
             ? ` "${String(link.attrs.title).replace(/"/g, '\\"')}"`
@@ -2328,7 +2332,7 @@ function serializeInlineMarked(
       }
     }
   }
-  closeTo([]);
+  closeTo([...baseMarks]);
   return output;
 }
 
@@ -3446,6 +3450,14 @@ function renderRawInline(node: PMNode, state: RenderState): string {
   } else
     output = `<span data-markdown-raw="true" data-kind="${escapeHtml(kind)}">${escapeHtml(source)}</span>`;
   if (!output) return output;
+  const renderedAsNodeView =
+    state.document !== undefined &&
+    state.nodePosition !== undefined &&
+    state.document.nodeAt(state.nodePosition) === node;
+  // ProseMirror renders the node's marks around a NodeView. Applying them
+  // again here would create nested links/marks, including invalid <a> inside
+  // <a> markup for linked inline Math.
+  if (renderedAsNodeView) return output;
   return applyInlineMarks(output, node.marks);
 }
 

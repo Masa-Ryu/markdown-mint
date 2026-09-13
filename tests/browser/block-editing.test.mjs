@@ -1676,6 +1676,51 @@ async function testAllMathSources(page) {
   );
 }
 
+async function testLinkedInlineMathGenericSerializer(page) {
+  const source = "Before **[$x$](https://example.com)** After";
+  let current = source;
+  await load(page, source);
+
+  const math = page.locator(
+    `${rich} .mm-rendered-inline[data-mm-editable-math="true"]`,
+  );
+  await math.dblclick();
+  let dialog = page.locator(".mm-profile-feature-dialog[open]");
+  await dialog.locator('[data-feature-field="body"]').fill("y");
+  await dialog.locator('button[type="submit"]').click();
+  current = current.replace("$x$", "$y$");
+  await expectSource(page, current);
+
+  await caret(page, `${rich} > p:first-child`, 0, "Before".length);
+  await page.keyboard.type("Changed");
+  current = current.replace("Before", "Changed");
+  await page.waitForFunction(() => !window.markdownMint.sync.hasPending);
+  const genericSource = (await saved(page)).markdown;
+  assert.equal(genericSource.replace(/\u00a0/g, " "), current);
+
+  const atoms = await page.evaluate(() => {
+    const result = [];
+    window.markdownMint.view.state.doc.descendants((node) => {
+      if (node.type.name !== "raw_inline") return;
+      if (node.attrs.kind !== "math_inline") return;
+      const link = node.marks.find((mark) => mark.type.name === "link");
+      result.push({
+        source: node.attrs.source,
+        marks: node.marks.map((mark) => mark.type.name),
+        href: link?.attrs.href,
+      });
+    });
+    return result;
+  });
+  assert.deepEqual(atoms, [
+    {
+      source: "$y$",
+      marks: ["strong", "link"],
+      href: "https://example.com",
+    },
+  ]);
+}
+
 async function testDocumentFixtures(page) {
   const fixtures = [
     ["common-test.md", "commonmark"],
@@ -1827,6 +1872,7 @@ async function main() {
       testDetailsWithInlineHtmlAttributeTags,
       testMathAndMermaidHeaders,
       testAllMathSources,
+      testLinkedInlineMathGenericSerializer,
       testDocumentFixtures,
     ]) {
       if (
