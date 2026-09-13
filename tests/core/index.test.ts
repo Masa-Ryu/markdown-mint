@@ -1146,6 +1146,34 @@ $$
     },
   );
 
+  it("does not rescan invalid fingerprint prefixes for blocked clones", () => {
+    const duplicateCount = 2_500;
+    const source =
+      [
+        ...Array.from({ length: duplicateCount }, () => "duplicate"),
+        "left anchor",
+        "right anchor",
+        "duplicate",
+      ].join("\n\n") + "\n";
+    const snapshot = parseMarkdown(source);
+    const original = childrenOf(snapshot.doc);
+    const leftIndex = duplicateCount;
+    const rightIndex = duplicateCount + 1;
+    const clones = Array.from({ length: duplicateCount }, () =>
+      schema.nodeFromJSON(original[0]!.toJSON()),
+    );
+    expect(clones[0]).not.toBe(original[0]);
+    const moved = schema.topNodeType.create(null, [
+      original[leftIndex]!,
+      ...clones,
+      original[rightIndex]!,
+    ]);
+
+    const serialized = serializeMarkdown(moved, snapshot);
+
+    expect(reparseMarkdown(serialized).doc.eq(moved)).toBe(true);
+  });
+
   it("bounds user supplied link and image destinations", () => {
     const link = schema.marks.link!.create({
       href: "https://example.org/a path/(part)|pipe\nnext",

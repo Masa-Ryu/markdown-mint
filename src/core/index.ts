@@ -3285,8 +3285,11 @@ function sourceMatches(
       (list[cursor]! <= previousCursor || usedPrevious.has(list[cursor]!))
     )
       cursor += 1;
+    // Persist only candidates that are already behind the lower bound. The
+    // candidate at cursor may be blocked by the future anchor and must remain
+    // available for a later current node after that anchor.
+    cursors.set(key, cursor);
     if (cursor >= list.length) {
-      cursors.set(key, cursor);
       continue;
     }
     const candidate = list[cursor]!;
