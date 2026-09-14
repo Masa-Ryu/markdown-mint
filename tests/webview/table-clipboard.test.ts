@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { parseMarkdown, schema, serializeMarkdown } from "../../src/core";
+import { MAX_CLIPBOARD_TEXT_LENGTH } from "../../src/shared/protocol";
 import {
   createTableNodeFromMatrix,
   detectSpreadsheetPaste,
@@ -10,7 +11,6 @@ import {
   parseClipboardHtmlWithStatus,
   parseTsv,
   parseTsvWithStatus,
-  MAX_CLIPBOARD_PAYLOAD_LENGTH,
   validateClipboardMatrix,
 } from "../../src/webview/tableClipboard";
 
@@ -215,7 +215,7 @@ describe("table clipboard parsing", () => {
     ).toEqual({ kind: "too-large", source: "internal" });
   });
 
-  it("accepts exactly 10,000 TSV cells and rejects oversized payloads before parsing", () => {
+  it("accepts exactly 10,000 TSV cells and stops oversized matrices while parsing", () => {
     const values = Array.from({ length: 100 }, (_, row) =>
       Array.from({ length: 100 }, (_, column) => `${row}:${column}`),
     );
@@ -231,8 +231,24 @@ describe("table clipboard parsing", () => {
       matrix: { rows: 100, columns: 100 },
     });
 
+    const tooWide = Array.from({ length: 100 }, () => "\t".repeat(100)).join(
+      "\n",
+    );
+    expect(parseTsvWithStatus(tooWide)).toEqual({
+      matrix: null,
+      failure: "too-large",
+    });
+
+    const largeEmpty = Array.from({ length: 1_000 }, () =>
+      "\t".repeat(999),
+    ).join("\n");
+    expect(parseTsvWithStatus(largeEmpty)).toEqual({
+      matrix: null,
+      failure: "too-large",
+    });
+
     expect(
-      parseTsvWithStatus(`A\t${"x".repeat(MAX_CLIPBOARD_PAYLOAD_LENGTH)}`),
+      parseTsvWithStatus(`A\t${"x".repeat(MAX_CLIPBOARD_TEXT_LENGTH)}`),
     ).toEqual({
       matrix: null,
       failure: "too-large",

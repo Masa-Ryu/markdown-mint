@@ -1,10 +1,10 @@
 import { TableMap, type CellSelection } from "prosemirror-tables";
 import { DOMSerializer, Fragment, Node as PMNode } from "prosemirror-model";
 import type { Schema } from "prosemirror-model";
+import { MAX_CLIPBOARD_TEXT_LENGTH } from "../shared/protocol";
 
 export const TABLE_CLIPBOARD_MIME = "application/x-markdown-mint-table";
 export const MAX_CLIPBOARD_CELLS = 10_000;
-export const MAX_CLIPBOARD_PAYLOAD_LENGTH = 2_000_000;
 
 const MAX_CLIPBOARD_DIMENSION = MAX_CLIPBOARD_CELLS;
 
@@ -109,7 +109,7 @@ function parseTsvResult(value: string): ClipboardMatrixParseResult {
     (!value.includes("\t") && !value.includes("\n") && !value.includes("\r"))
   )
     return failure("not-a-matrix");
-  if (value.length > MAX_CLIPBOARD_PAYLOAD_LENGTH) return failure("too-large");
+  if (value.length > MAX_CLIPBOARD_TEXT_LENGTH) return failure("too-large");
 
   const values: string[][] = [];
   let row: string[] = [];
@@ -118,9 +118,29 @@ function parseTsvResult(value: string): ClipboardMatrixParseResult {
   let quoteClosed = false;
   let fieldStart = true;
 
+  // Keep the parser's intermediate matrix bounded. A new wide row also pads
+  // every earlier row, so the prospective rectangular dimensions must be
+  // checked before the next field is appended.
+  let maxColumns = 0;
+  const exceedsCellLimit = (nextColumns: number): boolean => {
+    if (nextColumns > MAX_CLIPBOARD_DIMENSION) return true;
+    const nextMaxColumns = Math.max(maxColumns, nextColumns);
+    const prospectiveRows = values.length + 1;
+    return prospectiveRows > Math.floor(MAX_CLIPBOARD_CELLS / nextMaxColumns);
+  };
+
+  const pushField = (): ClipboardMatrixParseResult | null => {
+    if (exceedsCellLimit(row.length + 1)) return failure("too-large");
+    row.push(field);
+    return null;
+  };
+
   const pushRow = (): ClipboardMatrixParseResult | null => {
     if (row.length > MAX_CLIPBOARD_DIMENSION) return failure("too-large");
     if (values.length >= MAX_CLIPBOARD_DIMENSION) return failure("too-large");
+    maxColumns = Math.max(maxColumns, row.length);
+    if (values.length + 1 > Math.floor(MAX_CLIPBOARD_CELLS / maxColumns))
+      return failure("too-large");
     values.push(row);
     row = [];
     return null;
@@ -146,13 +166,14 @@ function parseTsvResult(value: string): ClipboardMatrixParseResult {
       quoteClosed = false;
       fieldStart = false;
     } else if (character === "\t") {
-      row.push(field);
-      if (row.length > MAX_CLIPBOARD_DIMENSION) return failure("too-large");
+      const pushedField = pushField();
+      if (pushedField) return pushedField;
       field = "";
       fieldStart = true;
       quoteClosed = false;
     } else if (character === "\n" || character === "\r") {
-      row.push(field);
+      const pushedField = pushField();
+      if (pushedField) return pushedField;
       const pushed = pushRow();
       if (pushed) return pushed;
       field = "";
@@ -167,8 +188,11 @@ function parseTsvResult(value: string): ClipboardMatrixParseResult {
   }
   if (quoted) return failure("malformed");
 
-  row.push(field);
-  if (!(row.length === 1 && row[0] === "" && values.length > 0)) {
+  // A final line break already closed the last row. Do not count that
+  // terminator as another empty cell or row.
+  if (!(row.length === 0 && field === "" && values.length > 0)) {
+    const pushedField = pushField();
+    if (pushedField) return pushedField;
     const pushed = pushRow();
     if (pushed) return pushed;
   }
@@ -183,13 +207,13 @@ export function parseTsv(value: string): TableMatrix | null {
   return parseTsvResult(value).matrix;
 }
 
-function hasTableMarkup(value: string): boolean {
+export function hasClipboardTableMarkup(value: string): boolean {
   return /<table(?:\s|>)/i.test(value);
 }
 
 /** Reject obviously oversized HTML before handing it to a DOM parser. */
 function hasOversizedHtmlTable(value: string): boolean {
-  if (value.length > MAX_CLIPBOARD_PAYLOAD_LENGTH) return true;
+  if (value.length > MAX_CLIPBOARD_TEXT_LENGTH) return true;
   const tags = /<(td|th|tr)\b/gi;
   let rows = 0;
   let cells = 0;
@@ -208,7 +232,7 @@ function parseClipboardHtmlResult(value: string): ClipboardMatrixParseResult {
   if (
     typeof value !== "string" ||
     !value ||
-    !hasTableMarkup(value) ||
+    !hasClipboardTableMarkup(value) ||
     typeof DOMParser === "undefined"
   )
     return failure("not-a-matrix");
@@ -262,7 +286,7 @@ export function parseClipboardHtml(value: string): TableMatrix | null {
 
 function parseInternalMatrixResult(value: string): ClipboardMatrixParseResult {
   if (typeof value !== "string" || !value) return failure("not-a-matrix");
-  if (value.length > MAX_CLIPBOARD_PAYLOAD_LENGTH) return failure("too-large");
+  if (value.length > MAX_CLIPBOARD_TEXT_LENGTH) return failure("too-large");
   try {
     const parsed = JSON.parse(value) as {
       values?: unknown;
@@ -316,7 +340,7 @@ export function detectSpreadsheetPaste(
   if (tsv.matrix && hasAtLeastTwoCells(tsv.matrix))
     return { kind: "matrix", source: "tsv", matrix: tsv.matrix };
 
-  const html = hasTableMarkup(payload.html)
+  const html = hasClipboardTableMarkup(payload.html)
     ? parseClipboardHtmlResult(payload.html)
     : failure("not-a-matrix");
   if (html.failure === "too-large")

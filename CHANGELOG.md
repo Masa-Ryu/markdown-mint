@@ -8,9 +8,12 @@
   CommonMark, code, raw, and native text-oriented surfaces on their normal
   paste paths.
 - Preserve displayed cell strings and internal rich content where safe, use
-  TSV before spreadsheet HTML, reject malformed or oversized matrices as a
-  whole at the shared 10,000-cell limit, and keep the existing table paste,
-  expansion, copy, cut, and selection behavior.
+  the internal → TSV → HTML priority lazily, reject malformed or oversized
+  matrices as a whole at the shared 10,000-cell limit, and keep the existing
+  table paste, expansion, copy, cut, and selection behavior. Table HTML with
+  no safe fallback never reaches the native HTML parser, and spreadsheet paste
+  checks the final serialized Markdown against the shared two-million UTF-16
+  code-unit source limit before committing the ProseMirror transaction.
 
 - Improve Mermaid Insert and Edit dialogs with a large, viewport-bounded,
   editor-first layout and accessible source labeling.
