@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.0.49
+
+- Move every contextual table-toolbar icon to the shared SVG asset pipeline,
+  preserving the existing groups, labels, commands, accessibility state, and
+  14px icon attributes while using the dedicated table/row/column delete
+  artwork.
+- Normalize each imported SVG once and clone its cached template for later
+  renders, avoiding repeated DOMParser work without sharing DOM nodes or
+  leaking per-call class, size, or accessibility attributes.
+
 ## 0.0.48
 
 - Prevent Insert popup items from showing simultaneous keyboard-focus and
