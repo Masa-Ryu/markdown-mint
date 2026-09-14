@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.0.53
+
+- Interpret multi-cell TSV, HTML-table, and Markdown Mint internal clipboard
+  payloads pasted outside the Rich Editor's existing tables as a header-first
+  Markdown table, while keeping ordinary multiline text, one-cell pastes,
+  CommonMark, code, raw, and native text-oriented surfaces on their normal
+  paste paths.
+- Preserve displayed cell strings and internal rich content where safe, use
+  TSV before spreadsheet HTML, reject malformed or oversized matrices as a
+  whole at the shared 10,000-cell limit, and keep the existing table paste,
+  expansion, copy, cut, and selection behavior.
+
 ## 0.0.52
 
 - Update the Link dialog destination field to accept relative paths, root paths,

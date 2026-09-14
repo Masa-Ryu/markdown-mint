@@ -1,0 +1,493 @@
+import { TableMap, type CellSelection } from "prosemirror-tables";
+import { DOMSerializer, Fragment, Node as PMNode } from "prosemirror-model";
+import type { Schema } from "prosemirror-model";
+
+export const TABLE_CLIPBOARD_MIME = "application/x-markdown-mint-table";
+export const MAX_CLIPBOARD_CELLS = 10_000;
+
+const MAX_CLIPBOARD_DIMENSION = MAX_CLIPBOARD_CELLS;
+const MAX_INTERNAL_CLIPBOARD_LENGTH = 2_000_000;
+
+export interface TableMatrix {
+  values: string[][];
+  rows: number;
+  columns: number;
+  /** ProseMirror JSON is used only for our bounded internal clipboard MIME. */
+  cellJson?: unknown[][];
+}
+
+export type ClipboardMatrixFailure = "not-a-matrix" | "malformed" | "too-large";
+
+export interface ClipboardMatrixValidation {
+  matrix: TableMatrix | null;
+  failure: ClipboardMatrixFailure | null;
+}
+
+export type ClipboardMatrixParseResult = ClipboardMatrixValidation;
+
+export interface ClipboardPayload {
+  internal: string;
+  text: string;
+  html: string;
+}
+
+export type SpreadsheetPasteDetection =
+  | {
+      kind: "matrix";
+      source: "internal" | "tsv" | "html";
+      matrix: TableMatrix;
+    }
+  | {
+      kind: "too-large";
+      source: "internal" | "tsv" | "html";
+    }
+  | {
+      kind: "single-cell";
+      source: "internal" | "html";
+      matrix: TableMatrix;
+    }
+  | { kind: "none" };
+
+function failure(failure: ClipboardMatrixFailure): ClipboardMatrixValidation {
+  return { matrix: null, failure };
+}
+
+/** Validate and normalize every matrix before it reaches a ProseMirror node. */
+export function validateClipboardMatrix(
+  input: unknown,
+): ClipboardMatrixValidation {
+  if (!Array.isArray(input) || input.length === 0) return failure("malformed");
+  if (input.length > MAX_CLIPBOARD_DIMENSION) return failure("too-large");
+
+  const values: string[][] = [];
+  let columns = 0;
+  for (const row of input) {
+    if (!Array.isArray(row) || row.length === 0) return failure("malformed");
+    if (row.length > MAX_CLIPBOARD_DIMENSION) return failure("too-large");
+    if (row.some((cell) => typeof cell !== "string"))
+      return failure("malformed");
+    const strings = row as string[];
+    values.push([...strings]);
+    columns = Math.max(columns, strings.length);
+  }
+  if (columns === 0) return failure("malformed");
+  if (values.length > Math.floor(MAX_CLIPBOARD_CELLS / columns))
+    return failure("too-large");
+
+  for (const row of values) while (row.length < columns) row.push("");
+  return {
+    matrix: {
+      values,
+      rows: values.length,
+      columns,
+    },
+    failure: null,
+  };
+}
+
+function withCellJson(
+  result: ClipboardMatrixValidation,
+  value: unknown,
+): ClipboardMatrixParseResult {
+  if (!result.matrix) return result;
+  const cellJson =
+    typeof value === "object" && value !== null && "cellJson" in value
+      ? (value as { cellJson?: unknown }).cellJson
+      : undefined;
+  return {
+    matrix: {
+      ...result.matrix,
+      ...(Array.isArray(cellJson) ? { cellJson: cellJson as unknown[][] } : {}),
+    },
+    failure: null,
+  };
+}
+
+function parseTsvResult(value: string): ClipboardMatrixParseResult {
+  if (
+    typeof value !== "string" ||
+    (!value.includes("\t") && !value.includes("\n") && !value.includes("\r"))
+  )
+    return failure("not-a-matrix");
+
+  const values: string[][] = [];
+  let row: string[] = [];
+  let field = "";
+  let quoted = false;
+  let quoteClosed = false;
+  let fieldStart = true;
+
+  const pushRow = (): ClipboardMatrixParseResult | null => {
+    if (row.length > MAX_CLIPBOARD_DIMENSION) return failure("too-large");
+    if (values.length >= MAX_CLIPBOARD_DIMENSION) return failure("too-large");
+    values.push(row);
+    row = [];
+    return null;
+  };
+
+  for (let index = 0; index < value.length; index += 1) {
+    const character = value[index];
+    if (quoted) {
+      if (character === '"') {
+        if (value[index + 1] === '"') {
+          field += '"';
+          index += 1;
+        } else {
+          quoted = false;
+          quoteClosed = true;
+        }
+      } else field += character;
+      continue;
+    }
+
+    if (character === '"' && fieldStart) {
+      quoted = true;
+      quoteClosed = false;
+      fieldStart = false;
+    } else if (character === "\t") {
+      row.push(field);
+      if (row.length > MAX_CLIPBOARD_DIMENSION) return failure("too-large");
+      field = "";
+      fieldStart = true;
+      quoteClosed = false;
+    } else if (character === "\n" || character === "\r") {
+      row.push(field);
+      const pushed = pushRow();
+      if (pushed) return pushed;
+      field = "";
+      fieldStart = true;
+      quoteClosed = false;
+      if (character === "\r" && value[index + 1] === "\n") index += 1;
+    } else {
+      if (quoteClosed) return failure("malformed");
+      field += character;
+      fieldStart = false;
+    }
+  }
+  if (quoted) return failure("malformed");
+
+  row.push(field);
+  if (!(row.length === 1 && row[0] === "" && values.length > 0)) {
+    const pushed = pushRow();
+    if (pushed) return pushed;
+  }
+  return validateClipboardMatrix(values);
+}
+
+export function parseTsvWithStatus(value: string): ClipboardMatrixParseResult {
+  return parseTsvResult(value);
+}
+
+export function parseTsv(value: string): TableMatrix | null {
+  return parseTsvResult(value).matrix;
+}
+
+function hasTableMarkup(value: string): boolean {
+  return /<table(?:\s|>)/i.test(value);
+}
+
+function parseClipboardHtmlResult(value: string): ClipboardMatrixParseResult {
+  if (
+    typeof value !== "string" ||
+    !value ||
+    !hasTableMarkup(value) ||
+    typeof DOMParser === "undefined"
+  )
+    return failure("not-a-matrix");
+
+  try {
+    const parsed = new DOMParser().parseFromString(value, "text/html");
+    const table = parsed.querySelector("table");
+    if (!table) return failure("not-a-matrix");
+    const extractText = (cell: Element): string => {
+      const walker = parsed.createTreeWalker(cell, NodeFilter.SHOW_ALL);
+      let output = "";
+      let node: Node | null;
+      while ((node = walker.nextNode())) {
+        if (
+          node.nodeType === Node.TEXT_NODE &&
+          !node.parentElement?.closest("script,style,template")
+        )
+          output += node.textContent ?? "";
+        else if (
+          node.nodeType === Node.ELEMENT_NODE &&
+          (node as Element).tagName === "BR"
+        )
+          output += "\n";
+      }
+      return output;
+    };
+    const rows = Array.from(table.querySelectorAll("tr"))
+      .filter((row) => row.closest("table") === table)
+      .map((row) =>
+        Array.from(row.querySelectorAll(":scope > th, :scope > td")).map(
+          (cell) => extractText(cell),
+        ),
+      );
+    if (!rows.length) return failure("malformed");
+    return validateClipboardMatrix(rows);
+  } catch {
+    return failure("malformed");
+  }
+}
+
+export function parseClipboardHtmlWithStatus(
+  value: string,
+): ClipboardMatrixParseResult {
+  return parseClipboardHtmlResult(value);
+}
+
+export function parseClipboardHtml(value: string): TableMatrix | null {
+  return parseClipboardHtmlResult(value).matrix;
+}
+
+function parseInternalMatrixResult(value: string): ClipboardMatrixParseResult {
+  if (typeof value !== "string" || !value) return failure("not-a-matrix");
+  if (value.length > MAX_INTERNAL_CLIPBOARD_LENGTH) return failure("too-large");
+  try {
+    const parsed = JSON.parse(value) as {
+      values?: unknown;
+      cellJson?: unknown;
+    };
+    const result = validateClipboardMatrix(parsed.values);
+    return withCellJson(result, parsed);
+  } catch {
+    return failure("malformed");
+  }
+}
+
+export function parseInternalMatrixWithStatus(
+  value: string,
+): ClipboardMatrixParseResult {
+  return parseInternalMatrixResult(value);
+}
+
+export function parseInternalMatrix(value: string): TableMatrix | null {
+  return parseInternalMatrixResult(value).matrix;
+}
+
+function hasAtLeastTwoCells(matrix: TableMatrix): boolean {
+  return matrix.rows * matrix.columns >= 2;
+}
+
+/** Select table-shaped clipboard data in the outside-table priority order. */
+export function detectSpreadsheetPaste(
+  payload: ClipboardPayload,
+): SpreadsheetPasteDetection {
+  let singleCell: Extract<
+    SpreadsheetPasteDetection,
+    { kind: "single-cell" }
+  > | null = null;
+  const internal = parseInternalMatrixResult(payload.internal);
+  if (internal.failure === "too-large")
+    return { kind: "too-large", source: "internal" };
+  if (internal.matrix && hasAtLeastTwoCells(internal.matrix))
+    return { kind: "matrix", source: "internal", matrix: internal.matrix };
+  if (internal.matrix)
+    singleCell = {
+      kind: "single-cell",
+      source: "internal",
+      matrix: internal.matrix,
+    };
+
+  const tsv = payload.text.includes("\t")
+    ? parseTsvResult(payload.text)
+    : failure("not-a-matrix");
+  if (tsv.failure === "too-large") return { kind: "too-large", source: "tsv" };
+  if (tsv.matrix && hasAtLeastTwoCells(tsv.matrix))
+    return { kind: "matrix", source: "tsv", matrix: tsv.matrix };
+
+  const html = hasTableMarkup(payload.html)
+    ? parseClipboardHtmlResult(payload.html)
+    : failure("not-a-matrix");
+  if (html.failure === "too-large")
+    return { kind: "too-large", source: "html" };
+  if (html.matrix && hasAtLeastTwoCells(html.matrix))
+    return { kind: "matrix", source: "html", matrix: html.matrix };
+  if (html.matrix && !singleCell)
+    singleCell = { kind: "single-cell", source: "html", matrix: html.matrix };
+
+  return singleCell ?? { kind: "none" };
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
+export function matrixToTsv(matrix: TableMatrix): string {
+  const quote = (cell: string) =>
+    /[\t\n\r"]/.test(cell) ? `"${cell.replaceAll('"', '""')}"` : cell;
+  return matrix.values.map((row) => row.map(quote).join("\t")).join("\n");
+}
+
+export function matrixToHtml(matrix: TableMatrix, schema: Schema): string {
+  const serializer = DOMSerializer.fromSchema(schema);
+  return `<table><tbody>${matrix.values
+    .map(
+      (row, rowIndex) =>
+        `<tr>${row
+          .map((cell, columnIndex) => {
+            const json = matrix.cellJson?.[rowIndex]?.[columnIndex];
+            try {
+              if (json) {
+                const cellNode: PMNode = PMNode.fromJSON(schema, json);
+                const holder = document.createElement("div");
+                holder.appendChild(
+                  serializer.serializeFragment(cellNode.content),
+                );
+                return `<td>${holder.innerHTML}</td>`;
+              }
+            } catch {
+              // The plain text fallback below is the safe behavior for stale data.
+            }
+            return `<td>${escapeHtml(cell).replace(/\r\n|\r|\n/g, "<br>")}</td>`;
+          })
+          .join("")}</tr>`,
+    )
+    .join("")}</tbody></table>`;
+}
+
+function safeCellContent(schema: Schema, cell: PMNode, text: string): PMNode {
+  const paragraphType = schema.nodes.paragraph;
+  if (!paragraphType) return cell;
+  try {
+    const hardBreak = schema.nodes.hard_break;
+    const normalized = text.replace(/\r\n?/g, "\n");
+    const inlineNodes: PMNode[] = [];
+    normalized.split("\n").forEach((line, index, lines) => {
+      if (line) inlineNodes.push(schema.text(line));
+      if (index < lines.length - 1 && hardBreak)
+        inlineNodes.push(hardBreak.create());
+    });
+    const paragraph = paragraphType.create(
+      null,
+      inlineNodes.length ? Fragment.fromArray(inlineNodes) : undefined,
+    );
+    return cell.type.create(cell.attrs, paragraph);
+  } catch {
+    return cell.type.create(cell.attrs, paragraphType.create());
+  }
+}
+
+export function cellFromClipboard(
+  schema: Schema,
+  target: PMNode,
+  text: string,
+  json: unknown,
+): PMNode {
+  try {
+    if (json && typeof json === "object") {
+      const candidate = PMNode.fromJSON(schema, json);
+      const role = candidate.type.spec.tableRole;
+      if (role === "cell" || role === "header_cell")
+        return target.type.create(target.attrs, candidate.content);
+    }
+  } catch {
+    // Clipboard data is untrusted. Fall through to a text-only cell.
+  }
+  return safeCellContent(schema, target, text);
+}
+
+/** Create an empty table; callers apply any UI-specific dimension policy. */
+export function createEmptyTableNode(
+  schema: Schema,
+  columns: number,
+  rows: number,
+): PMNode | null {
+  const table = schema.nodes.table;
+  const row = schema.nodes.table_row;
+  const cell = schema.nodes.table_cell;
+  const header = schema.nodes.table_header ?? cell;
+  const paragraph = schema.nodes.paragraph;
+  if (!table || !row || !cell || !header || !paragraph) return null;
+  const makeCells = (type: typeof cell): PMNode[] =>
+    Array.from({ length: columns }, () =>
+      type.create(null, paragraph.create()),
+    );
+  return table.create(null, [
+    row.create(null, makeCells(header)),
+    ...Array.from({ length: rows - 1 }, () =>
+      row.create(null, makeCells(cell)),
+    ),
+  ]);
+}
+
+/** Convert a validated clipboard matrix into a header-first Markdown table. */
+export function createTableNodeFromMatrix(
+  schema: Schema,
+  input: TableMatrix,
+): PMNode | null {
+  const validated = validateClipboardMatrix(input.values).matrix;
+  if (!validated) return null;
+  const table = schema.nodes.table;
+  const row = schema.nodes.table_row;
+  const cell = schema.nodes.table_cell;
+  const header = schema.nodes.table_header ?? cell;
+  const paragraph = schema.nodes.paragraph;
+  if (!table || !row || !cell || !header || !paragraph) return null;
+
+  try {
+    const rows = validated.values.map((values, rowIndex) => {
+      const cellType = rowIndex === 0 ? header : cell;
+      const cells = values.map((text, columnIndex) => {
+        const target = cellType.create(null, paragraph.create());
+        return cellFromClipboard(
+          schema,
+          target,
+          text,
+          input.cellJson?.[rowIndex]?.[columnIndex],
+        );
+      });
+      return row.create(null, Fragment.fromArray(cells));
+    });
+    return table.create(null, Fragment.fromArray(rows));
+  } catch {
+    return null;
+  }
+}
+
+/** Return only the text and cell JSON for a rectangular table selection. */
+export function tableSelectionMatrix(
+  selection: CellSelection,
+): TableMatrix | null {
+  const $anchorCell = selection.$anchorCell;
+  const table = $anchorCell.node(-1);
+  if (!table || table.type.spec.tableRole !== "table") return null;
+  const tableStart = $anchorCell.start(-1);
+  const map = TableMap.get(table);
+  const anchor = map.findCell(selection.$anchorCell.pos - tableStart);
+  const head = map.findCell(selection.$headCell.pos - tableStart);
+  const rect = {
+    top: Math.min(anchor.top, head.top),
+    left: Math.min(anchor.left, head.left),
+    bottom: Math.max(anchor.bottom, head.bottom),
+    right: Math.max(anchor.right, head.right),
+  };
+  const cellText = (cell: PMNode): string =>
+    cell.textBetween(0, cell.content.size, "\n", "\n").replace(/\u00a0/g, " ");
+  const values: string[][] = [];
+  const cellJson: unknown[][] = [];
+  for (let row = rect.top; row < rect.bottom; row += 1) {
+    const line: string[] = [];
+    const jsonLine: unknown[] = [];
+    for (let column = rect.left; column < rect.right; column += 1) {
+      const pos = map.positionAt(row, column, table);
+      const cell = table.nodeAt(pos);
+      line.push(cell ? cellText(cell) : "");
+      jsonLine.push(cell?.toJSON() ?? null);
+    }
+    values.push(line);
+    cellJson.push(jsonLine);
+  }
+  return {
+    values,
+    rows: values.length,
+    columns: values[0]?.length ?? 0,
+    cellJson,
+  };
+}

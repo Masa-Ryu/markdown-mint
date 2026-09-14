@@ -50,6 +50,7 @@ function lastEditMarkdown(messages: unknown[]): string {
 function dispatchPaste(
   app: ReturnType<typeof makeApp>["app"],
   data: Record<string, string>,
+  target: EventTarget = app.view.dom,
 ): Event {
   const event = new Event("paste", { bubbles: true, cancelable: true });
   Object.defineProperty(event, "clipboardData", {
@@ -58,8 +59,24 @@ function dispatchPaste(
       setData: () => undefined,
     },
   });
-  app.view.dom.dispatchEvent(event);
+  if (!(target instanceof EventTarget))
+    throw new Error("paste target is not an EventTarget");
+  target.dispatchEvent(event);
   return event;
+}
+
+function selectText(
+  app: ReturnType<typeof makeApp>["app"],
+  element: Element,
+  from: number,
+  to = from,
+): void {
+  const position = app.view.posAtDOM(element, 0);
+  app.view.dispatch(
+    app.view.state.tr.setSelection(
+      TextSelection.create(app.view.state.doc, position + from, position + to),
+    ),
+  );
 }
 
 function selectTableCellText(
@@ -143,6 +160,7 @@ function makeApp(
   api?: VSCodeApiLike,
   clipboardAvailable = false,
   documentId?: string,
+  profile: EditorInitialDocument["profile"] = "github",
 ) {
   const root = document.createElement("div");
   document.body.append(root);
@@ -158,6 +176,7 @@ function makeApp(
     core: { schema, parseMarkdown, serializeMarkdown, renderMarkdown },
     initialDocument: {
       ...documentFixture(markdown, clipboardAvailable),
+      profile,
       ...(documentId === undefined ? {} : { documentId }),
     },
   });
@@ -2481,6 +2500,256 @@ describe("sync safety", () => {
 });
 
 describe("table clipboard integration", () => {
+  it("imports outside-table TSV as a header-first table and preserves text around the caret", () => {
+    const { app, root, messages } = makeApp("BeforeAfter");
+    const paragraph = root.querySelector<HTMLElement>(".ProseMirror > p")!;
+    selectText(app, paragraph, "Before".length);
+
+    const event = dispatchPaste(app, {
+      "text/plain": "Name\tScore\r\nAlice\t90\r\nBob\t72",
+    });
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(app.view.state.doc.childCount).toBe(3);
+    expect(app.view.state.doc.child(0).textContent).toBe("Before");
+    expect(app.view.state.doc.child(1).type.name).toBe("table");
+    expect(app.view.state.doc.child(1).child(0).child(0).type.name).toBe(
+      "table_header",
+    );
+    expect(app.view.state.doc.child(1).child(1).child(0).type.name).toBe(
+      "table_cell",
+    );
+    expect(app.view.state.doc.child(2).textContent).toBe("After");
+    expect(lastEditMarkdown(messages)).toContain(
+      "| Name | Score |\n| --- | --- |\n| Alice | 90 |\n| Bob | 72 |",
+    );
+    expect(messages.filter(isEditMessage)).toHaveLength(1);
+    app.destroy();
+  });
+
+  it("imports a one-row TSV as a table with header cells", () => {
+    const { app, root } = makeApp("Before");
+    const paragraph = root.querySelector<HTMLElement>(".ProseMirror > p")!;
+    selectText(app, paragraph, "Before".length);
+
+    dispatchPaste(app, { "text/plain": "A\tB\tC" });
+
+    const table = app.view.state.doc.child(1);
+    expect(table.type.name).toBe("table");
+    expect(table.childCount).toBe(1);
+    expect(table.firstChild?.childCount).toBe(3);
+    expect(
+      Array.from(
+        { length: table.firstChild?.childCount ?? 0 },
+        (_, index) => table.firstChild!.child(index).type.name,
+      ),
+    ).toEqual(["table_header", "table_header", "table_header"]);
+    app.destroy();
+  });
+
+  it("prefers TSV display values over spreadsheet HTML and imports HTML-only columns", () => {
+    const tsv = makeApp("Before");
+    const tsvParagraph =
+      tsv.root.querySelector<HTMLElement>(".ProseMirror > p")!;
+    selectText(tsv.app, tsvParagraph, "Before".length);
+    dispatchPaste(tsv.app, {
+      "text/plain": "TSV\tValue",
+      "text/html":
+        '<table style="background:red"><tr><td>HTML</td><td>Ignored</td></tr></table>',
+    });
+    expect(tsv.app.view.state.doc.child(1).textContent).toBe("TSVValue");
+    expect(lastEditMarkdown(tsv.messages)).toContain("| TSV | Value |");
+    tsv.app.destroy();
+
+    const html = makeApp("Before");
+    const htmlParagraph =
+      html.root.querySelector<HTMLElement>(".ProseMirror > p")!;
+    selectText(html.app, htmlParagraph, "Before".length);
+    dispatchPaste(html.app, {
+      "text/html":
+        '<table style="color:red"><tbody><tr><td>00123</td></tr><tr><td>2026/09/14</td></tr></tbody></table>',
+    });
+    const htmlTable = html.app.view.state.doc.child(1);
+    expect(htmlTable.type.name).toBe("table");
+    expect(htmlTable.childCount).toBe(2);
+    expect(htmlTable.child(0).child(0).textContent).toBe("00123");
+    expect(htmlTable.child(1).child(0).textContent).toBe("2026/09/14");
+    expect(htmlTable.child(0).child(0).attrs).toMatchObject({
+      alignment: null,
+    });
+    html.app.destroy();
+  });
+
+  it("keeps ordinary multiline text and one-cell HTML on the native paste path", () => {
+    const plain = makeApp("Before");
+    const plainParagraph =
+      plain.root.querySelector<HTMLElement>(".ProseMirror > p")!;
+    selectText(plain.app, plainParagraph, "Before".length);
+    dispatchPaste(plain.app, { "text/plain": "Today\nTomorrow" });
+    let plainTables = 0;
+    plain.app.view.state.doc.descendants((node) => {
+      if (node.type.name === "table") plainTables += 1;
+    });
+    expect(plainTables).toBe(0);
+    expect(plain.app.view.state.doc.textContent).toContain("Today");
+    plain.app.destroy();
+
+    const html = makeApp("Before");
+    const htmlParagraph =
+      html.root.querySelector<HTMLElement>(".ProseMirror > p")!;
+    selectText(html.app, htmlParagraph, "Before".length);
+    dispatchPaste(html.app, {
+      "text/plain": "Alice",
+      "text/html": "<table><tr><td>Alice</td></tr></table>",
+    });
+    let htmlTables = 0;
+    html.app.view.state.doc.descendants((node) => {
+      if (node.type.name === "table") htmlTables += 1;
+    });
+    expect(htmlTables).toBe(0);
+    expect(html.app.view.state.doc.textContent).toContain("Alice");
+    html.app.destroy();
+  });
+
+  it("keeps spreadsheet paste as native text in CommonMark and code blocks", () => {
+    const commonmark = makeApp(
+      "Before",
+      undefined,
+      false,
+      undefined,
+      "commonmark",
+    );
+    const paragraph =
+      commonmark.root.querySelector<HTMLElement>(".ProseMirror > p")!;
+    selectText(commonmark.app, paragraph, "Before".length);
+    const commonmarkEvent = dispatchPaste(commonmark.app, {
+      "text/plain": "A\tB",
+      "text/html": "<table><tr><td>HTML</td><td>table</td></tr></table>",
+    });
+    expect(commonmarkEvent.defaultPrevented).toBe(true);
+    expect(commonmark.app.view.state.doc.firstChild?.type.name).toBe(
+      "paragraph",
+    );
+    expect(commonmark.app.view.state.doc.textContent).toContain("A\tB");
+    commonmark.app.destroy();
+
+    const code = makeApp("```text\nBefore\n```");
+    const codeElement = code.root.querySelector<HTMLElement>(
+      ".mm-code-block-pre code",
+    )!;
+    selectCodeBlockText(code.app, "Before".length);
+    dispatchPaste(code.app, { "text/plain": "A\tB" }, codeElement);
+    expect(code.app.view.state.doc.childCount).toBe(1);
+    expect(code.app.view.state.doc.firstChild?.type.name).toBe("code_block");
+    expect(code.app.view.state.doc.firstChild?.textContent).toContain("A\tB");
+    code.app.destroy();
+  });
+
+  it("imports a valid internal matrix with rich cell content and normalizes row types", () => {
+    const rich = schema.nodes.table_header!.create(
+      null,
+      schema.nodes.paragraph!.create(
+        null,
+        schema.text("Header", [schema.marks.strong!.create()]),
+      ),
+    );
+    const { app, root } = makeApp("Before");
+    const paragraph = root.querySelector<HTMLElement>(".ProseMirror > p")!;
+    selectText(app, paragraph, "Before".length);
+    dispatchPaste(app, {
+      ["application/x-markdown-mint-table"]: JSON.stringify({
+        values: [
+          ["Header", "Other"],
+          ["Body", "Value"],
+        ],
+        cellJson: [
+          [rich.toJSON(), { type: "not-a-real-node" }],
+          [null, null],
+        ],
+      }),
+      "text/plain": "Fallback\tValue\nBody\tValue",
+    });
+
+    const table = app.view.state.doc.child(1);
+    expect(table.child(0).child(0).type.name).toBe("table_header");
+    expect(table.child(1).child(0).type.name).toBe("table_cell");
+    expect(table.child(0).child(0).firstChild?.firstChild?.marks).toHaveLength(
+      1,
+    );
+    expect(table.child(0).child(1).textContent).toBe("Other");
+    app.destroy();
+  });
+
+  it("inserts a spreadsheet table directly at a BlockBoundarySelection", () => {
+    const { app, messages } = makeApp("First\n\nSecond");
+    const boundary = app.view.state.doc.firstChild!.nodeSize;
+    app.view.dispatch(
+      app.view.state.tr.setSelection(
+        new BlockBoundarySelection(app.view.state.doc.resolve(boundary)),
+      ),
+    );
+
+    const event = dispatchPaste(app, { "text/plain": "A\tB\n1\t2" });
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(
+      Array.from(
+        { length: app.view.state.doc.childCount },
+        (_, index) => app.view.state.doc.child(index).type.name,
+      ),
+    ).toEqual(["paragraph", "table", "paragraph"]);
+    expect(messages.filter(isEditMessage)).toHaveLength(1);
+    app.destroy();
+  });
+
+  it("keeps valid list and blockquote containers when splitting a paragraph", () => {
+    const list = makeApp("- Before\n\n- After");
+    const listParagraph =
+      list.root.querySelector<HTMLElement>(".ProseMirror li p")!;
+    selectText(list.app, listParagraph, "Before".length);
+    dispatchPaste(list.app, { "text/plain": "A\tB\n1\t2" });
+    expect(list.app.view.state.doc.firstChild?.type.name).toBe("bullet_list");
+    expect(list.app.view.state.doc.firstChild?.firstChild?.childCount).toBe(3);
+    expect(
+      list.app.view.state.doc.firstChild?.firstChild?.child(1).type.name,
+    ).toBe("table");
+    list.app.destroy();
+
+    const quote = makeApp("> Before\n>\n> After");
+    const quoteParagraph = quote.root.querySelector<HTMLElement>(
+      ".ProseMirror blockquote p",
+    )!;
+    selectText(quote.app, quoteParagraph, "Before".length);
+    dispatchPaste(quote.app, { "text/plain": "A\tB\n1\t2" });
+    expect(quote.app.view.state.doc.firstChild?.type.name).toBe("blockquote");
+    expect(quote.app.view.state.doc.firstChild?.child(1).type.name).toBe(
+      "table",
+    );
+    quote.app.destroy();
+  });
+
+  it("rejects oversized spreadsheet paste without truncating it", () => {
+    const { app, root, messages } = makeApp("Before");
+    const paragraph = root.querySelector<HTMLElement>(".ProseMirror > p")!;
+    selectText(app, paragraph, "Before".length);
+    const cells = Array.from({ length: 10_001 }, (_, index) => String(index));
+
+    const event = dispatchPaste(app, { "text/plain": cells.join("\t") });
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(app.view.state.doc.childCount).toBe(1);
+    expect(messages).toContainEqual(
+      expect.objectContaining({
+        type: "notify",
+        level: "warning",
+        message:
+          "Table paste is too large. Markdown Mint supports up to 10,000 pasted cells.",
+      }),
+    );
+    expect(messages.filter(isEditMessage)).toHaveLength(0);
+    app.destroy();
+  });
+
   it("delegates plain text paste at a cell cursor to ProseMirror", () => {
     const markdown = "| Header |\n| --- |\n| abcdef |";
     const { app, root, messages } = makeApp(markdown);
