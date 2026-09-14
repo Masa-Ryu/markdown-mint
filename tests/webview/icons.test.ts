@@ -3,10 +3,7 @@ import { createToolbarIcon } from "../../src/webview/icons";
 
 describe("toolbar icons", () => {
   it("parses each icon source once before cloning its template", () => {
-    const parseFromString = vi.spyOn(
-      DOMParser.prototype,
-      "parseFromString",
-    );
+    const parseFromString = vi.spyOn(DOMParser.prototype, "parseFromString");
 
     createToolbarIcon("table-row-above");
     const firstCallCount = parseFromString.mock.calls.length;
