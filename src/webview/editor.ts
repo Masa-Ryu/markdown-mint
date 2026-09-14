@@ -4700,7 +4700,14 @@ export class MarkdownEditorApp {
     const linkTitle = document.createElement("h2");
     linkTitle.id = "mm-link-dialog-title";
     linkTitle.textContent = "Insert link";
-    this.linkUrlInput = makeField("URL", "url", "https://example.com");
+    this.linkUrlInput = makeField(
+      "Link path or URL",
+      "text",
+      "./docs/example.md",
+    );
+    this.linkUrlInput.spellcheck = false;
+    this.linkUrlInput.autocapitalize = "off";
+    this.linkUrlInput.inputMode = "url";
     this.linkTextInput = makeField("Text", "text", "Selected text");
     const linkActions = document.createElement("div");
     linkActions.className = "mm-dialog-actions";

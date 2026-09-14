@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { TextSelection } from "prosemirror-state";
 import {
   parseMarkdown,
   renderMarkdown,
@@ -103,6 +104,39 @@ afterEach(() => {
 });
 
 describe("modal primary-modifier Enter runtime integration", () => {
+  it.each([
+    ["macOS", "MacIntel", { metaKey: true }],
+    ["Windows/Linux", "Linux x86_64", { ctrlKey: true }],
+  ])(
+    "submits the real link dialog with a relative href on %s",
+    async (_platformName, platform, modifiers) => {
+      const { app, root, messages } = makeApp("text", platform);
+      app.view.dispatch(
+        app.view.state.tr.setSelection(
+          TextSelection.create(app.view.state.doc, 1, 5),
+        ),
+      );
+      openToolbarDialog(root, "toolbar-link");
+
+      const dialog = root.querySelector<HTMLDialogElement>(
+        'dialog[aria-labelledby="mm-link-dialog-title"]',
+      )!;
+      const [linkInput] = Array.from(
+        dialog.querySelectorAll<HTMLInputElement>("input"),
+      );
+      expect(linkInput?.type).toBe("text");
+      linkInput!.value = "../README.md";
+
+      await pressShortcutEnter(linkInput!, modifiers);
+
+      expect(dialog.open).toBe(false);
+      expect(editMessages(messages)).toHaveLength(1);
+      expect(String(editMessages(messages)[0]?.markdown)).toBe(
+        "[text](../README.md)",
+      );
+    },
+  );
+
   it("submits the real image dialog with Command+Enter on macOS", async () => {
     const { root, messages } = makeApp("before", "MacIntel");
     openToolbarDialog(root, "toolbar-image");
