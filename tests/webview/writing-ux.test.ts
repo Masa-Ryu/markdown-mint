@@ -388,6 +388,10 @@ describe("bounded writing controls", () => {
       "Horizontal rule",
       "Format Markdown",
     ]);
+    expect(
+      toolbar.querySelector<HTMLButtonElement>('[data-testid="toolbar-image"]')
+        ?.dataset.tooltip,
+    ).toBe("Insert image; Shift + drag an image to import");
     expect(toolbar.querySelector(".mm-popup-toggle")).toBeNull();
     for (const element of Array.from(
       toolbar.querySelectorAll<HTMLElement>(

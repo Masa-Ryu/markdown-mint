@@ -10,6 +10,10 @@ import {
 import { PROTOCOL_VERSION } from "../../src/shared/protocol";
 import { BlockBoundarySelection } from "../../src/webview/blockBoundary";
 import {
+  imageImportPluginKey,
+  parseImageImportUriList,
+} from "../../src/webview/imageImport";
+import {
   createEditorApp,
   type EditorInitialDocument,
   type VSCodeApiLike,
@@ -60,6 +64,50 @@ function dispatchPaste(
   });
   app.view.dom.dispatchEvent(event);
   return event;
+}
+
+function imageFile(
+  name: string,
+  type = "image/png",
+  bytes = new Uint8Array([0]),
+  arrayBuffer: () => Promise<ArrayBuffer> = async () => bytes.buffer,
+): File {
+  return { name, type, size: bytes.byteLength, arrayBuffer } as File;
+}
+
+function dispatchImageDrop(
+  app: ReturnType<typeof makeApp>["app"],
+  files: readonly File[],
+  position: number,
+  uriList?: string,
+): DragEvent {
+  const event = new Event("drop", {
+    bubbles: true,
+    cancelable: true,
+  }) as DragEvent;
+  Object.defineProperty(event, "dataTransfer", {
+    value: {
+      files,
+      types: uriList === undefined ? [] : ["text/uri-list"],
+      getData: (format: string) =>
+        format === "text/uri-list" ? (uriList ?? "") : "",
+    },
+  });
+  Object.defineProperty(event, "shiftKey", { value: true });
+  Object.defineProperty(event, "clientX", { value: 40 });
+  Object.defineProperty(event, "clientY", { value: 20 });
+  const originalPosAtCoords = app.view.posAtCoords;
+  app.view.posAtCoords = (() => ({
+    pos: position,
+    inside: -1,
+  })) as typeof app.view.posAtCoords;
+  app.view.dom.dispatchEvent(event);
+  app.view.posAtCoords = originalPosAtCoords;
+  return event;
+}
+
+function receiveHostMessage(data: unknown): void {
+  window.dispatchEvent(new MessageEvent("message", { data }));
 }
 
 function selectTableCellText(
@@ -1663,6 +1711,571 @@ describe("rich editor rendering", () => {
       app.destroy();
     },
   );
+
+  it("intercepts PNG drops and waits for the host result before inserting", async () => {
+    const { app, root, messages } = makeApp("before after");
+    const event = dispatchImageDrop(app, [imageFile("architecture.png")], 7);
+
+    expect(event.defaultPrevented).toBe(true);
+    await flush();
+    const request = messages.find(
+      (message: any) => message.type === "image-import",
+    ) as any;
+    expect(request).toMatchObject({
+      type: "image-import",
+      fileName: "architecture.png",
+      mimeType: "image/png",
+      base64: "AA==",
+    });
+    expect(root.querySelector(".mm-image-importing")).not.toBeNull();
+    expect(messages.some((message: any) => message.type === "edit")).toBe(
+      false,
+    );
+
+    receiveHostMessage({
+      protocolVersion: PROTOCOL_VERSION,
+      type: "image-import-result",
+      requestId: request.requestId,
+      success: true,
+      relativePath: "./images/architecture.png",
+    });
+
+    expect(root.querySelector(".mm-image-importing")).toBeNull();
+    expect(lastEditMarkdown(messages)).toBe(
+      "before![architecture](./images/architecture.png) after",
+    );
+    const image = root.querySelector<HTMLImageElement>(".ProseMirror img");
+    expect(image).not.toBeNull();
+    expect(
+      app.view.state.doc.nodeAt(app.view.posAtDOM(image!, 0))?.attrs.src,
+    ).toBe("./images/architecture.png");
+    app.destroy();
+  });
+
+  it("imports an SVG file as the existing image node without inlining SVG markup", async () => {
+    const { app, root, messages } = makeApp("before after");
+    const event = dispatchImageDrop(
+      app,
+      [imageFile("diagram.svg", "image/svg+xml", new Uint8Array([60, 62]))],
+      7,
+    );
+
+    expect(event.defaultPrevented).toBe(true);
+    await flush();
+    const request = messages.find(
+      (message: any) => message.type === "image-import",
+    ) as any;
+    expect(request).toMatchObject({
+      type: "image-import",
+      fileName: "diagram.svg",
+      mimeType: "image/svg+xml",
+    });
+
+    receiveHostMessage({
+      protocolVersion: PROTOCOL_VERSION,
+      type: "image-import-result",
+      requestId: request.requestId,
+      success: true,
+      relativePath: "./images/diagram.svg",
+    });
+
+    expect(lastEditMarkdown(messages)).toBe(
+      "before![diagram](./images/diagram.svg) after",
+    );
+    expect(root.querySelector(".ProseMirror svg")).toBeNull();
+    expect(
+      root.querySelector<HTMLImageElement>(".ProseMirror img"),
+    ).not.toBeNull();
+    app.destroy();
+  });
+
+  it("parses URI-list comments, empty lines, line endings, and encoded basenames", () => {
+    expect(
+      parseImageImportUriList(
+        "# Finder comment\r\n\r\nfile:///workspace/assets/sample%20image.png\n" +
+          "file:///workspace/assets/notes.txt\r\n" +
+          "vscode-remote://ssh-remote+host/workspace/two.webp\n" +
+          "/workspace/assets/path.png",
+      ),
+    ).toEqual([
+      {
+        resourceUri: "file:///workspace/assets/sample%20image.png",
+        fileName: "sample image.png",
+      },
+      {
+        resourceUri: "vscode-remote://ssh-remote+host/workspace/two.webp",
+        fileName: "two.webp",
+      },
+      {
+        resourceUri: "/workspace/assets/path.png",
+        fileName: "path.png",
+      },
+    ]);
+  });
+
+  it("consumes a VS Code Explorer URI image drop without inserting the raw URI", async () => {
+    const { app, root, messages } = makeApp("before after");
+    const event = dispatchImageDrop(
+      app,
+      [],
+      7,
+      "# Explorer comment\r\n\r\nfile:///workspace/assets/sample.png\r\n",
+    );
+
+    expect(event.defaultPrevented).toBe(true);
+    await flush();
+    const request = messages.find(
+      (message: any) => message.type === "image-import-uri",
+    ) as any;
+    expect(request).toMatchObject({
+      type: "image-import-uri",
+      resourceUri: "file:///workspace/assets/sample.png",
+    });
+    expect(
+      messages.some((message: any) => message.type === "image-import"),
+    ).toBe(false);
+    expect(root.querySelector(".mm-image-importing")).not.toBeNull();
+    expect(messages.some(isEditMessage)).toBe(false);
+
+    receiveHostMessage({
+      protocolVersion: PROTOCOL_VERSION,
+      type: "image-import-result",
+      requestId: request.requestId,
+      success: true,
+      relativePath: "./images/sample.png",
+    });
+
+    expect(root.querySelector(".mm-image-importing")).toBeNull();
+    expect(lastEditMarkdown(messages)).toBe(
+      "before![sample](./images/sample.png) after",
+    );
+    expect(lastEditMarkdown(messages)).not.toContain("/workspace/");
+    app.destroy();
+  });
+
+  it("consumes a VS Code Explorer SVG URI drop and inserts the existing image node", async () => {
+    const { app, root, messages } = makeApp("before after");
+    const event = dispatchImageDrop(
+      app,
+      [],
+      7,
+      "file:///workspace/assets/diagram.svg",
+    );
+
+    expect(event.defaultPrevented).toBe(true);
+    await flush();
+    const request = messages.find(
+      (message: any) => message.type === "image-import-uri",
+    ) as any;
+    expect(request).toMatchObject({
+      type: "image-import-uri",
+      resourceUri: "file:///workspace/assets/diagram.svg",
+    });
+
+    receiveHostMessage({
+      protocolVersion: PROTOCOL_VERSION,
+      type: "image-import-result",
+      requestId: request.requestId,
+      success: true,
+      relativePath: "./images/diagram.svg",
+    });
+
+    expect(lastEditMarkdown(messages)).toBe(
+      "before![diagram](./images/diagram.svg) after",
+    );
+    expect(root.querySelector(".ProseMirror svg")).toBeNull();
+    app.destroy();
+  });
+
+  it("consumes image-looking path and remote URI strings instead of inserting them", async () => {
+    for (const resourceUri of [
+      "/workspace/assets/sample.png",
+      "vscode-remote://ssh-remote+host/workspace/sample.png",
+    ]) {
+      const { app, messages } = makeApp("before after");
+      const event = dispatchImageDrop(app, [], 7, resourceUri);
+
+      expect(event.defaultPrevented).toBe(true);
+      await flush();
+      const request = messages.find(
+        (message: any) => message.type === "image-import-uri",
+      ) as any;
+      expect(request.resourceUri).toBe(resourceUri);
+      receiveHostMessage({
+        protocolVersion: PROTOCOL_VERSION,
+        type: "image-import-result",
+        requestId: request.requestId,
+        success: false,
+        message: "The resource was rejected.",
+      });
+      expect(messages.some(isEditMessage)).toBe(false);
+      expect(lastEditMarkdown(messages)).not.toContain(resourceUri);
+      app.destroy();
+    }
+  });
+
+  it("keeps multiple URI image imports ordered and consumes mixed non-image resources", async () => {
+    const { app, messages } = makeApp("before after");
+    const event = dispatchImageDrop(
+      app,
+      [imageFile("notes.txt", "text/plain")],
+      7,
+      "file:///workspace/one.png\n" +
+        "file:///workspace/readme.txt\r\n" +
+        "# ignored\n" +
+        "file:///workspace/two.webp",
+    );
+
+    expect(event.defaultPrevented).toBe(true);
+    await flush();
+    const requests = messages.filter(
+      (message: any) => message.type === "image-import-uri",
+    ) as any[];
+    expect(requests.map((message) => message.resourceUri)).toEqual([
+      "file:///workspace/one.png",
+      "file:///workspace/two.webp",
+    ]);
+    expect(messages.some(isEditMessage)).toBe(false);
+
+    for (const [index, request] of requests.entries())
+      receiveHostMessage({
+        protocolVersion: PROTOCOL_VERSION,
+        type: "image-import-result",
+        requestId: request.requestId,
+        success: true,
+        relativePath: `./images/${index === 0 ? "one" : "two"}.${
+          index === 0 ? "png" : "webp"
+        }`,
+      });
+
+    const firstEdit = messages.filter(isEditMessage)[0] as any;
+    app.receiveDocument({
+      protocolVersion: PROTOCOL_VERSION,
+      type: "document",
+      markdown: firstEdit.markdown,
+      version: 2,
+      profile: "github",
+      operationId: firstEdit.operationId,
+      reason: "ack",
+    });
+    await flush();
+    expect(lastEditMarkdown(messages)).toBe(
+      "before![one](./images/one.png)![two](./images/two.webp) after",
+    );
+    expect(lastEditMarkdown(messages)).not.toContain("/workspace/");
+    app.destroy();
+  });
+
+  it("lets a URI-list drop with only non-images fall through", () => {
+    const { app, messages } = makeApp("before after");
+    dispatchImageDrop(app, [], 7, "file:///workspace/readme.txt\n# comment\n");
+
+    // The existing ProseMirror text-drop handler may consume a non-image URI
+    // resource; the image importer itself must not claim or send it.
+    expect(
+      messages.some((message: any) => message.type === "image-import-uri"),
+    ).toBe(false);
+    app.destroy();
+  });
+
+  it("lets non-image drops fall through to ProseMirror", () => {
+    const { app, messages } = makeApp("before after");
+    const event = dispatchImageDrop(
+      app,
+      [imageFile("notes.txt", "text/plain")],
+      7,
+    );
+
+    expect(event.defaultPrevented).toBe(false);
+    expect(
+      messages.some((message: any) => message.type === "image-import"),
+    ).toBe(false);
+    app.destroy();
+  });
+
+  it("rejects a code block drop before sending an image import request", async () => {
+    const { app, root, messages } = makeApp(
+      "before\n\n```ts\nconst value = 1;\n```\n\nafter",
+    );
+    const event = dispatchImageDrop(
+      app,
+      [imageFile("architecture.png")],
+      codeBlockPosition(app) + 2,
+    );
+
+    expect(event.defaultPrevented).toBe(true);
+    await flush();
+    expect(
+      messages.some((message: any) => message.type === "image-import"),
+    ).toBe(false);
+    expect(root.querySelector(".mm-image-importing")).toBeNull();
+    expect(
+      messages.some(
+        (message: any) =>
+          message.type === "notify" &&
+          message.level === "error" &&
+          message.message.includes("cannot be placed"),
+      ),
+    ).toBe(true);
+    app.destroy();
+  });
+
+  it.each([
+    [
+      "zero-byte image",
+      imageFile("empty.png", "image/png", new Uint8Array()),
+      "empty",
+    ],
+    [
+      "generic MIME image",
+      imageFile("architecture.png", "application/octet-stream"),
+      "MIME type",
+    ],
+  ])(
+    "clears pending state after the host semantically rejects a %s",
+    async (_, file, message) => {
+      const { app, root, messages } = makeApp("before after");
+      dispatchImageDrop(app, [file], 7);
+      await flush();
+      const request = messages.find(
+        (candidate: any) => candidate.type === "image-import",
+      ) as any;
+
+      expect(request).toBeDefined();
+      expect(root.querySelector(".mm-image-importing")).not.toBeNull();
+      receiveHostMessage({
+        protocolVersion: PROTOCOL_VERSION,
+        type: "image-import-result",
+        requestId: request.requestId,
+        success: false,
+        message: `The dropped image ${message}.`,
+      });
+
+      expect(root.querySelector(".mm-image-importing")).toBeNull();
+      expect(
+        imageImportPluginKey.getState(app.view.state)?.pending,
+      ).toHaveLength(0);
+      expect(messages.some((candidate: any) => candidate.type === "edit")).toBe(
+        false,
+      );
+      expect(
+        messages.some(
+          (candidate: any) =>
+            candidate.type === "notify" &&
+            candidate.level === "error" &&
+            candidate.message.includes(message),
+        ),
+      ).toBe(true);
+      app.destroy();
+    },
+  );
+
+  it("clears an image pending request when a correlated generic host error arrives", async () => {
+    const { app, root, messages } = makeApp("before after");
+    dispatchImageDrop(app, [imageFile("architecture.png")], 7);
+    await flush();
+    const request = messages.find(
+      (candidate: any) => candidate.type === "image-import",
+    ) as any;
+
+    receiveHostMessage({
+      protocolVersion: PROTOCOL_VERSION,
+      type: "error",
+      operationId: request.requestId,
+      message: "The image import request was rejected.",
+    });
+
+    expect(root.querySelector(".mm-image-importing")).toBeNull();
+    expect(imageImportPluginKey.getState(app.view.state)?.pending).toHaveLength(
+      0,
+    );
+    expect(messages.some((candidate: any) => candidate.type === "edit")).toBe(
+      false,
+    );
+    app.destroy();
+  });
+
+  it("maps the pending drop position through an edit made during import", async () => {
+    let releaseRead!: (value: ArrayBuffer) => void;
+    const file = imageFile(
+      "architecture.png",
+      "image/png",
+      new Uint8Array([0]),
+      () =>
+        new Promise<ArrayBuffer>((resolve) => {
+          releaseRead = resolve;
+        }),
+    );
+    const { app, messages } = makeApp("before after");
+    dispatchImageDrop(app, [file], 7);
+    await flush();
+    app.view.dispatch(app.view.state.tr.insertText("prefix ", 1));
+    const textEdit = messages.filter(isEditMessage).at(-1) as any;
+    app.receiveDocument({
+      protocolVersion: PROTOCOL_VERSION,
+      type: "document",
+      markdown: textEdit.markdown,
+      version: 2,
+      profile: "github",
+      operationId: textEdit.operationId,
+      reason: "ack",
+    });
+    releaseRead(new Uint8Array([0]).buffer);
+    await flush();
+    const request = messages.find(
+      (message: any) => message.type === "image-import",
+    ) as any;
+    receiveHostMessage({
+      protocolVersion: PROTOCOL_VERSION,
+      type: "image-import-result",
+      requestId: request.requestId,
+      success: true,
+      relativePath: "./images/architecture.png",
+    });
+
+    expect(lastEditMarkdown(messages)).toBe(
+      "prefix before![architecture](./images/architecture.png) after",
+    );
+    app.destroy();
+  });
+
+  it("keeps a deleted pending anchor at its mapped boundary until the result arrives", async () => {
+    const { app, root, messages } = makeApp("before after");
+    dispatchImageDrop(app, [imageFile("architecture.png")], 7);
+    await flush();
+    const request = messages.find(
+      (message: any) => message.type === "image-import",
+    ) as any;
+
+    app.view.dispatch(
+      app.view.state.tr.delete(1, app.view.state.doc.content.size - 1),
+    );
+    expect(
+      imageImportPluginKey.getState(app.view.state)?.pending[0],
+    ).toMatchObject({ anchorDeleted: true });
+    expect(root.querySelector(".mm-image-importing")).not.toBeNull();
+
+    receiveHostMessage({
+      protocolVersion: PROTOCOL_VERSION,
+      type: "image-import-result",
+      requestId: request.requestId,
+      success: true,
+      relativePath: "./images/architecture.png",
+    });
+
+    expect(root.querySelector(".mm-image-importing")).toBeNull();
+    expect(app.view.state.doc.firstChild?.firstChild?.type.name).toBe("image");
+    const deletionEdit = messages.filter(isEditMessage).at(-1) as any;
+    app.receiveDocument({
+      protocolVersion: PROTOCOL_VERSION,
+      type: "document",
+      markdown: deletionEdit.markdown,
+      version: 2,
+      profile: "github",
+      operationId: deletionEdit.operationId,
+      reason: "ack",
+    });
+    await flush();
+    expect(lastEditMarkdown(messages)).toBe(
+      "![architecture](./images/architecture.png)",
+    );
+    app.destroy();
+  });
+
+  it("URL-encodes an imported basename while preserving image serializer round trips", async () => {
+    const { app, messages } = makeApp("before after");
+    dispatchImageDrop(app, [imageFile("architecture #2%?.png")], 7);
+    await flush();
+    const request = messages.find(
+      (message: any) => message.type === "image-import",
+    ) as any;
+    expect(request.fileName).toBe("architecture #2%?.png");
+    receiveHostMessage({
+      protocolVersion: PROTOCOL_VERSION,
+      type: "image-import-result",
+      requestId: request.requestId,
+      success: true,
+      relativePath: "./images/architecture%20%232%25%3F.png",
+    });
+
+    const markdown = lastEditMarkdown(messages);
+    expect(markdown).toBe(
+      "before![architecture #2%?](./images/architecture%20%232%25%3F.png) after",
+    );
+    expect(
+      serializeMarkdown(app.view.state.doc, parseMarkdown(markdown, "github")),
+    ).toBe(markdown);
+    app.destroy();
+  });
+
+  it("keeps multiple image imports in DataTransfer order", async () => {
+    const { app, messages } = makeApp("before after");
+    dispatchImageDrop(app, [imageFile("one.png"), imageFile("two.png")], 7);
+    await flush();
+    const requests = messages.filter(
+      (message: any) => message.type === "image-import",
+    ) as any[];
+    expect(requests.map((message) => message.fileName)).toEqual([
+      "one.png",
+      "two.png",
+    ]);
+
+    for (const [index, request] of requests.entries())
+      receiveHostMessage({
+        protocolVersion: PROTOCOL_VERSION,
+        type: "image-import-result",
+        requestId: request.requestId,
+        success: true,
+        relativePath: `./images/${index === 0 ? "one" : "two"}.png`,
+      });
+
+    const firstEdit = messages.filter(isEditMessage)[0] as any;
+    app.receiveDocument({
+      protocolVersion: PROTOCOL_VERSION,
+      type: "document",
+      markdown: firstEdit.markdown,
+      version: 2,
+      profile: "github",
+      operationId: firstEdit.operationId,
+      reason: "ack",
+    });
+
+    expect(lastEditMarkdown(messages)).toBe(
+      "before![one](./images/one.png)![two](./images/two.png) after",
+    );
+    app.destroy();
+  });
+
+  it("reports a failed import without changing or serializing temporary state", async () => {
+    const { app, root, messages } = makeApp("before after");
+    dispatchImageDrop(app, [imageFile("architecture.png")], 7);
+    await flush();
+    const request = messages.find(
+      (message: any) => message.type === "image-import",
+    ) as any;
+    receiveHostMessage({
+      protocolVersion: PROTOCOL_VERSION,
+      type: "image-import-result",
+      requestId: request.requestId,
+      success: false,
+      message: "The dropped image exceeds the 10 MB size limit.",
+    });
+
+    expect(root.querySelector(".mm-image-importing")).toBeNull();
+    expect(messages.some((message: any) => message.type === "edit")).toBe(
+      false,
+    );
+    expect(
+      messages.some(
+        (message: any) =>
+          message.type === "notify" &&
+          message.level === "error" &&
+          message.message.includes("10 MB"),
+      ),
+    ).toBe(true);
+    app.destroy();
+  });
+
   it("resolves relative image URLs for display without changing Markdown attrs", async () => {
     const root = document.createElement("div");
     document.body.append(root);
@@ -1689,6 +2302,15 @@ describe("rich editor rendering", () => {
     expect(
       serializeMarkdown(app.view.state.doc, parseMarkdown(source, "github")),
     ).toBe(source);
+    app.destroy();
+  });
+
+  it("does not render SVG data URIs as image sources", () => {
+    const { app, root } = makeApp(
+      "![diagram](data:image/svg+xml;base64,PHN2Zy8+)",
+    );
+    expect(root.querySelector(".ProseMirror img")).toBeNull();
+    expect(root.querySelector(".ProseMirror svg")).toBeNull();
     app.destroy();
   });
 
