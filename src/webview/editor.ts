@@ -2422,6 +2422,24 @@ export class MarkdownEditorApp {
   private tooltip!: HTMLElement;
   private tooltipTarget: HTMLElement | null = null;
   private tooltipPreviousDescribedBy: string | null = null;
+  private readonly richLinkMouseDownHandler = (event: MouseEvent): void => {
+    const anchor = this.richLinkFor(event.target);
+    if (!anchor || event.button !== 0 || !this.linkModifierPressed(event))
+      return;
+    // Keep the browser's native mouse sequence intact so it still emits the
+    // follow-up click. The click handler owns default-navigation prevention.
+    event.stopPropagation();
+  };
+  private readonly richLinkClickHandler = (event: MouseEvent): void => {
+    const anchor = this.richLinkFor(event.target);
+    if (!anchor || event.button !== 0) return;
+    // A normal click must still reach ProseMirror so it can place the caret or
+    // extend a selection, but it must never navigate the Webview itself.
+    event.preventDefault();
+    if (!this.linkModifierPressed(event)) return;
+    event.stopPropagation();
+    this.followRichLink(anchor);
+  };
   private readonly tooltipPointerOverHandler = (event: PointerEvent): void => {
     const target = this.tooltipTargetFor(event.target);
     if (target) this.showTooltip(target);
@@ -2767,6 +2785,14 @@ export class MarkdownEditorApp {
     if (this.parseError || !this.initialized) {
       this.view.setProps({ editable: () => false });
     }
+    if (this.mode === "rich") {
+      this.view.dom.addEventListener(
+        "mousedown",
+        this.richLinkMouseDownHandler,
+        true,
+      );
+      this.view.dom.addEventListener("click", this.richLinkClickHandler, true);
+    }
     this.sync = new SyncController(this.version, this.vscode, initial.markdown);
     this.messageHandler = (event) => this.handleMessage(event.data);
     window.addEventListener("message", this.messageHandler);
@@ -2838,6 +2864,12 @@ export class MarkdownEditorApp {
     }
     this.pendingClipboard.clear();
     window.removeEventListener("message", this.messageHandler);
+    this.view.dom.removeEventListener(
+      "mousedown",
+      this.richLinkMouseDownHandler,
+      true,
+    );
+    this.view.dom.removeEventListener("click", this.richLinkClickHandler, true);
     window.removeEventListener("resize", this.writingToolbarResizeHandler);
     this.stage.removeEventListener("scroll", this.writingToolbarScrollHandler);
     this.stage.removeEventListener(
@@ -4297,9 +4329,11 @@ export class MarkdownEditorApp {
   private tooltipTargetFor(target: EventTarget | null): HTMLElement | null {
     if (!(target instanceof Element)) return null;
     if (target === this.tooltip || this.tooltip?.contains(target)) return null;
-    const candidate = target.closest<HTMLElement>("[data-tooltip]");
+    const candidate = target.closest<HTMLElement>("[data-tooltip], a[href]");
     if (!candidate || !this.root.contains(candidate)) return null;
-    return candidate.dataset.tooltip?.trim() ? candidate : null;
+    return candidate.dataset.tooltip?.trim() || this.richLinkFor(candidate)
+      ? candidate
+      : null;
   }
 
   private setTooltip(element: HTMLElement, label: string): void {
@@ -4308,7 +4342,14 @@ export class MarkdownEditorApp {
   }
 
   private showTooltip(target: HTMLElement): void {
-    const label = target.dataset.tooltip?.trim();
+    const configuredLabel = target.dataset.tooltip?.trim();
+    const label =
+      configuredLabel ||
+      (this.richLinkFor(target)
+        ? isMac()
+          ? "Cmd+Click to follow link"
+          : "Ctrl+Click to follow link"
+        : "");
     if (!label || this.destroyed) return;
     if (this.tooltipTarget !== target) {
       this.hideTooltip();
@@ -4327,6 +4368,50 @@ export class MarkdownEditorApp {
     this.tooltip.hidden = false;
     this.tooltip.setAttribute("aria-hidden", "false");
     this.positionTooltip(target);
+  }
+
+  private richLinkFor(target: EventTarget | null): HTMLAnchorElement | null {
+    if (this.mode !== "rich" || !this.view || !(target instanceof Element))
+      return null;
+    const anchor = target.closest<HTMLAnchorElement>("a[href]");
+    return anchor && this.view.dom.contains(anchor) ? anchor : null;
+  }
+
+  private linkModifierPressed(event: MouseEvent): boolean {
+    return isMac()
+      ? event.metaKey && !event.altKey
+      : event.ctrlKey && !event.altKey;
+  }
+
+  private followRichLink(anchor: HTMLAnchorElement): void {
+    const href = anchor.getAttribute("href");
+    if (!href) return;
+    if (href.startsWith("#")) {
+      this.scrollToRichFragment(href.slice(1));
+      return;
+    }
+    this.vscode?.postMessage({
+      protocolVersion: PROTOCOL_VERSION,
+      type: "open-link",
+      href,
+    });
+  }
+
+  private scrollToRichFragment(fragment: string): void {
+    if (!fragment) return;
+    const candidates = Array.from(
+      this.view.dom.querySelectorAll<HTMLElement>("[id]"),
+    );
+    let target = candidates.find((element) => element.id === fragment);
+    if (!target) {
+      try {
+        const decoded = decodeURIComponent(fragment);
+        target = candidates.find((element) => element.id === decoded);
+      } catch {
+        // A malformed percent escape cannot identify an existing DOM id.
+      }
+    }
+    target?.scrollIntoView?.({ block: "start" });
   }
 
   private hideTooltip(): void {

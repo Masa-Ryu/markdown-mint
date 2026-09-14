@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   MAX_CLIPBOARD_TEXT_LENGTH,
+  MAX_RESOURCE_URL_LENGTH,
   PROTOCOL_VERSION,
   isHostMessage,
   parseWebviewMessage,
@@ -241,5 +242,78 @@ describe("Markdown Mint wire protocol", () => {
         success: true,
       }),
     ).toBe(false);
+  });
+
+  it("accepts a raw link href at the protocol boundary and enforces its cap", () => {
+    const href = "../docs/guide.md#section";
+    expect(
+      parseWebviewMessage({
+        protocolVersion: PROTOCOL_VERSION,
+        type: "open-link",
+        href,
+      }),
+    ).toEqual({
+      protocolVersion: PROTOCOL_VERSION,
+      type: "open-link",
+      href,
+    });
+    for (const validHref of [
+      "https://example.com",
+      "mailto:user@example.com",
+      "../README.md",
+      "./docs/guide.md",
+      "/docs/guide.md",
+    ]) {
+      expect(
+        parseWebviewMessage({
+          protocolVersion: PROTOCOL_VERSION,
+          type: "open-link",
+          href: validHref,
+        }),
+      ).toMatchObject({
+        protocolVersion: PROTOCOL_VERSION,
+        type: "open-link",
+        href: validHref,
+      });
+    }
+    expect(
+      parseWebviewMessage({
+        protocolVersion: PROTOCOL_VERSION,
+        type: "open-link",
+        href: "x".repeat(MAX_RESOURCE_URL_LENGTH),
+      }),
+    ).toEqual({
+      protocolVersion: PROTOCOL_VERSION,
+      type: "open-link",
+      href: "x".repeat(MAX_RESOURCE_URL_LENGTH),
+    });
+    expect(
+      parseWebviewMessage({
+        protocolVersion: PROTOCOL_VERSION,
+        type: "open-link",
+        href: "x".repeat(MAX_RESOURCE_URL_LENGTH + 1),
+      }),
+    ).toBeUndefined();
+    expect(
+      parseWebviewMessage({
+        protocolVersion: PROTOCOL_VERSION,
+        type: "open-link",
+        href: "",
+      }),
+    ).toBeUndefined();
+    expect(
+      parseWebviewMessage({
+        protocolVersion: PROTOCOL_VERSION,
+        type: "open-link",
+        href: 42,
+      }),
+    ).toBeUndefined();
+    expect(
+      parseWebviewMessage({
+        protocolVersion: PROTOCOL_VERSION + 1,
+        type: "open-link",
+        href,
+      }),
+    ).toBeUndefined();
   });
 });

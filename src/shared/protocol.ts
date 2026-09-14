@@ -117,6 +117,13 @@ export interface ClipboardWriteMessage {
   readonly text: string;
 }
 
+export interface OpenLinkMessage {
+  readonly protocolVersion: typeof PROTOCOL_VERSION;
+  readonly type: "open-link";
+  /** The raw href attribute from the Rich Editor anchor. */
+  readonly href: string;
+}
+
 export interface ClipboardResultMessage {
   readonly protocolVersion: typeof PROTOCOL_VERSION;
   readonly type: "clipboard-result";
@@ -231,6 +238,7 @@ export type WebviewMessage =
   | PreviewRequestMessage
   | RecoverDraftMessage
   | ClipboardWriteMessage
+  | OpenLinkMessage
   | UserNotificationMessage;
 
 export type HostMessage =
@@ -499,6 +507,14 @@ export function parseWebviewMessage(
             text: value.text,
           }
         : undefined;
+    case "open-link":
+      return isSafeLinkHref(value.href)
+        ? {
+            protocolVersion: PROTOCOL_VERSION,
+            type: "open-link",
+            href: value.href,
+          }
+        : undefined;
     case "notify":
       return (value.level === "info" ||
         value.level === "warning" ||
@@ -552,6 +568,14 @@ function optionalBoolean(value: unknown): value is boolean | undefined {
 
 function isSafeClipboardText(value: unknown): value is string {
   return typeof value === "string" && value.length <= MAX_CLIPBOARD_TEXT_LENGTH;
+}
+
+export function isSafeLinkHref(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    value.length <= MAX_RESOURCE_URL_LENGTH
+  );
 }
 
 function optionalResourceUrl(value: unknown): value is string | undefined {

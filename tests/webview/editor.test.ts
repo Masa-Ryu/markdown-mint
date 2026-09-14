@@ -18,11 +18,12 @@ import {
 function documentFixture(
   markdown = "# Title\n\nParagraph",
   clipboardAvailable = false,
+  profile: EditorInitialDocument["profile"] = "github",
 ): EditorInitialDocument {
   return {
     markdown,
     version: 1,
-    profile: "github",
+    profile,
     ...(clipboardAvailable ? { clipboardAvailable: true } : {}),
   };
 }
@@ -45,6 +46,15 @@ function isEditMessage(
 
 function lastEditMarkdown(messages: unknown[]): string {
   return messages.filter(isEditMessage).at(-1)?.markdown ?? "";
+}
+
+function hasMessageType(messages: unknown[], type: string): boolean {
+  return messages.some(
+    (message) =>
+      typeof message === "object" &&
+      message !== null &&
+      (message as { type?: unknown }).type === type,
+  );
 }
 
 function dispatchPaste(
@@ -143,6 +153,7 @@ function makeApp(
   api?: VSCodeApiLike,
   clipboardAvailable = false,
   documentId?: string,
+  profile: EditorInitialDocument["profile"] = "github",
 ) {
   const root = document.createElement("div");
   document.body.append(root);
@@ -157,7 +168,7 @@ function makeApp(
     vscode,
     core: { schema, parseMarkdown, serializeMarkdown, renderMarkdown },
     initialDocument: {
-      ...documentFixture(markdown, clipboardAvailable),
+      ...documentFixture(markdown, clipboardAvailable, profile),
       ...(documentId === undefined ? {} : { documentId }),
     },
   });
@@ -254,6 +265,11 @@ beforeEach(() => {
     Object.defineProperty(Text.prototype, "getClientRects", {
       configurable: true,
       value: () => [],
+    });
+  if (!document.elementFromPoint)
+    Object.defineProperty(document, "elementFromPoint", {
+      configurable: true,
+      value: () => null,
     });
 });
 
@@ -1790,6 +1806,202 @@ describe("rich editor rendering", () => {
         ?.getAttribute("aria-pressed"),
     ).toBe("false");
     app.destroy();
+  });
+});
+
+describe("Rich Editor link navigation", () => {
+  function dispatchPrimaryClick(
+    anchor: HTMLAnchorElement,
+    modifiers: Pick<MouseEventInit, "metaKey" | "ctrlKey"> = {},
+  ): { mousedown: MouseEvent; click: MouseEvent } {
+    const mousedown = new MouseEvent("mousedown", {
+      bubbles: true,
+      cancelable: true,
+      button: 0,
+      ...modifiers,
+    });
+    anchor.dispatchEvent(mousedown);
+    const click = new MouseEvent("click", {
+      bubbles: true,
+      cancelable: true,
+      button: 0,
+      ...modifiers,
+    });
+    anchor.dispatchEvent(click);
+    return { mousedown, click };
+  }
+
+  function setPlatform(value: string): () => void {
+    const descriptor = Object.getOwnPropertyDescriptor(
+      Navigator.prototype,
+      "platform",
+    );
+    Object.defineProperty(navigator, "platform", {
+      configurable: true,
+      value,
+    });
+    return () => {
+      if (descriptor) Object.defineProperty(navigator, "platform", descriptor);
+      else delete (navigator as { platform?: string }).platform;
+    };
+  }
+
+  it.each([
+    ["MacIntel", "metaKey"],
+    ["Linux x86_64", "ctrlKey"],
+  ] as const)(
+    "opens an external link with the platform modifier on %s",
+    (platform, modifier) => {
+      const restorePlatform = setPlatform(platform);
+      try {
+        const { app, messages } = makeApp(
+          "[open](https://example.com/a%20b?q=1#section)",
+        );
+        const anchor = app.view.dom.querySelector<HTMLAnchorElement>("a[href]");
+        if (!anchor) throw new Error("link is not rendered");
+
+        const { mousedown, click } = dispatchPrimaryClick(anchor, {
+          [modifier]: true,
+        });
+
+        expect(mousedown.defaultPrevented).toBe(false);
+        expect(click.defaultPrevented).toBe(true);
+        expect(messages).toContainEqual({
+          protocolVersion: PROTOCOL_VERSION,
+          type: "open-link",
+          href: "https://example.com/a%20b?q=1#section",
+        });
+        expect(hasMessageType(messages, "edit")).toBe(false);
+        app.destroy();
+      } finally {
+        restorePlatform();
+      }
+    },
+  );
+
+  it.each([
+    ["MacIntel", "metaKey"],
+    ["Linux x86_64", "ctrlKey"],
+  ] as const)(
+    "preserves a raw relative href with the platform modifier on %s",
+    (platform, modifier) => {
+      const restorePlatform = setPlatform(platform);
+      try {
+        const { app, messages } = makeApp("[open](../README.md)");
+        const anchor = app.view.dom.querySelector<HTMLAnchorElement>("a[href]");
+        if (!anchor) throw new Error("link is not rendered");
+
+        dispatchPrimaryClick(anchor, { [modifier]: true });
+
+        expect(messages).toContainEqual({
+          protocolVersion: PROTOCOL_VERSION,
+          type: "open-link",
+          href: "../README.md",
+        });
+        expect(hasMessageType(messages, "edit")).toBe(false);
+        app.destroy();
+      } finally {
+        restorePlatform();
+      }
+    },
+  );
+
+  it("keeps an ordinary link click in the editor without posting a navigation message", () => {
+    const restorePlatform = setPlatform("Linux x86_64");
+    try {
+      const { app, messages } = makeApp("[open](https://example.com)");
+      const anchor = app.view.dom.querySelector<HTMLAnchorElement>("a[href]");
+      if (!anchor) throw new Error("link is not rendered");
+      let bubbled = false;
+      app.view.dom.addEventListener("click", () => {
+        bubbled = true;
+      });
+
+      const { click } = dispatchPrimaryClick(anchor);
+
+      expect(click.defaultPrevented).toBe(true);
+      expect(click.cancelBubble).toBe(false);
+      expect(bubbled).toBe(true);
+      expect(hasMessageType(messages, "open-link")).toBe(false);
+      expect(hasMessageType(messages, "edit")).toBe(false);
+      app.destroy();
+    } finally {
+      restorePlatform();
+    }
+  });
+
+  it("scrolls to an existing heading id without changing source state", () => {
+    const restorePlatform = setPlatform("Linux x86_64");
+    try {
+      const { app, messages } = makeApp("[jump](#target)\n\n# Target");
+      const anchor = app.view.dom.querySelector<HTMLAnchorElement>("a[href]");
+      const target = app.view.dom.querySelector<HTMLElement>("h1#target");
+      if (!anchor || !target)
+        throw new Error("fragment fixture is not rendered");
+      const scrollIntoView = vi.fn();
+      Object.defineProperty(target, "scrollIntoView", {
+        configurable: true,
+        value: scrollIntoView,
+      });
+
+      dispatchPrimaryClick(anchor, { ctrlKey: true });
+
+      expect(scrollIntoView).toHaveBeenCalledWith({ block: "start" });
+      expect(hasMessageType(messages, "open-link")).toBe(false);
+      expect(hasMessageType(messages, "edit")).toBe(false);
+      app.destroy();
+    } finally {
+      restorePlatform();
+    }
+  });
+
+  it("uses existing GitLab TOC and footnote ids for fragment navigation", () => {
+    const restorePlatform = setPlatform("Linux x86_64");
+    try {
+      const toc = makeApp(
+        "[[_TOC_]]\n\n# Target",
+        undefined,
+        false,
+        undefined,
+        "gitlab",
+      );
+      const tocAnchor = toc.app.view.dom.querySelector<HTMLAnchorElement>(
+        ".table-of-contents a[href]",
+      );
+      const heading = toc.app.view.dom.querySelector<HTMLElement>("h1#target");
+      if (!tocAnchor || !heading)
+        throw new Error("TOC fixture is not rendered");
+      const tocScroll = vi.fn();
+      Object.defineProperty(heading, "scrollIntoView", {
+        configurable: true,
+        value: tocScroll,
+      });
+      dispatchPrimaryClick(tocAnchor, { ctrlKey: true });
+      expect(tocScroll).toHaveBeenCalledWith({ block: "start" });
+      expect(hasMessageType(toc.messages, "open-link")).toBe(false);
+      toc.app.destroy();
+
+      const footnote = makeApp("Reference[^one]\n\n[^one]: note");
+      const footnoteAnchor =
+        footnote.app.view.dom.querySelector<HTMLAnchorElement>(
+          ".footnote-ref a[href]",
+        );
+      const footnoteTarget =
+        footnote.app.view.dom.querySelector<HTMLElement>("#fn-one");
+      if (!footnoteAnchor || !footnoteTarget)
+        throw new Error("footnote fixture is not rendered");
+      const footnoteScroll = vi.fn();
+      Object.defineProperty(footnoteTarget, "scrollIntoView", {
+        configurable: true,
+        value: footnoteScroll,
+      });
+      dispatchPrimaryClick(footnoteAnchor, { ctrlKey: true });
+      expect(footnoteScroll).toHaveBeenCalledWith({ block: "start" });
+      expect(hasMessageType(footnote.messages, "open-link")).toBe(false);
+      footnote.app.destroy();
+    } finally {
+      restorePlatform();
+    }
   });
 });
 

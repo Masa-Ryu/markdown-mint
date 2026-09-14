@@ -17,6 +17,7 @@ const detailsTitle = ".mm-details-summary";
 const detailsInput = ".mm-details-summary-input";
 const detailsToggle = ".mm-details-toggle";
 const undoShortcut = process.platform === "darwin" ? "Meta+z" : "Control+z";
+const primaryLinkModifier = process.platform === "darwin" ? "Meta" : "Control";
 const fence = (language, source) =>
   `\u0060\u0060\u0060${language}\n${source}\n\u0060\u0060\u0060`;
 const blocks = (...values) => values.join("\n\n");
@@ -2106,6 +2107,124 @@ async function testSelectionAndModifiers(page) {
   await noEdits(page, before, "selection and modified arrows");
 }
 
+async function testRichEditorLinks(page) {
+  await load(page, "[README](../README.md)");
+  const plainBefore = await saved(page);
+  const plainLink = page.locator(`${rich} a[href]`);
+  await plainLink.click();
+  await noEdits(page, plainBefore, "plain Rich Editor link click");
+  assert.equal(
+    await page.evaluate(
+      () =>
+        window.__markdownMintHarness.messages.filter(
+          (message) => message.type === "open-link",
+        ).length,
+    ),
+    0,
+    "plain link click sent an open-link message",
+  );
+
+  await load(page, "[README](../README.md)");
+  const relativeBefore = await saved(page);
+  await page
+    .locator(`${rich} a[href]`)
+    .click({ modifiers: [primaryLinkModifier] });
+  await page.waitForFunction(
+    () =>
+      window.__markdownMintHarness.messages.filter(
+        (message) => message.type === "open-link",
+      ).length === 1,
+  );
+  const relativeOpen = await page.evaluate(() =>
+    window.__markdownMintHarness.messages.find(
+      (message) => message.type === "open-link",
+    ),
+  );
+  assert.deepEqual(relativeOpen, {
+    protocolVersion: 1,
+    type: "open-link",
+    href: "../README.md",
+  });
+  await noEdits(
+    page,
+    relativeBefore,
+    "modified relative Rich Editor link click",
+  );
+
+  await load(page, "[Example](https://example.com)");
+  const externalBefore = await saved(page);
+  await page
+    .locator(`${rich} a[href]`)
+    .click({ modifiers: [primaryLinkModifier] });
+  await page.waitForFunction(
+    () =>
+      window.__markdownMintHarness.messages.filter(
+        (message) => message.type === "open-link",
+      ).length === 1,
+  );
+  const externalOpen = await page.evaluate(() =>
+    window.__markdownMintHarness.messages.find(
+      (message) => message.type === "open-link",
+    ),
+  );
+  assert.equal(externalOpen.href, "https://example.com");
+  await noEdits(
+    page,
+    externalBefore,
+    "modified external Rich Editor link click",
+  );
+
+  await load(page, "[Section](#section)\n\n# Section");
+  const fragmentBefore = await saved(page);
+  await page.evaluate(() => {
+    const target = document.querySelector("#section");
+    if (!target) throw new Error("heading fragment target is not rendered");
+    window.__markdownMintFragmentScrolls = 0;
+    target.scrollIntoView = () => {
+      window.__markdownMintFragmentScrolls += 1;
+    };
+  });
+  await page
+    .locator(`${rich} a[href="#section"]`)
+    .click({ modifiers: [primaryLinkModifier] });
+  await page.waitForFunction(() => window.__markdownMintFragmentScrolls === 1);
+  assert.equal(
+    await page.evaluate(
+      () =>
+        window.__markdownMintHarness.messages.filter(
+          (message) => message.type === "open-link",
+        ).length,
+    ),
+    0,
+  );
+  await noEdits(page, fragmentBefore, "heading fragment navigation");
+
+  await load(page, "[[_TOC_]]\n\n# Section", "gitlab");
+  const tocBefore = await saved(page);
+  await page.evaluate(() => {
+    const target = document.querySelector("#section");
+    if (!target) throw new Error("TOC fragment target is not rendered");
+    window.__markdownMintFragmentScrolls = 0;
+    target.scrollIntoView = () => {
+      window.__markdownMintFragmentScrolls += 1;
+    };
+  });
+  await page
+    .locator(`${rich} .table-of-contents a[href]`)
+    .click({ modifiers: [primaryLinkModifier] });
+  await page.waitForFunction(() => window.__markdownMintFragmentScrolls === 1);
+  assert.equal(
+    await page.evaluate(
+      () =>
+        window.__markdownMintHarness.messages.filter(
+          (message) => message.type === "open-link",
+        ).length,
+    ),
+    0,
+  );
+  await noEdits(page, tocBefore, "TOC fragment navigation");
+}
+
 async function testVerticalGoalAndEmptyEdges(page) {
   const long = "0123456789012345678901234567890123456789";
   for (const middle of [alert("x"), "x"]) {
@@ -3275,6 +3394,7 @@ async function main() {
       testCodeVerticalNavigation,
       testExpandedCodeVerticalNavigation,
       testSelectionAndModifiers,
+      testRichEditorLinks,
       testVerticalGoalAndEmptyEdges,
       testNestedDetailsAndComposition,
       testRenderedTraversal,

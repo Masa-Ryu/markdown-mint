@@ -94,6 +94,31 @@ including Ctrl/Cmd+Enter, require a current successful validation result.
 The renderer continues to use the existing strict security configuration and
 sanitization path.
 
+## Rich Editor link navigation
+
+The Rich Editor follows links only for the platform primary modifier: Cmd+Click
+on macOS and Ctrl+Click on Windows/Linux. Ordinary clicks still reach
+ProseMirror for caret placement, selection, and link-text editing, while the
+Rich Editor prevents the Webview's default navigation. Hovering a link uses the
+existing tooltip mechanism to show the platform-specific follow-link hint.
+
+External `http`, `https`, `mailto`, and `tel` destinations are sent as the raw
+DOM `href` to the Extension Host and opened with `vscode.env.openExternal`.
+Relative paths are resolved with `vscode.Uri` from the current document URI;
+root-relative paths use the document's workspace folder and never fall back to
+the filesystem root. Existing targets are opened with `vscode.open`, preserving
+VS Code's normal editor association. A missing target produces a concise
+notification only when the user invokes the link.
+
+Fragment-only links use the existing `id` attributes inside the current Rich
+Editor DOM, including generated heading, TOC, and footnote targets. They do not
+send a Host message or create Markdown, dirty-state, or undo changes. A
+file-plus-fragment link opens the file and safely ignores the fragment. The
+Dedicated Preview and VS Code native Markdown Preview are unchanged. Host-side
+scheme validation rejects `javascript`, `command`, `vscode`,
+`vscode-insiders`, `data`, and every other unapproved scheme; the protocol also
+caps untrusted hrefs with `MAX_RESOURCE_URL_LENGTH`.
+
 ## Alert inline editing refinement
 
 Alerts keep their existing visual design and raw Markdown representation while

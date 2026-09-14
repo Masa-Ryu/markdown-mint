@@ -140,6 +140,7 @@
       const clone = value => JSON.parse(JSON.stringify(value));
       const isRecord = value => typeof value === 'object' && value !== null && !Array.isArray(value);
       const safeMarkdown = value => typeof value === 'string' && value.length <= 2000000;
+      const safeLinkHref = value => typeof value === 'string' && value.length > 0 && value.length <= 8192;
       const safeOperation = value => typeof value === 'string' && value.length > 0 && value.length <= 160 && /^[a-zA-Z0-9._:-]+$/.test(value);
       const optionalString = value => value === undefined || (typeof value === 'string' && value.length <= 160);
       const versionValue = value => Number.isSafeInteger(value) && value >= 1;
@@ -159,6 +160,7 @@
           case 'format': return versionValue(value.baseVersion) && safeOperation(value.operationId);
           case 'preview': return optionalVersion(value.baseVersion) && optionalString(value.operationId);
           case 'recoverDraft': return versionValue(value.baseVersion) && safeOperation(value.operationId) && safeMarkdown(value.markdown);
+          case 'open-link': return safeLinkHref(value.href);
           case 'notify': return (value.level === 'info' || value.level === 'warning' || value.level === 'error') && typeof value.message === 'string' && value.message.length <= 1024 && optionalString(value.operationId);
           default: return false;
         }
@@ -311,6 +313,9 @@
               return;
             }
             accept(message.operationId, 'format');
+          } else if (message.type === 'open-link') {
+            // The browser harness verifies the Webview transport only. The
+            // extension host owns URI classification and the actual opener.
           }
         },
         getState: () => clone(state),
