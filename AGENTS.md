@@ -118,3 +118,71 @@ feature, a breaking change, or either combined with bug fixes is MINOR; tests or
 refactoring only with no release is no version bump. Do not continue an
 indefinite `0.0.x`-only workflow: feature or compatibility changes must advance
 the minor component to `0.Y.0`.
+
+### Transition to `1.0.0`
+
+Release `1.0.0` only when Markdown Mint is ready to begin a formal compatibility
+contract across future releases for its documented user-facing behavior and
+public compatibility contract. Development duration, release count, or feature
+count alone must never be used as the reason to release `1.0.0`. After `1.0.0`,
+apply the normal PATCH/MINOR/MAJOR SemVer rules above.
+
+### Release version update procedure
+
+During release preparation, update the version with npm rather than editing
+`package.json` and `package-lock.json` separately. Run exactly one required bump:
+
+```bash
+npm version patch --no-git-tag-version
+npm version minor --no-git-tag-version
+npm version major --no-git-tag-version
+```
+
+During `0.x`, follow the existing `0.x` rule and normally use `patch` or
+`minor`. If the release contents change after the bump and the required SemVer
+level may have changed, reassess the final release contents and update the
+version accordingly before publishing.
+
+After changing the version, perform at least these checks:
+
+1. Confirm that `package.json` and `package-lock.json` contain the same version.
+2. Confirm that `CHANGELOG.md` has a section for that exact version.
+3. Confirm that the `CHANGELOG.md` section accurately describes the release
+   contents.
+4. Run `npm run compile`.
+5. Run `npm test`.
+6. Run `npm run lint`.
+7. Run `npm run format:check`.
+8. Run the required extension and acceptance tests.
+9. Run `npm run package`.
+10. Confirm that the generated VSIX has the intended version.
+
+### Git tag policy
+
+Formal release tags must use the exact format `vX.Y.Z`, for example:
+
+```text
+v0.1.0
+v1.4.2
+```
+
+Create a tag only after the release contents and version are final. Never reuse
+or overwrite a version or tag that has already been formally released. If a
+published release needs a correction, publish a new version instead; for
+example, `v0.1.0` must be followed by `v0.1.1`, not by replacing the contents of
+`v0.1.0`.
+
+### VS Code Marketplace pre-release
+
+Do not confuse the VS Code Marketplace pre-release publishing mechanism with a
+SemVer pre-release suffix. The following forms are not part of Markdown Mint's
+normal VS Code extension versioning operation:
+
+```text
+1.2.0-beta.1
+1.2.0-rc.1
+```
+
+Treat Marketplace pre-release publishing as the Marketplace's separate
+pre-release mechanism. Keep it separate from the ordinary PATCH/MINOR/MAJOR
+version bump decision.
