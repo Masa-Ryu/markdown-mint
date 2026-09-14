@@ -609,25 +609,20 @@ function isSafeClipboardText(value: unknown): value is string {
 function isImageImportFileName(value: unknown): value is string {
   return (
     typeof value === "string" &&
-    value.length > 0 &&
-    value.length <= MAX_IMAGE_IMPORT_FILE_NAME_LENGTH &&
-    !hasControlCharacter(value)
+    value.length <= MAX_IMAGE_IMPORT_FILE_NAME_LENGTH
   );
 }
 
 function isImageImportMimeType(value: unknown): value is string {
   return (
     typeof value === "string" &&
-    value.length > 0 &&
-    value.length <= MAX_IMAGE_IMPORT_MIME_TYPE_LENGTH &&
-    /^image\/[a-z0-9][a-z0-9.+-]*$/i.test(value)
+    value.length <= MAX_IMAGE_IMPORT_MIME_TYPE_LENGTH
   );
 }
 
 function isBase64Payload(value: unknown): value is string {
   return (
     typeof value === "string" &&
-    value.length > 0 &&
     value.length <= MAX_IMAGE_IMPORT_BASE64_LENGTH &&
     /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(
       value,

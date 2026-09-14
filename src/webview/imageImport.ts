@@ -198,6 +198,18 @@ export class ImageImportController {
     }
   }
 
+  /** Finish an image request if a correlated generic host error reaches us. */
+  handleError(view: EditorView, requestId: string, message: string): boolean {
+    const pending = imageImportPluginKey
+      .getState(view.state)
+      ?.pending.some((candidate) => candidate.requestId === requestId);
+    if (!pending) return false;
+    this.pendingFiles.delete(requestId);
+    this.finishWithoutDocumentChange(view, requestId);
+    this.options.notify(message || "The dropped image could not be imported.");
+    return true;
+  }
+
   cancel(view?: EditorView): void {
     this.pendingFiles.clear();
     if (!view) return;

@@ -28,6 +28,8 @@ class TestFileSystem {
   failWrite = false;
   failRename = false;
   holdWrites = false;
+  writeFileCalls = 0;
+  readonly renameTargets: string[] = [];
   private writeReleases: Array<() => void> = [];
 
   async createDirectory(uri: TestUri): Promise<void> {
@@ -35,6 +37,7 @@ class TestFileSystem {
   }
 
   async writeFile(uri: TestUri, bytes: Uint8Array): Promise<void> {
+    this.writeFileCalls += 1;
     if (this.failWrite) throw new Error("disk full");
     if (this.holdWrites)
       await new Promise<void>((resolve) => {
@@ -53,6 +56,7 @@ class TestFileSystem {
     target: TestUri,
     options: { readonly overwrite: boolean },
   ): Promise<void> {
+    this.renameTargets.push(target.toString());
     if (this.failRename) throw new Error("permission denied");
     const targetKey = target.toString();
     if (!options.overwrite && this.files.has(targetKey))
@@ -153,6 +157,42 @@ describe("Extension Host image import", () => {
     expect(
       fileSystem.files.get("file:/workspace/docs/images/architecture-1.png"),
     ).toEqual(new Uint8Array([2]));
+    expect(
+      [...fileSystem.files.keys()].some((key) =>
+        key.includes(".markdown-mint-image-"),
+      ),
+    ).toBe(false);
+  });
+
+  it("writes image bytes once while retrying several collision-safe names", async () => {
+    const { deps, fileSystem } = dependencies();
+    for (const [suffix, byte] of [
+      ["", 1],
+      ["-1", 2],
+      ["-2", 3],
+    ] as const)
+      fileSystem.files.set(
+        `file:/workspace/docs/images/architecture${suffix}.png`,
+        new Uint8Array([byte]),
+      );
+
+    const result = await saveImageImport(
+      new TestUri("file", "/workspace/docs/README.md"),
+      request(),
+      deps,
+    );
+
+    expect(result).toEqual({
+      success: true,
+      relativePath: "./images/architecture-3.png",
+    });
+    expect(fileSystem.writeFileCalls).toBe(1);
+    expect(fileSystem.renameTargets).toEqual([
+      "file:/workspace/docs/images/architecture.png",
+      "file:/workspace/docs/images/architecture-1.png",
+      "file:/workspace/docs/images/architecture-2.png",
+      "file:/workspace/docs/images/architecture-3.png",
+    ]);
     expect(
       [...fileSystem.files.keys()].some((key) =>
         key.includes(".markdown-mint-image-"),
@@ -290,10 +330,37 @@ describe("Extension Host image import", () => {
     });
     expect(fileSystem.directories.size).toBe(0);
 
+    expect(decodeImageImportBase64("")).toEqual(new Uint8Array());
     expect(() => decodeImageImportBase64("not base64?")).toThrow(
       "valid base64",
     );
   });
+
+  it.each([
+    ["zero-byte image", { base64: "" }, "empty"],
+    [
+      "generic MIME for a PNG",
+      { mimeType: "application/octet-stream" },
+      "MIME type",
+    ],
+  ])(
+    "returns a semantic failure for %s before filesystem creation",
+    async (_, overrides, message) => {
+      const { deps, fileSystem } = dependencies();
+      const result = await saveImageImport(
+        new TestUri("file", "/workspace/docs/README.md"),
+        request(overrides),
+        deps,
+      );
+
+      expect(result).toMatchObject({
+        success: false,
+        message: expect.stringContaining(message),
+      });
+      expect(fileSystem.directories.size).toBe(0);
+      expect(fileSystem.files.size).toBe(0);
+    },
+  );
 
   it("returns a write error without claiming that the image was imported", async () => {
     const fileSystem = new TestFileSystem();

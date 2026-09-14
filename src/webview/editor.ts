@@ -8594,6 +8594,15 @@ export class MarkdownEditorApp {
       this.imageImport.handleResult(this.view, message);
     } else if (message.type === "error") {
       if (
+        message.operationId &&
+        this.imageImport.handleError(
+          this.view,
+          message.operationId,
+          message.message,
+        )
+      )
+        return;
+      if (
         this.pendingProfile?.operationId &&
         this.pendingProfile.operationId === message.operationId
       ) {

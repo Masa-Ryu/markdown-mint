@@ -99,14 +99,16 @@ sanitization path.
 The Rich Editor consumes a drop only when `DataTransfer.files` contains a
 potential image. PNG, JPEG/JPG, GIF, and WebP files are read in the Webview and
 sent as bounded base64 payloads; the Webview never writes to the filesystem.
-The Extension Host validates the MIME type and extension again, decodes the
-payload with the 10 MB limit, creates the Markdown document's sibling `images`
-directory through `workspace.fs`, and atomically claims the first available
-basename (then `-1`, `-2`, and so on) with a same-directory temporary file and
-`rename(..., { overwrite: false })`. Temporary files are cleaned up after both
-successful and failed attempts. The returned `./images/<basename>` source
-encodes only the basename segment for URL semantics while preserving the real
-filesystem name. SVG, arbitrary MIME/extension combinations, unsafe names,
+The wire protocol checks only message shape, bounded fields, and structurally
+valid base64; the Extension Host owns semantic validation of empty payloads,
+MIME/extension combinations, and unsafe names. It decodes the payload with the
+10 MB limit, creates the Markdown document's sibling `images` directory
+through `workspace.fs`, writes one same-directory temporary file, and atomically
+claims the first available basename (then `-1`, `-2`, and so on) by retrying
+`rename(..., { overwrite: false })` against that same temporary file. Temporary
+files are cleaned up after both successful and failed attempts. The returned
+`./images/<basename>` source encodes only the basename segment for URL semantics
+while preserving the real filesystem name. Unsupported images, unsafe names,
 oversized payloads, and failed writes leave the Markdown document unchanged and
 use the existing VS Code error notification route. Existing non-image
 ProseMirror drops continue through the normal handler.
@@ -125,16 +127,20 @@ retained on Undo.
 Protocol, Extension Host, and Webview regressions cover validation, atomic
 concurrent duplicate names with both payloads retained, URL-special basenames,
 255-character collision suffixes, temporary-file cleanup, unsafe paths, size
-and write failures, non-image fall-through, invalid code-block preflight,
+and write failures, one-write collision retries, zero-byte and generic-MIME
+correlated failures, non-image fall-through, invalid code-block preflight,
 mapped positions, destructive pending-anchor edits, multiple-file order,
 failure cleanup, serializer round trips, and temporary-state
-non-serialization. The browser block suite also passed all five required
+non-serialization. The final unit suite passed 794 tests across 38 files; the
+browser block suite also passed all five required
 fixtures (`common-test.md`, `github-test.md`, `github-test-class-B.md`,
 `gitlab-test.md`, and `gitlab-test-class-B.md`) on Rich, dedicated preview, and
-native-preview surfaces. The installed Extension Development Host acceptance
-suite completed successfully. Direct Finder or Explorer drag/drop, GIF
-animation, native host persistence, and operating-system IME behavior remain
-manual checks.
+native-preview surfaces. The spacing suite passed 37 Rich/preview and 37
+native cases. Compile, lint (0 errors; 74 `any` warnings), format
+check, and the installed Extension Development Host acceptance suite all
+completed successfully. Direct Finder or Explorer drag/drop, GIF animation,
+Remote SSH filesystem import, native host persistence, and operating-system
+IME behavior remain manual checks.
 
 ## Alert inline editing refinement
 

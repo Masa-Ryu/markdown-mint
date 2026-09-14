@@ -51,8 +51,8 @@ let temporaryFileSequence = 0;
 export function decodeImageImportBase64(base64: string): Uint8Array {
   if (base64.length > MAX_IMAGE_IMPORT_BASE64_LENGTH)
     throw new Error("The dropped image exceeds the 10 MB size limit.");
+  if (base64.length === 0) return new Uint8Array(0);
   if (
-    base64.length === 0 ||
     !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(
       base64,
     )
@@ -107,42 +107,70 @@ export async function saveImageImport<Uri extends ImageImportUriLike>(
   request: ImageImportMessage,
   dependencies: ImageImportDependencies<Uri>,
 ): Promise<ImageImportSaveResult> {
+  let temporaryUri: Uri | undefined;
+  let result: ImageImportSaveResult = {
+    success: false,
+    message: "The image could not be imported.",
+  };
+  let claimed = false;
   try {
     const bytes = decodeImageImportBase64(request.base64);
+    if (bytes.byteLength === 0) throw new Error("The dropped image is empty.");
     const fileName = normalizeImageImportFileName(request.fileName);
     validateImageType(fileName, request.mimeType);
     const documentDirectory = documentDirectoryUri(documentUri, dependencies);
     const imagesDirectory = dependencies.joinPath(documentDirectory, "images");
 
     await dependencies.fs.createDirectory(imagesDirectory);
+    temporaryUri = dependencies.joinPath(
+      imagesDirectory,
+      temporaryFileName(request.requestId),
+    );
+    await dependencies.fs.writeFile(temporaryUri, bytes);
     for (let suffix = 0; suffix <= MAX_DUPLICATE_ATTEMPTS; suffix += 1) {
       const targetName = suffix === 0 ? fileName : withSuffix(fileName, suffix);
       const relativePath = relativeImagePath(targetName);
-      const temporaryUri = dependencies.joinPath(
-        imagesDirectory,
-        temporaryFileName(request.requestId),
-      );
       try {
-        await dependencies.fs.writeFile(temporaryUri, bytes);
         await dependencies.fs.rename(
           temporaryUri,
           dependencies.joinPath(imagesDirectory, targetName),
           { overwrite: false },
         );
-        return { success: true, relativePath };
+        result = { success: true, relativePath };
+        claimed = true;
+        break;
       } catch (error) {
-        await cleanupTemporaryFile(dependencies.fs, temporaryUri);
         if (isExistingFile(error)) continue;
         throw error;
       }
     }
-    throw new Error("Too many images have the same file name.");
+    if (!claimed) throw new Error("Too many images have the same file name.");
   } catch (error) {
-    return {
+    result = {
       success: false,
       message: errorMessage(error, "The image could not be imported."),
     };
   }
+  if (temporaryUri) {
+    try {
+      // A successful rename removes the source; missing-file cleanup is
+      // expected. On collision retries the source remains until the final
+      // claim, so cleanup also covers every failure path.
+      await cleanupTemporaryFile(dependencies.fs, temporaryUri);
+    } catch (error) {
+      const cleanupMessage = errorMessage(
+        error,
+        "The temporary image could not be cleaned up.",
+      );
+      result = result.success
+        ? { success: false, message: cleanupMessage }
+        : {
+            success: false,
+            message: `${result.message} ${cleanupMessage}`,
+          };
+    }
+  }
+  return result;
 }
 
 function documentDirectoryUri<Uri extends ImageImportUriLike>(

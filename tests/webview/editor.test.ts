@@ -1784,6 +1784,81 @@ describe("rich editor rendering", () => {
     app.destroy();
   });
 
+  it.each([
+    [
+      "zero-byte image",
+      imageFile("empty.png", "image/png", new Uint8Array()),
+      "empty",
+    ],
+    [
+      "generic MIME image",
+      imageFile("architecture.png", "application/octet-stream"),
+      "MIME type",
+    ],
+  ])(
+    "clears pending state after the host semantically rejects a %s",
+    async (_, file, message) => {
+      const { app, root, messages } = makeApp("before after");
+      dispatchImageDrop(app, [file], 7);
+      await flush();
+      const request = messages.find(
+        (candidate: any) => candidate.type === "image-import",
+      ) as any;
+
+      expect(request).toBeDefined();
+      expect(root.querySelector(".mm-image-importing")).not.toBeNull();
+      receiveHostMessage({
+        protocolVersion: PROTOCOL_VERSION,
+        type: "image-import-result",
+        requestId: request.requestId,
+        success: false,
+        message: `The dropped image ${message}.`,
+      });
+
+      expect(root.querySelector(".mm-image-importing")).toBeNull();
+      expect(
+        imageImportPluginKey.getState(app.view.state)?.pending,
+      ).toHaveLength(0);
+      expect(messages.some((candidate: any) => candidate.type === "edit")).toBe(
+        false,
+      );
+      expect(
+        messages.some(
+          (candidate: any) =>
+            candidate.type === "notify" &&
+            candidate.level === "error" &&
+            candidate.message.includes(message),
+        ),
+      ).toBe(true);
+      app.destroy();
+    },
+  );
+
+  it("clears an image pending request when a correlated generic host error arrives", async () => {
+    const { app, root, messages } = makeApp("before after");
+    dispatchImageDrop(app, [imageFile("architecture.png")], 7);
+    await flush();
+    const request = messages.find(
+      (candidate: any) => candidate.type === "image-import",
+    ) as any;
+
+    receiveHostMessage({
+      protocolVersion: PROTOCOL_VERSION,
+      type: "error",
+      operationId: request.requestId,
+      message: "The image import request was rejected.",
+    });
+
+    expect(root.querySelector(".mm-image-importing")).toBeNull();
+    expect(imageImportPluginKey.getState(app.view.state)?.pending).toHaveLength(
+      0,
+    );
+    expect(messages.some((candidate: any) => candidate.type === "edit")).toBe(
+      false,
+    );
+    app.destroy();
+  });
+
   it("maps the pending drop position through an edit made during import", async () => {
     let releaseRead!: (value: ArrayBuffer) => void;
     const file = imageFile(

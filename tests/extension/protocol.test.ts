@@ -268,7 +268,51 @@ describe("Markdown Mint wire protocol", () => {
         type: "image-import",
         requestId: "image:1:abc",
         fileName: "architecture.png",
-        mimeType: "text/plain",
+        mimeType: "application/octet-stream",
+        base64: "AA==",
+      }),
+    ).toEqual({
+      protocolVersion: PROTOCOL_VERSION,
+      type: "image-import",
+      requestId: "image:1:abc",
+      fileName: "architecture.png",
+      mimeType: "application/octet-stream",
+      base64: "AA==",
+    });
+    expect(
+      parseWebviewMessage({
+        protocolVersion: PROTOCOL_VERSION,
+        type: "image-import",
+        requestId: "image:1:abc",
+        fileName: "empty.png",
+        mimeType: "image/png",
+        base64: "",
+      }),
+    ).toEqual({
+      protocolVersion: PROTOCOL_VERSION,
+      type: "image-import",
+      requestId: "image:1:abc",
+      fileName: "empty.png",
+      mimeType: "image/png",
+      base64: "",
+    });
+    expect(
+      parseWebviewMessage({
+        protocolVersion: PROTOCOL_VERSION,
+        type: "image-import",
+        requestId: "image:1:abc",
+        fileName: "../escape.png",
+        mimeType: "image/png",
+        base64: "AA==",
+      }),
+    ).toMatchObject({ fileName: "../escape.png" });
+    expect(
+      parseWebviewMessage({
+        protocolVersion: PROTOCOL_VERSION,
+        type: "image-import",
+        requestId: "image:1:abc",
+        fileName: "architecture.png",
+        mimeType: 42,
         base64: "AA==",
       }),
     ).toBeUndefined();
