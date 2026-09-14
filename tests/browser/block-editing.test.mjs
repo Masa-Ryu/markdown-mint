@@ -17,6 +17,8 @@ const detailsTitle = ".mm-details-summary";
 const detailsInput = ".mm-details-summary-input";
 const detailsToggle = ".mm-details-toggle";
 const undoShortcut = process.platform === "darwin" ? "Meta+z" : "Control+z";
+const redoShortcut =
+  process.platform === "darwin" ? "Meta+Shift+z" : "Control+y";
 const fence = (language, source) =>
   `\u0060\u0060\u0060${language}\n${source}\n\u0060\u0060\u0060`;
 const blocks = (...values) => values.join("\n\n");
@@ -1676,6 +1678,56 @@ async function testTableNavigation(page) {
   await noEdits(page, before, "table vertical navigation");
 }
 
+async function testSpreadsheetTablePasteHistory(page) {
+  const source = blocks(
+    "Before",
+    "| H1 | H2 |\n| --- | --- |\n| A1 | A2 |",
+    "After",
+  );
+  await load(page, source);
+  await caret(page, `${rich} > p:first-child`, -1);
+  await page.evaluate(() => {
+    const clipboardData = new DataTransfer();
+    clipboardData.setData("text/plain", "Name\tScore\nAlice\t90");
+    const event = new ClipboardEvent("paste", {
+      bubbles: true,
+      cancelable: true,
+      clipboardData,
+    });
+    const editor = document.querySelector(".mm-rich-panel .ProseMirror");
+    if (!editor) throw new Error("Rich Editor was not rendered");
+    editor.dispatchEvent(event);
+  });
+  const changed = blocks(
+    "Before",
+    "| Name | Score |\n| --- | --- |\n| Alice | 90 |",
+    "| H1 | H2 |\n| --- | --- |\n| A1 | A2 |",
+    "After",
+  );
+  await expectSource(page, changed);
+  assert.equal(
+    await page.locator(`${rich} > table`).count(),
+    2,
+    "spreadsheet paste did not insert one table block",
+  );
+
+  await page.keyboard.press(undoShortcut);
+  await expectSource(page, source);
+  assert.equal(
+    await page.locator(`${rich} > table`).count(),
+    1,
+    "one Undo did not remove the pasted table",
+  );
+
+  await page.keyboard.press(redoShortcut);
+  await expectSource(page, changed);
+  assert.equal(
+    await page.locator(`${rich} > table`).count(),
+    2,
+    "one Redo did not restore the pasted table",
+  );
+}
+
 async function testNestedBlockquoteTableNavigation(page) {
   const source = blocks(
     [
@@ -2650,6 +2702,7 @@ async function testDetailsWithInlineHtmlAttributeTags(page) {
 }
 
 async function testMathAndMermaidHeaders(page) {
+  let mathDialogWidth = 0;
   for (const [kind, source, replacement] of [
     ["math", "$$\nx^2\n$$", "y^3"],
     [
@@ -2690,6 +2743,46 @@ async function testMathAndMermaidHeaders(page) {
       await dialog.getAttribute("data-profile-feature-mode"),
       "edit",
     );
+    assert.equal(await dialog.locator("h2").textContent(), `Edit ${label}`);
+    if (kind === "mermaid") {
+      await page.waitForFunction(
+        () =>
+          document.querySelector(
+            ".mm-profile-feature-dialog[open] .mm-mermaid-validation-status",
+          )?.textContent === "✓ Valid · Flowchart",
+      );
+      assert.equal(
+        await dialog.locator(".mm-mermaid-version").textContent(),
+        "Mermaid 11.17.2",
+      );
+      assert.equal(
+        await dialog.locator(".mm-mermaid-dialog-meta").getAttribute("hidden"),
+        null,
+      );
+      const layout = await dialog.evaluate((element) => {
+        const body = element.querySelector('[data-feature-field="body"]');
+        const rect = element.getBoundingClientRect();
+        const bodyRect = body?.getBoundingClientRect();
+        return {
+          width: rect.width,
+          height: rect.height,
+          bodyHeight: bodyRect?.height ?? 0,
+          bodyFlex: body ? getComputedStyle(body).flex : "",
+        };
+      });
+      assert.ok(layout.width > mathDialogWidth, "Mermaid dialog did not grow");
+      assert.ok(layout.width > 700, "Mermaid dialog is still too narrow");
+      assert.ok(layout.height > 500, "Mermaid dialog is still too short");
+      assert.ok(
+        layout.bodyHeight > 400,
+        "Mermaid editor did not fill the modal",
+      );
+      assert.match(layout.bodyFlex, /1\s+1\s+auto/);
+    } else {
+      mathDialogWidth = await dialog.evaluate(
+        (element) => element.getBoundingClientRect().width,
+      );
+    }
     await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
     await noEdits(page, before, `${kind} cancel`);
     for (const key of ["Enter", "Space"]) {
@@ -3230,6 +3323,7 @@ async function main() {
       testArrowDocumentEdges,
       testWrappedVerticalNavigation,
       testTableNavigation,
+      testSpreadsheetTablePasteHistory,
       testNestedBlockquoteTableNavigation,
       testCodeVerticalNavigation,
       testExpandedCodeVerticalNavigation,

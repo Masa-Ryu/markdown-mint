@@ -11,8 +11,31 @@ import {
   type MarkdownEditorApp,
 } from "../../src/webview/editor";
 import { BlockBoundarySelection } from "../../src/webview/blockBoundary";
+import { installModalSubmitShortcut } from "../../src/webview/modalSubmitShortcut";
 
 const apps: MarkdownEditorApp[] = [];
+
+function installMermaidRuntime(): void {
+  const globals = globalThis as unknown as Record<string, unknown>;
+  globals.markdownMintMermaidVersion = "11.17.2";
+  globals.markdownMintMermaid = {
+    parse: async (source: string) => {
+      if (!/^(?:flowchart|graph)\b/m.test(source) || /-->\s*$/.test(source))
+        throw new Error("Mermaid syntax error");
+      return {
+        diagramType: source.trimStart().startsWith("graph")
+          ? "flowchart"
+          : "flowchart-v2",
+      };
+    },
+    render: () => "<svg />",
+  };
+}
+
+async function settleMermaidValidation(): Promise<void> {
+  await new Promise<void>((resolve) => setTimeout(resolve, 320));
+  await Promise.resolve();
+}
 
 function makeApp(
   markdown = "selected text",
@@ -80,6 +103,7 @@ function dispatchCellText(app: MarkdownEditorApp, root: HTMLElement): void {
 
 beforeEach(() => {
   document.body.replaceChildren();
+  installMermaidRuntime();
   if (typeof Range !== "undefined" && !Range.prototype.getClientRects)
     Object.defineProperty(Range.prototype, "getClientRects", {
       configurable: true,
@@ -102,6 +126,9 @@ beforeEach(() => {
 afterEach(() => {
   for (const app of apps) app.destroy();
   apps.length = 0;
+  const globals = globalThis as unknown as Record<string, unknown>;
+  delete globals.markdownMintMermaid;
+  delete globals.markdownMintMermaidVersion;
   document.body.replaceChildren();
 });
 
@@ -152,7 +179,135 @@ describe("profile feature toolbar", () => {
     ).toBeTruthy();
   });
 
-  it("inserts the four GitHub features through guarded dialogs", () => {
+  it("shows Mermaid-only metadata and keeps the accessible source label", async () => {
+    const { root } = makeApp();
+    featureButton(root, "mermaid").click();
+    const dialog = root.querySelector<HTMLDialogElement>(
+      ".mm-profile-feature-dialog",
+    )!;
+    const body = dialog.querySelector<HTMLTextAreaElement>(
+      '[data-feature-field="body"]',
+    )!;
+    const status = dialog.querySelector<HTMLElement>(
+      ".mm-mermaid-validation-status",
+    )!;
+    expect(dialog.dataset.profileFeature).toBe("mermaid");
+    expect(dialog.querySelector("h2")?.textContent).toBe("Insert Mermaid");
+    expect(
+      dialog.querySelector<HTMLElement>(".mm-mermaid-dialog-meta")!.hidden,
+    ).toBe(false);
+    expect(
+      dialog.querySelector<HTMLElement>(".mm-mermaid-version")!.textContent,
+    ).toBe("Mermaid 11.17.2");
+    expect(status.textContent).toBe("Checking…");
+    expect(
+      dialog.querySelector("[data-feature-field-container=body] > span"),
+    ).not.toBeNull();
+    expect(body.getAttribute("aria-label")).toBe("Diagram source");
+    expect(
+      dialog.querySelector<HTMLButtonElement>('button[type="submit"]')!
+        .disabled,
+    ).toBe(true);
+    await settleMermaidValidation();
+    expect(status.textContent).toBe("✓ Valid · Flowchart");
+    expect(
+      dialog.querySelector<HTMLButtonElement>('button[type="submit"]')!
+        .disabled,
+    ).toBe(false);
+
+    dialog
+      .querySelector<HTMLButtonElement>("button:not([type=submit])")!
+      .click();
+    featureButton(root, "math").click();
+    expect(dialog.dataset.profileFeature).toBe("math");
+    expect(
+      dialog.querySelector<HTMLElement>(".mm-mermaid-dialog-meta")!.hidden,
+    ).toBe(true);
+  });
+
+  it("blocks invalid and empty Mermaid source, including direct form submission", async () => {
+    const { root, app, messages } = makeApp();
+    featureButton(root, "mermaid").click();
+    const dialog = root.querySelector<HTMLDialogElement>(
+      ".mm-profile-feature-dialog",
+    )!;
+    const body = dialog.querySelector<HTMLTextAreaElement>(
+      '[data-feature-field="body"]',
+    )!;
+    const submit = dialog.querySelector<HTMLButtonElement>(
+      'button[type="submit"]',
+    )!;
+    body.value = "flowchart TD\n  A -->";
+    body.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(submit.disabled).toBe(true);
+    await settleMermaidValidation();
+    expect(
+      dialog.querySelector<HTMLElement>(".mm-mermaid-validation-status")!
+        .textContent,
+    ).toBe("✕ Syntax error");
+    expect(submit.disabled).toBe(true);
+    dialog
+      .querySelector("form")!
+      .dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    await Promise.resolve();
+    expect(editCount(messages)).toBe(0);
+    expect(dialog.hasAttribute("open")).toBe(true);
+
+    body.value = "";
+    body.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(submit.disabled).toBe(true);
+    await Promise.resolve();
+    expect(
+      dialog.querySelector<HTMLElement>(".mm-mermaid-validation-status")!
+        .textContent,
+    ).toBe("Enter Mermaid source");
+    expect(serializeMarkdown(app.view.state.doc)).toBe("selected text");
+  });
+
+  it("requires a valid latest source for the platform submit shortcut", async () => {
+    const { root, messages } = makeApp();
+    const disposeShortcut = installModalSubmitShortcut(root, "Linux x86_64");
+    try {
+      featureButton(root, "mermaid").click();
+      const dialog = root.querySelector<HTMLDialogElement>(
+        ".mm-profile-feature-dialog",
+      )!;
+      const body = dialog.querySelector<HTMLTextAreaElement>(
+        '[data-feature-field="body"]',
+      )!;
+      body.value = "flowchart TD\n  A -->";
+      body.dispatchEvent(new Event("input", { bubbles: true }));
+      await settleMermaidValidation();
+      const invalidEnter = new KeyboardEvent("keydown", {
+        key: "Enter",
+        ctrlKey: true,
+        bubbles: true,
+        cancelable: true,
+      });
+      body.dispatchEvent(invalidEnter);
+      await Promise.resolve();
+      expect(invalidEnter.defaultPrevented).toBe(false);
+      expect(editCount(messages)).toBe(0);
+
+      body.value = "flowchart TD\n  A --> B";
+      body.dispatchEvent(new Event("input", { bubbles: true }));
+      await settleMermaidValidation();
+      const validEnter = new KeyboardEvent("keydown", {
+        key: "Enter",
+        ctrlKey: true,
+        bubbles: true,
+        cancelable: true,
+      });
+      body.dispatchEvent(validEnter);
+      await Promise.resolve();
+      expect(validEnter.defaultPrevented).toBe(true);
+      expect(editCount(messages)).toBe(1);
+    } finally {
+      disposeShortcut();
+    }
+  });
+
+  it("inserts the four GitHub features through guarded dialogs", async () => {
     const cases: Array<{
       id: string;
       configure: (dialog: HTMLDialogElement) => void;
@@ -207,8 +362,22 @@ describe("profile feature toolbar", () => {
       const dialog = root.querySelector<HTMLDialogElement>(
         '[data-feature-dialog="true"]',
       )!;
+      expect(dialog.querySelector("h2")?.textContent).toBe(
+        {
+          alert: "Insert Alert",
+          details: "Insert Details",
+          math: "Insert Math",
+          mermaid: "Insert Mermaid",
+        }[entry.id],
+      );
       expect(dialog.getAttribute("data-profile-feature")).toBe(entry.id);
       entry.configure(dialog);
+      if (entry.id === "mermaid") {
+        dialog
+          .querySelector<HTMLTextAreaElement>('[data-feature-field="body"]')!
+          .dispatchEvent(new Event("input", { bubbles: true }));
+        await settleMermaidValidation();
+      }
       dialog.querySelector<HTMLButtonElement>('button[type="submit"]')!.click();
       expect(currentSource(app)).toContain(entry.expected);
       expect(editCount(messages)).toBe(1);
@@ -217,7 +386,7 @@ describe("profile feature toolbar", () => {
     }
   });
 
-  it("inserts GitHub block features directly from a boundary without Enter", () => {
+  it("inserts GitHub block features directly from a boundary without Enter", async () => {
     const source = "```text\ncode\n```\n\n| A | B |\n| --- | --- |\n| a | b |";
     const cases: Array<{
       id: "alert" | "details" | "math" | "mermaid";
@@ -285,6 +454,12 @@ describe("profile feature toolbar", () => {
         '[data-feature-dialog="true"]',
       )!;
       entry.configure(dialog);
+      if (entry.id === "mermaid") {
+        dialog
+          .querySelector<HTMLTextAreaElement>('[data-feature-field="body"]')!
+          .dispatchEvent(new Event("input", { bubbles: true }));
+        await settleMermaidValidation();
+      }
       dialog.querySelector<HTMLButtonElement>('button[type="submit"]')!.click();
 
       expect(currentSource(app)).toContain(entry.sourcePart);

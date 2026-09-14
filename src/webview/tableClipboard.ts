@@ -4,9 +4,9 @@ import type { Schema } from "prosemirror-model";
 
 export const TABLE_CLIPBOARD_MIME = "application/x-markdown-mint-table";
 export const MAX_CLIPBOARD_CELLS = 10_000;
+export const MAX_CLIPBOARD_PAYLOAD_LENGTH = 2_000_000;
 
 const MAX_CLIPBOARD_DIMENSION = MAX_CLIPBOARD_CELLS;
-const MAX_INTERNAL_CLIPBOARD_LENGTH = 2_000_000;
 
 export interface TableMatrix {
   values: string[][];
@@ -109,6 +109,7 @@ function parseTsvResult(value: string): ClipboardMatrixParseResult {
     (!value.includes("\t") && !value.includes("\n") && !value.includes("\r"))
   )
     return failure("not-a-matrix");
+  if (value.length > MAX_CLIPBOARD_PAYLOAD_LENGTH) return failure("too-large");
 
   const values: string[][] = [];
   let row: string[] = [];
@@ -186,6 +187,23 @@ function hasTableMarkup(value: string): boolean {
   return /<table(?:\s|>)/i.test(value);
 }
 
+/** Reject obviously oversized HTML before handing it to a DOM parser. */
+function hasOversizedHtmlTable(value: string): boolean {
+  if (value.length > MAX_CLIPBOARD_PAYLOAD_LENGTH) return true;
+  const tags = /<(td|th|tr)\b/gi;
+  let rows = 0;
+  let cells = 0;
+  let match: RegExpExecArray | null;
+  while ((match = tags.exec(value))) {
+    if (match[1]?.toLowerCase() === "tr") rows += 1;
+    else cells += 1;
+    if (rows > MAX_CLIPBOARD_CELLS || cells > MAX_CLIPBOARD_CELLS) return true;
+  }
+  const oversizedSpan =
+    /<(?:td|th)\b[^>]*\b(?:rowspan|colspan)\s*=\s*["']?\s*(\d+)/i.exec(value);
+  return oversizedSpan ? Number(oversizedSpan[1]) > MAX_CLIPBOARD_CELLS : false;
+}
+
 function parseClipboardHtmlResult(value: string): ClipboardMatrixParseResult {
   if (
     typeof value !== "string" ||
@@ -194,6 +212,7 @@ function parseClipboardHtmlResult(value: string): ClipboardMatrixParseResult {
     typeof DOMParser === "undefined"
   )
     return failure("not-a-matrix");
+  if (hasOversizedHtmlTable(value)) return failure("too-large");
 
   try {
     const parsed = new DOMParser().parseFromString(value, "text/html");
@@ -243,7 +262,7 @@ export function parseClipboardHtml(value: string): TableMatrix | null {
 
 function parseInternalMatrixResult(value: string): ClipboardMatrixParseResult {
   if (typeof value !== "string" || !value) return failure("not-a-matrix");
-  if (value.length > MAX_INTERNAL_CLIPBOARD_LENGTH) return failure("too-large");
+  if (value.length > MAX_CLIPBOARD_PAYLOAD_LENGTH) return failure("too-large");
   try {
     const parsed = JSON.parse(value) as {
       values?: unknown;

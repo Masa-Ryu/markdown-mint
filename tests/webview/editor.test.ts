@@ -2580,6 +2580,39 @@ describe("table clipboard integration", () => {
     html.app.destroy();
   });
 
+  it("keeps TSV ahead of HTML inside a table and treats multiline prose as native text", () => {
+    const prioritized = makeApp(
+      "| Header | Other |\n| --- | --- |\n| abc | def |",
+    );
+    const prioritizedCell =
+      prioritized.root.querySelector<HTMLElement>("tbody td")!;
+    selectTableCellText(prioritized.app, prioritizedCell, 1);
+    dispatchPaste(prioritized.app, {
+      "text/plain": "TSV\tValue",
+      "text/html": "<table><tr><td>HTML</td><td>Ignored</td></tr></table>",
+    });
+    expect(
+      prioritized.app.view.state.doc.firstChild?.child(1).child(0).textContent,
+    ).toBe("TSV");
+    expect(lastEditMarkdown(prioritized.messages)).toContain("| TSV | Value |");
+    prioritized.app.destroy();
+
+    const multiline = makeApp("| Header |\n| --- |\n| abcdef |");
+    const multilineCell =
+      multiline.root.querySelector<HTMLElement>("tbody td")!;
+    selectTableCellText(multiline.app, multilineCell, 3);
+    const event = dispatchPaste(multiline.app, {
+      "text/plain": "Today\nTomorrow",
+    });
+    expect(event.defaultPrevented).toBe(true);
+    const table = multiline.app.view.state.doc.firstChild!;
+    expect(table.childCount).toBe(2);
+    expect(multiline.app.view.state.doc.textContent).toContain("Today");
+    expect(multiline.app.view.state.doc.textContent).toContain("Tomorrow");
+    expect(multiline.messages.filter(isEditMessage)).toHaveLength(1);
+    multiline.app.destroy();
+  });
+
   it("keeps ordinary multiline text and one-cell HTML on the native paste path", () => {
     const plain = makeApp("Before");
     const plainParagraph =
@@ -2747,6 +2780,36 @@ describe("table clipboard integration", () => {
       }),
     );
     expect(messages.filter(isEditMessage)).toHaveLength(0);
+    app.destroy();
+  });
+
+  it("rejects oversized HTML instead of falling back to a lower-priority TSV", () => {
+    const { app, root, messages } = makeApp(
+      "| Header |\n| --- |\n| unchanged |",
+    );
+    const cell = root.querySelector<HTMLElement>("tbody td")!;
+    selectTableCellText(app, cell, 1);
+    const oversizedHtml = `<table><tr>${Array.from(
+      { length: 10_001 },
+      () => "<td>oversized</td>",
+    ).join("")}</tr></table>`;
+    const event = dispatchPaste(app, {
+      "text/plain": "Safe\tValue",
+      "text/html": oversizedHtml,
+    });
+    expect(event.defaultPrevented).toBe(true);
+    expect(app.view.state.doc.firstChild?.child(1).child(0).textContent).toBe(
+      "unchanged",
+    );
+    expect(messages.filter(isEditMessage)).toHaveLength(0);
+    expect(messages).toContainEqual(
+      expect.objectContaining({
+        type: "notify",
+        level: "warning",
+        message:
+          "Table paste is too large. Markdown Mint supports up to 10,000 pasted cells.",
+      }),
+    );
     app.destroy();
   });
 

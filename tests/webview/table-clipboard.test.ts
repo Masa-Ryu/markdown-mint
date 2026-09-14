@@ -1,13 +1,16 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { parseMarkdown, schema, serializeMarkdown } from "../../src/core";
 import {
   createTableNodeFromMatrix,
   detectSpreadsheetPaste,
   matrixToTsv,
   parseClipboardHtml,
+  parseClipboardHtmlWithStatus,
   parseTsv,
+  parseTsvWithStatus,
+  MAX_CLIPBOARD_PAYLOAD_LENGTH,
   validateClipboardMatrix,
 } from "../../src/webview/tableClipboard";
 
@@ -210,6 +213,53 @@ describe("table clipboard parsing", () => {
         html: "",
       }),
     ).toEqual({ kind: "too-large", source: "internal" });
+  });
+
+  it("accepts exactly 10,000 TSV cells and rejects oversized payloads before parsing", () => {
+    const values = Array.from({ length: 100 }, (_, row) =>
+      Array.from({ length: 100 }, (_, column) => `${row}:${column}`),
+    );
+    expect(
+      detectSpreadsheetPaste({
+        internal: "",
+        text: matrixToTsv({ values, rows: 100, columns: 100 }),
+        html: "",
+      }),
+    ).toMatchObject({
+      kind: "matrix",
+      source: "tsv",
+      matrix: { rows: 100, columns: 100 },
+    });
+
+    expect(
+      parseTsvWithStatus(`A\t${"x".repeat(MAX_CLIPBOARD_PAYLOAD_LENGTH)}`),
+    ).toEqual({
+      matrix: null,
+      failure: "too-large",
+    });
+  });
+
+  it("rejects oversized HTML before constructing a DOM", () => {
+    const parseFromString = vi.spyOn(DOMParser.prototype, "parseFromString");
+    const html = `<table><tr>${Array.from(
+      { length: 10_001 },
+      () => "<td>cell</td>",
+    ).join("")}</tr></table>`;
+    try {
+      expect(parseClipboardHtmlWithStatus(html)).toEqual({
+        matrix: null,
+        failure: "too-large",
+      });
+      expect(parseFromString).not.toHaveBeenCalled();
+      expect(
+        parseClipboardHtmlWithStatus(
+          '<table><tr><td colspan="10001">cell</td></tr></table>',
+        ),
+      ).toEqual({ matrix: null, failure: "too-large" });
+      expect(parseFromString).not.toHaveBeenCalled();
+    } finally {
+      parseFromString.mockRestore();
+    }
   });
 
   it("creates an unbounded clipboard table with header row normalization", () => {
