@@ -1,8 +1,11 @@
 # Markdown Mint
 
-**A visual Markdown editor for VS Code.**
+**A visual WYSIWYG Markdown editor for VS Code.**
 
-Edit Markdown visually without giving up the `.md` file underneath.
+Edit Markdown visually with rich table editing, Mermaid, math,
+GitHub/GitLab Markdown support, and full access to the underlying `.md` source.
+
+**Write visually. Stay in Markdown.**
 
 ![markdown mint demo](./images/demo1.gif)
 
@@ -44,5 +47,3 @@ Choose the profile that matches where your Markdown will be used.
 Markdown Mint does not introduce a proprietary document format.
 
 Your Markdown file remains the source of truth. Edit visually when it is convenient, and switch back to the raw source whenever you need exact control.
-
-**Write visually. Stay in Markdown.**

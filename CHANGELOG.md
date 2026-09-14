@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.0.53
+
+- Improve Marketplace metadata and README searchability for visual WYSIWYG
+  Markdown editing, tables, GitHub/GitLab Markdown, Mermaid, math, and source
+  editing.
+
 ## 0.0.52
 
 - Update the Link dialog destination field to accept relative paths, root paths,
