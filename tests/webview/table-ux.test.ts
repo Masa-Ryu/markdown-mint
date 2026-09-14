@@ -956,9 +956,33 @@ describe("contextual table toolbar", () => {
     ).toBeTruthy();
     expect(
       rowAbove
-        .querySelector<SVGSVGElement>(".mm-table-toolbar-icon path")
+        .querySelector<SVGSVGElement>(".mm-table-toolbar-icon [stroke]")
         ?.getAttribute("stroke"),
     ).toBe("currentColor");
+    const tableIcons = {
+      "row-above": "table-row-above",
+      "row-below": "table-row-below",
+      "row-delete": "table-row-delete",
+      "col-left": "table-column-left",
+      "col-right": "table-column-right",
+      "col-delete": "table-column-delete",
+      "align-left": "table-align-left",
+      "align-center": "table-align-center",
+      "align-right": "table-align-right",
+      "table-numbering": "table-numbering",
+      "table-delete": "table-delete",
+    } as const;
+    for (const [action, iconName] of Object.entries(tableIcons)) {
+      const icon = toolbar.querySelector<SVGSVGElement>(
+        `[data-action="${action}"] .mm-table-toolbar-icon`,
+      );
+      expect(icon).not.toBeNull();
+      expect(icon?.dataset.icon).toBe(iconName);
+      expect(icon?.getAttribute("width")).toBe("14");
+      expect(icon?.getAttribute("height")).toBe("14");
+      expect(icon?.getAttribute("aria-hidden")).toBe("true");
+      expect(icon?.getAttribute("focusable")).toBe("false");
+    }
     expect(
       Array.from(
         toolbar.querySelectorAll<HTMLElement>(".mm-table-toolbar-group-label"),

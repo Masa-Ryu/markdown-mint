@@ -6787,66 +6787,9 @@ export class MarkdownEditorApp {
       hidden: "true",
     });
 
-    type TableToolbarIcon =
-      | "row-above"
-      | "row-below"
-      | "row-delete"
-      | "col-left"
-      | "col-right"
-      | "col-delete"
-      | "align-left"
-      | "align-center"
-      | "align-right"
-      | "numbering"
-      | "table-delete";
-    const icon = (kind: TableToolbarIcon): SVGSVGElement => {
-      const svg = document.createElementNS(
-        "http://www.w3.org/2000/svg",
-        "svg",
-      ) as SVGSVGElement;
-      svg.setAttribute("class", "mm-table-toolbar-icon");
-      svg.setAttribute("viewBox", "0 0 16 16");
-      svg.setAttribute("width", "14");
-      svg.setAttribute("height", "14");
-      svg.setAttribute("aria-hidden", "true");
-      svg.setAttribute("focusable", "false");
-      const paths: Record<TableToolbarIcon, string[]> = {
-        "row-above": ["M2 6h8M2 9h8M2 12h8", "M13 6V2", "M11 4l2-2 2 2"],
-        "row-below": ["M2 4h8M2 7h8M2 10h8", "M13 10v4", "M11 12l2 2 2-2"],
-        "row-delete": ["M2 4h12M2 8h12M2 12h12", "M3 8h10"],
-        "col-left": ["M5 2v12M8 2v12M11 2v12", "M6 8H2", "M4 6 2 8l2 2"],
-        "col-right": ["M5 2v12M8 2v12M11 2v12", "M10 8h4", "M12 6l2 2-2 2"],
-        "col-delete": ["M4 2v12M8 2v12M12 2v12", "M8 3v10"],
-        "align-left": ["M2 4h12", "M2 8h9", "M2 12h12"],
-        "align-center": ["M2 4h12", "M4 8h8", "M2 12h12"],
-        "align-right": ["M2 4h12", "M5 8h9", "M2 12h12"],
-        numbering: ["M5 1 3 15", "M11 1 9 15", "M2 6h12", "M1 11h12"],
-        "table-delete": [
-          "M4 5h8l-.5 9h-7z",
-          "M3 5h10",
-          "M6 3h4",
-          "M6 7.5v4M8 7.5v4M10 7.5v4",
-        ],
-      };
-      for (const pathData of paths[kind]) {
-        const pathElement = document.createElementNS(
-          "http://www.w3.org/2000/svg",
-          "path",
-        );
-        pathElement.setAttribute("d", pathData);
-        pathElement.setAttribute("fill", "none");
-        pathElement.setAttribute("stroke", "currentColor");
-        pathElement.setAttribute("stroke-linecap", "round");
-        pathElement.setAttribute("stroke-linejoin", "round");
-        pathElement.setAttribute("stroke-width", "1.35");
-        svg.append(pathElement);
-      }
-      return svg;
-    };
-
     const addGroup = (
       label: string,
-      actions: Array<[TableToolbarAction, string, string, TableToolbarIcon]>,
+      actions: Array<[TableToolbarAction, string, string, ToolbarIconName]>,
     ): void => {
       const group = makeElement("div", {
         class: "mm-table-toolbar-group",
@@ -6876,7 +6819,11 @@ export class MarkdownEditorApp {
           class: "mm-table-toolbar-button-label",
         });
         labelElement.textContent = text;
-        button.append(icon(iconKind), labelElement);
+        appendToolbarIcon(button, iconKind, undefined, {
+          className: "mm-table-toolbar-icon",
+          size: 14,
+        });
+        button.append(labelElement);
         button.addEventListener("mousedown", (event) => {
           // Keep the ProseMirror selection in place while the contextual
           // toolbar receives focus. The command runs from that stable state.
@@ -6891,27 +6838,32 @@ export class MarkdownEditorApp {
     };
 
     addGroup("Row", [
-      ["row-above", "Above", "Add row above", "row-above"],
-      ["row-below", "Below", "Add row below", "row-below"],
-      ["row-delete", "Delete", "Delete selected row", "row-delete"],
+      ["row-above", "Above", "Add row above", "table-row-above"],
+      ["row-below", "Below", "Add row below", "table-row-below"],
+      ["row-delete", "Delete", "Delete selected row", "table-row-delete"],
     ]);
     addGroup("Column", [
-      ["col-left", "Left", "Add column left", "col-left"],
-      ["col-right", "Right", "Add column right", "col-right"],
-      ["col-delete", "Delete", "Delete selected column", "col-delete"],
+      ["col-left", "Left", "Add column left", "table-column-left"],
+      ["col-right", "Right", "Add column right", "table-column-right"],
+      ["col-delete", "Delete", "Delete selected column", "table-column-delete"],
     ]);
     addGroup("Align", [
-      ["align-left", "Left", "Align selected column left", "align-left"],
+      ["align-left", "Left", "Align selected column left", "table-align-left"],
       [
         "align-center",
         "Center",
         "Align selected column center",
-        "align-center",
+        "table-align-center",
       ],
-      ["align-right", "Right", "Align selected column right", "align-right"],
+      [
+        "align-right",
+        "Right",
+        "Align selected column right",
+        "table-align-right",
+      ],
     ]);
     addGroup("Rows", [
-      ["table-numbering", "#", "Number table rows", "numbering"],
+      ["table-numbering", "#", "Number table rows", "table-numbering"],
     ]);
     addGroup("Table", [
       ["table-delete", "Delete table", "Delete table", "table-delete"],

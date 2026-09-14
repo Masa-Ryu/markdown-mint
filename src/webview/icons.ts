@@ -58,6 +58,7 @@ export type ToolbarIconName =
   | "redo";
 
 const FIXED_ICON_COLOR = /#111827/gi;
+const ICON_TEMPLATE_CACHE = new Map<ToolbarIconName, SVGSVGElement>();
 
 const ICON_SOURCES: Readonly<Record<ToolbarIconName, string>> = {
   bold: boldAsset,
@@ -118,6 +119,24 @@ export interface ToolbarIconOptions {
   size?: number;
 }
 
+function getToolbarIconTemplate(name: ToolbarIconName): SVGSVGElement {
+  const cached = ICON_TEMPLATE_CACHE.get(name);
+  if (cached) return cached;
+
+  const source = ICON_SOURCES[name];
+  const parsed = new DOMParser().parseFromString(source, "image/svg+xml");
+  const root = parsed.documentElement;
+  if (!root || root.localName !== "svg") {
+    throw new Error("Invalid Markdown Mint toolbar icon: " + name);
+  }
+
+  const template = document.importNode(root, true) as unknown as SVGSVGElement;
+  replaceFixedColors(template);
+  removeFormattingWhitespace(template);
+  ICON_TEMPLATE_CACHE.set(name, template);
+  return template;
+}
+
 /**
  * Build a trusted repository icon as an inline SVG.
  *
@@ -129,22 +148,13 @@ export function createToolbarIcon(
   name: ToolbarIconName,
   options: ToolbarIconOptions = {},
 ): SVGSVGElement {
-  const source = ICON_SOURCES[name];
-  const parsed = new DOMParser().parseFromString(source, "image/svg+xml");
-  const root = parsed.documentElement;
-  if (!root || root.localName !== "svg") {
-    throw new Error("Invalid Markdown Mint toolbar icon: " + name);
-  }
-
-  const svg = document.importNode(root, true) as unknown as SVGSVGElement;
-  svg.classList.add(options.className ?? "mm-toolbar-icon");
+  const svg = getToolbarIconTemplate(name).cloneNode(true) as SVGSVGElement;
+  svg.setAttribute("class", options.className ?? "mm-toolbar-icon");
   svg.dataset.icon = name;
   svg.setAttribute("width", String(options.size ?? 20));
   svg.setAttribute("height", String(options.size ?? 20));
   svg.setAttribute("aria-hidden", "true");
   svg.setAttribute("focusable", "false");
-  replaceFixedColors(svg);
-  removeFormattingWhitespace(svg);
   return svg;
 }
 
