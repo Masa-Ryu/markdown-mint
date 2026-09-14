@@ -1103,7 +1103,7 @@ zoom, font loading, and operating-system IME candidate UI remain manual checks.
   table mappings, theme-color normalization, clone independence, and size
   isolation.
 
-## 0.0.50 table clipboard text paste
+## 0.0.49 table clipboard text paste
 
 `handlePaste()` classifies the clipboard payload before entering the table
 matrix replacement path. An ordinary text paste from a `TextSelection` inside

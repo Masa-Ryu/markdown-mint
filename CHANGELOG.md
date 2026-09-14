@@ -10,6 +10,8 @@
   renders, avoiding repeated DOMParser work without sharing DOM nodes or
   leaking per-call class, size, or accessibility attributes.
 
+## 0.0.49
+
 - Delegate ordinary text pasted into a table cell from a `TextSelection` to
   ProseMirror's standard paste pipeline, preserving the surrounding text and
   replacing only the selected range. Keep rectangular TSV, HTML table,
