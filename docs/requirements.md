@@ -1103,6 +1103,24 @@ zoom, font loading, and operating-system IME candidate UI remain manual checks.
   table mappings, theme-color normalization, clone independence, and size
   isolation.
 
+## 0.0.49 table clipboard text paste
+
+`handlePaste()` classifies the clipboard payload before entering the table
+matrix replacement path. An ordinary text paste from a `TextSelection` inside
+a cell now returns `false`, so ProseMirror inserts at the caret or replaces
+only the selected text. A `CellSelection` retains its whole-cell 1×1 fallback;
+internal Markdown Mint table data, an HTML `<table>`, and recognized TSV still
+use matrix replacement and table expansion. The generic `tableContext()`
+meaning remains unchanged for navigation and toolbar state.
+
+The focused webview regression covers caret insertion, partial text selection,
+TSV expansion, and CellSelection replacement. The final unit suite passed 742
+tests across 34 files; the browser fixture suite passed all five required
+fixtures on Rich, dedicated Preview, and native-preview surfaces; and the
+installed VS Code Extension Development Host exited successfully. Actual
+Ctrl/Cmd clipboard gestures and operating-system IME behavior remain manual
+checks rather than claims from the synthetic clipboard tests.
+
 ## Current Arrow navigation invariant
 
 Plain collapsed ArrowLeft/Right/Up/Down navigation has one actual-target graph.

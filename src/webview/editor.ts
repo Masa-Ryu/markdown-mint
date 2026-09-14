@@ -9361,20 +9361,29 @@ export class MarkdownEditorApp {
     }
     const context = tableContext(view.state.selection);
     if (!context) return false;
-    if (this.profile === "commonmark") {
-      this.setNotice("Table paste is unavailable in CommonMark.");
-      event.preventDefault();
-      return true;
-    }
     const html = event.clipboardData.getData("text/html");
     const text = event.clipboardData.getData("text/plain");
     const internal = parseInternalMatrix(
       event.clipboardData.getData(TABLE_CLIPBOARD_MIME),
     );
+    const htmlMatrix = parseClipboardHtml(html);
+    const tsvMatrix = parseTsv(text);
+    const isCellSelection = view.state.selection instanceof CellSelection;
+    // Plain text in an ordinary text selection must continue through
+    // ProseMirror's native paste pipeline. Only table-shaped clipboard data
+    // (or a CellSelection, which has historically accepted a 1x1 fallback)
+    // belongs to the table replacement path.
+    if (!isCellSelection && !internal && !htmlMatrix && !tsvMatrix)
+      return false;
+    if (this.profile === "commonmark") {
+      this.setNotice("Table paste is unavailable in CommonMark.");
+      event.preventDefault();
+      return true;
+    }
     const matrix =
       internal ??
-      parseClipboardHtml(html) ??
-      parseTsv(text) ??
+      htmlMatrix ??
+      tsvMatrix ??
       (text ? { values: [[text]], rows: 1, columns: 1 } : null);
     if (!matrix) return false;
     const selectedRows = context.rect.bottom - context.rect.top;

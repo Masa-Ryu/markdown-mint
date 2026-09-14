@@ -10,6 +10,11 @@
   renders, avoiding repeated DOMParser work without sharing DOM nodes or
   leaking per-call class, size, or accessibility attributes.
 
+- Delegate ordinary text pasted into a table cell from a `TextSelection` to
+  ProseMirror's standard paste pipeline, preserving the surrounding text and
+  replacing only the selected range. Keep rectangular TSV, HTML table,
+  Markdown Mint internal clipboard, and `CellSelection` table paste behavior.
+
 ## 0.0.48
 
 - Prevent Insert popup items from showing simultaneous keyboard-focus and
