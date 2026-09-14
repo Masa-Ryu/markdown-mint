@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.0.49
+## 0.0.50
 
 - Move every contextual table-toolbar icon to the shared SVG asset pipeline,
   preserving the existing groups, labels, commands, accessibility state, and

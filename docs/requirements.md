@@ -1085,7 +1085,7 @@ zoom, font loading, and operating-system IME candidate UI remain manual checks.
   rules. The native operating-system pointer/IME visual behavior remains a
   manual check.
 
-## 0.0.49 table toolbar SVG assets
+## 0.0.50 table toolbar SVG assets
 
 - The contextual table toolbar uses the shared `ToolbarIconName` and
   `appendToolbarIcon()` path for all row, column, alignment, numbering, and
@@ -1103,7 +1103,7 @@ zoom, font loading, and operating-system IME candidate UI remain manual checks.
   table mappings, theme-color normalization, clone independence, and size
   isolation.
 
-## 0.0.49 table clipboard text paste
+## 0.0.50 table clipboard text paste
 
 `handlePaste()` classifies the clipboard payload before entering the table
 matrix replacement path. An ordinary text paste from a `TextSelection` inside
