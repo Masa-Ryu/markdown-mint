@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.0.49
+
+- Delegate ordinary text pasted into a table cell from a `TextSelection` to
+  ProseMirror's standard paste pipeline, preserving the surrounding text and
+  replacing only the selected range. Keep rectangular TSV, HTML table,
+  Markdown Mint internal clipboard, and `CellSelection` table paste behavior.
+
 ## 0.0.48
 
 - Prevent Insert popup items from showing simultaneous keyboard-focus and

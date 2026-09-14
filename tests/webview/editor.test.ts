@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { NodeSelection, TextSelection } from "prosemirror-state";
+import { CellSelection } from "prosemirror-tables";
 import {
   parseMarkdown,
   renderMarkdown,
@@ -44,6 +45,39 @@ function isEditMessage(
 
 function lastEditMarkdown(messages: unknown[]): string {
   return messages.filter(isEditMessage).at(-1)?.markdown ?? "";
+}
+
+function dispatchPaste(
+  app: ReturnType<typeof makeApp>["app"],
+  data: Record<string, string>,
+): Event {
+  const event = new Event("paste", { bubbles: true, cancelable: true });
+  Object.defineProperty(event, "clipboardData", {
+    value: {
+      getData: (kind: string) => data[kind] ?? "",
+      setData: () => undefined,
+    },
+  });
+  app.view.dom.dispatchEvent(event);
+  return event;
+}
+
+function selectTableCellText(
+  app: ReturnType<typeof makeApp>["app"],
+  cell: Element,
+  from: number,
+  to = from,
+): void {
+  const cellPos = app.view.posAtDOM(cell, 0);
+  app.view.dispatch(
+    app.view.state.tr.setSelection(
+      TextSelection.create(
+        app.view.state.doc,
+        cellPos + 1 + from,
+        cellPos + 1 + to,
+      ),
+    ),
+  );
 }
 
 function openImageDialog(root: HTMLElement): HTMLDialogElement {
@@ -2367,6 +2401,34 @@ describe("sync safety", () => {
 });
 
 describe("table clipboard integration", () => {
+  it("delegates plain text paste at a cell cursor to ProseMirror", () => {
+    const markdown = "| Header |\n| --- |\n| abcdef |";
+    const { app, root, messages } = makeApp(markdown);
+    const bodyCell = root.querySelector<HTMLElement>("tbody td")!;
+    selectTableCellText(app, bodyCell, 3);
+
+    const event = dispatchPaste(app, { "text/plain": "XYZ" });
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(bodyCell.textContent).toBe("abcXYZdef");
+    expect(lastEditMarkdown(messages)).toContain("abcXYZdef");
+    app.destroy();
+  });
+
+  it("delegates plain text paste over a cell TextSelection to ProseMirror", () => {
+    const markdown = "| Header |\n| --- |\n| abcdef |";
+    const { app, root, messages } = makeApp(markdown);
+    const bodyCell = root.querySelector<HTMLElement>("tbody td")!;
+    selectTableCellText(app, bodyCell, 2, 4);
+
+    const event = dispatchPaste(app, { "text/plain": "XYZ" });
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(bodyCell.textContent).toBe("abXYZef");
+    expect(lastEditMarkdown(messages)).toContain("abXYZef");
+    app.destroy();
+  });
+
   it("pastes TSV into a clicked body cell and expands in one edit", () => {
     const markdown = "| A | B |\n| --- | --- |\n| 1 | 2 |";
     const { app, root, messages } = makeApp(markdown);
@@ -2377,19 +2439,29 @@ describe("table clipboard integration", () => {
         TextSelection.near(app.view.state.doc.resolve(cellPos + 1)),
       ),
     );
-    const event = new Event("paste", { bubbles: true, cancelable: true });
-    Object.defineProperty(event, "clipboardData", {
-      value: {
-        getData: (kind: string) =>
-          kind === "text/plain" ? "日本語\t\n追加\t値" : "",
-        setData: () => undefined,
-      },
-    });
-    app.view.dom.dispatchEvent(event);
+    dispatchPaste(app, { "text/plain": "日本語\t\n追加\t値" });
     const edit = messages.filter((message: any) => message.type === "edit");
     expect(edit).toHaveLength(1);
     expect((edit[0] as any).markdown).toContain("日本語");
     expect((edit[0] as any).markdown).toContain("追加");
+    app.destroy();
+  });
+
+  it("keeps CellSelection plain-text paste as whole-cell replacement", () => {
+    const markdown = "| Header |\n| --- |\n| abcdef |";
+    const { app, root, messages } = makeApp(markdown);
+    const bodyCell = root.querySelector<HTMLElement>("tbody td")!;
+    const cellPos = app.view.posAtDOM(bodyCell, 0) - 1;
+    app.view.dispatch(
+      app.view.state.tr.setSelection(
+        CellSelection.create(app.view.state.doc, cellPos),
+      ),
+    );
+
+    dispatchPaste(app, { "text/plain": "XYZ" });
+
+    expect(bodyCell.textContent).toBe("XYZ");
+    expect(lastEditMarkdown(messages)).toContain("| XYZ |");
     app.destroy();
   });
 });
