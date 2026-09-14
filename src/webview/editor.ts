@@ -9407,6 +9407,8 @@ export class MarkdownEditorApp {
       this.materializeBoundary(view.state.selection.head);
       return false;
     }
+    const context = tableContext(view.state.selection);
+    if (!context) return false;
     const html = event.clipboardData.getData("text/html");
     const text = event.clipboardData.getData("text/plain");
     const internal = parseInternalMatrix(
@@ -9421,8 +9423,6 @@ export class MarkdownEditorApp {
     // belongs to the table replacement path.
     if (!isCellSelection && !internal && !htmlMatrix && !tsvMatrix)
       return false;
-    const context = tableContext(view.state.selection);
-    if (!context) return false;
     if (this.profile === "commonmark") {
       this.setNotice("Table paste is unavailable in CommonMark.");
       event.preventDefault();
