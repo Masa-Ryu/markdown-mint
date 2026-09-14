@@ -55,6 +55,8 @@ export function classifyLinkNavigation(
     return { kind: "invalid", reason: "too-large" };
   if (hasControlCharacter(href))
     return { kind: "invalid", reason: "control-character" };
+  if (hasMalformedPercentEscape(href))
+    return { kind: "invalid", reason: "malformed" };
 
   const scheme = href.match(LINK_SCHEME_PATTERN)?.[1]?.toLowerCase();
   if (scheme) {
@@ -87,7 +89,12 @@ export function classifyLinkNavigation(
   if (!base) return { kind: "invalid", reason: "workspace-required" };
 
   try {
-    const pathSegments = reference.path.split("/").filter(Boolean);
+    // Markdown stores URI-encoded destinations, while Uri.joinPath expects
+    // decoded path fragments. Decode only after splitting the raw query and
+    // fragment so encoded filename characters such as `%23` and `%3F` stay in
+    // the path instead of becoming URI delimiters.
+    const decodedPath = decodeURIComponent(reference.path);
+    const pathSegments = decodedPath.split("/").filter(Boolean);
     if (pathSegments.length === 0)
       return { kind: "invalid", reason: "path-required" };
     const uri = vscode.Uri.joinPath(base, ...pathSegments).with({
@@ -113,4 +120,15 @@ function hasControlCharacter(value: string): boolean {
     if (code <= 0x1f || code === 0x7f) return true;
   }
   return false;
+}
+
+function hasMalformedPercentEscape(value: string): boolean {
+  try {
+    // This validates percent escapes and UTF-8 sequences without changing the
+    // href used for external navigation.
+    decodeURIComponent(value);
+    return false;
+  } catch {
+    return true;
+  }
 }

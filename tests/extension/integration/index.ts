@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
-import { readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import * as path from "node:path";
 import * as vscode from "vscode";
+import { classifyLinkNavigation } from "../../../src/extension/linkNavigation";
 
 const VIEW_TYPE = "markdownMint.editor";
 const TEST_FILE = process.env.MARKDOWN_MINT_TEST_FILE;
@@ -31,6 +32,7 @@ export async function run(): Promise<void> {
   const api = await extension.activate();
   assert.equal(typeof api.extendMarkdownIt, "function");
   assert.equal(typeof api.renderWithNativeMarkdown, "function");
+  await runLinkUriAcceptance(filePath);
   await runRequiredMarkdownFixtureAcceptance(api);
 
   const commands = await vscode.commands.getCommands(true);
@@ -389,6 +391,64 @@ export async function run(): Promise<void> {
     vscode.ConfigurationTarget.Workspace,
   );
   await vscode.commands.executeCommand("workbench.action.closeAllEditors");
+}
+
+async function runLinkUriAcceptance(filePath: string): Promise<void> {
+  const documentPath = path.join(path.dirname(filePath), "docs", "manual.md");
+  await mkdir(path.dirname(documentPath), { recursive: true });
+  await writeFile(documentPath, "# Link URI acceptance\n");
+
+  const documentUri = vscode.Uri.file(documentPath);
+  const workspaceFolder = vscode.workspace.getWorkspaceFolder(documentUri);
+  assert.ok(workspaceFolder, "the link document is inside the test workspace");
+
+  const localCases = [
+    ["./hoge%20manual.pdf", "hoge manual.pdf"],
+    ["../docs/design%20spec.pdf", "design spec.pdf"],
+    ["./c%23-guide.md", "c#-guide.md"],
+    ["./question%3Fguide.md", "question?guide.md"],
+  ] as const;
+  for (const [href, filename] of localCases) {
+    const expectedPath = path.join(path.dirname(documentPath), filename);
+    await writeFile(expectedPath, "link target\n");
+    const target = classifyLinkNavigation(href, documentUri, workspaceFolder);
+    assert.equal(target.kind, "internal", href);
+    if (target.kind !== "internal") continue;
+    assert.equal(target.uri.scheme, documentUri.scheme, href);
+    assert.equal(target.uri.authority, documentUri.authority, href);
+    assert.equal(target.uri.fsPath, expectedPath, href);
+    await vscode.workspace.fs.stat(target.uri);
+  }
+
+  const malformed = classifyLinkNavigation(
+    "./broken%2",
+    documentUri,
+    workspaceFolder,
+  );
+  assert.deepEqual(malformed, {
+    kind: "invalid",
+    reason: "malformed",
+  });
+
+  const remoteDocument = vscode.Uri.parse(
+    "vscode-remote://ssh-remote+dev/workspace/docs/manual.md",
+  );
+  const remoteWorkspace = {
+    uri: vscode.Uri.parse("vscode-remote://ssh-remote+dev/workspace"),
+    name: "remote",
+    index: 0,
+  } satisfies vscode.WorkspaceFolder;
+  const remoteTarget = classifyLinkNavigation(
+    "./design%20spec.pdf",
+    remoteDocument,
+    remoteWorkspace,
+  );
+  assert.equal(remoteTarget.kind, "internal");
+  if (remoteTarget.kind === "internal") {
+    assert.equal(remoteTarget.uri.scheme, "vscode-remote");
+    assert.equal(remoteTarget.uri.authority, "ssh-remote+dev");
+    assert.equal(remoteTarget.uri.path, "/workspace/docs/design spec.pdf");
+  }
 }
 
 async function runRequiredMarkdownFixtureAcceptance(api: {

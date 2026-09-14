@@ -32,7 +32,27 @@ const vscode = vi.hoisted(() => {
     public readonly path: string;
     public readonly query: string;
     public readonly fragment: string;
-    private constructor(value: string) {
+    private constructor(
+      value: string,
+      components?: {
+        scheme: string;
+        authority: string;
+        path: string;
+        query: string;
+        fragment: string;
+      },
+    ) {
+      if (components) {
+        this.scheme = components.scheme;
+        this.authority = components.authority;
+        this.path = normalizePath(
+          components.path || (components.scheme === "file" ? "/" : ""),
+        );
+        this.query = components.query;
+        this.fragment = components.fragment;
+        this.fsPath = this.path;
+        return;
+      }
       const schemeMatch = value.match(/^([a-z][a-z0-9+.-]*):/i);
       this.scheme = schemeMatch?.[1] ?? "file";
       const rest = schemeMatch ? value.slice(schemeMatch[0].length) : value;
@@ -77,14 +97,7 @@ const vscode = vi.hoisted(() => {
       query: string,
       fragment: string,
     ): Uri {
-      const authorityPart = authority ? `//${authority}` : "";
-      const pathPart =
-        authorityPart && !path.startsWith("/") ? `/${path}` : path;
-      return new Uri(
-        `${scheme}:${
-          scheme === "file" && !authorityPart ? "//" : authorityPart
-        }${pathPart}${query ? `?${query}` : ""}${fragment ? `#${fragment}` : ""}`,
-      );
+      return new Uri("", { scheme, authority, path, query, fragment });
     }
     public with(options: {
       scheme?: string;
@@ -267,6 +280,10 @@ const vscode = vi.hoisted(() => {
   }> = [];
   const existingFiles = new Set([
     "/workspace/docs/guide.md",
+    "/workspace/docs/hoge manual.pdf",
+    "/workspace/docs/design spec.pdf",
+    "/workspace/docs/c#-guide.md",
+    "/workspace/docs/question?guide.md",
     "/workspace/README.md",
     "/workspace/root.md",
     "/workspace/second/root.md",
@@ -776,6 +793,10 @@ describe("MarkdownMintEditorProvider", () => {
 
   it.each([
     ["./guide.md", "/workspace/docs/guide.md"],
+    ["./hoge%20manual.pdf", "/workspace/docs/hoge manual.pdf"],
+    ["../docs/design%20spec.pdf", "/workspace/docs/design spec.pdf"],
+    ["./c%23-guide.md", "/workspace/docs/c#-guide.md"],
+    ["./question%3Fguide.md", "/workspace/docs/question?guide.md"],
     ["../README.md", "/workspace/README.md"],
     ["/root.md", "/workspace/root.md"],
   ])(
@@ -887,7 +908,7 @@ describe("MarkdownMintEditorProvider", () => {
     const { classifyLinkNavigation } =
       await import("../../src/extension/linkNavigation");
     const target = classifyLinkNavigation(
-      "./guide.md",
+      "./design%20spec.pdf",
       documentUri as never,
       workspaceFolder as never,
     );
@@ -897,9 +918,37 @@ describe("MarkdownMintEditorProvider", () => {
       uri: {
         scheme: "vscode-remote",
         authority: "ssh-remote+dev",
-        path: "/workspace/docs/guide.md",
+        path: "/workspace/docs/design spec.pdf",
       },
     });
+  });
+
+  it("rejects malformed percent escapes before opening a local link", async () => {
+    vscode.__state.reset();
+    const provider = new MarkdownMintEditorProvider(context() as never);
+    const document = vscode.__state.document;
+    await provider.resolveCustomTextEditor(
+      document as never,
+      vscode.__state.panel as never,
+      {} as never,
+    );
+    vscode.__state.panel.webview.receive({ protocolVersion: 1, type: "ready" });
+    vscode.__state.panel.webview.receive({
+      protocolVersion: 1,
+      type: "open-link",
+      href: "./broken%2",
+    });
+    await flush();
+
+    expect(vscode.__state.commandCalls).not.toContainEqual(
+      expect.objectContaining({ command: "vscode.open" }),
+    );
+    expect(vscode.__state.openExternalCalls).toHaveLength(0);
+    expect(vscode.__state.userNotifications.at(-1)).toMatchObject({
+      level: "warning",
+      message: "The link target could not be opened: ./broken%2",
+    });
+    provider.dispose();
   });
 
   it("opens a separate file and ignores its fragment", async () => {
@@ -915,7 +964,7 @@ describe("MarkdownMintEditorProvider", () => {
     vscode.__state.panel.webview.receive({
       protocolVersion: 1,
       type: "open-link",
-      href: "./guide.md#missing-heading",
+      href: "./guide.md?mode=read#missing-heading",
     });
     await flush();
 
@@ -924,6 +973,7 @@ describe("MarkdownMintEditorProvider", () => {
       .find((call: { command: string }) => call.command === "vscode.open");
     expect(openCall?.args[0]).toMatchObject({
       fsPath: "/workspace/docs/guide.md",
+      query: "mode=read",
       fragment: "",
     });
     expect(vscode.__state.userNotifications).toHaveLength(0);

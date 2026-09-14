@@ -106,9 +106,12 @@ External `http`, `https`, `mailto`, and `tel` destinations are sent as the raw
 DOM `href` to the Extension Host and opened with `vscode.env.openExternal`.
 Relative paths are resolved with `vscode.Uri` from the current document URI;
 root-relative paths use the document's workspace folder and never fall back to
-the filesystem root. Existing targets are opened with `vscode.open`, preserving
-VS Code's normal editor association. A missing target produces a concise
-notification only when the user invokes the link.
+the filesystem root. Percent-encoded path components are decoded before they
+are passed to `vscode.Uri.joinPath`; raw query and fragment delimiters retain
+their existing split behavior, and malformed percent escapes are rejected.
+Existing targets are opened with `vscode.open`, preserving VS Code's normal
+editor association. A missing target produces a concise notification only when
+the user invokes the link.
 
 Fragment-only links use the existing `id` attributes inside the current Rich
 Editor DOM, including generated heading, TOC, and footnote targets. They do not
