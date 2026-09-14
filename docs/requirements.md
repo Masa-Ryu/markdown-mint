@@ -1085,7 +1085,7 @@ zoom, font loading, and operating-system IME candidate UI remain manual checks.
   rules. The native operating-system pointer/IME visual behavior remains a
   manual check.
 
-## 0.0.53 spreadsheet table paste
+## 0.1.0 spreadsheet table paste
 
 - `tableClipboard.ts` owns the bounded matrix parser/validator, clipboard
   priority detection, text-only external HTML extraction, internal rich-cell
