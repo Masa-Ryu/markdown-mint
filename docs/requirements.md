@@ -73,7 +73,7 @@ The focused browser checks were complete in that build. Native integration was
 exercised separately there; native VS Code visual geometry is kept distinct
 from the browser evidence.
 
-## Mermaid editor modal (0.0.53)
+## Mermaid editor modal (0.1.0)
 
 Mermaid Insert and Edit dialogs use a large, viewport-bounded layout with the
 source editor occupying the flexible space between the title/status header and

@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.0.53
+## 0.1.0
 
 - Improve Mermaid Insert and Edit dialogs with a large, viewport-bounded,
   editor-first layout and accessible source labeling.
@@ -10,6 +10,9 @@
 - Block empty, checking, invalid, stale, and out-of-date Mermaid submissions,
   including Ctrl/Cmd+Enter, and protect asynchronous validation from races and
   dialog closure.
+
+## 0.0.53
+
 - Improve Marketplace metadata and README searchability for visual WYSIWYG
   Markdown editing, tables, GitHub/GitLab Markdown, Mermaid, math, and source
   editing.
