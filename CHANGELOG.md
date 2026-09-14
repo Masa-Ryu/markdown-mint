@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.0.52
+
+- Update the Link dialog destination field to accept relative paths, root paths,
+  fragments, HTTPS URLs, and mailto URLs without converting or normalizing the
+  Markdown href. Preserve the existing safe URL rendering controls for unsafe
+  schemes.
+
 ## 0.0.50
 
 - Move every contextual table-toolbar icon to the shared SVG asset pipeline,

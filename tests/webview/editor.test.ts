@@ -93,6 +93,19 @@ function openImageDialog(root: HTMLElement): HTMLDialogElement {
   return dialog;
 }
 
+function openLinkDialog(root: HTMLElement): HTMLDialogElement {
+  const button = root.querySelector<HTMLButtonElement>(
+    '[data-testid="toolbar-link"]',
+  );
+  if (!button) throw new Error("link toolbar button is not rendered");
+  button.click();
+  const dialog = root.querySelector<HTMLDialogElement>(
+    '[aria-labelledby="mm-link-dialog-title"]',
+  );
+  if (!dialog) throw new Error("link dialog is not rendered");
+  return dialog;
+}
+
 async function flush(): Promise<void> {
   await new Promise<void>((resolve) => setTimeout(resolve, 0));
   await Promise.resolve();
@@ -1522,6 +1535,73 @@ describe("rich editor rendering", () => {
     expect(lastEditMarkdown(messages)).not.toContain(
       "vscode-webview-resource:",
     );
+    app.destroy();
+  });
+
+  it.each([
+    ["docs/guide.md", "[text](docs/guide.md)"],
+    ["./docs/guide.md", "[text](./docs/guide.md)"],
+    ["../README.md", "[text](../README.md)"],
+    ["/docs/guide.md", "[text](/docs/guide.md)"],
+    ["#section", "[text](#section)"],
+    ["https://example.com", "[text](https://example.com)"],
+    ["mailto:user@example.com", "[text](mailto:user@example.com)"],
+  ])("accepts link destination %s without normalization", (href, expected) => {
+    const source = "text";
+    const { app, root, messages } = makeApp(source);
+    app.view.dispatch(
+      app.view.state.tr.setSelection(
+        TextSelection.create(app.view.state.doc, 1, 1 + source.length),
+      ),
+    );
+
+    const dialog = openLinkDialog(root);
+    const [linkInput, textInput] = Array.from(
+      dialog.querySelectorAll<HTMLInputElement>("input"),
+    );
+    expect(linkInput?.type).toBe("text");
+    expect(linkInput?.getAttribute("type")).toBe("text");
+    expect(linkInput?.placeholder).toBe("./docs/example.md");
+    expect(linkInput?.spellcheck).toBe(false);
+    expect(linkInput?.autocapitalize).toBe("off");
+    expect(linkInput?.inputMode).toBe("url");
+    expect(dialog.textContent).toContain("Link path or URL");
+
+    linkInput!.value = href;
+    expect(linkInput!.checkValidity()).toBe(true);
+    textInput!.value = "text";
+    dialog.querySelector<HTMLButtonElement>('button[type="submit"]')!.click();
+
+    expect(
+      app.view.state.doc.firstChild?.firstChild?.marks[0]?.attrs.href,
+    ).toBe(href);
+    expect(lastEditMarkdown(messages)).toBe(expected);
+    app.destroy();
+  });
+
+  it("loads and reapplies an existing relative link without changing its href", () => {
+    const source = "[text](../README.md)";
+    const { app, root } = makeApp(source);
+    app.view.dispatch(
+      app.view.state.tr.setSelection(
+        TextSelection.create(app.view.state.doc, 1, 1 + "text".length),
+      ),
+    );
+
+    const dialog = openLinkDialog(root);
+    const [linkInput] = Array.from(
+      dialog.querySelectorAll<HTMLInputElement>("input"),
+    );
+    expect(linkInput?.value).toBe("../README.md");
+    expect(linkInput?.checkValidity()).toBe(true);
+    dialog.querySelector<HTMLButtonElement>('button[type="submit"]')!.click();
+
+    expect(
+      app.view.state.doc.firstChild?.firstChild?.marks[0]?.attrs.href,
+    ).toBe("../README.md");
+    expect(
+      serializeMarkdown(app.view.state.doc, parseMarkdown(source, "github")),
+    ).toBe(source);
     app.destroy();
   });
 

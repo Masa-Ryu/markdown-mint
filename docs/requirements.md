@@ -1085,6 +1085,18 @@ zoom, font loading, and operating-system IME candidate UI remain manual checks.
   rules. The native operating-system pointer/IME visual behavior remains a
   manual check.
 
+## 0.0.52 Link dialog relative destinations
+
+- The Link dialog uses a plain text destination field with URL-oriented input
+  hints, so relative paths such as `./docs/guide.md`, `../README.md`, and
+  `/docs/guide.md`, fragments, HTTPS URLs, and mailto URLs can be submitted.
+- Link dialog edits retain the entered destination in the ProseMirror link mark
+  and Markdown serialization. Existing relative links are loaded back into the
+  dialog unchanged, while the Core `safeUrl` rendering guard remains intact.
+- Webview regression coverage exercises Apply for every supported destination,
+  existing relative-link editing, and both platform primary-modifier Enter
+  shortcuts.
+
 ## 0.0.50 table toolbar SVG assets
 
 - The contextual table toolbar uses the shared `ToolbarIconName` and
