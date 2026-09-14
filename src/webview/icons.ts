@@ -12,6 +12,17 @@ import checklistAsset from "../../assets/checklist.svg?raw";
 import blockquoteAsset from "../../assets/blockquote.svg?raw";
 import codeBlockAsset from "../../assets/code-block.svg?raw";
 import tableAsset from "../../assets/table.svg?raw";
+import tableRowAboveAsset from "../../assets/table-row-above.svg?raw";
+import tableRowBelowAsset from "../../assets/table-row-below.svg?raw";
+import tableRowDeleteAsset from "../../assets/table-row-delete.svg?raw";
+import tableColumnLeftAsset from "../../assets/table-column-left.svg?raw";
+import tableColumnRightAsset from "../../assets/table-column-right.svg?raw";
+import tableColumnDeleteAsset from "../../assets/table-column-delete.svg?raw";
+import tableAlignLeftAsset from "../../assets/table-align-left.svg?raw";
+import tableAlignCenterAsset from "../../assets/table-align-center.svg?raw";
+import tableAlignRightAsset from "../../assets/table-align-right.svg?raw";
+import tableNumberingAsset from "../../assets/table-numbering.svg?raw";
+import tableDeleteAsset from "../../assets/table-delete.svg?raw";
 import dividerAsset from "../../assets/divider.svg?raw";
 import formatAsset from "../../assets/format.svg?raw";
 import undoAsset from "../../assets/undo.svg?raw";
@@ -30,6 +41,17 @@ export type ToolbarIconName =
   | "blockquote"
   | "code-block"
   | "table"
+  | "table-row-above"
+  | "table-row-below"
+  | "table-row-delete"
+  | "table-column-left"
+  | "table-column-right"
+  | "table-column-delete"
+  | "table-align-left"
+  | "table-align-center"
+  | "table-align-right"
+  | "table-numbering"
+  | "table-delete"
   | "divider"
   | "format"
   | "undo"
@@ -50,6 +72,17 @@ const ICON_SOURCES: Readonly<Record<ToolbarIconName, string>> = {
   blockquote: blockquoteAsset,
   "code-block": codeBlockAsset,
   table: tableAsset,
+  "table-row-above": tableRowAboveAsset,
+  "table-row-below": tableRowBelowAsset,
+  "table-row-delete": tableRowDeleteAsset,
+  "table-column-left": tableColumnLeftAsset,
+  "table-column-right": tableColumnRightAsset,
+  "table-column-delete": tableColumnDeleteAsset,
+  "table-align-left": tableAlignLeftAsset,
+  "table-align-center": tableAlignCenterAsset,
+  "table-align-right": tableAlignRightAsset,
+  "table-numbering": tableNumberingAsset,
+  "table-delete": tableDeleteAsset,
   divider: dividerAsset,
   format: formatAsset,
   undo: undoAsset,
