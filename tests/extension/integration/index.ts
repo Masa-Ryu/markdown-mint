@@ -406,7 +406,6 @@ async function runLinkUriAcceptance(filePath: string): Promise<void> {
     ["./hoge%20manual.pdf", "hoge manual.pdf"],
     ["../docs/design%20spec.pdf", "design spec.pdf"],
     ["./c%23-guide.md", "c#-guide.md"],
-    ["./question%3Fguide.md", "question?guide.md"],
   ] as const;
   for (const [href, filename] of localCases) {
     const expectedPath = path.join(path.dirname(documentPath), filename);
@@ -418,6 +417,21 @@ async function runLinkUriAcceptance(filePath: string): Promise<void> {
     assert.equal(target.uri.authority, documentUri.authority, href);
     assert.equal(target.uri.fsPath, expectedPath, href);
     await vscode.workspace.fs.stat(target.uri);
+  }
+
+  const questionTarget = classifyLinkNavigation(
+    "./question%3Fguide.md",
+    documentUri,
+    workspaceFolder,
+  );
+  assert.equal(questionTarget.kind, "internal");
+  if (questionTarget.kind === "internal") {
+    const expectedQuestionUri = vscode.Uri.file(
+      path.join(path.dirname(documentPath), "question?guide.md"),
+    );
+    assert.equal(questionTarget.uri.path, expectedQuestionUri.path);
+    assert.equal(questionTarget.uri.query, "");
+    assert.equal(questionTarget.uri.fragment, "");
   }
 
   const malformed = classifyLinkNavigation(
