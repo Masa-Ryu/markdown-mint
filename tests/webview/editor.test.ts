@@ -62,6 +62,43 @@ function dispatchPaste(
   return event;
 }
 
+function imageFile(
+  name: string,
+  type = "image/png",
+  bytes = new Uint8Array([0]),
+  arrayBuffer: () => Promise<ArrayBuffer> = async () => bytes.buffer,
+): File {
+  return { name, type, size: bytes.byteLength, arrayBuffer } as File;
+}
+
+function dispatchImageDrop(
+  app: ReturnType<typeof makeApp>["app"],
+  files: readonly File[],
+  position: number,
+): DragEvent {
+  const event = new Event("drop", {
+    bubbles: true,
+    cancelable: true,
+  }) as DragEvent;
+  Object.defineProperty(event, "dataTransfer", {
+    value: { files, getData: () => "" },
+  });
+  Object.defineProperty(event, "clientX", { value: 40 });
+  Object.defineProperty(event, "clientY", { value: 20 });
+  const originalPosAtCoords = app.view.posAtCoords;
+  app.view.posAtCoords = (() => ({
+    pos: position,
+    inside: -1,
+  })) as typeof app.view.posAtCoords;
+  app.view.dom.dispatchEvent(event);
+  app.view.posAtCoords = originalPosAtCoords;
+  return event;
+}
+
+function receiveHostMessage(data: unknown): void {
+  window.dispatchEvent(new MessageEvent("message", { data }));
+}
+
 function selectTableCellText(
   app: ReturnType<typeof makeApp>["app"],
   cell: Element,
@@ -1663,6 +1700,174 @@ describe("rich editor rendering", () => {
       app.destroy();
     },
   );
+
+  it("intercepts PNG drops and waits for the host result before inserting", async () => {
+    const { app, root, messages } = makeApp("before after");
+    const event = dispatchImageDrop(app, [imageFile("architecture.png")], 7);
+
+    expect(event.defaultPrevented).toBe(true);
+    await flush();
+    const request = messages.find(
+      (message: any) => message.type === "image-import",
+    ) as any;
+    expect(request).toMatchObject({
+      type: "image-import",
+      fileName: "architecture.png",
+      mimeType: "image/png",
+      base64: "AA==",
+    });
+    expect(root.querySelector(".mm-image-importing")).not.toBeNull();
+    expect(messages.some((message: any) => message.type === "edit")).toBe(
+      false,
+    );
+
+    receiveHostMessage({
+      protocolVersion: PROTOCOL_VERSION,
+      type: "image-import-result",
+      requestId: request.requestId,
+      success: true,
+      relativePath: "./images/architecture.png",
+    });
+
+    expect(root.querySelector(".mm-image-importing")).toBeNull();
+    expect(lastEditMarkdown(messages)).toBe(
+      "before![architecture](./images/architecture.png) after",
+    );
+    const image = root.querySelector<HTMLImageElement>(".ProseMirror img");
+    expect(image).not.toBeNull();
+    expect(
+      app.view.state.doc.nodeAt(app.view.posAtDOM(image!, 0))?.attrs.src,
+    ).toBe("./images/architecture.png");
+    app.destroy();
+  });
+
+  it("lets non-image drops fall through to ProseMirror", () => {
+    const { app, messages } = makeApp("before after");
+    const event = dispatchImageDrop(
+      app,
+      [imageFile("notes.txt", "text/plain")],
+      7,
+    );
+
+    expect(event.defaultPrevented).toBe(false);
+    expect(
+      messages.some((message: any) => message.type === "image-import"),
+    ).toBe(false);
+    app.destroy();
+  });
+
+  it("maps the pending drop position through an edit made during import", async () => {
+    let releaseRead!: (value: ArrayBuffer) => void;
+    const file = imageFile(
+      "architecture.png",
+      "image/png",
+      new Uint8Array([0]),
+      () =>
+        new Promise<ArrayBuffer>((resolve) => {
+          releaseRead = resolve;
+        }),
+    );
+    const { app, messages } = makeApp("before after");
+    dispatchImageDrop(app, [file], 7);
+    await flush();
+    app.view.dispatch(app.view.state.tr.insertText("prefix ", 1));
+    const textEdit = messages.filter(isEditMessage).at(-1) as any;
+    app.receiveDocument({
+      protocolVersion: PROTOCOL_VERSION,
+      type: "document",
+      markdown: textEdit.markdown,
+      version: 2,
+      profile: "github",
+      operationId: textEdit.operationId,
+      reason: "ack",
+    });
+    releaseRead(new Uint8Array([0]).buffer);
+    await flush();
+    const request = messages.find(
+      (message: any) => message.type === "image-import",
+    ) as any;
+    receiveHostMessage({
+      protocolVersion: PROTOCOL_VERSION,
+      type: "image-import-result",
+      requestId: request.requestId,
+      success: true,
+      relativePath: "./images/architecture.png",
+    });
+
+    expect(lastEditMarkdown(messages)).toBe(
+      "prefix before![architecture](./images/architecture.png) after",
+    );
+    app.destroy();
+  });
+
+  it("keeps multiple image imports in DataTransfer order", async () => {
+    const { app, messages } = makeApp("before after");
+    dispatchImageDrop(app, [imageFile("one.png"), imageFile("two.png")], 7);
+    await flush();
+    const requests = messages.filter(
+      (message: any) => message.type === "image-import",
+    ) as any[];
+    expect(requests.map((message) => message.fileName)).toEqual([
+      "one.png",
+      "two.png",
+    ]);
+
+    for (const [index, request] of requests.entries())
+      receiveHostMessage({
+        protocolVersion: PROTOCOL_VERSION,
+        type: "image-import-result",
+        requestId: request.requestId,
+        success: true,
+        relativePath: `./images/${index === 0 ? "one" : "two"}.png`,
+      });
+
+    const firstEdit = messages.filter(isEditMessage)[0] as any;
+    app.receiveDocument({
+      protocolVersion: PROTOCOL_VERSION,
+      type: "document",
+      markdown: firstEdit.markdown,
+      version: 2,
+      profile: "github",
+      operationId: firstEdit.operationId,
+      reason: "ack",
+    });
+
+    expect(lastEditMarkdown(messages)).toBe(
+      "before![one](./images/one.png)![two](./images/two.png) after",
+    );
+    app.destroy();
+  });
+
+  it("reports a failed import without changing or serializing temporary state", async () => {
+    const { app, root, messages } = makeApp("before after");
+    dispatchImageDrop(app, [imageFile("architecture.png")], 7);
+    await flush();
+    const request = messages.find(
+      (message: any) => message.type === "image-import",
+    ) as any;
+    receiveHostMessage({
+      protocolVersion: PROTOCOL_VERSION,
+      type: "image-import-result",
+      requestId: request.requestId,
+      success: false,
+      message: "The dropped image exceeds the 10 MB size limit.",
+    });
+
+    expect(root.querySelector(".mm-image-importing")).toBeNull();
+    expect(messages.some((message: any) => message.type === "edit")).toBe(
+      false,
+    );
+    expect(
+      messages.some(
+        (message: any) =>
+          message.type === "notify" &&
+          message.level === "error" &&
+          message.message.includes("10 MB"),
+      ),
+    ).toBe(true);
+    app.destroy();
+  });
+
   it("resolves relative image URLs for display without changing Markdown attrs", async () => {
     const root = document.createElement("div");
     document.body.append(root);

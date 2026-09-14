@@ -131,6 +131,10 @@ import {
 } from "../core/visualRendering";
 import { isBlankSpacingNode } from "../core";
 import { mergeMarkdownSnapshots } from "../shared/threeWayMerge";
+import {
+  ImageImportController,
+  type ImageImportControllerOptions,
+} from "./imageImport";
 
 export type DocumentProfile = "github" | "gitlab" | "commonmark";
 export type EditorMode = "rich" | "preview" | "source";
@@ -2307,6 +2311,7 @@ export class MarkdownEditorApp {
     string,
     { resolve: (success: boolean) => void; timer?: number }
   >();
+  private readonly imageImport: ImageImportController;
   private previewEnhancer: RenderingEnhancer | undefined;
   /**
    * The last Markdown snapshot produced for the current PM document.
@@ -2526,6 +2531,15 @@ export class MarkdownEditorApp {
     this.core = options.core;
     this.options = { ...options, hostUndo: options.hostUndo ?? true };
     this.schema = options.core.schema;
+    const imageImportOptions: ImageImportControllerOptions = {
+      schema: this.schema,
+      ...(this.vscode
+        ? { postMessage: (message) => this.vscode?.postMessage(message) }
+        : {}),
+      canImport: () => this.canEditBlock(),
+      notify: (message) => this.notifyHost("error", message),
+    };
+    this.imageImport = new ImageImportController(imageImportOptions);
     this.initialized = Boolean(options.initialDocument);
     const initial = options.initialDocument ?? {
       markdown: "",
@@ -2759,6 +2773,8 @@ export class MarkdownEditorApp {
         copy: (view, event) => this.handleCopy(view, event as ClipboardEvent),
         cut: (view, event) => this.handleCut(view, event as ClipboardEvent),
         paste: (view, event) => this.handlePaste(view, event as ClipboardEvent),
+        drop: (view, event) =>
+          this.imageImport.handleDrop(view, event as DragEvent),
       },
     });
     // The initial document came from the host, so it is already the current
@@ -2874,6 +2890,7 @@ export class MarkdownEditorApp {
     this.previewEnhancer?.dispose();
     this.previewEnhancer = undefined;
     this.bodyNavigation?.destroy();
+    this.imageImport.dispose(this.view);
     this.view.destroy();
   }
 
@@ -2918,6 +2935,7 @@ export class MarkdownEditorApp {
       createWritingInputRules(this.schema),
       createBlockBoundaryPlugin(),
       createRenderingPlugin(() => this.profile),
+      this.imageImport.plugin,
       keymap(this.createKeymap()),
       tableEditing(),
       createTableNumberingPlugin(),
@@ -8572,6 +8590,8 @@ export class MarkdownEditorApp {
       this.handleSaveResult(message);
     } else if (message.type === "clipboard-result") {
       this.resolveClipboard(message);
+    } else if (message.type === "image-import-result") {
+      this.imageImport.handleResult(this.view, message);
     } else if (message.type === "error") {
       if (
         this.pendingProfile?.operationId &&
@@ -9090,6 +9110,9 @@ export class MarkdownEditorApp {
       this.profileFeatureError.textContent =
         "The document changed; nothing was updated. Copy your draft before closing this dialog.";
     }
+
+    if (!preserveState || message.mode === "preview")
+      this.imageImport.cancel(this.view);
 
     if (!preserveState) {
       if (this.tableDialogOpen)

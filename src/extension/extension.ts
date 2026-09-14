@@ -6,6 +6,7 @@ import {
   loadFormatterConfig,
   type FormatterConfigResult,
 } from "./formatterConfig";
+import { saveImageImport } from "./imageImport";
 import {
   MARKDOWN_MINT_VIEW_TYPE,
   MarkdownMintCodeLensProvider,
@@ -21,6 +22,7 @@ import {
   type ErrorMessage,
   type ClipboardResultMessage,
   type ClipboardWriteMessage,
+  type ImageImportMessage,
   type FormatRejectedMessage,
   type HostDocumentReason,
   type HostMessage,
@@ -723,6 +725,11 @@ export class MarkdownMintEditorProvider
       case "clipboard-write":
         await this.handleClipboardWrite(session, message);
         return;
+      case "image-import":
+        await this.enqueue(session.state, () =>
+          this.handleImageImport(session, message),
+        );
+        return;
       case "notify":
         this.notifyUser(message);
         return;
@@ -843,6 +850,25 @@ export class MarkdownMintEditorProvider
         ).slice(0, 1_024),
       });
     }
+  }
+
+  private async handleImageImport(
+    session: PanelSession,
+    message: ImageImportMessage,
+  ): Promise<void> {
+    const result = await saveImageImport(session.state.uri, message, {
+      fs: vscode.workspace.fs,
+      joinPath: (base, ...parts) => vscode.Uri.joinPath(base, ...parts),
+    });
+    const response: HostMessage = {
+      protocolVersion: PROTOCOL_VERSION,
+      type: "image-import-result",
+      requestId: message.requestId,
+      ...(result.success
+        ? { success: true, relativePath: result.relativePath }
+        : { success: false, message: result.message.slice(0, 1_024) }),
+    };
+    this.post(session, response);
   }
 
   private notifyUser(message: UserNotificationMessage): void {

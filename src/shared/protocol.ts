@@ -9,6 +9,11 @@ export const MAX_OPERATION_ID_LENGTH = 160;
 export const MAX_RESOURCE_URL_LENGTH = 8_192;
 export const MAX_DOCUMENT_ID_LENGTH = 2_048;
 export const MAX_CLIPBOARD_TEXT_LENGTH = MAX_MARKDOWN_LENGTH;
+export const MAX_IMAGE_IMPORT_BYTES = 10 * 1024 * 1024;
+export const MAX_IMAGE_IMPORT_BASE64_LENGTH =
+  Math.ceil(MAX_IMAGE_IMPORT_BYTES / 3) * 4;
+export const MAX_IMAGE_IMPORT_FILE_NAME_LENGTH = 512;
+export const MAX_IMAGE_IMPORT_MIME_TYPE_LENGTH = 128;
 
 export const MARKDOWN_PROFILES = ["github", "gitlab", "commonmark"] as const;
 export type MarkdownProfile = (typeof MARKDOWN_PROFILES)[number];
@@ -125,6 +130,24 @@ export interface ClipboardResultMessage {
   readonly message?: string;
 }
 
+export interface ImageImportMessage {
+  readonly protocolVersion: typeof PROTOCOL_VERSION;
+  readonly type: "image-import";
+  readonly requestId: string;
+  readonly fileName: string;
+  readonly mimeType: string;
+  readonly base64: string;
+}
+
+export interface ImageImportResultMessage {
+  readonly protocolVersion: typeof PROTOCOL_VERSION;
+  readonly type: "image-import-result";
+  readonly requestId: string;
+  readonly success: boolean;
+  readonly relativePath?: string;
+  readonly message?: string;
+}
+
 export interface ReadyMessage {
   readonly protocolVersion: typeof PROTOCOL_VERSION;
   readonly type: "ready";
@@ -231,6 +254,7 @@ export type WebviewMessage =
   | PreviewRequestMessage
   | RecoverDraftMessage
   | ClipboardWriteMessage
+  | ImageImportMessage
   | UserNotificationMessage;
 
 export type HostMessage =
@@ -241,6 +265,7 @@ export type HostMessage =
   | SaveResultMessage
   | RecoveryOpenedMessage
   | ClipboardResultMessage
+  | ImageImportResultMessage
   | ErrorMessage;
 
 export function isMarkdownProfile(value: unknown): value is MarkdownProfile {
@@ -355,6 +380,19 @@ export function isHostMessage(value: unknown): value is HostMessage {
       typeof value.success === "boolean" &&
       optionalMessage(value.message)
     );
+  }
+  if (value.type === "image-import-result") {
+    if (
+      !isOperationId(value.requestId) ||
+      typeof value.success !== "boolean" ||
+      !optionalMessage(value.message)
+    )
+      return false;
+    if (value.success)
+      return (
+        isRelativeImagePath(value.relativePath) && value.message === undefined
+      );
+    return value.relativePath === undefined;
   }
   if (value.type === "error") {
     return (
@@ -499,6 +537,20 @@ export function parseWebviewMessage(
             text: value.text,
           }
         : undefined;
+    case "image-import":
+      return isOperationId(value.requestId) &&
+        isImageImportFileName(value.fileName) &&
+        isImageImportMimeType(value.mimeType) &&
+        isBase64Payload(value.base64)
+        ? {
+            protocolVersion: PROTOCOL_VERSION,
+            type: "image-import",
+            requestId: value.requestId,
+            fileName: value.fileName,
+            mimeType: value.mimeType,
+            base64: value.base64,
+          }
+        : undefined;
     case "notify":
       return (value.level === "info" ||
         value.level === "warning" ||
@@ -552,6 +604,53 @@ function optionalBoolean(value: unknown): value is boolean | undefined {
 
 function isSafeClipboardText(value: unknown): value is string {
   return typeof value === "string" && value.length <= MAX_CLIPBOARD_TEXT_LENGTH;
+}
+
+function isImageImportFileName(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    value.length <= MAX_IMAGE_IMPORT_FILE_NAME_LENGTH &&
+    !hasControlCharacter(value)
+  );
+}
+
+function isImageImportMimeType(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    value.length <= MAX_IMAGE_IMPORT_MIME_TYPE_LENGTH &&
+    /^image\/[a-z0-9][a-z0-9.+-]*$/i.test(value)
+  );
+}
+
+function isBase64Payload(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    value.length <= MAX_IMAGE_IMPORT_BASE64_LENGTH &&
+    /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(
+      value,
+    )
+  );
+}
+
+function isRelativeImagePath(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    value.length <= MAX_RESOURCE_URL_LENGTH &&
+    /^\.\/images\/[^/\\]+$/.test(value) &&
+    !hasControlCharacter(value)
+  );
+}
+
+function hasControlCharacter(value: string): boolean {
+  for (const character of value) {
+    const code = character.charCodeAt(0);
+    if (code <= 0x1f || (code >= 0x7f && code <= 0x9f)) return true;
+  }
+  return false;
 }
 
 function optionalResourceUrl(value: unknown): value is string | undefined {

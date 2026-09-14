@@ -94,6 +94,38 @@ including Ctrl/Cmd+Enter, require a current successful validation result.
 The renderer continues to use the existing strict security configuration and
 sanitization path.
 
+## Image file drag-and-drop import (0.2.0)
+
+The Rich Editor consumes a drop only when `DataTransfer.files` contains a
+potential image. PNG, JPEG/JPG, GIF, and WebP files are read in the Webview and
+sent as bounded base64 payloads; the Webview never writes to the filesystem.
+The Extension Host validates the MIME type and extension again, decodes the
+payload with the 10 MB limit, creates the Markdown document's sibling `images`
+directory through `workspace.fs`, chooses the first unused basename (then
+`-1`, `-2`, and so on), and returns only a `./images/<name>` source path. SVG,
+arbitrary MIME/extension combinations, unsafe names, oversized payloads, and
+failed writes leave the Markdown document unchanged and use the existing VS
+Code error notification route. Existing non-image ProseMirror drops continue
+through the normal handler.
+
+Each imported file receives an independent request id. Its pending drop
+position is held in a ProseMirror plugin state and widget decoration; every
+transaction maps that position, and the existing `image` node is inserted only
+after the host returns. Pending decorations are not serialized, and the normal
+image insertion transaction is undoable while the saved file is intentionally
+retained on Undo.
+
+Protocol, Extension Host, and Webview regressions cover validation, duplicate
+names, unsafe paths, size and write failures, non-image fall-through, mapped
+positions, multiple-file order, failure cleanup, and temporary-state
+non-serialization. The browser block suite also passed all five required
+fixtures (`common-test.md`, `github-test.md`, `github-test-class-B.md`,
+`gitlab-test.md`, and `gitlab-test-class-B.md`) on Rich, dedicated preview, and
+native-preview surfaces. The installed Extension Development Host could not
+complete this run because VS Code terminated with `SIGABRT`; direct Finder or
+Explorer drag/drop, GIF animation, native host persistence, and operating-system
+IME behavior remain manual checks.
+
 ## Alert inline editing refinement
 
 Alerts keep their existing visual design and raw Markdown representation while

@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.0
+
+- Add local PNG, JPEG/JPG, GIF, and WebP drag-and-drop import to the Rich
+  Editor. Images are saved beside the Markdown document under `images/` with
+  collision-safe names and inserted as portable, URL-safe `./images/...`
+  references using the existing image node and serializer.
+- Keep imports atomic under concurrent same-name drops, validate insertion
+  positions before saving, and track pending positions through ProseMirror
+  transaction mapping until the host responds.
+
 ## 0.1.0
 
 - Improve Mermaid Insert and Edit dialogs with a large, viewport-bounded,

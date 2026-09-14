@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   MAX_CLIPBOARD_TEXT_LENGTH,
+  MAX_IMAGE_IMPORT_BASE64_LENGTH,
   PROTOCOL_VERSION,
   isHostMessage,
   parseWebviewMessage,
@@ -239,6 +240,102 @@ describe("Markdown Mint wire protocol", () => {
         type: "clipboard-result",
         requestId: "copy with spaces",
         success: true,
+      }),
+    ).toBe(false);
+  });
+
+  it("validates image import requests and correlated results", () => {
+    expect(
+      parseWebviewMessage({
+        protocolVersion: PROTOCOL_VERSION,
+        type: "image-import",
+        requestId: "image:1:abc",
+        fileName: "architecture.png",
+        mimeType: "image/png",
+        base64: "AA==",
+      }),
+    ).toEqual({
+      protocolVersion: PROTOCOL_VERSION,
+      type: "image-import",
+      requestId: "image:1:abc",
+      fileName: "architecture.png",
+      mimeType: "image/png",
+      base64: "AA==",
+    });
+    expect(
+      parseWebviewMessage({
+        protocolVersion: PROTOCOL_VERSION,
+        type: "image-import",
+        requestId: "image:1:abc",
+        fileName: "architecture.png",
+        mimeType: "text/plain",
+        base64: "AA==",
+      }),
+    ).toBeUndefined();
+    expect(
+      parseWebviewMessage({
+        protocolVersion: PROTOCOL_VERSION,
+        type: "image-import",
+        requestId: "image:1:abc",
+        fileName: "architecture.png",
+        mimeType: "image/png",
+        base64: "not-base64?",
+      }),
+    ).toBeUndefined();
+    expect(
+      parseWebviewMessage({
+        protocolVersion: PROTOCOL_VERSION,
+        type: "image-import",
+        requestId: "image:1:abc",
+        fileName: "architecture.png",
+        mimeType: "image/png",
+        base64: "A".repeat(MAX_IMAGE_IMPORT_BASE64_LENGTH + 4),
+      }),
+    ).toBeUndefined();
+    expect(
+      parseWebviewMessage({
+        protocolVersion: PROTOCOL_VERSION,
+        type: "image-import",
+        requestId: "image with spaces",
+        fileName: "architecture.png",
+        mimeType: "image/png",
+        base64: "AA==",
+      }),
+    ).toBeUndefined();
+
+    expect(
+      isHostMessage({
+        protocolVersion: PROTOCOL_VERSION,
+        type: "image-import-result",
+        requestId: "image:1:abc",
+        success: true,
+        relativePath: "./images/architecture.png",
+      }),
+    ).toBe(true);
+    expect(
+      isHostMessage({
+        protocolVersion: PROTOCOL_VERSION,
+        type: "image-import-result",
+        requestId: "image:1:abc",
+        success: false,
+        message: "The dropped image exceeds the 10 MB size limit.",
+      }),
+    ).toBe(true);
+    expect(
+      isHostMessage({
+        protocolVersion: PROTOCOL_VERSION,
+        type: "image-import-result",
+        requestId: "image:1:abc",
+        success: true,
+      }),
+    ).toBe(false);
+    expect(
+      isHostMessage({
+        protocolVersion: PROTOCOL_VERSION,
+        type: "image-import-result",
+        requestId: "image:1:abc",
+        success: true,
+        relativePath: "file:///workspace/images/architecture.png",
       }),
     ).toBe(false);
   });
