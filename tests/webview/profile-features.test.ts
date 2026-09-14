@@ -192,6 +192,7 @@ describe("profile feature toolbar", () => {
       ".mm-mermaid-validation-status",
     )!;
     expect(dialog.dataset.profileFeature).toBe("mermaid");
+    expect(dialog.querySelector("h2")?.textContent).toBe("Insert Mermaid");
     expect(
       dialog.querySelector<HTMLElement>(".mm-mermaid-dialog-meta")!.hidden,
     ).toBe(false);
@@ -361,6 +362,14 @@ describe("profile feature toolbar", () => {
       const dialog = root.querySelector<HTMLDialogElement>(
         '[data-feature-dialog="true"]',
       )!;
+      expect(dialog.querySelector("h2")?.textContent).toBe(
+        {
+          alert: "Insert Alert",
+          details: "Insert Details",
+          math: "Insert Math",
+          mermaid: "Insert Mermaid",
+        }[entry.id],
+      );
       expect(dialog.getAttribute("data-profile-feature")).toBe(entry.id);
       entry.configure(dialog);
       if (entry.id === "mermaid") {

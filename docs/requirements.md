@@ -82,6 +82,10 @@ textarea retains its accessible name. The header reports the bundled Mermaid
 runtime version and the current validation state, including a humanized
 diagram type after a successful parse.
 
+The dialog titles are `Insert Mermaid` and `Edit Mermaid`; the shared feature
+labels and the existing Math, Alert, Details, and other feature dialog titles
+remain unchanged.
+
 Validation removes the same NUL characters and Mermaid directives as the
 renderer before calling the bundled Mermaid runtime's `parse()` method. It is
 debounced during typing, rejects empty and over-limit input, and guards

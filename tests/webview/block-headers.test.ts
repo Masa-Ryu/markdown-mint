@@ -417,6 +417,7 @@ describe("block header actions", () => {
         ".mm-profile-feature-dialog[open]",
       )!;
       expect(dialog.dataset.profileFeatureMode).toBe("edit");
+      expect(dialog.querySelector("h2")?.textContent).toBe(`Edit ${label}`);
       dialog
         .querySelector<HTMLButtonElement>("button:not([type='submit'])")!
         .click();

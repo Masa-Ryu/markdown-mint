@@ -4,6 +4,8 @@
 
 - Improve Mermaid Insert and Edit dialogs with a large, viewport-bounded,
   editor-first layout and accessible source labeling.
+- Use concise `Insert Mermaid` and `Edit Mermaid` titles without changing the
+  shared Profile Feature labels or other feature dialog titles.
 - Show the installed Mermaid runtime version, humanized diagram type, and
   debounced live syntax status while keeping the existing strict renderer
   security settings and source normalization.

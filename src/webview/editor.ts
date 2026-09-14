@@ -5167,7 +5167,7 @@ export class MarkdownEditorApp {
     this.profileFeatureDialog.dataset.profileFeature = id;
     this.profileFeatureDialog.dataset.profileFeatureMode = "insert";
     this.profileFeatureDialog.querySelector("h2")!.textContent =
-      "Insert " + feature.label;
+      "Insert " + (id === "mermaid" ? "Mermaid" : feature.label);
     this.profileFeatureApplyButton.textContent = "Insert";
     this.profileFeatureApplyButton.disabled = id === "mermaid";
     this.profileFeatureAlertType.parentElement!.hidden = id !== "alert";

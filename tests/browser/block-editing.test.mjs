@@ -2691,6 +2691,7 @@ async function testMathAndMermaidHeaders(page) {
       await dialog.getAttribute("data-profile-feature-mode"),
       "edit",
     );
+    assert.equal(await dialog.locator("h2").textContent(), `Edit ${label}`);
     if (kind === "mermaid") {
       await page.waitForFunction(
         () =>
