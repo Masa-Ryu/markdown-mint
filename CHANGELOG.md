@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.0.53
+## 0.1.0
 
 - Interpret multi-cell TSV, HTML-table, and Markdown Mint internal clipboard
   payloads pasted outside the Rich Editor's existing tables as a header-first
@@ -11,6 +11,12 @@
   TSV before spreadsheet HTML, reject malformed or oversized matrices as a
   whole at the shared 10,000-cell limit, and keep the existing table paste,
   expansion, copy, cut, and selection behavior.
+
+## 0.0.53
+
+- Improve Marketplace metadata and README searchability for visual WYSIWYG
+  Markdown editing, tables, GitHub/GitLab Markdown, Mermaid, math, and source
+  editing.
 
 ## 0.0.52
 
