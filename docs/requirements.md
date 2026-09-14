@@ -138,9 +138,16 @@ fixtures (`common-test.md`, `github-test.md`, `github-test-class-B.md`,
 native-preview surfaces. The spacing suite passed 37 Rich/preview and 37
 native cases. Compile, lint (0 errors; 74 `any` warnings), format
 check, and the installed Extension Development Host acceptance suite all
-completed successfully. Direct Finder or Explorer drag/drop, GIF animation,
-Remote SSH filesystem import, native host persistence, and operating-system
-IME behavior remain manual checks.
+completed successfully. Manual checks:
+
+- macOS Finder real PNG drag/drop: not tested (the native drag automation
+  returned `noWindowsAvailable`).
+- image persistence after reopening the document: not tested.
+- duplicate filename collision behavior: not tested.
+- Undo removing the Markdown reference while retaining saved image files: not
+  tested.
+- JPEG, WebP, GIF animation, Windows Explorer real file drop, Remote SSH
+  actual filesystem import, and operating-system IME interaction: not tested.
 
 ## Alert inline editing refinement
 

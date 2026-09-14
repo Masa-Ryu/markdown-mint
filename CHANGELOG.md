@@ -3,19 +3,14 @@
 ## 0.2.0
 
 - Add local PNG, JPEG/JPG, GIF, and WebP drag-and-drop import to the Rich
-  Editor. Images are saved beside the Markdown document under `images/` with
-  collision-safe names and inserted as portable, URL-safe `./images/...`
-  references using the existing image node and serializer.
-- Keep imports atomic under concurrent same-name drops, validate insertion
-  positions before saving, and track pending positions through ProseMirror
-  transaction mapping until the host responds.
-- Keep pending imports outside the Markdown document while tracking their drop
-  positions through ProseMirror transaction mapping.
-- Claim image names atomically without overwriting concurrent files, encode
-  returned basename segments for URL-safe Markdown paths, and reject drops that
-  cannot accept an image before saving any bytes.
-- Keep a pending import's mapped boundary alive when surrounding content is
-  deleted before the Extension Host response arrives.
+  Editor. Imported images are stored in a sibling `images/` directory and
+  inserted with portable, URL-safe relative Markdown paths.
+- Make image import safe under concurrent drops and filename collisions without
+  overwriting existing files, while keeping filenames with URL-special
+  characters usable in Markdown.
+- Preserve the intended drop position across asynchronous imports and document
+  edits, reject invalid insertion locations before saving, and cleanly handle
+  failed imports without modifying the Markdown document.
 
 ## 0.1.0
 
