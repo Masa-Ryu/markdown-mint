@@ -1554,6 +1554,212 @@ describe("rich editor rendering", () => {
     app.destroy();
   });
 
+  it("searches link files through the host and consumes candidate Enter", async () => {
+    const source = "replace me";
+    const { app, root, messages } = makeApp(source);
+    app.view.dispatch(
+      app.view.state.tr.setSelection(
+        TextSelection.create(app.view.state.doc, 1, 1 + source.length),
+      ),
+    );
+    const dialog = openLinkDialog(root);
+    const [linkInput, textInput] = Array.from(
+      dialog.querySelectorAll<HTMLInputElement>("input"),
+    );
+    linkInput!.value = "ho";
+    linkInput!.dispatchEvent(new Event("input", { bubbles: true }));
+    await new Promise<void>((resolve) => setTimeout(resolve, 90));
+    const request = messages.find(
+      (message: any) => message.type === "workspace-file-search",
+    ) as any;
+    expect(request).toMatchObject({ filter: "all", query: "ho" });
+
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        data: {
+          protocolVersion: PROTOCOL_VERSION,
+          type: "workspace-file-search-result",
+          requestId: request.requestId,
+          candidates: [
+            {
+              fileName: "hoge manual.pdf",
+              directory: "specs/",
+              relativePath: "../specs/hoge%20manual.pdf",
+            },
+            {
+              fileName: "hoge-design.md",
+              directory: "docs/",
+              relativePath: "../docs/hoge-design.md",
+            },
+          ],
+        },
+      }),
+    );
+    const options = dialog.querySelectorAll<HTMLButtonElement>(
+      ".mm-file-autocomplete-option",
+    );
+    expect(options).toHaveLength(2);
+    expect(options[0]?.textContent).toContain("hoge manual.pdf");
+    expect(linkInput!.getAttribute("aria-controls")).toMatch(
+      /^mm-file-autocomplete-/,
+    );
+    expect(linkInput!.getAttribute("aria-activedescendant")).toBe(
+      options[0]?.id,
+    );
+
+    const beforeEdits = messages.filter(isEditMessage).length;
+    linkInput!.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "ArrowDown",
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    linkInput!.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "Enter",
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    expect(linkInput!.value).toBe("../docs/hoge-design.md");
+    expect(
+      dialog.querySelector<HTMLElement>(".mm-file-autocomplete")?.hidden,
+    ).toBe(true);
+    expect(messages.filter(isEditMessage)).toHaveLength(beforeEdits);
+    expect(document.activeElement).toBe(linkInput);
+
+    textInput!.value = "Hoge document";
+    await flush();
+    dialog.querySelector<HTMLButtonElement>('button[type="submit"]')!.click();
+    expect(lastEditMarkdown(messages)).toBe(
+      "[replace me](../docs/hoge-design.md)",
+    );
+    app.destroy();
+  });
+
+  it("keeps image autocomplete image-only and leaves Alt text untouched", async () => {
+    const source = "replace me";
+    const { app, root, messages } = makeApp(source);
+    app.view.dispatch(
+      app.view.state.tr.setSelection(
+        TextSelection.create(app.view.state.doc, 1, 1 + source.length),
+      ),
+    );
+    const dialog = openImageDialog(root);
+    const [imageInput, altInput] = Array.from(
+      dialog.querySelectorAll<HTMLInputElement>("input"),
+    );
+    altInput!.value = "Keep this alt text";
+    imageInput!.value = "lo";
+    imageInput!.dispatchEvent(new Event("input", { bubbles: true }));
+    await new Promise<void>((resolve) => setTimeout(resolve, 90));
+    const request = messages.find(
+      (message: any) => message.type === "workspace-file-search",
+    ) as any;
+    expect(request).toMatchObject({ filter: "image", query: "lo" });
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        data: {
+          protocolVersion: PROTOCOL_VERSION,
+          type: "workspace-file-search-result",
+          requestId: request.requestId,
+          candidates: [
+            {
+              fileName: "logo.png",
+              directory: "assets/",
+              relativePath: "../assets/logo.png",
+            },
+          ],
+        },
+      }),
+    );
+    expect(
+      dialog.querySelectorAll(".mm-file-autocomplete-option"),
+    ).toHaveLength(1);
+    imageInput!.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "Enter",
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    expect(imageInput!.value).toBe("../assets/logo.png");
+    expect(altInput!.value).toBe("Keep this alt text");
+    expect(messages.filter(isEditMessage)).toHaveLength(0);
+    await flush();
+    dialog.querySelector<HTMLButtonElement>('button[type="submit"]')!.click();
+    expect(app.view.state.doc.firstChild?.firstChild?.attrs.src).toBe(
+      "../assets/logo.png",
+    );
+    expect(app.view.state.doc.firstChild?.firstChild?.attrs.alt).toBe(
+      "Keep this alt text",
+    );
+    expect(lastEditMarkdown(messages)).toBe(
+      "![Keep this alt text](../assets/logo.png)",
+    );
+    app.destroy();
+  });
+
+  it("hides local candidates for external URLs and closes only the list on Escape", async () => {
+    const { app, root, messages } = makeApp("replace me");
+    app.view.dispatch(
+      app.view.state.tr.setSelection(
+        TextSelection.create(app.view.state.doc, 1, 1 + "replace me".length),
+      ),
+    );
+    const dialog = openLinkDialog(root);
+    const [linkInput] = Array.from(
+      dialog.querySelectorAll<HTMLInputElement>("input"),
+    );
+    linkInput!.value = "ho";
+    linkInput!.dispatchEvent(new Event("input", { bubbles: true }));
+    await new Promise<void>((resolve) => setTimeout(resolve, 90));
+    const request = messages.find(
+      (message: any) => message.type === "workspace-file-search",
+    ) as any;
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        data: {
+          protocolVersion: PROTOCOL_VERSION,
+          type: "workspace-file-search-result",
+          requestId: request.requestId,
+          candidates: [
+            {
+              fileName: "hoge.pdf",
+              directory: "docs/",
+              relativePath: "./hoge.pdf",
+            },
+          ],
+        },
+      }),
+    );
+    expect(
+      dialog.querySelector<HTMLElement>(".mm-file-autocomplete")?.hidden,
+    ).toBe(false);
+    linkInput!.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "Escape",
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    expect(
+      dialog.querySelector<HTMLElement>(".mm-file-autocomplete")?.hidden,
+    ).toBe(true);
+    expect(document.activeElement).toBe(linkInput);
+    linkInput!.value = "https://example.com";
+    linkInput!.dispatchEvent(new Event("input", { bubbles: true }));
+    await flush();
+    expect(
+      messages.filter(
+        (message: any) => message.type === "workspace-file-search",
+      ),
+    ).toHaveLength(1);
+    expect(messages.filter(isEditMessage)).toHaveLength(0);
+    app.destroy();
+  });
+
   it.each([
     ["docs/guide.md", "[text](docs/guide.md)"],
     ["./docs/guide.md", "[text](./docs/guide.md)"],

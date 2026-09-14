@@ -127,6 +127,12 @@ const vscode = vi.hoisted(() => {
       }${this.fragment ? `#${this.fragment}` : ""}`;
     }
   }
+  class RelativePattern {
+    public constructor(
+      public readonly base: unknown,
+      public readonly pattern: string,
+    ) {}
+  }
   class Position {
     public constructor(
       public readonly line: number,
@@ -287,7 +293,9 @@ const vscode = vi.hoisted(() => {
     "/workspace/README.md",
     "/workspace/root.md",
     "/workspace/second/root.md",
+    "/workspace-b/docs/hoge manual.pdf",
   ]);
+  const findFilesCalls: Array<{ include: unknown; exclude: unknown }> = [];
   const openExternalCalls: Uri[] = [];
   let openExternalResult = true;
   let openExternalError: Error | undefined;
@@ -473,6 +481,12 @@ const vscode = vi.hoisted(() => {
       { uri: Uri; name: string; index: number } | undefined {
       return workspaceFolder;
     },
+    findFiles(include: unknown, exclude?: unknown): Promise<Uri[]> {
+      findFilesCalls.push({ include, exclude });
+      return Promise.resolve(
+        [...existingFiles].map((filePath) => Uri.file(filePath)),
+      );
+    },
   };
   const TextDocumentChangeReason = { Undo: 1, Redo: 2 } as const;
   const commandCalls: Array<{
@@ -587,6 +601,7 @@ const vscode = vi.hoisted(() => {
     commandCalls.length = 0;
     openWithError = undefined;
     openExternalCalls.length = 0;
+    findFilesCalls.length = 0;
     openExternalResult = true;
     openExternalError = undefined;
     workspaceFolder = undefined;
@@ -596,6 +611,7 @@ const vscode = vi.hoisted(() => {
     Uri,
     Position,
     Range,
+    RelativePattern,
     TextEdit,
     WorkspaceEdit,
     TextDocument,
@@ -626,6 +642,7 @@ const vscode = vi.hoisted(() => {
       configurationUpdates,
       commandCalls,
       openExternalCalls,
+      findFilesCalls,
       get openExternalResult(): boolean {
         return openExternalResult;
       },
@@ -948,6 +965,87 @@ describe("MarkdownMintEditorProvider", () => {
       level: "warning",
       message: "The link target could not be opened: ./broken%2",
     });
+    provider.dispose();
+  });
+
+  it("searches only the active workspace folder and returns encoded relative paths", async () => {
+    vscode.__state.reset();
+    vscode.__state.workspaceFolder = {
+      uri: vscode.Uri.file("/workspace"),
+      name: "workspace",
+      index: 0,
+    };
+    const provider = new MarkdownMintEditorProvider(context() as never);
+    const document = vscode.__state.document;
+    await provider.resolveCustomTextEditor(
+      document as never,
+      vscode.__state.panel as never,
+      {} as never,
+    );
+    vscode.__state.panel.webview.receive({ protocolVersion: 1, type: "ready" });
+    vscode.__state.panel.webview.receive({
+      protocolVersion: 1,
+      type: "workspace-file-search",
+      requestId: "file-search:1",
+      query: "hoge",
+      filter: "all",
+    });
+    await flush();
+
+    expect(vscode.__state.findFilesCalls).toEqual([
+      {
+        include: expect.objectContaining({
+          base: expect.objectContaining({
+            uri: expect.objectContaining({ fsPath: "/workspace" }),
+          }),
+          pattern: "**/*",
+        }),
+        exclude: undefined,
+      },
+    ]);
+    expect(vscode.__state.panel.webview.messages).toContainEqual(
+      expect.objectContaining({
+        type: "workspace-file-search-result",
+        requestId: "file-search:1",
+        candidates: [
+          expect.objectContaining({
+            fileName: "hoge manual.pdf",
+            directory: "docs/",
+            relativePath: "./hoge%20manual.pdf",
+          }),
+        ],
+      }),
+    );
+    provider.dispose();
+  });
+
+  it("returns no file candidates when the document is outside a workspace", async () => {
+    vscode.__state.reset();
+    const provider = new MarkdownMintEditorProvider(context() as never);
+    const document = vscode.__state.document;
+    await provider.resolveCustomTextEditor(
+      document as never,
+      vscode.__state.panel as never,
+      {} as never,
+    );
+    vscode.__state.panel.webview.receive({ protocolVersion: 1, type: "ready" });
+    vscode.__state.panel.webview.receive({
+      protocolVersion: 1,
+      type: "workspace-file-search",
+      requestId: "file-search:outside",
+      query: "hoge",
+      filter: "all",
+    });
+    await flush();
+
+    expect(vscode.__state.findFilesCalls).toHaveLength(0);
+    expect(vscode.__state.panel.webview.messages).toContainEqual(
+      expect.objectContaining({
+        type: "workspace-file-search-result",
+        requestId: "file-search:outside",
+        candidates: [],
+      }),
+    );
     provider.dispose();
   });
 

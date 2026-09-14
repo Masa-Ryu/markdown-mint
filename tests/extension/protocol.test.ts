@@ -316,4 +316,59 @@ describe("Markdown Mint wire protocol", () => {
       }),
     ).toBeUndefined();
   });
+
+  it("validates bounded workspace file search requests and results", () => {
+    expect(
+      parseWebviewMessage({
+        protocolVersion: PROTOCOL_VERSION,
+        type: "workspace-file-search",
+        requestId: "file-search:1",
+        query: "hoge",
+        filter: "image",
+      }),
+    ).toEqual({
+      protocolVersion: PROTOCOL_VERSION,
+      type: "workspace-file-search",
+      requestId: "file-search:1",
+      query: "hoge",
+      filter: "image",
+    });
+    expect(
+      isHostMessage({
+        protocolVersion: PROTOCOL_VERSION,
+        type: "workspace-file-search-result",
+        requestId: "file-search:1",
+        candidates: [
+          {
+            fileName: "hoge manual.pdf",
+            directory: "specs/",
+            relativePath: "../specs/hoge%20manual.pdf",
+          },
+        ],
+      }),
+    ).toBe(true);
+    expect(
+      parseWebviewMessage({
+        protocolVersion: PROTOCOL_VERSION,
+        type: "workspace-file-search",
+        requestId: "file-search:1",
+        query: "x".repeat(257),
+        filter: "all",
+      }),
+    ).toBeUndefined();
+    expect(
+      isHostMessage({
+        protocolVersion: PROTOCOL_VERSION,
+        type: "workspace-file-search-result",
+        requestId: "file-search:1",
+        candidates: [
+          {
+            fileName: "unsafe.md",
+            directory: "docs/",
+            relativePath: "./unsafe#fragment.md",
+          },
+        ],
+      }),
+    ).toBe(false);
+  });
 });

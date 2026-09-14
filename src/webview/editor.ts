@@ -44,13 +44,16 @@ import {
 import { liftTarget } from "prosemirror-transform";
 import {
   isHostMessage,
+  MAX_FILE_SEARCH_QUERY_LENGTH,
   PROTOCOL_VERSION,
   type ClipboardResultMessage,
   type EditRejectedMessage,
   type PreviewMessage as HostPreviewMessage,
   type PreviewTypography,
   type SaveResultMessage,
+  type WorkspaceFileSearchResultMessage,
 } from "../shared/protocol";
+import { isWorkspaceFileSearchQuery } from "../shared/workspaceFileSearch";
 import {
   createStarterPlugin,
   getStarterState,
@@ -60,6 +63,7 @@ import {
   type StarterPluginState,
 } from "./starter";
 import { createWritingInputRules } from "./input-rules";
+import { FileAutocomplete } from "./fileAutocomplete";
 import { BodyNavigation } from "./bodyNavigation";
 import {
   BlockBoundarySelection,
@@ -2339,9 +2343,20 @@ export class MarkdownEditorApp {
   private linkDialog!: HTMLDialogElement;
   private linkUrlInput!: HTMLInputElement;
   private linkTextInput!: HTMLInputElement;
+  private linkAutocomplete!: FileAutocomplete;
   private imageDialog!: HTMLDialogElement;
   private imageUrlInput!: HTMLInputElement;
   private imageAltInput!: HTMLInputElement;
+  private imageAutocomplete!: FileAutocomplete;
+  private workspaceSearchSequence = 0;
+  private readonly pendingWorkspaceSearch = new Map<
+    "link" | "image",
+    {
+      readonly requestId: string;
+      readonly query: string;
+      readonly generation: number;
+    }
+  >();
   private emojiDialog!: HTMLDialogElement;
   private emojiSearchInput!: HTMLInputElement;
   private emojiGrid!: HTMLElement;
@@ -2898,6 +2913,8 @@ export class MarkdownEditorApp {
     document.removeEventListener("focusin", this.writingFocusInHandler);
     document.removeEventListener("keydown", this.writingKeyDownHandler);
     this.closeWritingPopups();
+    this.linkAutocomplete?.dispose();
+    this.imageAutocomplete?.dispose();
     this.clearBlockGapInsert();
     this.closeEmojiPicker();
     this.closeProfileFeatureDialog();
@@ -4809,6 +4826,10 @@ export class MarkdownEditorApp {
     this.linkUrlInput.spellcheck = false;
     this.linkUrlInput.autocapitalize = "off";
     this.linkUrlInput.inputMode = "url";
+    this.linkAutocomplete = new FileAutocomplete({
+      input: this.linkUrlInput,
+      onQuery: (query) => this.requestWorkspaceFileSearch("link", query),
+    });
     this.linkTextInput = makeField("Text", "text", "Selected text");
     const linkActions = document.createElement("div");
     linkActions.className = "mm-dialog-actions";
@@ -4841,7 +4862,12 @@ export class MarkdownEditorApp {
     );
     linkForm.addEventListener("submit", (event) => {
       event.preventDefault();
+      if (this.linkAutocomplete.consumeSubmit()) return;
       this.applyLink(this.linkUrlInput.value.trim(), this.linkTextInput.value);
+      this.closeDialog(link);
+    });
+    link.addEventListener("cancel", (event) => {
+      event.preventDefault();
       this.closeDialog(link);
     });
     link.append(linkForm);
@@ -4861,6 +4887,10 @@ export class MarkdownEditorApp {
       "text",
       "./images/example.png",
     );
+    this.imageAutocomplete = new FileAutocomplete({
+      input: this.imageUrlInput,
+      onQuery: (query) => this.requestWorkspaceFileSearch("image", query),
+    });
     this.imageAltInput = makeField("Alt text", "text", "Description");
     const imageActions = document.createElement("div");
     imageActions.className = "mm-dialog-actions";
@@ -4880,10 +4910,15 @@ export class MarkdownEditorApp {
     );
     imageForm.addEventListener("submit", (event) => {
       event.preventDefault();
+      if (this.imageAutocomplete.consumeSubmit()) return;
       this.applyImage(
         this.imageUrlInput.value.trim(),
         this.imageAltInput.value,
       );
+      this.closeDialog(image);
+    });
+    image.addEventListener("cancel", (event) => {
+      event.preventDefault();
       this.closeDialog(image);
     });
     image.append(imageForm);
@@ -7545,8 +7580,70 @@ export class MarkdownEditorApp {
   }
 
   private closeDialog(dialog: HTMLDialogElement): void {
+    if (dialog === this.linkDialog) this.linkAutocomplete.close();
+    if (dialog === this.imageDialog) this.imageAutocomplete.close();
     if (typeof dialog.close === "function") dialog.close();
     else dialog.removeAttribute("open");
+  }
+
+  private requestWorkspaceFileSearch(
+    kind: "link" | "image",
+    query: string,
+  ): void {
+    if (
+      !this.vscode ||
+      !this.initialized ||
+      this.previewOnly ||
+      query.length > MAX_FILE_SEARCH_QUERY_LENGTH
+    )
+      return;
+    const requestId = `file-search:${++this.workspaceSearchSequence}`;
+    this.pendingWorkspaceSearch.set(kind, {
+      requestId,
+      query,
+      generation: this.documentGeneration,
+    });
+    this.vscode.postMessage({
+      protocolVersion: PROTOCOL_VERSION,
+      type: "workspace-file-search",
+      requestId,
+      query,
+      filter: kind === "image" ? "image" : "all",
+    });
+  }
+
+  private receiveWorkspaceFileSearch(
+    message: WorkspaceFileSearchResultMessage,
+  ): void {
+    let kind: "link" | "image" | undefined;
+    for (const [candidateKind, pending] of this.pendingWorkspaceSearch) {
+      if (pending.requestId === message.requestId) {
+        kind = candidateKind;
+        break;
+      }
+    }
+    if (!kind) return;
+    const pending = this.pendingWorkspaceSearch.get(kind);
+    this.pendingWorkspaceSearch.delete(kind);
+    if (!pending) return;
+    const input = kind === "link" ? this.linkUrlInput : this.imageUrlInput;
+    const autocomplete =
+      kind === "link" ? this.linkAutocomplete : this.imageAutocomplete;
+    if (
+      pending.generation !== this.documentGeneration ||
+      pending.query !== input.value.trim() ||
+      !isWorkspaceFileSearchQuery(input.value)
+    ) {
+      autocomplete.clear();
+      return;
+    }
+    autocomplete.setCandidates(message.candidates);
+  }
+
+  private clearWorkspaceFileSearch(): void {
+    this.pendingWorkspaceSearch.clear();
+    this.linkAutocomplete?.clear();
+    this.imageAutocomplete?.clear();
   }
 
   private restoreSelectionObject(selection: Selection | null): boolean {
@@ -7598,6 +7695,7 @@ export class MarkdownEditorApp {
       this.linkUrlInput.value = href;
     }
     this.openDialog(this.linkDialog);
+    this.linkAutocomplete.open();
     this.linkUrlInput.focus();
   }
 
@@ -7625,6 +7723,7 @@ export class MarkdownEditorApp {
     this.imageUrlInput.value = "";
     this.imageAltInput.value = "";
     this.openDialog(this.imageDialog);
+    this.imageAutocomplete.open();
     this.imageUrlInput.focus();
   }
 
@@ -8657,6 +8756,8 @@ export class MarkdownEditorApp {
       this.handleSaveResult(message);
     } else if (message.type === "clipboard-result") {
       this.resolveClipboard(message);
+    } else if (message.type === "workspace-file-search-result") {
+      this.receiveWorkspaceFileSearch(message);
     } else if (message.type === "error") {
       if (
         this.pendingProfile?.operationId &&
@@ -8680,6 +8781,7 @@ export class MarkdownEditorApp {
   }
 
   private receivePreview(message: HostPreviewMessage): void {
+    this.clearWorkspaceFileSearch();
     this.clipboardAvailable = message.clipboardAvailable === true;
     if (
       message.version < this.version ||
@@ -8778,6 +8880,7 @@ export class MarkdownEditorApp {
   }
 
   receiveDocument(message: DocumentMessage): void {
+    this.clearWorkspaceFileSearch();
     this.clipboardAvailable = message.clipboardAvailable === true;
     if (message.documentId) this.documentId = message.documentId;
     if (message.reason === "save") {

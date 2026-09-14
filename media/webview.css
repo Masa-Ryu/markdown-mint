@@ -763,6 +763,7 @@ textarea:focus-visible {
   font-weight: 600;
 }
 .mm-dialog-field {
+  position: relative;
   display: grid;
   gap: 5px;
 }
@@ -788,6 +789,66 @@ textarea:focus-visible {
 }
 .mm-dialog-field select {
   cursor: pointer;
+}
+.mm-file-autocomplete {
+  position: absolute;
+  z-index: 2;
+  top: 100%;
+  right: 0;
+  left: 0;
+  max-height: min(34vh, 240px);
+  margin-top: 3px;
+  overflow-y: auto;
+  border: 1px solid var(--vscode-quickInput-foreground, var(--mm-control-border));
+  border-radius: 4px;
+  background: var(--vscode-quickInput-background, var(--mm-control-background));
+  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.28);
+}
+.mm-file-autocomplete[hidden] {
+  display: none;
+}
+.mm-file-autocomplete-option {
+  display: grid;
+  width: 100%;
+  gap: 1px;
+  padding: 7px 9px;
+  border: 0;
+  color: var(--vscode-quickInput-foreground, var(--mm-control-foreground));
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+.mm-file-autocomplete-option:hover,
+.mm-file-autocomplete-option:focus-visible,
+.mm-file-autocomplete-option.is-active {
+  color: var(
+    --vscode-list-activeSelectionForeground,
+    var(--mm-control-foreground)
+  );
+  background: var(
+    --vscode-list-activeSelectionBackground,
+    var(--mm-control-hover-background)
+  );
+  outline: none;
+}
+.mm-file-autocomplete-name {
+  overflow: hidden;
+  font-size: 0.95em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mm-file-autocomplete-directory {
+  overflow: hidden;
+  color: var(--vscode-descriptionForeground, var(--mm-control-foreground));
+  font-size: 0.85em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mm-file-autocomplete-option.is-active .mm-file-autocomplete-directory,
+.mm-file-autocomplete-option:hover .mm-file-autocomplete-directory,
+.mm-file-autocomplete-option:focus-visible .mm-file-autocomplete-directory {
+  color: inherit;
+  opacity: 0.85;
 }
 .mm-profile-feature-error {
   margin: 0;

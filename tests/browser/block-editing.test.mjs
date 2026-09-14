@@ -2225,6 +2225,68 @@ async function testRichEditorLinks(page) {
   await noEdits(page, tocBefore, "TOC fragment navigation");
 }
 
+async function testWorkspaceFileAutocomplete(page) {
+  await load(page, "Target");
+  await caret(page, `${rich} > p`, 0, -1);
+  const linkBefore = await saved(page);
+  await page.locator('[data-testid="toolbar-link"]').click();
+  const linkDialog = page.locator(
+    'dialog[aria-labelledby="mm-link-dialog-title"]',
+  );
+  await linkDialog.waitFor({ state: "visible" });
+  const linkInput = linkDialog.locator("input").first();
+  await linkInput.fill("ho");
+  const linkOptions = linkDialog.locator(".mm-file-autocomplete-option");
+  await linkOptions.first().waitFor({ state: "visible" });
+  assert.equal(
+    await linkOptions
+      .first()
+      .locator(".mm-file-autocomplete-name")
+      .textContent(),
+    "hoge.pdf",
+  );
+  await linkInput.press("ArrowDown");
+  await linkInput.press("Enter");
+  assert.equal(await linkInput.inputValue(), "../docs/hoge-design.md");
+  assert.equal(
+    await linkDialog.isVisible(),
+    true,
+    "candidate Enter submitted the dialog",
+  );
+  await noEdits(page, linkBefore, "link autocomplete selection");
+  await linkDialog.locator('input[placeholder="Selected text"]').fill("Target");
+  await linkDialog.locator('button[type="submit"]').click();
+  await expectSource(page, "[Target](../docs/hoge-design.md)");
+
+  await load(page, "Target");
+  await caret(page, `${rich} > p`, 0, -1);
+  const imageBefore = await saved(page);
+  await page.locator('[data-testid="toolbar-image"]').click();
+  const imageDialog = page.locator(
+    'dialog[aria-labelledby="mm-image-dialog-title"]',
+  );
+  await imageDialog.waitFor({ state: "visible" });
+  const imageInput = imageDialog.locator("input").first();
+  const altInput = imageDialog.locator("input").nth(1);
+  await altInput.fill("Keep alt");
+  await imageInput.fill("lo");
+  const imageOptions = imageDialog.locator(".mm-file-autocomplete-option");
+  await imageOptions.first().waitFor({ state: "visible" });
+  assert.equal(
+    await imageOptions
+      .first()
+      .locator(".mm-file-autocomplete-name")
+      .textContent(),
+    "logo.png",
+  );
+  await imageInput.press("Enter");
+  assert.equal(await imageInput.inputValue(), "../assets/logo.png");
+  assert.equal(await altInput.inputValue(), "Keep alt");
+  await noEdits(page, imageBefore, "image autocomplete selection");
+  await imageDialog.locator('button[type="submit"]').click();
+  await expectSource(page, "![Keep alt](../assets/logo.png)");
+}
+
 async function testVerticalGoalAndEmptyEdges(page) {
   const long = "0123456789012345678901234567890123456789";
   for (const middle of [alert("x"), "x"]) {
@@ -3395,6 +3457,7 @@ async function main() {
       testExpandedCodeVerticalNavigation,
       testSelectionAndModifiers,
       testRichEditorLinks,
+      testWorkspaceFileAutocomplete,
       testVerticalGoalAndEmptyEdges,
       testNestedDetailsAndComposition,
       testRenderedTraversal,

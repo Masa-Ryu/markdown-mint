@@ -3,6 +3,8 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import * as path from "node:path";
 import * as vscode from "vscode";
 import { classifyLinkNavigation } from "../../../src/extension/linkNavigation";
+import { WorkspaceFileSearchHost } from "../../../src/extension/workspaceFileSearch";
+import { isImageFileName } from "../../../src/shared/workspaceFileSearch";
 
 const VIEW_TYPE = "markdownMint.editor";
 const TEST_FILE = process.env.MARKDOWN_MINT_TEST_FILE;
@@ -33,6 +35,7 @@ export async function run(): Promise<void> {
   assert.equal(typeof api.extendMarkdownIt, "function");
   assert.equal(typeof api.renderWithNativeMarkdown, "function");
   await runLinkUriAcceptance(filePath);
+  await runWorkspaceFileSearchAcceptance(filePath);
   await runRequiredMarkdownFixtureAcceptance(api);
 
   const commands = await vscode.commands.getCommands(true);
@@ -462,6 +465,152 @@ async function runLinkUriAcceptance(filePath: string): Promise<void> {
     assert.equal(remoteTarget.uri.scheme, "vscode-remote");
     assert.equal(remoteTarget.uri.authority, "ssh-remote+dev");
     assert.equal(remoteTarget.uri.path, "/workspace/docs/design spec.pdf");
+  }
+}
+
+async function runWorkspaceFileSearchAcceptance(
+  filePath: string,
+): Promise<void> {
+  const documentPath = path.join(path.dirname(filePath), "docs", "search.md");
+  const documentDirectory = path.dirname(documentPath);
+  const specsDirectory = path.join(path.dirname(documentDirectory), "specs");
+  const assetsDirectory = path.join(documentDirectory, "assets");
+  const excludedDirectory = path.join(
+    path.dirname(documentDirectory),
+    "excluded",
+  );
+  await mkdir(documentDirectory, { recursive: true });
+  await mkdir(specsDirectory, { recursive: true });
+  await mkdir(assetsDirectory, { recursive: true });
+  await mkdir(excludedDirectory, { recursive: true });
+  await writeFile(documentPath, "# Search acceptance\n");
+  await writeFile(path.join(documentDirectory, "hoge manual.pdf"), "pdf\n");
+  await writeFile(path.join(specsDirectory, "design spec.pdf"), "pdf\n");
+  await writeFile(path.join(documentDirectory, "c#-guide.md"), "guide\n");
+  await writeFile(path.join(documentDirectory, "percent%guide.md"), "guide\n");
+  await writeFile(path.join(excludedDirectory, "hidden.md"), "hidden\n");
+  for (const extension of [
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".gif",
+    ".webp",
+    ".svg",
+    ".avif",
+    ".bmp",
+  ])
+    await writeFile(path.join(assetsDirectory, `logo${extension}`), "image\n");
+  await writeFile(path.join(assetsDirectory, "notes.md"), "not image\n");
+
+  const documentUri = vscode.Uri.file(documentPath);
+  const workspaceFolder = vscode.workspace.getWorkspaceFolder(documentUri);
+  assert.ok(workspaceFolder, "the autocomplete document is in the workspace");
+  const filesConfiguration = vscode.workspace.getConfiguration(
+    "files",
+    documentUri,
+  );
+  await filesConfiguration.update(
+    "exclude",
+    { "**/excluded/**": true },
+    vscode.ConfigurationTarget.Workspace,
+  );
+  const search = new WorkspaceFileSearchHost();
+  try {
+    const linkCandidates = await search.searchFiles(
+      documentUri,
+      workspaceFolder,
+      "hoge",
+      "all",
+    );
+    assert.deepEqual(linkCandidates[0], {
+      fileName: "hoge manual.pdf",
+      directory: "docs/",
+      relativePath: "./hoge%20manual.pdf",
+    });
+
+    const percentCandidates = await search.searchFiles(
+      documentUri,
+      workspaceFolder,
+      "percent",
+      "all",
+    );
+    assert.equal(percentCandidates[0]?.relativePath, "./percent%25guide.md");
+
+    const parentCandidates = await search.searchFiles(
+      documentUri,
+      workspaceFolder,
+      "design spec",
+      "all",
+    );
+    assert.equal(
+      parentCandidates[0]?.relativePath,
+      "../specs/design%20spec.pdf",
+    );
+
+    const imageCandidates = await search.searchFiles(
+      documentUri,
+      workspaceFolder,
+      "logo",
+      "image",
+    );
+    assert.equal(imageCandidates.length, 8);
+    assert.ok(
+      imageCandidates.every((candidate) => isImageFileName(candidate.fileName)),
+    );
+    assert.equal(
+      imageCandidates.some((candidate) => candidate.fileName === "notes.md"),
+      false,
+    );
+
+    const hiddenCandidates = await search.searchFiles(
+      documentUri,
+      workspaceFolder,
+      "hidden",
+      "all",
+    );
+    assert.deepEqual(hiddenCandidates, []);
+
+    const generatedLink = linkCandidates[0];
+    assert.ok(generatedLink, "a real workspace candidate is returned");
+    const resolved = classifyLinkNavigation(
+      generatedLink.relativePath,
+      documentUri,
+      workspaceFolder,
+    );
+    assert.equal(resolved.kind, "internal");
+    if (resolved.kind === "internal") {
+      assert.equal(
+        resolved.uri.fsPath,
+        path.join(documentDirectory, "hoge manual.pdf"),
+      );
+      await vscode.workspace.fs.stat(resolved.uri);
+    }
+
+    const generatedPercentLink = percentCandidates[0];
+    assert.ok(
+      generatedPercentLink,
+      "the percent filename candidate is returned",
+    );
+    const resolvedPercent = classifyLinkNavigation(
+      generatedPercentLink.relativePath,
+      documentUri,
+      workspaceFolder,
+    );
+    assert.equal(resolvedPercent.kind, "internal");
+    if (resolvedPercent.kind === "internal") {
+      assert.equal(
+        resolvedPercent.uri.fsPath,
+        path.join(documentDirectory, "percent%guide.md"),
+      );
+      await vscode.workspace.fs.stat(resolvedPercent.uri);
+    }
+  } finally {
+    search.dispose();
+    await filesConfiguration.update(
+      "exclude",
+      undefined,
+      vscode.ConfigurationTarget.Workspace,
+    );
   }
 }
 
