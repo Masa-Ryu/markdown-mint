@@ -190,6 +190,7 @@ describe("Extension Host image import", () => {
   it.each([
     ["sample.png", "image/png"],
     ["photo.jpeg", "image/jpeg"],
+    ["diagram.svg", "image/svg+xml"],
   ])(
     "reads a workspace URI for %s and sends its bytes through the common save pipeline",
     async (fileName, _mimeType) => {
@@ -241,6 +242,47 @@ describe("Extension Host image import", () => {
     ).toEqual(new Uint8Array([4, 5]));
   });
 
+  it("accepts SVG only with its supported image MIME type", async () => {
+    const { deps, fileSystem } = dependencies();
+    const accepted = await saveImageImport(
+      new TestUri("file", "/workspace/docs/README.md"),
+      request({
+        fileName: "diagram.svg",
+        mimeType: "image/svg+xml",
+        base64: "PHN2Zy8+",
+      }),
+      deps,
+    );
+
+    expect(accepted).toEqual({
+      success: true,
+      relativePath: "./images/diagram.svg",
+    });
+    expect(
+      fileSystem.files.get("file:/workspace/docs/images/diagram.svg"),
+    ).toEqual(new Uint8Array([60, 115, 118, 103, 47, 62]));
+
+    for (const mimeType of [
+      "text/html",
+      "image/png",
+      "application/javascript",
+    ]) {
+      const result = await saveImageImport(
+        new TestUri("file", "/workspace/other/README.md"),
+        request({
+          fileName: "diagram.svg",
+          mimeType,
+          base64: "AA==",
+        }),
+        dependencies().deps,
+      );
+      expect(result).toMatchObject({
+        success: false,
+        message: expect.stringContaining("MIME type"),
+      });
+    }
+  });
+
   it("preserves URI basename encoding and URL-encodes only the saved basename in Markdown", async () => {
     const { deps, fileSystem } = uriDependencies();
     const fileName = "architecture #2%?.png";
@@ -259,6 +301,30 @@ describe("Extension Host image import", () => {
     expect(result).toEqual({
       success: true,
       relativePath: "./images/architecture%20%232%25%3F.png",
+    });
+    expect(
+      fileSystem.files.get(`file:/workspace/docs/images/${fileName}`),
+    ).toEqual(new Uint8Array([6]));
+  });
+
+  it("URL-encodes an SVG basename while preserving its real filesystem name", async () => {
+    const { deps, fileSystem } = uriDependencies();
+    const fileName = "architecture #1.svg";
+    fileSystem.files.set(
+      "file:/workspace/assets/architecture%20%231.svg",
+      new Uint8Array([6]),
+    );
+
+    const result = await saveImageImportUri(
+      new TestUri("file", "/workspace/docs/README.md"),
+      "file:///workspace/assets/architecture%20%231.svg",
+      "image:svg-url-special",
+      deps,
+    );
+
+    expect(result).toEqual({
+      success: true,
+      relativePath: "./images/architecture%20%231.svg",
     });
     expect(
       fileSystem.files.get(`file:/workspace/docs/images/${fileName}`),
@@ -295,6 +361,36 @@ describe("Extension Host image import", () => {
     ).toEqual(new Uint8Array([7, 8]));
   });
 
+  it("keeps duplicate SVG URI imports collision-safe", async () => {
+    const { deps, fileSystem } = uriDependencies();
+    fileSystem.files.set(
+      "file:/workspace/docs/images/diagram.svg",
+      new Uint8Array([9]),
+    );
+    fileSystem.files.set(
+      "file:/workspace/assets/diagram.svg",
+      new Uint8Array([7, 8]),
+    );
+
+    const result = await saveImageImportUri(
+      new TestUri("file", "/workspace/docs/README.md"),
+      "file:///workspace/assets/diagram.svg",
+      "image:svg-duplicate",
+      deps,
+    );
+
+    expect(result).toEqual({
+      success: true,
+      relativePath: "./images/diagram-1.svg",
+    });
+    expect(
+      fileSystem.files.get("file:/workspace/docs/images/diagram.svg"),
+    ).toEqual(new Uint8Array([9]));
+    expect(
+      fileSystem.files.get("file:/workspace/docs/images/diagram-1.svg"),
+    ).toEqual(new Uint8Array([7, 8]));
+  });
+
   it("rejects URI resources outside the workspace before reading or saving", async () => {
     const { deps, fileSystem } = uriDependencies();
     fileSystem.files.set("file:/outside/sample.png", new Uint8Array([1]));
@@ -313,6 +409,7 @@ describe("Extension Host image import", () => {
 
   it.each([
     ["nonexistent URI", "file:///workspace/assets/missing.png"],
+    ["nonexistent SVG URI", "file:///workspace/assets/missing.svg"],
     ["directory URI", "file:///workspace/assets/folder.png"],
     ["unsupported extension", "file:///workspace/assets/notes.txt"],
   ])(
@@ -362,12 +459,12 @@ describe("Extension Host image import", () => {
     const { deps: oversizedDeps, fileSystem: oversizedFileSystem } =
       uriDependencies();
     oversizedFileSystem.files.set(
-      "file:/workspace/assets/large.png",
+      "file:/workspace/assets/large.svg",
       new Uint8Array(MAX_IMAGE_IMPORT_BYTES + 1),
     );
     const oversizedResult = await saveImageImportUri(
       new TestUri("file", "/workspace/docs/README.md"),
-      "file:///workspace/assets/large.png",
+      "file:///workspace/assets/large.svg",
       "image:oversized-uri",
       oversizedDeps,
     );
@@ -381,17 +478,33 @@ describe("Extension Host image import", () => {
     );
   });
 
+  it("rejects an SVG directory URI before reading bytes", async () => {
+    const { deps, fileSystem } = uriDependencies();
+    fileSystem.directories.add("file:/workspace/assets/folder.svg");
+
+    const result = await saveImageImportUri(
+      new TestUri("file", "/workspace/docs/README.md"),
+      "file:///workspace/assets/folder.svg",
+      "image:svg-directory-uri",
+      deps,
+    );
+
+    expect(result).toMatchObject({ success: false });
+    expect(fileSystem.readFileCalls).toHaveLength(0);
+    expect(fileSystem.directories).not.toContain("file:/workspace/docs/images");
+  });
+
   it("returns a correlated failure when the URI resource cannot be read", async () => {
     const { deps, fileSystem } = uriDependencies();
     fileSystem.files.set(
-      "file:/workspace/assets/sample.png",
+      "file:/workspace/assets/sample.svg",
       new Uint8Array([1]),
     );
     fileSystem.failRead = true;
 
     const result = await saveImageImportUri(
       new TestUri("file", "/workspace/docs/README.md"),
-      "file:///workspace/assets/sample.png",
+      "file:///workspace/assets/sample.svg",
       "image:permission",
       deps,
     );
@@ -571,7 +684,7 @@ describe("Extension Host image import", () => {
     const { deps: extensionDeps } = dependencies();
     const unsupportedExtension = await saveImageImport(
       new TestUri("file", "/workspace/docs/README.md"),
-      request({ fileName: "diagram.svg", mimeType: "image/svg+xml" }),
+      request({ fileName: "diagram.bmp", mimeType: "image/bmp" }),
       extensionDeps,
     );
     expect(unsupportedExtension).toMatchObject({ success: false });

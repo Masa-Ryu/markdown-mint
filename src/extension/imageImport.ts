@@ -62,6 +62,7 @@ const MIME_TYPES_BY_EXTENSION: Readonly<Record<string, readonly string[]>> = {
   ".jpg": ["image/jpeg", "image/jpg"],
   ".gif": ["image/gif"],
   ".webp": ["image/webp"],
+  ".svg": ["image/svg+xml"],
 };
 
 const MAX_FILE_NAME_LENGTH = 255;
@@ -174,7 +175,9 @@ export async function readImageImportUri<Uri extends ImageImportUriLike>(
   normalizeImageImportFileName(fileName);
   const mimeType = imageImportMimeTypeForFileName(fileName);
   if (!mimeType)
-    throw new Error("Only PNG, JPEG, GIF, and WebP images can be imported.");
+    throw new Error(
+      "Only PNG, JPEG, GIF, WebP, and SVG images can be imported.",
+    );
 
   const stat = await dependencies.resource.stat(sourceUri);
   if (
@@ -400,7 +403,9 @@ function validateImageType(fileName: string, mimeType: string): void {
   const extension = fileName.slice(fileName.lastIndexOf(".")).toLowerCase();
   const allowedMimeTypes = MIME_TYPES_BY_EXTENSION[extension];
   if (!allowedMimeTypes)
-    throw new Error("Only PNG, JPEG, GIF, and WebP images can be imported.");
+    throw new Error(
+      "Only PNG, JPEG, GIF, WebP, and SVG images can be imported.",
+    );
   if (!allowedMimeTypes.includes(mimeType.toLowerCase()))
     throw new Error("The dropped image MIME type is not supported.");
 }

@@ -2,9 +2,9 @@
 
 ## 0.2.0
 
-- Add local PNG, JPEG/JPG, GIF, and WebP image import to the Rich Editor via
-  Shift + drag-and-drop from files or workspace resources. Imported images are
-  stored in a sibling `images/` directory and inserted with portable,
+- Add local PNG, JPEG/JPG, GIF, WebP, and SVG image import to the Rich Editor
+  via Shift + drag-and-drop from files or workspace resources. Imported images
+  are stored in a sibling `images/` directory and inserted with portable,
   URL-safe relative Markdown paths.
 - Make image import safe under concurrent drops and filename collisions without
   overwriting existing files, while keeping filenames with URL-special

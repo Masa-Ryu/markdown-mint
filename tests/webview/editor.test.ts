@@ -1752,6 +1752,43 @@ describe("rich editor rendering", () => {
     app.destroy();
   });
 
+  it("imports an SVG file as the existing image node without inlining SVG markup", async () => {
+    const { app, root, messages } = makeApp("before after");
+    const event = dispatchImageDrop(
+      app,
+      [imageFile("diagram.svg", "image/svg+xml", new Uint8Array([60, 62]))],
+      7,
+    );
+
+    expect(event.defaultPrevented).toBe(true);
+    await flush();
+    const request = messages.find(
+      (message: any) => message.type === "image-import",
+    ) as any;
+    expect(request).toMatchObject({
+      type: "image-import",
+      fileName: "diagram.svg",
+      mimeType: "image/svg+xml",
+    });
+
+    receiveHostMessage({
+      protocolVersion: PROTOCOL_VERSION,
+      type: "image-import-result",
+      requestId: request.requestId,
+      success: true,
+      relativePath: "./images/diagram.svg",
+    });
+
+    expect(lastEditMarkdown(messages)).toBe(
+      "before![diagram](./images/diagram.svg) after",
+    );
+    expect(root.querySelector(".ProseMirror svg")).toBeNull();
+    expect(
+      root.querySelector<HTMLImageElement>(".ProseMirror img"),
+    ).not.toBeNull();
+    app.destroy();
+  });
+
   it("parses URI-list comments, empty lines, line endings, and encoded basenames", () => {
     expect(
       parseImageImportUriList(
@@ -1813,6 +1850,40 @@ describe("rich editor rendering", () => {
       "before![sample](./images/sample.png) after",
     );
     expect(lastEditMarkdown(messages)).not.toContain("/workspace/");
+    app.destroy();
+  });
+
+  it("consumes a VS Code Explorer SVG URI drop and inserts the existing image node", async () => {
+    const { app, root, messages } = makeApp("before after");
+    const event = dispatchImageDrop(
+      app,
+      [],
+      7,
+      "file:///workspace/assets/diagram.svg",
+    );
+
+    expect(event.defaultPrevented).toBe(true);
+    await flush();
+    const request = messages.find(
+      (message: any) => message.type === "image-import-uri",
+    ) as any;
+    expect(request).toMatchObject({
+      type: "image-import-uri",
+      resourceUri: "file:///workspace/assets/diagram.svg",
+    });
+
+    receiveHostMessage({
+      protocolVersion: PROTOCOL_VERSION,
+      type: "image-import-result",
+      requestId: request.requestId,
+      success: true,
+      relativePath: "./images/diagram.svg",
+    });
+
+    expect(lastEditMarkdown(messages)).toBe(
+      "before![diagram](./images/diagram.svg) after",
+    );
+    expect(root.querySelector(".ProseMirror svg")).toBeNull();
     app.destroy();
   });
 
@@ -2231,6 +2302,15 @@ describe("rich editor rendering", () => {
     expect(
       serializeMarkdown(app.view.state.doc, parseMarkdown(source, "github")),
     ).toBe(source);
+    app.destroy();
+  });
+
+  it("does not render SVG data URIs as image sources", () => {
+    const { app, root } = makeApp(
+      "![diagram](data:image/svg+xml;base64,PHN2Zy8+)",
+    );
+    expect(root.querySelector(".ProseMirror img")).toBeNull();
+    expect(root.querySelector(".ProseMirror svg")).toBeNull();
     app.destroy();
   });
 

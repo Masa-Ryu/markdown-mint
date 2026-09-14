@@ -72,6 +72,7 @@ const MIME_BY_EXTENSION: Readonly<Record<string, string>> = {
   ".jpg": "image/jpeg",
   ".gif": "image/gif",
   ".webp": "image/webp",
+  ".svg": "image/svg+xml",
 };
 
 /** Keep the pending import positions outside the document and map them with PM. */

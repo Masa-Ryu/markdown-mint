@@ -106,9 +106,9 @@ resource is never allowed to fall through as raw path or URI text. A mixed drop
 imports only supported images and consumes the whole event, while a drop with
 no supported image continues through the normal ProseMirror handler.
 
-PNG, JPEG/JPG, GIF, and WebP files are read in the Webview and sent as bounded
-base64 payloads; the Webview never writes to the filesystem. For VS Code
-Explorer resources, the Webview sends only the URI and the Extension Host
+PNG, JPEG/JPG, GIF, WebP, and SVG files are read in the Webview and sent as
+bounded base64 payloads; the Webview never writes to the filesystem. For VS
+Code Explorer resources, the Webview sends only the URI and the Extension Host
 validates the parsed workspace resource, reads it through `workspace.fs`, and
 then joins the same byte-oriented save pipeline. The wire protocol checks
 message shape and bounded fields; the Extension Host owns semantic validation
@@ -122,7 +122,9 @@ failed attempts. The returned `./images/<basename>` source encodes only the
 basename segment for URL semantics while preserving the real filesystem name.
 Unsupported images, unsafe names, oversized payloads, unreadable or
 out-of-workspace resources, and failed writes leave the Markdown document
-unchanged and use the existing VS Code error notification route.
+unchanged and use the existing VS Code error notification route. SVG is kept
+as an external image resource; its XML is never injected into the Webview DOM,
+and no new SVG data URI source is accepted.
 
 Each imported file receives an independent request id. Its pending drop
 position is held as a point anchor in a ProseMirror plugin state and widget
@@ -143,12 +145,12 @@ and write failures, one-write collision retries, zero-byte and generic-MIME
 correlated failures, non-image fall-through, invalid code-block preflight,
 mapped positions, destructive pending-anchor edits, multiple-file order,
 failure cleanup, serializer round trips, and temporary-state
-non-serialization. The final unit suite passed 811 tests across 38 files; the
+non-serialization. The final unit suite passed 820 tests across 38 files; the
 browser block suite also passed all five required
 fixtures (`common-test.md`, `github-test.md`, `github-test-class-B.md`,
 `gitlab-test.md`, and `gitlab-test-class-B.md`) on Rich, dedicated preview, and
 native-preview surfaces. The spacing suite passed 37 Rich/preview and 37
-native cases. Compile, lint (0 errors; 83 `any` warnings), format
+native cases. Compile, lint (0 errors; 87 `any` warnings), format
 check, and the installed Extension Development Host acceptance suite all
 completed successfully. Manual checks:
 
@@ -161,6 +163,7 @@ completed successfully. Manual checks:
   tested.
 - JPEG: not tested.
 - WebP: not tested.
+- SVG real drop: not tested.
 - GIF animation: not tested.
 - Windows Explorer real file drop: not tested.
 - Remote SSH actual filesystem import: not tested.
