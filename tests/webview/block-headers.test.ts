@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   isMathFenceLanguage,
   parseMarkdown,
@@ -14,6 +14,28 @@ import { blockSourceEditor } from "../../src/webview/blockSourceEditing";
 import { NodeSelection } from "prosemirror-state";
 
 const apps: MarkdownEditorApp[] = [];
+
+function installMermaidRuntime(): void {
+  const globals = globalThis as unknown as Record<string, unknown>;
+  globals.markdownMintMermaidVersion = "11.17.2";
+  globals.markdownMintMermaid = {
+    parse: async (source: string) => {
+      if (!/^(?:flowchart|graph)\b/m.test(source) || /-->\s*$/.test(source))
+        throw new Error("Mermaid syntax error");
+      return {
+        diagramType: source.trimStart().startsWith("graph")
+          ? "flowchart"
+          : "flowchart-v2",
+      };
+    },
+    render: () => "<svg />",
+  };
+}
+
+async function settleMermaidValidation(): Promise<void> {
+  await new Promise<void>((resolve) => setTimeout(resolve, 320));
+  await Promise.resolve();
+}
 function setup(source: string) {
   const root = document.createElement("div");
   document.body.append(root);
@@ -41,8 +63,15 @@ function openRenderedEditor(
     new MouseEvent("dblclick", { bubbles: true, cancelable: true }),
   );
 }
+beforeEach(() => {
+  installMermaidRuntime();
+});
+
 afterEach(() => {
   apps.splice(0).forEach((app) => app.destroy());
+  const globals = globalThis as unknown as Record<string, unknown>;
+  delete globals.markdownMintMermaid;
+  delete globals.markdownMintMermaidVersion;
   document.body.replaceChildren();
 });
 
@@ -360,7 +389,7 @@ describe("block header actions", () => {
     ["mermaid", "```mermaid\ngraph LR\n  A --> B\n```"],
   ] as const)(
     "uses the rendered %s block for modal editing",
-    (kind, source) => {
+    async (kind, source) => {
       const { root, app } = setup(source);
       const label = kind === "math" ? "Math" : "Mermaid";
       const rendered = root.querySelector<HTMLElement>(
@@ -429,6 +458,12 @@ describe("block header actions", () => {
       dialog.querySelector<HTMLTextAreaElement>(
         "[data-feature-field=body]",
       )!.value = kind === "math" ? "y^3" : "graph TD\n  C --> D";
+      if (kind === "mermaid") {
+        dialog
+          .querySelector<HTMLTextAreaElement>("[data-feature-field=body]")!
+          .dispatchEvent(new Event("input", { bubbles: true }));
+        await settleMermaidValidation();
+      }
       dialog.querySelector<HTMLButtonElement>("button[type=submit]")!.click();
       expect(serializeMarkdown(app.view.state.doc)).toContain(
         kind === "math" ? "y^3" : "C --> D",
@@ -475,9 +510,10 @@ describe("block header actions", () => {
     "~~~math\nx + y\n~~~",
   ])(
     "edits the existing rendered source and preserves its wrapper: %s",
-    (source) => {
+    async (source) => {
       const { root, app, messages } = setup(source);
       openRenderedEditor(root, source.startsWith("```") ? "mermaid" : "math");
+      if (source.startsWith("```")) await settleMermaidValidation();
       const dialog = root.querySelector<HTMLDialogElement>(
         ".mm-profile-feature-dialog",
       )!;
@@ -495,6 +531,10 @@ describe("block header actions", () => {
       ).toHaveLength(0);
       openRenderedEditor(root, source.startsWith("```") ? "mermaid" : "math");
       input.value = original + "  ";
+      if (source.startsWith("```")) {
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+        await settleMermaidValidation();
+      }
       dialog.querySelector<HTMLButtonElement>("button[type=submit]")!.click();
       expect(app.view.state.doc.childCount).toBe(1);
       expect(serializeMarkdown(app.view.state.doc)).toBe(

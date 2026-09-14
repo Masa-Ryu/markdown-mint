@@ -73,6 +73,23 @@ The focused browser checks were complete in that build. Native integration was
 exercised separately there; native VS Code visual geometry is kept distinct
 from the browser evidence.
 
+## Mermaid editor modal (0.0.53)
+
+Mermaid Insert and Edit dialogs use a large, viewport-bounded layout with the
+source editor occupying the flexible space between the title/status header and
+the action row. The visual “Diagram source” label is hidden, while the
+textarea retains its accessible name. The header reports the bundled Mermaid
+runtime version and the current validation state, including a humanized
+diagram type after a successful parse.
+
+Validation removes the same NUL characters and Mermaid directives as the
+renderer before calling the bundled Mermaid runtime's `parse()` method. It is
+debounced during typing, rejects empty and over-limit input, and guards
+delayed results against newer input or a closed dialog. Insert and Update,
+including Ctrl/Cmd+Enter, require a current successful validation result.
+The renderer continues to use the existing strict security configuration and
+sanitization path.
+
 ## Alert inline editing refinement
 
 Alerts keep their existing visual design and raw Markdown representation while

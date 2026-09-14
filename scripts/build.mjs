@@ -1,6 +1,7 @@
 import { build, context } from "esbuild";
 import { existsSync, mkdirSync } from "node:fs";
-import { cp, mkdir } from "node:fs/promises";
+import { cp, mkdir, readFile } from "node:fs/promises";
+import { createRequire } from "node:module";
 import { writeThirdPartyNotices } from "./third-party-notices.mjs";
 
 const watch = process.argv.includes("--watch");
@@ -8,6 +9,13 @@ const extensionOnly = process.argv.includes("--extension-only");
 const webviewOnly = process.argv.includes("--webview-only");
 
 mkdirSync("dist", { recursive: true });
+
+const require = createRequire(import.meta.url);
+const mermaidPackagePath = require.resolve("mermaid/package.json");
+const mermaidPackage = JSON.parse(await readFile(mermaidPackagePath, "utf8"));
+if (typeof mermaidPackage.version !== "string" || !mermaidPackage.version)
+  throw new Error("The installed Mermaid package does not declare a version.");
+const mermaidVersion = mermaidPackage.version;
 
 async function copyRenderingAssets() {
   await mkdir("dist/katex/fonts", { recursive: true });
@@ -70,6 +78,9 @@ const mermaidOptions = {
   sourcemap: true,
   minify: false,
   legalComments: "none",
+  define: {
+    __MERMAID_VERSION__: JSON.stringify(mermaidVersion),
+  },
 };
 
 async function buildOne(options) {

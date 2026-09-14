@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.0.53
+
+- Improve Mermaid Insert and Edit dialogs with a large, viewport-bounded,
+  editor-first layout and accessible source labeling.
+- Show the installed Mermaid runtime version, humanized diagram type, and
+  debounced live syntax status while keeping the existing strict renderer
+  security settings and source normalization.
+- Block empty, checking, invalid, stale, and out-of-date Mermaid submissions,
+  including Ctrl/Cmd+Enter, and protect asynchronous validation from races and
+  dialog closure.
+
 ## 0.0.52
 
 - Update the Link dialog destination field to accept relative paths, root paths,
