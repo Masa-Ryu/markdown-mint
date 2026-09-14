@@ -4599,7 +4599,7 @@ export class MarkdownEditorApp {
       "link",
       "link",
     );
-    addButton(
+    const imageButton = addButton(
       "",
       "Insert image",
       () => this.insertImage(),
@@ -4609,6 +4609,8 @@ export class MarkdownEditorApp {
       "image",
       "image",
     );
+    imageButton.dataset.tooltip =
+      "Insert image; Shift + drag an image to import";
     const emojiButton = makeElement("button", {
       type: "button",
       class: "mm-emoji-button",

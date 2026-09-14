@@ -9,7 +9,10 @@ import {
 } from "../../src/core";
 import { PROTOCOL_VERSION } from "../../src/shared/protocol";
 import { BlockBoundarySelection } from "../../src/webview/blockBoundary";
-import { imageImportPluginKey } from "../../src/webview/imageImport";
+import {
+  imageImportPluginKey,
+  parseImageImportUriList,
+} from "../../src/webview/imageImport";
 import {
   createEditorApp,
   type EditorInitialDocument,
@@ -76,14 +79,21 @@ function dispatchImageDrop(
   app: ReturnType<typeof makeApp>["app"],
   files: readonly File[],
   position: number,
+  uriList?: string,
 ): DragEvent {
   const event = new Event("drop", {
     bubbles: true,
     cancelable: true,
   }) as DragEvent;
   Object.defineProperty(event, "dataTransfer", {
-    value: { files, getData: () => "" },
+    value: {
+      files,
+      types: uriList === undefined ? [] : ["text/uri-list"],
+      getData: (format: string) =>
+        format === "text/uri-list" ? (uriList ?? "") : "",
+    },
   });
+  Object.defineProperty(event, "shiftKey", { value: true });
   Object.defineProperty(event, "clientX", { value: 40 });
   Object.defineProperty(event, "clientY", { value: 20 });
   const originalPosAtCoords = app.view.posAtCoords;
@@ -1739,6 +1749,161 @@ describe("rich editor rendering", () => {
     expect(
       app.view.state.doc.nodeAt(app.view.posAtDOM(image!, 0))?.attrs.src,
     ).toBe("./images/architecture.png");
+    app.destroy();
+  });
+
+  it("parses URI-list comments, empty lines, line endings, and encoded basenames", () => {
+    expect(
+      parseImageImportUriList(
+        "# Finder comment\r\n\r\nfile:///workspace/assets/sample%20image.png\n" +
+          "file:///workspace/assets/notes.txt\r\n" +
+          "vscode-remote://ssh-remote+host/workspace/two.webp\n" +
+          "/workspace/assets/path.png",
+      ),
+    ).toEqual([
+      {
+        resourceUri: "file:///workspace/assets/sample%20image.png",
+        fileName: "sample image.png",
+      },
+      {
+        resourceUri: "vscode-remote://ssh-remote+host/workspace/two.webp",
+        fileName: "two.webp",
+      },
+      {
+        resourceUri: "/workspace/assets/path.png",
+        fileName: "path.png",
+      },
+    ]);
+  });
+
+  it("consumes a VS Code Explorer URI image drop without inserting the raw URI", async () => {
+    const { app, root, messages } = makeApp("before after");
+    const event = dispatchImageDrop(
+      app,
+      [],
+      7,
+      "# Explorer comment\r\n\r\nfile:///workspace/assets/sample.png\r\n",
+    );
+
+    expect(event.defaultPrevented).toBe(true);
+    await flush();
+    const request = messages.find(
+      (message: any) => message.type === "image-import-uri",
+    ) as any;
+    expect(request).toMatchObject({
+      type: "image-import-uri",
+      resourceUri: "file:///workspace/assets/sample.png",
+    });
+    expect(
+      messages.some((message: any) => message.type === "image-import"),
+    ).toBe(false);
+    expect(root.querySelector(".mm-image-importing")).not.toBeNull();
+    expect(messages.some(isEditMessage)).toBe(false);
+
+    receiveHostMessage({
+      protocolVersion: PROTOCOL_VERSION,
+      type: "image-import-result",
+      requestId: request.requestId,
+      success: true,
+      relativePath: "./images/sample.png",
+    });
+
+    expect(root.querySelector(".mm-image-importing")).toBeNull();
+    expect(lastEditMarkdown(messages)).toBe(
+      "before![sample](./images/sample.png) after",
+    );
+    expect(lastEditMarkdown(messages)).not.toContain("/workspace/");
+    app.destroy();
+  });
+
+  it("consumes image-looking path and remote URI strings instead of inserting them", async () => {
+    for (const resourceUri of [
+      "/workspace/assets/sample.png",
+      "vscode-remote://ssh-remote+host/workspace/sample.png",
+    ]) {
+      const { app, messages } = makeApp("before after");
+      const event = dispatchImageDrop(app, [], 7, resourceUri);
+
+      expect(event.defaultPrevented).toBe(true);
+      await flush();
+      const request = messages.find(
+        (message: any) => message.type === "image-import-uri",
+      ) as any;
+      expect(request.resourceUri).toBe(resourceUri);
+      receiveHostMessage({
+        protocolVersion: PROTOCOL_VERSION,
+        type: "image-import-result",
+        requestId: request.requestId,
+        success: false,
+        message: "The resource was rejected.",
+      });
+      expect(messages.some(isEditMessage)).toBe(false);
+      expect(lastEditMarkdown(messages)).not.toContain(resourceUri);
+      app.destroy();
+    }
+  });
+
+  it("keeps multiple URI image imports ordered and consumes mixed non-image resources", async () => {
+    const { app, messages } = makeApp("before after");
+    const event = dispatchImageDrop(
+      app,
+      [imageFile("notes.txt", "text/plain")],
+      7,
+      "file:///workspace/one.png\n" +
+        "file:///workspace/readme.txt\r\n" +
+        "# ignored\n" +
+        "file:///workspace/two.webp",
+    );
+
+    expect(event.defaultPrevented).toBe(true);
+    await flush();
+    const requests = messages.filter(
+      (message: any) => message.type === "image-import-uri",
+    ) as any[];
+    expect(requests.map((message) => message.resourceUri)).toEqual([
+      "file:///workspace/one.png",
+      "file:///workspace/two.webp",
+    ]);
+    expect(messages.some(isEditMessage)).toBe(false);
+
+    for (const [index, request] of requests.entries())
+      receiveHostMessage({
+        protocolVersion: PROTOCOL_VERSION,
+        type: "image-import-result",
+        requestId: request.requestId,
+        success: true,
+        relativePath: `./images/${index === 0 ? "one" : "two"}.${
+          index === 0 ? "png" : "webp"
+        }`,
+      });
+
+    const firstEdit = messages.filter(isEditMessage)[0] as any;
+    app.receiveDocument({
+      protocolVersion: PROTOCOL_VERSION,
+      type: "document",
+      markdown: firstEdit.markdown,
+      version: 2,
+      profile: "github",
+      operationId: firstEdit.operationId,
+      reason: "ack",
+    });
+    await flush();
+    expect(lastEditMarkdown(messages)).toBe(
+      "before![one](./images/one.png)![two](./images/two.webp) after",
+    );
+    expect(lastEditMarkdown(messages)).not.toContain("/workspace/");
+    app.destroy();
+  });
+
+  it("lets a URI-list drop with only non-images fall through", () => {
+    const { app, messages } = makeApp("before after");
+    dispatchImageDrop(app, [], 7, "file:///workspace/readme.txt\n# comment\n");
+
+    // The existing ProseMirror text-drop handler may consume a non-image URI
+    // resource; the image importer itself must not claim or send it.
+    expect(
+      messages.some((message: any) => message.type === "image-import-uri"),
+    ).toBe(false);
     app.destroy();
   });
 

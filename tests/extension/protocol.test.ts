@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   MAX_CLIPBOARD_TEXT_LENGTH,
   MAX_IMAGE_IMPORT_BASE64_LENGTH,
+  MAX_RESOURCE_URL_LENGTH,
   PROTOCOL_VERSION,
   isHostMessage,
   parseWebviewMessage,
@@ -382,5 +383,47 @@ describe("Markdown Mint wire protocol", () => {
         relativePath: "file:///workspace/images/architecture.png",
       }),
     ).toBe(false);
+  });
+
+  it("validates URI image import requests without reading the URI on the webview side", () => {
+    expect(
+      parseWebviewMessage({
+        protocolVersion: PROTOCOL_VERSION,
+        type: "image-import-uri",
+        requestId: "image:uri:1",
+        resourceUri:
+          "vscode-remote://ssh-remote+host/workspace/assets/sample.png",
+      }),
+    ).toEqual({
+      protocolVersion: PROTOCOL_VERSION,
+      type: "image-import-uri",
+      requestId: "image:uri:1",
+      resourceUri:
+        "vscode-remote://ssh-remote+host/workspace/assets/sample.png",
+    });
+    expect(
+      parseWebviewMessage({
+        protocolVersion: PROTOCOL_VERSION,
+        type: "image-import-uri",
+        requestId: "image:uri:1",
+        resourceUri: "",
+      }),
+    ).toBeUndefined();
+    expect(
+      parseWebviewMessage({
+        protocolVersion: PROTOCOL_VERSION,
+        type: "image-import-uri",
+        requestId: "image:uri:1",
+        resourceUri: "x".repeat(MAX_RESOURCE_URL_LENGTH + 1),
+      }),
+    ).toBeUndefined();
+    expect(
+      parseWebviewMessage({
+        protocolVersion: PROTOCOL_VERSION,
+        type: "image-import-uri",
+        requestId: "image:uri:1",
+        resourceUri: "file:///workspace/sample\n.png",
+      }),
+    ).toBeUndefined();
   });
 });

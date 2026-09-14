@@ -6,7 +6,7 @@ import {
   loadFormatterConfig,
   type FormatterConfigResult,
 } from "./formatterConfig";
-import { saveImageImport } from "./imageImport";
+import { saveImageImport, saveImageImportUri } from "./imageImport";
 import {
   MARKDOWN_MINT_VIEW_TYPE,
   MarkdownMintCodeLensProvider,
@@ -23,6 +23,7 @@ import {
   type ClipboardResultMessage,
   type ClipboardWriteMessage,
   type ImageImportMessage,
+  type ImageImportUriMessage,
   type FormatRejectedMessage,
   type HostDocumentReason,
   type HostMessage,
@@ -730,6 +731,11 @@ export class MarkdownMintEditorProvider
           this.handleImageImport(session, message),
         );
         return;
+      case "image-import-uri":
+        await this.enqueue(session.state, () =>
+          this.handleImageImportUri(session, message),
+        );
+        return;
       case "notify":
         this.notifyUser(message);
         return;
@@ -860,6 +866,40 @@ export class MarkdownMintEditorProvider
       fs: vscode.workspace.fs,
       joinPath: (base, ...parts) => vscode.Uri.joinPath(base, ...parts),
     });
+    const response: HostMessage = {
+      protocolVersion: PROTOCOL_VERSION,
+      type: "image-import-result",
+      requestId: message.requestId,
+      ...(result.success
+        ? { success: true, relativePath: result.relativePath }
+        : { success: false, message: result.message.slice(0, 1_024) }),
+    };
+    this.post(session, response);
+  }
+
+  private async handleImageImportUri(
+    session: PanelSession,
+    message: ImageImportUriMessage,
+  ): Promise<void> {
+    const result = await saveImageImportUri(
+      session.state.uri,
+      message.resourceUri,
+      message.requestId,
+      {
+        fs: vscode.workspace.fs,
+        resource: vscode.workspace.fs,
+        joinPath: (base, ...parts) => vscode.Uri.joinPath(base, ...parts),
+        parseUri: (value) => {
+          try {
+            return vscode.Uri.parse(value);
+          } catch {
+            return undefined;
+          }
+        },
+        isWorkspaceResource: (uri) =>
+          Boolean(vscode.workspace.getWorkspaceFolder(uri)),
+      },
+    );
     const response: HostMessage = {
       protocolVersion: PROTOCOL_VERSION,
       type: "image-import-result",

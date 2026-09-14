@@ -96,22 +96,33 @@ sanitization path.
 
 ## Image file drag-and-drop import (0.2.0)
 
-The Rich Editor consumes a drop only when `DataTransfer.files` contains a
-potential image. PNG, JPEG/JPG, GIF, and WebP files are read in the Webview and
-sent as bounded base64 payloads; the Webview never writes to the filesystem.
-The wire protocol checks only message shape, bounded fields, and structurally
-valid base64; the Extension Host owns semantic validation of empty payloads,
-MIME/extension combinations, and unsafe names. It decodes the payload with the
-10 MB limit, creates the Markdown document's sibling `images` directory
-through `workspace.fs`, writes one same-directory temporary file, and atomically
-claims the first available basename (then `-1`, `-2`, and so on) by retrying
-`rename(..., { overwrite: false })` against that same temporary file. Temporary
-files are cleaned up after both successful and failed attempts. The returned
-`./images/<basename>` source encodes only the basename segment for URL semantics
-while preserving the real filesystem name. Unsupported images, unsafe names,
-oversized payloads, and failed writes leave the Markdown document unchanged and
-use the existing VS Code error notification route. Existing non-image
-ProseMirror drops continue through the normal handler.
+Image insertion is documented as Shift + drag-and-drop from Finder, Windows
+Explorer, or the VS Code Explorer because that is the supported Webview route
+for external resources. The Rich Editor consumes a drop when it contains a
+supported image in either `DataTransfer.files` or a `text/uri-list` payload.
+URI lists are parsed as ordered CRLF/LF-separated resources, ignoring blank and
+`#` comment lines and decoding percent-encoded basenames; a supported image
+resource is never allowed to fall through as raw path or URI text. A mixed drop
+imports only supported images and consumes the whole event, while a drop with
+no supported image continues through the normal ProseMirror handler.
+
+PNG, JPEG/JPG, GIF, and WebP files are read in the Webview and sent as bounded
+base64 payloads; the Webview never writes to the filesystem. For VS Code
+Explorer resources, the Webview sends only the URI and the Extension Host
+validates the parsed workspace resource, reads it through `workspace.fs`, and
+then joins the same byte-oriented save pipeline. The wire protocol checks
+message shape and bounded fields; the Extension Host owns semantic validation
+of empty payloads, MIME/extension combinations, readable file resources, and
+unsafe names. It applies the 10 MB limit, creates the Markdown document's
+sibling `images` directory through `workspace.fs`, writes one same-directory
+temporary file, and atomically claims the first available basename (then `-1`,
+`-2`, and so on) by retrying `rename(..., { overwrite: false })` against that
+same temporary file. Temporary files are cleaned up after both successful and
+failed attempts. The returned `./images/<basename>` source encodes only the
+basename segment for URL semantics while preserving the real filesystem name.
+Unsupported images, unsafe names, oversized payloads, unreadable or
+out-of-workspace resources, and failed writes leave the Markdown document
+unchanged and use the existing VS Code error notification route.
 
 Each imported file receives an independent request id. Its pending drop
 position is held as a point anchor in a ProseMirror plugin state and widget
@@ -124,24 +135,26 @@ file is read or saved. Pending decorations are not serialized, and the normal
 image insertion transaction is undoable while the saved file is intentionally
 retained on Undo.
 
-Protocol, Extension Host, and Webview regressions cover validation, atomic
+Protocol, Extension Host, and Webview regressions cover validation, URI-list
+parsing and resource-drop fall-through protection, atomic
 concurrent duplicate names with both payloads retained, URL-special basenames,
 255-character collision suffixes, temporary-file cleanup, unsafe paths, size
 and write failures, one-write collision retries, zero-byte and generic-MIME
 correlated failures, non-image fall-through, invalid code-block preflight,
 mapped positions, destructive pending-anchor edits, multiple-file order,
 failure cleanup, serializer round trips, and temporary-state
-non-serialization. The final unit suite passed 794 tests across 38 files; the
+non-serialization. The final unit suite passed 811 tests across 38 files; the
 browser block suite also passed all five required
 fixtures (`common-test.md`, `github-test.md`, `github-test-class-B.md`,
 `gitlab-test.md`, and `gitlab-test-class-B.md`) on Rich, dedicated preview, and
 native-preview surfaces. The spacing suite passed 37 Rich/preview and 37
-native cases. Compile, lint (0 errors; 74 `any` warnings), format
+native cases. Compile, lint (0 errors; 83 `any` warnings), format
 check, and the installed Extension Development Host acceptance suite all
 completed successfully. Manual checks:
 
-- macOS Finder real PNG drag/drop: not tested (the native drag automation
-  returned `noWindowsAvailable`).
+- macOS Finder real Shift + PNG drag/drop: not tested (the native drag
+  automation returned `noWindowsAvailable`).
+- VS Code Explorer real Shift + image resource drop: not tested.
 - image persistence after reopening the document: not tested.
 - duplicate filename collision behavior: not tested.
 - Undo removing the Markdown reference while retaining saved image files: not

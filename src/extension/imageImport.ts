@@ -2,6 +2,7 @@ import {
   MAX_IMAGE_IMPORT_BYTES,
   MAX_IMAGE_IMPORT_BASE64_LENGTH,
   MAX_IMAGE_IMPORT_FILE_NAME_LENGTH,
+  MAX_RESOURCE_URL_LENGTH,
   type ImageImportMessage,
 } from "../shared/protocol";
 
@@ -22,9 +23,33 @@ export interface ImageImportFileSystem<Uri extends ImageImportUriLike> {
   writeFile(uri: Uri, bytes: Uint8Array): PromiseLike<void>;
 }
 
+export interface ImageImportResourceStat {
+  readonly type: number;
+  readonly size: number;
+}
+
+export interface ImageImportResourceReader<Uri extends ImageImportUriLike> {
+  stat(uri: Uri): PromiseLike<ImageImportResourceStat>;
+  readFile(uri: Uri): PromiseLike<Uint8Array>;
+}
+
 export interface ImageImportDependencies<Uri extends ImageImportUriLike> {
   readonly fs: ImageImportFileSystem<Uri>;
   readonly joinPath: (base: Uri, ...parts: string[]) => Uri;
+}
+
+export interface ImageImportUriDependencies<
+  Uri extends ImageImportUriLike,
+> extends ImageImportDependencies<Uri> {
+  readonly resource: ImageImportResourceReader<Uri>;
+  readonly parseUri: (value: string) => Uri | undefined;
+  readonly isWorkspaceResource: (uri: Uri) => boolean;
+}
+
+export interface ImageImportUriReadResult {
+  readonly fileName: string;
+  readonly mimeType: string;
+  readonly bytes: Uint8Array;
 }
 
 export type ImageImportSaveResult =
@@ -41,6 +66,8 @@ const MIME_TYPES_BY_EXTENSION: Readonly<Record<string, readonly string[]>> = {
 
 const MAX_FILE_NAME_LENGTH = 255;
 const MAX_DUPLICATE_ATTEMPTS = 10_000;
+export const IMAGE_IMPORT_FILE_TYPE_FILE = 1;
+export const IMAGE_IMPORT_FILE_TYPE_DIRECTORY = 2;
 let temporaryFileSequence = 0;
 
 /**
@@ -107,6 +134,132 @@ export async function saveImageImport<Uri extends ImageImportUriLike>(
   request: ImageImportMessage,
   dependencies: ImageImportDependencies<Uri>,
 ): Promise<ImageImportSaveResult> {
+  try {
+    return await saveImageImportBytes(
+      documentUri,
+      request.fileName,
+      request.mimeType,
+      decodeImageImportBase64(request.base64),
+      request.requestId,
+      dependencies,
+    );
+  } catch (error) {
+    return {
+      success: false,
+      message: errorMessage(error, "The image could not be imported."),
+    };
+  }
+}
+
+/** Read a VS Code Explorer resource through the Extension Host filesystem. */
+export async function readImageImportUri<Uri extends ImageImportUriLike>(
+  resourceUri: string,
+  dependencies: ImageImportUriDependencies<Uri>,
+): Promise<ImageImportUriReadResult> {
+  if (
+    resourceUri.length === 0 ||
+    resourceUri.length > MAX_RESOURCE_URL_LENGTH ||
+    hasControlCharacter(resourceUri)
+  )
+    throw new Error("The dropped image URI is not safe.");
+
+  const sourceUri = dependencies.parseUri(resourceUri);
+  if (!sourceUri?.scheme || !dependencies.isWorkspaceResource(sourceUri))
+    throw new Error(
+      "Only image resources inside the current workspace can be imported.",
+    );
+
+  const fileName = imageImportFileNameFromUri(sourceUri, resourceUri);
+  if (!fileName) throw new Error("The dropped image URI has no file name.");
+  normalizeImageImportFileName(fileName);
+  const mimeType = imageImportMimeTypeForFileName(fileName);
+  if (!mimeType)
+    throw new Error("Only PNG, JPEG, GIF, and WebP images can be imported.");
+
+  const stat = await dependencies.resource.stat(sourceUri);
+  if (
+    !Number.isSafeInteger(stat.type) ||
+    (stat.type & IMAGE_IMPORT_FILE_TYPE_FILE) === 0 ||
+    (stat.type & IMAGE_IMPORT_FILE_TYPE_DIRECTORY) !== 0
+  )
+    throw new Error("The dropped image resource is not a file.");
+  if (!Number.isSafeInteger(stat.size) || stat.size < 0)
+    throw new Error("The dropped image resource has an invalid size.");
+  if (stat.size > MAX_IMAGE_IMPORT_BYTES)
+    throw new Error("The dropped image exceeds the 10 MB size limit.");
+
+  const bytes = await dependencies.resource.readFile(sourceUri);
+  if (bytes.byteLength > MAX_IMAGE_IMPORT_BYTES)
+    throw new Error("The dropped image exceeds the 10 MB size limit.");
+  return { fileName, mimeType, bytes };
+}
+
+/** Read and save a URI source through the same pipeline as a File source. */
+export async function saveImageImportUri<Uri extends ImageImportUriLike>(
+  documentUri: Uri,
+  resourceUri: string,
+  requestId: string,
+  dependencies: ImageImportUriDependencies<Uri>,
+): Promise<ImageImportSaveResult> {
+  try {
+    const source = await readImageImportUri(resourceUri, dependencies);
+    return await saveImageImportBytes(
+      documentUri,
+      source.fileName,
+      source.mimeType,
+      source.bytes,
+      requestId,
+      dependencies,
+    );
+  } catch (error) {
+    return {
+      success: false,
+      message: errorMessage(error, "The image could not be imported."),
+    };
+  }
+}
+
+/** Return the decoded basename without ever exposing the URI path to Markdown. */
+export function imageImportFileNameFromUri<Uri extends ImageImportUriLike>(
+  uri: Uri,
+  resourceUri?: string,
+): string | undefined {
+  const path = resourceUri ? (rawUriPath(resourceUri) ?? uri.path) : uri.path;
+  if (!path || path.endsWith("/")) return undefined;
+  const slash = path.lastIndexOf("/");
+  const encodedFileName = path.slice(slash + 1);
+  if (!encodedFileName) return undefined;
+  try {
+    return decodeURIComponent(encodedFileName);
+  } catch {
+    return undefined;
+  }
+}
+
+function rawUriPath(resourceUri: string): string | undefined {
+  try {
+    return new URL(resourceUri).pathname;
+  } catch {
+    return undefined;
+  }
+}
+
+export function imageImportMimeTypeForFileName(
+  fileName: string,
+): string | undefined {
+  const extension = fileName.slice(fileName.lastIndexOf(".")).toLowerCase();
+  return MIME_TYPES_BY_EXTENSION[extension]?.[0];
+}
+
+/** Save validated bytes beside the Markdown document and return a portable path. */
+export async function saveImageImportBytes<Uri extends ImageImportUriLike>(
+  documentUri: Uri,
+  fileName: string,
+  mimeType: string,
+  bytes: Uint8Array,
+  requestId: string,
+  dependencies: ImageImportDependencies<Uri>,
+): Promise<ImageImportSaveResult> {
   let temporaryUri: Uri | undefined;
   let result: ImageImportSaveResult = {
     success: false,
@@ -114,21 +267,23 @@ export async function saveImageImport<Uri extends ImageImportUriLike>(
   };
   let claimed = false;
   try {
-    const bytes = decodeImageImportBase64(request.base64);
     if (bytes.byteLength === 0) throw new Error("The dropped image is empty.");
-    const fileName = normalizeImageImportFileName(request.fileName);
-    validateImageType(fileName, request.mimeType);
+    if (bytes.byteLength > MAX_IMAGE_IMPORT_BYTES)
+      throw new Error("The dropped image exceeds the 10 MB size limit.");
+    const safeFileName = normalizeImageImportFileName(fileName);
+    validateImageType(safeFileName, mimeType);
     const documentDirectory = documentDirectoryUri(documentUri, dependencies);
     const imagesDirectory = dependencies.joinPath(documentDirectory, "images");
 
     await dependencies.fs.createDirectory(imagesDirectory);
     temporaryUri = dependencies.joinPath(
       imagesDirectory,
-      temporaryFileName(request.requestId),
+      temporaryFileName(requestId),
     );
     await dependencies.fs.writeFile(temporaryUri, bytes);
     for (let suffix = 0; suffix <= MAX_DUPLICATE_ATTEMPTS; suffix += 1) {
-      const targetName = suffix === 0 ? fileName : withSuffix(fileName, suffix);
+      const targetName =
+        suffix === 0 ? safeFileName : withSuffix(safeFileName, suffix);
       const relativePath = relativeImagePath(targetName);
       try {
         await dependencies.fs.rename(

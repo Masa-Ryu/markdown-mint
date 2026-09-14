@@ -9,8 +9,10 @@ import {
 } from "prosemirror-state";
 import {
   MAX_IMAGE_IMPORT_BYTES,
+  MAX_RESOURCE_URL_LENGTH,
   PROTOCOL_VERSION,
   type ImageImportMessage,
+  type ImageImportUriMessage,
   type ImageImportResultMessage,
 } from "../shared/protocol";
 
@@ -36,14 +38,29 @@ type ImageImportTransactionMeta =
   | { readonly kind: "finish"; readonly requestId: string }
   | { readonly kind: "clear" };
 
-interface ImageImportFileRequest {
+interface ImageImportFileSource {
   readonly requestId: string;
   readonly file: File;
 }
 
+interface ImageImportUriSource {
+  readonly requestId: string;
+  readonly resourceUri: string;
+  readonly fileName: string;
+}
+
+type ImageImportSource = ImageImportFileSource | ImageImportUriSource;
+
+export interface ParsedImageImportUri {
+  readonly resourceUri: string;
+  readonly fileName: string;
+}
+
 export interface ImageImportControllerOptions {
   readonly schema: Schema;
-  readonly postMessage?: (message: ImageImportMessage) => void;
+  readonly postMessage?: (
+    message: ImageImportMessage | ImageImportUriMessage,
+  ) => void;
   readonly canImport: () => boolean;
   readonly notify: (message: string) => void;
   readonly createRequestId?: () => string;
@@ -79,7 +96,7 @@ export function createImageImportPlugin(): Plugin<ImageImportPluginState> {
 export class ImageImportController {
   readonly plugin: Plugin<ImageImportPluginState>;
   private readonly options: ImageImportControllerOptions;
-  private readonly pendingFiles = new Map<string, File>();
+  private readonly pendingSources = new Map<string, ImageImportSource>();
   private readQueue: Promise<void> = Promise.resolve();
   private destroyed = false;
 
@@ -91,7 +108,19 @@ export class ImageImportController {
   handleDrop(view: EditorView, event: DragEvent): boolean {
     const files = filesFromDrop(event);
     const imageFiles = files.filter(isPotentialImageFile);
-    if (imageFiles.length === 0) return false;
+    const uriImages = imageImportUrisFromDrop(event);
+    const imageUris = uriImages.filter(
+      (candidate) => candidate.resourceUri.length <= MAX_RESOURCE_URL_LENGTH,
+    );
+    const hasOversizedImageUri = uriImages.length > imageUris.length;
+    if (imageFiles.length === 0 && imageUris.length === 0) {
+      if (hasOversizedImageUri) {
+        event.preventDefault();
+        this.options.notify("The dropped image URI is too large to import.");
+        return true;
+      }
+      return false;
+    }
 
     event.preventDefault();
     if (!this.options.canImport() || !this.options.postMessage) {
@@ -119,18 +148,26 @@ export class ImageImportController {
       return true;
     }
 
-    const requests: ImageImportFileRequest[] = [];
-    for (const file of imageFiles) {
-      const requestId = this.newRequestId();
-      const request = { requestId, file };
-      requests.push(request);
-      this.pendingFiles.set(requestId, file);
+    const sources: ImageImportSource[] =
+      imageFiles.length > 0
+        ? imageFiles.map((file) => ({
+            requestId: this.newRequestId(),
+            file,
+          }))
+        : imageUris.map((source) => ({
+            requestId: this.newRequestId(),
+            resourceUri: source.resourceUri,
+            fileName: source.fileName,
+          }));
+    for (const source of sources) {
+      const fileName = "file" in source ? source.file.name : source.fileName;
+      this.pendingSources.set(source.requestId, source);
       view.dispatch(
         view.state.tr.setMeta(imageImportPluginKey, {
           kind: "add",
           request: {
-            requestId,
-            fileName: file.name,
+            requestId: source.requestId,
+            fileName,
             position: insertionPosition,
             anchorDeleted: false,
           },
@@ -142,7 +179,7 @@ export class ImageImportController {
     // order, while all positions are already present and can map through the
     // first completed insertion.
     this.readQueue = this.readQueue
-      .then(() => this.sendFilesInOrder(view, requests))
+      .then(() => this.sendSourcesInOrder(view, sources))
       .catch(() => undefined);
     return true;
   }
@@ -153,7 +190,7 @@ export class ImageImportController {
       ?.pending.find((candidate) => candidate.requestId === result.requestId);
     if (!pending) return;
 
-    this.pendingFiles.delete(result.requestId);
+    this.pendingSources.delete(result.requestId);
     if (!result.success) {
       this.finishWithoutDocumentChange(view, result.requestId);
       this.options.notify(
@@ -204,14 +241,14 @@ export class ImageImportController {
       .getState(view.state)
       ?.pending.some((candidate) => candidate.requestId === requestId);
     if (!pending) return false;
-    this.pendingFiles.delete(requestId);
+    this.pendingSources.delete(requestId);
     this.finishWithoutDocumentChange(view, requestId);
     this.options.notify(message || "The dropped image could not be imported.");
     return true;
   }
 
   cancel(view?: EditorView): void {
-    this.pendingFiles.clear();
+    this.pendingSources.clear();
     if (!view) return;
     const pending = imageImportPluginKey.getState(view.state)?.pending;
     if (!pending?.length) return;
@@ -240,28 +277,38 @@ export class ImageImportController {
     );
   }
 
-  private async sendFilesInOrder(
+  private async sendSourcesInOrder(
     view: EditorView,
-    requests: readonly ImageImportFileRequest[],
+    sources: readonly ImageImportSource[],
   ): Promise<void> {
-    for (const { requestId, file } of requests) {
+    for (const source of sources) {
       if (this.destroyed) return;
-      if (!this.isPending(view, requestId)) continue;
+      if (!this.isPending(view, source.requestId)) continue;
+      if ("resourceUri" in source) {
+        const message: ImageImportUriMessage = {
+          protocolVersion: PROTOCOL_VERSION,
+          type: "image-import-uri",
+          requestId: source.requestId,
+          resourceUri: source.resourceUri,
+        };
+        this.options.postMessage?.(message);
+        continue;
+      }
       try {
-        const bytes = await readFileBytes(file);
-        if (!this.isPending(view, requestId)) continue;
+        const bytes = await readFileBytes(source.file);
+        if (!this.isPending(view, source.requestId)) continue;
         const message: ImageImportMessage = {
           protocolVersion: PROTOCOL_VERSION,
           type: "image-import",
-          requestId,
-          fileName: file.name,
-          mimeType: imageMimeType(file),
+          requestId: source.requestId,
+          fileName: source.file.name,
+          mimeType: imageMimeType(source.file),
           base64: bytesToBase64(bytes),
         };
         this.options.postMessage?.(message);
       } catch (error) {
-        this.pendingFiles.delete(requestId);
-        this.finishWithoutDocumentChange(view, requestId);
+        this.pendingSources.delete(source.requestId);
+        this.finishWithoutDocumentChange(view, source.requestId);
         this.options.notify(
           errorMessage(error, "The dropped image could not be read."),
         );
@@ -272,7 +319,7 @@ export class ImageImportController {
   private isPending(view: EditorView, requestId: string): boolean {
     return Boolean(
       !this.destroyed &&
-      this.pendingFiles.has(requestId) &&
+      this.pendingSources.has(requestId) &&
       imageImportPluginKey
         .getState(view.state)
         ?.pending.some((candidate) => candidate.requestId === requestId),
@@ -357,16 +404,75 @@ function filesFromDrop(event: DragEvent): File[] {
   }
 }
 
+function imageImportUrisFromDrop(event: DragEvent): ParsedImageImportUri[] {
+  try {
+    const dataTransfer = event.dataTransfer;
+    if (!dataTransfer) return [];
+    const types = Array.from(dataTransfer.types ?? [], String);
+    if (types.length > 0 && !types.includes("text/uri-list")) return [];
+    const uriList = dataTransfer.getData("text/uri-list");
+    return typeof uriList === "string" ? parseImageImportUriList(uriList) : [];
+  } catch {
+    return [];
+  }
+}
+
+/** Parse RFC 2483-style URI-list data without turning URIs into document text. */
+export function parseImageImportUriList(
+  uriList: string,
+): ParsedImageImportUri[] {
+  const sources: ParsedImageImportUri[] = [];
+  for (const rawLine of uriList.split(/\r\n?|\n/)) {
+    const resourceUri = rawLine.trim();
+    if (!resourceUri || resourceUri.startsWith("#")) continue;
+    const fileName = imageFileNameFromResourceUri(resourceUri);
+    if (!fileName || !isPotentialImageFileName(fileName)) continue;
+    sources.push({ resourceUri, fileName });
+  }
+  return sources;
+}
+
+function imageFileNameFromResourceUri(resourceUri: string): string | null {
+  let encodedFileName: string;
+  try {
+    const parsed = new URL(resourceUri);
+    if (!parsed.protocol || !parsed.pathname || parsed.pathname.endsWith("/"))
+      return null;
+    const slash = parsed.pathname.lastIndexOf("/");
+    encodedFileName = parsed.pathname.slice(slash + 1);
+  } catch {
+    // Some native/Explorer producers expose a path-like value even though
+    // the contract is a URI list. Keep an image-looking candidate consumed so
+    // it cannot fall through as document text; the Host will reject it when
+    // it cannot parse or authorize the resource URI.
+    const resourcePath = resourceUri.split(/[?#]/, 1)[0] ?? "";
+    const slash = Math.max(
+      resourcePath.lastIndexOf("/"),
+      resourcePath.lastIndexOf("\\"),
+    );
+    encodedFileName = resourcePath.slice(slash + 1);
+  }
+  if (!encodedFileName) return null;
+  try {
+    return decodeURIComponent(encodedFileName);
+  } catch {
+    // Keep a supported-looking malformed URI as an import candidate so the
+    // host can reject it without letting the raw URI fall through to text.
+    return encodedFileName;
+  }
+}
+
 function isPotentialImageFile(file: File): boolean {
   const mimeType = String(file.type ?? "")
     .trim()
     .toLowerCase();
-  return (
-    mimeType.startsWith("image/") ||
-    Object.prototype.hasOwnProperty.call(
-      MIME_BY_EXTENSION,
-      extensionOf(file.name),
-    )
+  return mimeType.startsWith("image/") || isPotentialImageFileName(file.name);
+}
+
+function isPotentialImageFileName(fileName: string): boolean {
+  return Object.prototype.hasOwnProperty.call(
+    MIME_BY_EXTENSION,
+    extensionOf(fileName),
   );
 }
 

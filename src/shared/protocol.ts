@@ -139,6 +139,13 @@ export interface ImageImportMessage {
   readonly base64: string;
 }
 
+export interface ImageImportUriMessage {
+  readonly protocolVersion: typeof PROTOCOL_VERSION;
+  readonly type: "image-import-uri";
+  readonly requestId: string;
+  readonly resourceUri: string;
+}
+
 export interface ImageImportResultMessage {
   readonly protocolVersion: typeof PROTOCOL_VERSION;
   readonly type: "image-import-result";
@@ -255,6 +262,7 @@ export type WebviewMessage =
   | RecoverDraftMessage
   | ClipboardWriteMessage
   | ImageImportMessage
+  | ImageImportUriMessage
   | UserNotificationMessage;
 
 export type HostMessage =
@@ -551,6 +559,15 @@ export function parseWebviewMessage(
             base64: value.base64,
           }
         : undefined;
+    case "image-import-uri":
+      return isOperationId(value.requestId) && isResourceUri(value.resourceUri)
+        ? {
+            protocolVersion: PROTOCOL_VERSION,
+            type: "image-import-uri",
+            requestId: value.requestId,
+            resourceUri: value.resourceUri,
+          }
+        : undefined;
     case "notify":
       return (value.level === "info" ||
         value.level === "warning" ||
@@ -652,6 +669,15 @@ function optionalResourceUrl(value: unknown): value is string | undefined {
   return (
     value === undefined ||
     (typeof value === "string" && value.length <= MAX_RESOURCE_URL_LENGTH)
+  );
+}
+
+function isResourceUri(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    value.length <= MAX_RESOURCE_URL_LENGTH &&
+    !hasControlCharacter(value)
   );
 }
 

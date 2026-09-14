@@ -5,9 +5,13 @@ import {
   type ImageImportMessage,
 } from "../../src/shared/protocol";
 import {
+  IMAGE_IMPORT_FILE_TYPE_DIRECTORY,
+  IMAGE_IMPORT_FILE_TYPE_FILE,
   decodeImageImportBase64,
+  saveImageImportUri,
   saveImageImport,
   type ImageImportDependencies,
+  type ImageImportUriDependencies,
   type ImageImportUriLike,
 } from "../../src/extension/imageImport";
 
@@ -26,9 +30,11 @@ class TestFileSystem {
   readonly directories = new Set<string>();
   readonly files = new Map<string, Uint8Array>();
   failWrite = false;
+  failRead = false;
   failRename = false;
   holdWrites = false;
   writeFileCalls = 0;
+  readonly readFileCalls: string[] = [];
   readonly renameTargets: string[] = [];
   private writeReleases: Array<() => void> = [];
 
@@ -49,6 +55,28 @@ class TestFileSystem {
         for (const release of releases) release();
       });
     this.files.set(uri.toString(), new Uint8Array(bytes));
+  }
+
+  async stat(uri: TestUri): Promise<{
+    type: number;
+    size: number;
+  }> {
+    const key = uri.toString();
+    if (this.directories.has(key))
+      return { type: IMAGE_IMPORT_FILE_TYPE_DIRECTORY, size: 0 };
+    const bytes = this.files.get(key);
+    if (!bytes)
+      throw Object.assign(new Error("not found"), { code: "FileNotFound" });
+    return { type: IMAGE_IMPORT_FILE_TYPE_FILE, size: bytes.byteLength };
+  }
+
+  async readFile(uri: TestUri): Promise<Uint8Array> {
+    this.readFileCalls.push(uri.toString());
+    if (this.failRead) throw new Error("permission denied");
+    const bytes = this.files.get(uri.toString());
+    if (!bytes)
+      throw Object.assign(new Error("not found"), { code: "FileNotFound" });
+    return new Uint8Array(bytes);
   }
 
   async rename(
@@ -95,6 +123,35 @@ function dependencies(fileSystem = new TestFileSystem()): {
   };
 }
 
+function parseTestUri(value: string): TestUri | undefined {
+  try {
+    const parsed = new URL(value);
+    return new TestUri(parsed.protocol.slice(0, -1), parsed.pathname);
+  } catch {
+    return undefined;
+  }
+}
+
+function uriDependencies(
+  fileSystem = new TestFileSystem(),
+  isWorkspaceResource: (uri: TestUri) => boolean = (uri) =>
+    uri.path.startsWith("/workspace/"),
+): {
+  deps: ImageImportUriDependencies<TestUri>;
+  fileSystem: TestFileSystem;
+} {
+  const { deps } = dependencies(fileSystem);
+  return {
+    fileSystem,
+    deps: {
+      ...deps,
+      resource: fileSystem,
+      parseUri: parseTestUri,
+      isWorkspaceResource,
+    },
+  };
+}
+
 function request(
   overrides: Partial<
     Pick<ImageImportMessage, "requestId" | "fileName" | "mimeType" | "base64">
@@ -128,6 +185,219 @@ describe("Extension Host image import", () => {
     expect(
       fileSystem.files.get("file:/workspace/docs/images/architecture.png"),
     ).toEqual(new Uint8Array([0]));
+  });
+
+  it.each([
+    ["sample.png", "image/png"],
+    ["photo.jpeg", "image/jpeg"],
+  ])(
+    "reads a workspace URI for %s and sends its bytes through the common save pipeline",
+    async (fileName, _mimeType) => {
+      const { deps, fileSystem } = uriDependencies();
+      const sourceUri = `file:///workspace/assets/${fileName}`;
+      const bytes = new Uint8Array([1, 2, 3]);
+      fileSystem.files.set(`file:/workspace/assets/${fileName}`, bytes);
+
+      const result = await saveImageImportUri(
+        new TestUri("file", "/workspace/docs/README.md"),
+        sourceUri,
+        `image:uri-${fileName}`,
+        deps,
+      );
+
+      expect(result).toEqual({
+        success: true,
+        relativePath: `./images/${fileName}`,
+      });
+      expect(fileSystem.readFileCalls).toEqual([
+        `file:/workspace/assets/${fileName}`,
+      ]);
+      expect(
+        fileSystem.files.get(`file:/workspace/docs/images/${fileName}`),
+      ).toEqual(bytes);
+    },
+  );
+
+  it("reads a remote virtual URI without using a Node filesystem", async () => {
+    const { deps, fileSystem } = uriDependencies();
+    fileSystem.files.set(
+      "vscode-remote:/workspace/assets/sample.webp",
+      new Uint8Array([4, 5]),
+    );
+
+    const result = await saveImageImportUri(
+      new TestUri("vscode-remote", "/workspace/docs/README.md"),
+      "vscode-remote://ssh-remote+host/workspace/assets/sample.webp",
+      "image:remote",
+      deps,
+    );
+
+    expect(result).toEqual({
+      success: true,
+      relativePath: "./images/sample.webp",
+    });
+    expect(
+      fileSystem.files.get("vscode-remote:/workspace/docs/images/sample.webp"),
+    ).toEqual(new Uint8Array([4, 5]));
+  });
+
+  it("preserves URI basename encoding and URL-encodes only the saved basename in Markdown", async () => {
+    const { deps, fileSystem } = uriDependencies();
+    const fileName = "architecture #2%?.png";
+    fileSystem.files.set(
+      "file:/workspace/assets/architecture%20%232%25%3F.png",
+      new Uint8Array([6]),
+    );
+
+    const result = await saveImageImportUri(
+      new TestUri("file", "/workspace/docs/README.md"),
+      "file:///workspace/assets/architecture%20%232%25%3F.png",
+      "image:url-special",
+      deps,
+    );
+
+    expect(result).toEqual({
+      success: true,
+      relativePath: "./images/architecture%20%232%25%3F.png",
+    });
+    expect(
+      fileSystem.files.get(`file:/workspace/docs/images/${fileName}`),
+    ).toEqual(new Uint8Array([6]));
+  });
+
+  it("keeps duplicate URI imports collision-safe", async () => {
+    const { deps, fileSystem } = uriDependencies();
+    fileSystem.files.set(
+      "file:/workspace/docs/images/sample.png",
+      new Uint8Array([9]),
+    );
+    fileSystem.files.set(
+      "file:/workspace/assets/sample.png",
+      new Uint8Array([7, 8]),
+    );
+
+    const result = await saveImageImportUri(
+      new TestUri("file", "/workspace/docs/README.md"),
+      "file:///workspace/assets/sample.png",
+      "image:duplicate-uri",
+      deps,
+    );
+
+    expect(result).toEqual({
+      success: true,
+      relativePath: "./images/sample-1.png",
+    });
+    expect(
+      fileSystem.files.get("file:/workspace/docs/images/sample.png"),
+    ).toEqual(new Uint8Array([9]));
+    expect(
+      fileSystem.files.get("file:/workspace/docs/images/sample-1.png"),
+    ).toEqual(new Uint8Array([7, 8]));
+  });
+
+  it("rejects URI resources outside the workspace before reading or saving", async () => {
+    const { deps, fileSystem } = uriDependencies();
+    fileSystem.files.set("file:/outside/sample.png", new Uint8Array([1]));
+
+    const result = await saveImageImportUri(
+      new TestUri("file", "/workspace/docs/README.md"),
+      "file:///outside/sample.png",
+      "image:outside",
+      deps,
+    );
+
+    expect(result).toMatchObject({ success: false });
+    expect(fileSystem.readFileCalls).toHaveLength(0);
+    expect(fileSystem.directories.size).toBe(0);
+  });
+
+  it.each([
+    ["nonexistent URI", "file:///workspace/assets/missing.png"],
+    ["directory URI", "file:///workspace/assets/folder.png"],
+    ["unsupported extension", "file:///workspace/assets/notes.txt"],
+  ])(
+    "rejects a %s without creating the destination",
+    async (_, resourceUri) => {
+      const { deps, fileSystem } = uriDependencies();
+      if (resourceUri.endsWith("folder.png"))
+        fileSystem.directories.add("file:/workspace/assets/folder.png");
+      else if (resourceUri.endsWith("notes.txt"))
+        fileSystem.files.set(
+          "file:/workspace/assets/notes.txt",
+          new Uint8Array([1]),
+        );
+
+      const result = await saveImageImportUri(
+        new TestUri("file", "/workspace/docs/README.md"),
+        resourceUri,
+        "image:invalid-uri",
+        deps,
+      );
+
+      expect(result).toMatchObject({ success: false });
+      expect(fileSystem.directories).not.toContain(
+        "file:/workspace/docs/images",
+      );
+      expect(
+        [...fileSystem.files.keys()].some((key) =>
+          key.startsWith("file:/workspace/docs/images/"),
+        ),
+      ).toBe(false);
+    },
+  );
+
+  it("rejects a URI directory and an oversized URI before reading bytes", async () => {
+    const { deps: directoryDeps, fileSystem: directoryFileSystem } =
+      uriDependencies();
+    directoryFileSystem.directories.add("file:/workspace/assets/folder.png");
+    const directoryResult = await saveImageImportUri(
+      new TestUri("file", "/workspace/docs/README.md"),
+      "file:///workspace/assets/folder.png",
+      "image:directory-uri",
+      directoryDeps,
+    );
+    expect(directoryResult).toMatchObject({ success: false });
+    expect(directoryFileSystem.readFileCalls).toHaveLength(0);
+
+    const { deps: oversizedDeps, fileSystem: oversizedFileSystem } =
+      uriDependencies();
+    oversizedFileSystem.files.set(
+      "file:/workspace/assets/large.png",
+      new Uint8Array(MAX_IMAGE_IMPORT_BYTES + 1),
+    );
+    const oversizedResult = await saveImageImportUri(
+      new TestUri("file", "/workspace/docs/README.md"),
+      "file:///workspace/assets/large.png",
+      "image:oversized-uri",
+      oversizedDeps,
+    );
+    expect(oversizedResult).toMatchObject({
+      success: false,
+      message: expect.stringContaining("10 MB"),
+    });
+    expect(oversizedFileSystem.readFileCalls).toHaveLength(0);
+    expect(oversizedFileSystem.directories).not.toContain(
+      "file:/workspace/docs/images",
+    );
+  });
+
+  it("returns a correlated failure when the URI resource cannot be read", async () => {
+    const { deps, fileSystem } = uriDependencies();
+    fileSystem.files.set(
+      "file:/workspace/assets/sample.png",
+      new Uint8Array([1]),
+    );
+    fileSystem.failRead = true;
+
+    const result = await saveImageImportUri(
+      new TestUri("file", "/workspace/docs/README.md"),
+      "file:///workspace/assets/sample.png",
+      "image:permission",
+      deps,
+    );
+
+    expect(result).toEqual({ success: false, message: "permission denied" });
+    expect(fileSystem.directories.size).toBe(0);
   });
 
   it("increments duplicate names without overwriting existing images", async () => {
