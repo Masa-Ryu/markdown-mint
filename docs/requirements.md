@@ -146,8 +146,12 @@ completed successfully. Manual checks:
 - duplicate filename collision behavior: not tested.
 - Undo removing the Markdown reference while retaining saved image files: not
   tested.
-- JPEG, WebP, GIF animation, Windows Explorer real file drop, Remote SSH
-  actual filesystem import, and operating-system IME interaction: not tested.
+- JPEG: not tested.
+- WebP: not tested.
+- GIF animation: not tested.
+- Windows Explorer real file drop: not tested.
+- Remote SSH actual filesystem import: not tested.
+- operating-system IME interaction: not tested.
 
 ## Alert inline editing refinement
 
