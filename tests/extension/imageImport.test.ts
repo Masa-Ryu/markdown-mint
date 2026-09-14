@@ -26,20 +26,48 @@ class TestFileSystem {
   readonly directories = new Set<string>();
   readonly files = new Map<string, Uint8Array>();
   failWrite = false;
+  failRename = false;
+  holdWrites = false;
+  private writeReleases: Array<() => void> = [];
 
   async createDirectory(uri: TestUri): Promise<void> {
     this.directories.add(uri.toString());
   }
 
-  async stat(uri: TestUri): Promise<unknown> {
-    if (this.directories.has(uri.toString()) || this.files.has(uri.toString()))
-      return {};
-    throw Object.assign(new Error("not found"), { code: "FileNotFound" });
-  }
-
   async writeFile(uri: TestUri, bytes: Uint8Array): Promise<void> {
     if (this.failWrite) throw new Error("disk full");
+    if (this.holdWrites)
+      await new Promise<void>((resolve) => {
+        this.writeReleases.push(resolve);
+        if (this.writeReleases.length < 2) return;
+        this.holdWrites = false;
+        const releases = this.writeReleases;
+        this.writeReleases = [];
+        for (const release of releases) release();
+      });
     this.files.set(uri.toString(), new Uint8Array(bytes));
+  }
+
+  async rename(
+    source: TestUri,
+    target: TestUri,
+    options: { readonly overwrite: boolean },
+  ): Promise<void> {
+    if (this.failRename) throw new Error("permission denied");
+    const targetKey = target.toString();
+    if (!options.overwrite && this.files.has(targetKey))
+      throw Object.assign(new Error("already exists"), { code: "FileExists" });
+    const sourceKey = source.toString();
+    const bytes = this.files.get(sourceKey);
+    if (!bytes)
+      throw Object.assign(new Error("not found"), { code: "FileNotFound" });
+    this.files.set(targetKey, new Uint8Array(bytes));
+    this.files.delete(sourceKey);
+  }
+
+  async delete(uri: TestUri): Promise<void> {
+    if (this.files.delete(uri.toString())) return;
+    throw Object.assign(new Error("not found"), { code: "FileNotFound" });
   }
 }
 
@@ -65,7 +93,7 @@ function dependencies(fileSystem = new TestFileSystem()): {
 
 function request(
   overrides: Partial<
-    Pick<ImageImportMessage, "fileName" | "mimeType" | "base64">
+    Pick<ImageImportMessage, "requestId" | "fileName" | "mimeType" | "base64">
   > = {},
 ): ImageImportMessage {
   return {
@@ -125,6 +153,91 @@ describe("Extension Host image import", () => {
     expect(
       fileSystem.files.get("file:/workspace/docs/images/architecture-1.png"),
     ).toEqual(new Uint8Array([2]));
+    expect(
+      [...fileSystem.files.keys()].some((key) =>
+        key.includes(".markdown-mint-image-"),
+      ),
+    ).toBe(false);
+  });
+
+  it("atomically keeps both payloads for concurrent imports with the same name", async () => {
+    const fileSystem = new TestFileSystem();
+    fileSystem.holdWrites = true;
+    const { deps } = dependencies(fileSystem);
+    const [first, second] = await Promise.all([
+      saveImageImport(
+        new TestUri("file", "/workspace/docs/README.md"),
+        request({ requestId: "image:concurrent-1", base64: "AQ==" }),
+        deps,
+      ),
+      saveImageImport(
+        new TestUri("file", "/workspace/docs/OTHER.md"),
+        request({ requestId: "image:concurrent-2", base64: "Ag==" }),
+        deps,
+      ),
+    ]);
+
+    expect(
+      [first, second]
+        .map((result) =>
+          result.success ? result.relativePath : "unexpected failure",
+        )
+        .sort(),
+    ).toEqual(["./images/architecture-1.png", "./images/architecture.png"]);
+    expect(
+      fileSystem.files.get("file:/workspace/docs/images/architecture.png"),
+    ).toEqual(new Uint8Array([1]));
+    expect(
+      fileSystem.files.get("file:/workspace/docs/images/architecture-1.png"),
+    ).toEqual(new Uint8Array([2]));
+    expect(
+      [...fileSystem.files.keys()].some((key) =>
+        key.includes(".markdown-mint-image-"),
+      ),
+    ).toBe(false);
+  });
+
+  it("URL-encodes only the returned basename while preserving the real file name", async () => {
+    const { deps, fileSystem } = dependencies();
+    const fileName = "architecture #2%?.png";
+    const result = await saveImageImport(
+      new TestUri("file", "/workspace/docs/README.md"),
+      request({ fileName }),
+      deps,
+    );
+
+    expect(result).toEqual({
+      success: true,
+      relativePath: "./images/architecture%20%232%25%3F.png",
+    });
+    expect(
+      fileSystem.files.get(`file:/workspace/docs/images/${fileName}`),
+    ).toEqual(new Uint8Array([0]));
+  });
+
+  it("keeps collision suffixes within the 255-character file name limit", async () => {
+    const { deps, fileSystem } = dependencies();
+    const fileName = `${"a".repeat(251)}.png`;
+    fileSystem.files.set(
+      `file:/workspace/docs/images/${fileName}`,
+      new Uint8Array([1]),
+    );
+
+    const result = await saveImageImport(
+      new TestUri("file", "/workspace/docs/README.md"),
+      request({ fileName }),
+      deps,
+    );
+
+    const targetName = `${"a".repeat(249)}-1.png`;
+    expect(result).toEqual({
+      success: true,
+      relativePath: `./images/${targetName}`,
+    });
+    expect(targetName.length).toBe(255);
+    expect(
+      fileSystem.files.get(`file:/workspace/docs/images/${targetName}`),
+    ).toEqual(new Uint8Array([0]));
   });
 
   it.each([
@@ -193,6 +306,20 @@ describe("Extension Host image import", () => {
     );
 
     expect(result).toEqual({ success: false, message: "disk full" });
+    expect(fileSystem.files.size).toBe(0);
+  });
+
+  it("cleans the temporary file when the final rename fails", async () => {
+    const fileSystem = new TestFileSystem();
+    fileSystem.failRename = true;
+    const { deps } = dependencies(fileSystem);
+    const result = await saveImageImport(
+      new TestUri("file", "/workspace/docs/README.md"),
+      request(),
+      deps,
+    );
+
+    expect(result).toEqual({ success: false, message: "permission denied" });
     expect(fileSystem.files.size).toBe(0);
   });
 

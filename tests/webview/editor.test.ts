@@ -9,6 +9,7 @@ import {
 } from "../../src/core";
 import { PROTOCOL_VERSION } from "../../src/shared/protocol";
 import { BlockBoundarySelection } from "../../src/webview/blockBoundary";
+import { imageImportPluginKey } from "../../src/webview/imageImport";
 import {
   createEditorApp,
   type EditorInitialDocument,
@@ -1756,6 +1757,33 @@ describe("rich editor rendering", () => {
     app.destroy();
   });
 
+  it("rejects a code block drop before sending an image import request", async () => {
+    const { app, root, messages } = makeApp(
+      "before\n\n```ts\nconst value = 1;\n```\n\nafter",
+    );
+    const event = dispatchImageDrop(
+      app,
+      [imageFile("architecture.png")],
+      codeBlockPosition(app) + 2,
+    );
+
+    expect(event.defaultPrevented).toBe(true);
+    await flush();
+    expect(
+      messages.some((message: any) => message.type === "image-import"),
+    ).toBe(false);
+    expect(root.querySelector(".mm-image-importing")).toBeNull();
+    expect(
+      messages.some(
+        (message: any) =>
+          message.type === "notify" &&
+          message.level === "error" &&
+          message.message.includes("cannot be placed"),
+      ),
+    ).toBe(true);
+    app.destroy();
+  });
+
   it("maps the pending drop position through an edit made during import", async () => {
     let releaseRead!: (value: ArrayBuffer) => void;
     const file = imageFile(
@@ -1797,6 +1825,75 @@ describe("rich editor rendering", () => {
     expect(lastEditMarkdown(messages)).toBe(
       "prefix before![architecture](./images/architecture.png) after",
     );
+    app.destroy();
+  });
+
+  it("keeps a deleted pending anchor at its mapped boundary until the result arrives", async () => {
+    const { app, root, messages } = makeApp("before after");
+    dispatchImageDrop(app, [imageFile("architecture.png")], 7);
+    await flush();
+    const request = messages.find(
+      (message: any) => message.type === "image-import",
+    ) as any;
+
+    app.view.dispatch(
+      app.view.state.tr.delete(1, app.view.state.doc.content.size - 1),
+    );
+    expect(
+      imageImportPluginKey.getState(app.view.state)?.pending[0],
+    ).toMatchObject({ anchorDeleted: true });
+    expect(root.querySelector(".mm-image-importing")).not.toBeNull();
+
+    receiveHostMessage({
+      protocolVersion: PROTOCOL_VERSION,
+      type: "image-import-result",
+      requestId: request.requestId,
+      success: true,
+      relativePath: "./images/architecture.png",
+    });
+
+    expect(root.querySelector(".mm-image-importing")).toBeNull();
+    expect(app.view.state.doc.firstChild?.firstChild?.type.name).toBe("image");
+    const deletionEdit = messages.filter(isEditMessage).at(-1) as any;
+    app.receiveDocument({
+      protocolVersion: PROTOCOL_VERSION,
+      type: "document",
+      markdown: deletionEdit.markdown,
+      version: 2,
+      profile: "github",
+      operationId: deletionEdit.operationId,
+      reason: "ack",
+    });
+    await flush();
+    expect(lastEditMarkdown(messages)).toBe(
+      "![architecture](./images/architecture.png)",
+    );
+    app.destroy();
+  });
+
+  it("URL-encodes an imported basename while preserving image serializer round trips", async () => {
+    const { app, messages } = makeApp("before after");
+    dispatchImageDrop(app, [imageFile("architecture #2%?.png")], 7);
+    await flush();
+    const request = messages.find(
+      (message: any) => message.type === "image-import",
+    ) as any;
+    expect(request.fileName).toBe("architecture #2%?.png");
+    receiveHostMessage({
+      protocolVersion: PROTOCOL_VERSION,
+      type: "image-import-result",
+      requestId: request.requestId,
+      success: true,
+      relativePath: "./images/architecture%20%232%25%3F.png",
+    });
+
+    const markdown = lastEditMarkdown(messages);
+    expect(markdown).toBe(
+      "before![architecture #2%?](./images/architecture%20%232%25%3F.png) after",
+    );
+    expect(
+      serializeMarkdown(app.view.state.doc, parseMarkdown(markdown, "github")),
+    ).toBe(markdown);
     app.destroy();
   });
 

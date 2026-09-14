@@ -9,6 +9,13 @@
 - Keep imports atomic under concurrent same-name drops, validate insertion
   positions before saving, and track pending positions through ProseMirror
   transaction mapping until the host responds.
+- Keep pending imports outside the Markdown document while tracking their drop
+  positions through ProseMirror transaction mapping.
+- Claim image names atomically without overwriting concurrent files, encode
+  returned basename segments for URL-safe Markdown paths, and reject drops that
+  cannot accept an image before saving any bytes.
+- Keep a pending import's mapped boundary alive when surrounding content is
+  deleted before the Extension Host response arrives.
 
 ## 0.1.0
 

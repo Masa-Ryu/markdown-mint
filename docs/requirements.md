@@ -101,30 +101,40 @@ potential image. PNG, JPEG/JPG, GIF, and WebP files are read in the Webview and
 sent as bounded base64 payloads; the Webview never writes to the filesystem.
 The Extension Host validates the MIME type and extension again, decodes the
 payload with the 10 MB limit, creates the Markdown document's sibling `images`
-directory through `workspace.fs`, chooses the first unused basename (then
-`-1`, `-2`, and so on), and returns only a `./images/<name>` source path. SVG,
-arbitrary MIME/extension combinations, unsafe names, oversized payloads, and
-failed writes leave the Markdown document unchanged and use the existing VS
-Code error notification route. Existing non-image ProseMirror drops continue
-through the normal handler.
+directory through `workspace.fs`, and atomically claims the first available
+basename (then `-1`, `-2`, and so on) with a same-directory temporary file and
+`rename(..., { overwrite: false })`. Temporary files are cleaned up after both
+successful and failed attempts. The returned `./images/<basename>` source
+encodes only the basename segment for URL semantics while preserving the real
+filesystem name. SVG, arbitrary MIME/extension combinations, unsafe names,
+oversized payloads, and failed writes leave the Markdown document unchanged and
+use the existing VS Code error notification route. Existing non-image
+ProseMirror drops continue through the normal handler.
 
 Each imported file receives an independent request id. Its pending drop
-position is held in a ProseMirror plugin state and widget decoration; every
-transaction maps that position, and the existing `image` node is inserted only
-after the host returns. Pending decorations are not serialized, and the normal
+position is held as a point anchor in a ProseMirror plugin state and widget
+decoration; every transaction maps that position with an association toward
+the inserted content. When an edit deletes the original point, the mapped
+boundary remains pending and is revalidated when the host returns rather than
+being silently discarded. The existing `image` node is inserted only after the
+host returns, and the initial drop position is schema-preflighted before any
+file is read or saved. Pending decorations are not serialized, and the normal
 image insertion transaction is undoable while the saved file is intentionally
 retained on Undo.
 
-Protocol, Extension Host, and Webview regressions cover validation, duplicate
-names, unsafe paths, size and write failures, non-image fall-through, mapped
-positions, multiple-file order, failure cleanup, and temporary-state
+Protocol, Extension Host, and Webview regressions cover validation, atomic
+concurrent duplicate names with both payloads retained, URL-special basenames,
+255-character collision suffixes, temporary-file cleanup, unsafe paths, size
+and write failures, non-image fall-through, invalid code-block preflight,
+mapped positions, destructive pending-anchor edits, multiple-file order,
+failure cleanup, serializer round trips, and temporary-state
 non-serialization. The browser block suite also passed all five required
 fixtures (`common-test.md`, `github-test.md`, `github-test-class-B.md`,
 `gitlab-test.md`, and `gitlab-test-class-B.md`) on Rich, dedicated preview, and
-native-preview surfaces. The installed Extension Development Host could not
-complete this run because VS Code terminated with `SIGABRT`; direct Finder or
-Explorer drag/drop, GIF animation, native host persistence, and operating-system
-IME behavior remain manual checks.
+native-preview surfaces. The installed Extension Development Host acceptance
+suite completed successfully. Direct Finder or Explorer drag/drop, GIF
+animation, native host persistence, and operating-system IME behavior remain
+manual checks.
 
 ## Alert inline editing refinement
 

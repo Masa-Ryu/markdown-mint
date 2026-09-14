@@ -1,6 +1,6 @@
 import { Decoration, DecorationSet } from "prosemirror-view";
 import type { EditorView } from "prosemirror-view";
-import type { Node as PMNode, Schema } from "prosemirror-model";
+import type { Node as PMNode, NodeType, Schema } from "prosemirror-model";
 import {
   Plugin,
   PluginKey,
@@ -18,6 +18,8 @@ export interface PendingImageImport {
   readonly requestId: string;
   readonly fileName: string;
   readonly position: number;
+  /** True when the original point was deleted; position now means its mapped boundary. */
+  readonly anchorDeleted: boolean;
 }
 
 export interface ImageImportPluginState {
@@ -106,6 +108,16 @@ export class ImageImportController {
       );
       return true;
     }
+    const imageType = this.options.schema.nodes.image;
+    const insertionPosition = imageType
+      ? imageInsertionPosition(view, position, imageType)
+      : null;
+    if (insertionPosition === null) {
+      this.options.notify(
+        "The image cannot be placed at the dropped position.",
+      );
+      return true;
+    }
 
     const requests: ImageImportFileRequest[] = [];
     for (const file of imageFiles) {
@@ -119,7 +131,8 @@ export class ImageImportController {
           request: {
             requestId,
             fileName: file.name,
-            position,
+            position: insertionPosition,
+            anchorDeleted: false,
           },
         } satisfies ImageImportTransactionMeta),
       );
@@ -280,26 +293,31 @@ function applyImageImportTransaction(
   const pending: PendingImageImport[] = [];
   for (const candidate of value.pending) {
     const mapped = transaction.mapping.mapResult(candidate.position, 1);
-    if (!mapped.deleted) pending.push({ ...candidate, position: mapped.pos });
+    pending.push({
+      ...candidate,
+      position: mapped.pos,
+      anchorDeleted: candidate.anchorDeleted || mapped.deleted,
+    });
   }
   let decorations = value.decorations.map(transaction.mapping, transaction.doc);
+  for (const candidate of pending) {
+    if (
+      decorations.find(
+        undefined,
+        undefined,
+        (spec) => spec.key === candidate.requestId,
+      ).length === 0
+    )
+      decorations = decorations.add(transaction.doc, [
+        pendingImageDecoration(candidate),
+      ]);
+  }
   const meta = transaction.getMeta(imageImportPluginKey) as
     ImageImportTransactionMeta | undefined;
   if (meta?.kind === "add") {
     pending.push(meta.request);
     decorations = decorations.add(transaction.doc, [
-      Decoration.widget(
-        meta.request.position,
-        () => {
-          const label = document.createElement("span");
-          label.className = "mm-image-importing";
-          label.dataset.requestId = meta.request.requestId;
-          label.textContent = "Importing image…";
-          label.setAttribute("aria-live", "polite");
-          return label;
-        },
-        { key: meta.request.requestId, side: 1 },
-      ),
+      pendingImageDecoration(meta.request),
     ]);
   } else if (meta?.kind === "finish") {
     const target = decorations.find(
@@ -346,8 +364,14 @@ function dropPosition(view: EditorView, event: DragEvent): number | null {
       left: event.clientX,
       top: event.clientY,
     });
-    if (!result || !Number.isSafeInteger(result.pos)) return null;
-    return Math.max(0, Math.min(result.pos, view.state.doc.content.size));
+    if (
+      !result ||
+      !Number.isSafeInteger(result.pos) ||
+      result.pos < 0 ||
+      result.pos > view.state.doc.content.size
+    )
+      return null;
+    return result.pos;
   } catch {
     return null;
   }
@@ -358,21 +382,9 @@ function imageTransactionAt(
   position: number,
   image: PMNode,
 ): Transaction | null {
-  const safePosition = Math.max(
-    0,
-    Math.min(position, view.state.doc.content.size),
-  );
+  const safePosition = imageInsertionPosition(view, position, image.type);
+  if (safePosition === null) return null;
   try {
-    const resolved = view.state.doc.resolve(safePosition);
-    if (
-      !resolved.parent.inlineContent ||
-      !resolved.parent.canReplaceWith(
-        resolved.index(),
-        resolved.index(),
-        image.type,
-      )
-    )
-      return null;
     let transaction = view.state.tr.replaceWith(
       safePosition,
       safePosition,
@@ -398,6 +410,47 @@ function imageTransactionAt(
   } catch {
     return null;
   }
+}
+
+function imageInsertionPosition(
+  view: EditorView,
+  position: number,
+  imageType: NodeType,
+): number | null {
+  if (
+    !Number.isSafeInteger(position) ||
+    position < 0 ||
+    position > view.state.doc.content.size
+  )
+    return null;
+  try {
+    const resolved = view.state.doc.resolve(position);
+    return resolved.parent.inlineContent &&
+      resolved.parent.canReplaceWith(
+        resolved.index(),
+        resolved.index(),
+        imageType,
+      )
+      ? position
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function pendingImageDecoration(request: PendingImageImport): Decoration {
+  return Decoration.widget(
+    request.position,
+    () => {
+      const label = document.createElement("span");
+      label.className = "mm-image-importing";
+      label.dataset.requestId = request.requestId;
+      label.textContent = "Importing image…";
+      label.setAttribute("aria-live", "polite");
+      return label;
+    },
+    { key: request.requestId, side: 1 },
+  );
 }
 
 async function readFileBytes(file: File): Promise<Uint8Array> {

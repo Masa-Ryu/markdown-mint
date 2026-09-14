@@ -13,7 +13,12 @@ export interface ImageImportUriLike {
 
 export interface ImageImportFileSystem<Uri extends ImageImportUriLike> {
   createDirectory(uri: Uri): PromiseLike<void>;
-  stat(uri: Uri): PromiseLike<unknown>;
+  delete(uri: Uri): PromiseLike<void>;
+  rename(
+    source: Uri,
+    target: Uri,
+    options: { readonly overwrite: boolean },
+  ): PromiseLike<void>;
   writeFile(uri: Uri, bytes: Uint8Array): PromiseLike<void>;
 }
 
@@ -36,6 +41,7 @@ const MIME_TYPES_BY_EXTENSION: Readonly<Record<string, readonly string[]>> = {
 
 const MAX_FILE_NAME_LENGTH = 255;
 const MAX_DUPLICATE_ATTEMPTS = 10_000;
+let temporaryFileSequence = 0;
 
 /**
  * Decode and validate a Webview base64 payload without relying on Node's
@@ -109,16 +115,28 @@ export async function saveImageImport<Uri extends ImageImportUriLike>(
     const imagesDirectory = dependencies.joinPath(documentDirectory, "images");
 
     await dependencies.fs.createDirectory(imagesDirectory);
-    const targetName = await availableFileName(
-      imagesDirectory,
-      fileName,
-      dependencies,
-    );
-    await dependencies.fs.writeFile(
-      dependencies.joinPath(imagesDirectory, targetName),
-      bytes,
-    );
-    return { success: true, relativePath: `./images/${targetName}` };
+    for (let suffix = 0; suffix <= MAX_DUPLICATE_ATTEMPTS; suffix += 1) {
+      const targetName = suffix === 0 ? fileName : withSuffix(fileName, suffix);
+      const relativePath = relativeImagePath(targetName);
+      const temporaryUri = dependencies.joinPath(
+        imagesDirectory,
+        temporaryFileName(request.requestId),
+      );
+      try {
+        await dependencies.fs.writeFile(temporaryUri, bytes);
+        await dependencies.fs.rename(
+          temporaryUri,
+          dependencies.joinPath(imagesDirectory, targetName),
+          { overwrite: false },
+        );
+        return { success: true, relativePath };
+      } catch (error) {
+        await cleanupTemporaryFile(dependencies.fs, temporaryUri);
+        if (isExistingFile(error)) continue;
+        throw error;
+      }
+    }
+    throw new Error("Too many images have the same file name.");
   } catch (error) {
     return {
       success: false,
@@ -144,30 +162,55 @@ function documentDirectoryUri<Uri extends ImageImportUriLike>(
   return dependencies.joinPath(documentUri, "..");
 }
 
-async function availableFileName<Uri extends ImageImportUriLike>(
-  directory: Uri,
-  originalName: string,
-  dependencies: ImageImportDependencies<Uri>,
-): Promise<string> {
-  for (let suffix = 0; suffix <= MAX_DUPLICATE_ATTEMPTS; suffix += 1) {
-    const candidate =
-      suffix === 0 ? originalName : withSuffix(originalName, suffix);
-    try {
-      await dependencies.fs.stat(dependencies.joinPath(directory, candidate));
-    } catch (error) {
-      if (isMissingFile(error)) return candidate;
-      throw new Error(
-        errorMessage(error, "The existing image could not be inspected."),
-      );
-    }
-  }
-  throw new Error("Too many images have the same file name.");
-}
-
 function withSuffix(fileName: string, suffix: number): string {
   const extensionIndex = fileName.lastIndexOf(".");
-  if (extensionIndex <= 0) return `${fileName}-${suffix}`;
-  return `${fileName.slice(0, extensionIndex)}-${suffix}${fileName.slice(extensionIndex)}`;
+  const suffixText = `-${suffix}`;
+  if (extensionIndex <= 0) {
+    return `${fileName.slice(0, MAX_FILE_NAME_LENGTH - suffixText.length)}${suffixText}`;
+  }
+  const stem = fileName.slice(0, extensionIndex);
+  const extension = fileName.slice(extensionIndex);
+  const maxStemLength =
+    MAX_FILE_NAME_LENGTH - suffixText.length - extension.length;
+  if (maxStemLength > 0)
+    return `${stem.slice(0, maxStemLength)}${suffixText}${extension}`;
+  const maxExtensionLength = Math.max(
+    1,
+    MAX_FILE_NAME_LENGTH - suffixText.length - 1,
+  );
+  return `${stem.slice(0, 1)}${suffixText}${extension.slice(-maxExtensionLength)}`;
+}
+
+function relativeImagePath(fileName: string): string {
+  try {
+    return `./images/${encodeURIComponent(fileName)}`;
+  } catch {
+    throw new Error("The dropped image file name is not safe.");
+  }
+}
+
+function temporaryFileName(requestId: string): string {
+  temporaryFileSequence += 1;
+  const safeRequestId = requestId.replace(/[^A-Za-z0-9_-]/g, "_").slice(-64);
+  const randomPart =
+    typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+      ? crypto.randomUUID()
+      : Math.random().toString(36).slice(2);
+  return `.markdown-mint-image-${safeRequestId || "request"}-${Date.now().toString(36)}-${temporaryFileSequence}-${randomPart}.tmp`;
+}
+
+async function cleanupTemporaryFile<Uri extends ImageImportUriLike>(
+  fileSystem: ImageImportFileSystem<Uri>,
+  uri: Uri,
+): Promise<void> {
+  try {
+    await fileSystem.delete(uri);
+  } catch (error) {
+    if (isMissingFile(error)) return;
+    throw new Error(
+      errorMessage(error, "The temporary image could not be cleaned up."),
+    );
+  }
 }
 
 function validateImageType(fileName: string, mimeType: string): void {
@@ -192,6 +235,12 @@ function isMissingFile(error: unknown): boolean {
   if (!error || typeof error !== "object") return false;
   const code = (error as { code?: unknown }).code;
   return code === "FileNotFound" || code === "ENOENT" || code === "NotFound";
+}
+
+function isExistingFile(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const code = (error as { code?: unknown }).code;
+  return code === "FileExists" || code === "EEXIST" || code === "AlreadyExists";
 }
 
 function errorMessage(error: unknown, fallback: string): string {
