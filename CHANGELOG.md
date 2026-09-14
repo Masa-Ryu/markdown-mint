@@ -10,6 +10,9 @@
 - Block empty, checking, invalid, stale, and out-of-date Mermaid submissions,
   including Ctrl/Cmd+Enter, and protect asynchronous validation from races and
   dialog closure.
+- Improve Marketplace metadata and README searchability for visual WYSIWYG
+  Markdown editing, tables, GitHub/GitLab Markdown, Mermaid, math, and source
+  editing.
 
 ## 0.0.52
 
