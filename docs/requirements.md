@@ -1085,6 +1085,24 @@ zoom, font loading, and operating-system IME candidate UI remain manual checks.
   rules. The native operating-system pointer/IME visual behavior remains a
   manual check.
 
+## 0.0.50 table toolbar SVG assets
+
+- The contextual table toolbar uses the shared `ToolbarIconName` and
+  `appendToolbarIcon()` path for all row, column, alignment, numbering, and
+  table actions. Each action maps to its dedicated repository SVG asset while
+  retaining the existing group order, labels, tooltip text, commands,
+  selection handling, disabled state, and `aria-pressed` state.
+- Table toolbar icons keep the `.mm-table-toolbar-icon` class and 14px SVG
+  width/height attributes. Repository-fixed `#111827` colors are normalized to
+  `currentColor` before rendering so the assets follow the active VS Code
+  theme, including the table/row/column delete variants.
+- Normalized SVG templates are cached by icon name. Every render clones the
+  template and applies call-specific class, size, `data-icon`, and accessibility
+  attributes, so repeated table updates avoid reparsing while DOM nodes and
+  attributes remain isolated between calls. Unit coverage checks all eleven
+  table mappings, theme-color normalization, clone independence, and size
+  isolation.
+
 ## 0.0.49 table clipboard text paste
 
 `handlePaste()` classifies the clipboard payload before entering the table
