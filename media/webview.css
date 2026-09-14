@@ -593,6 +593,90 @@ textarea:focus-visible {
 .mm-input-dialog::backdrop {
   background: rgba(0, 0, 0, 0.35);
 }
+.mm-input-dialog.mm-profile-feature-dialog[data-profile-feature="mermaid"] {
+  box-sizing: border-box;
+  width: min(960px, calc(100vw - 32px));
+  height: min(760px, calc(100dvh - 32px));
+  max-height: calc(100dvh - 32px);
+  overflow: hidden;
+}
+.mm-profile-feature-dialog[data-profile-feature="mermaid"] .mm-dialog-form {
+  box-sizing: border-box;
+  min-height: 0;
+  height: 100%;
+  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  grid-template-areas:
+    "title meta"
+    "body body"
+    "actions actions";
+  gap: 10px 16px;
+  overflow: hidden;
+}
+.mm-profile-feature-dialog[data-profile-feature="mermaid"] .mm-dialog-form > h2 {
+  grid-area: title;
+  align-self: center;
+  margin: 0;
+  white-space: nowrap;
+}
+.mm-mermaid-dialog-meta {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 12px;
+  overflow: hidden;
+  color: var(--vscode-descriptionForeground, var(--mm-control-foreground));
+  font-size: 0.9em;
+  white-space: nowrap;
+}
+.mm-mermaid-dialog-meta[hidden] {
+  display: none;
+}
+.mm-profile-feature-dialog[data-profile-feature="mermaid"]
+  .mm-mermaid-dialog-meta {
+  grid-area: meta;
+}
+.mm-mermaid-version {
+  flex: 0 0 auto;
+}
+.mm-mermaid-validation-status {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mm-mermaid-validation-status[data-validation-state="valid"] {
+  color: var(--vscode-testing-iconPassed, var(--mm-control-foreground));
+}
+.mm-mermaid-validation-status[data-validation-state="invalid"] {
+  color: var(--vscode-errorForeground, var(--mm-error-foreground));
+}
+.mm-profile-feature-dialog[data-profile-feature="mermaid"]
+  [data-feature-field-container="body"] {
+  display: flex;
+  min-height: 0;
+  grid-area: body;
+  flex-direction: column;
+  gap: 0;
+}
+.mm-profile-feature-dialog[data-profile-feature="mermaid"]
+  [data-feature-field-container="body"]
+  > span {
+  display: none;
+}
+.mm-profile-feature-dialog[data-profile-feature="mermaid"]
+  [data-feature-field="body"] {
+  box-sizing: border-box;
+  min-height: 0;
+  flex: 1 1 auto;
+  resize: none;
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: var(--vscode-editor-font-size, inherit);
+  line-height: 1.4;
+}
+.mm-profile-feature-dialog[data-profile-feature="mermaid"] .mm-dialog-actions {
+  grid-area: actions;
+}
 .mm-emoji-dialog {
   width: min(420px, calc(100vw - 30px));
 }

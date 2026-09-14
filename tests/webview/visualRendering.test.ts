@@ -349,6 +349,27 @@ describe("local Mermaid rendering lifecycle", () => {
     );
     enhancer.dispose();
   });
+
+  it("passes the shared normalized source to Mermaid rendering", async () => {
+    const sources: string[] = [];
+    const runtime: MermaidRuntime = {
+      render: (_id, source) => {
+        sources.push(source);
+        return "<svg />";
+      },
+    };
+    (globalThis as Record<string, unknown>).markdownMintMermaid = runtime;
+    const element = diagram(
+      "\0 %%{init: { theme: dark }}%%\nflowchart TD\n A-->B",
+    );
+    const enhancer = enhanceRenderedContent(document.body);
+    await flush();
+
+    expect(sources).toEqual(["flowchart TD\n A-->B"]);
+    expect(element.dataset.mmMermaidState).toBe("rendered");
+    enhancer.dispose();
+  });
+
   it("removes SVG fallback fills from connectors and edge label backgrounds", async () => {
     const runtime: MermaidRuntime = {
       render: () =>

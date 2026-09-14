@@ -2,14 +2,19 @@ import {
   enhanceCodeBlockControls,
   type CodeBlockControlOptions,
 } from "./codeBlockControls";
+import {
+  MAX_MERMAID_SOURCE_LENGTH,
+  mermaidRuntimeFromGlobal,
+  normalizeMermaidSource,
+  type MermaidRuntime,
+} from "./mermaidValidation";
 
-export interface MermaidRuntime {
-  initialize?: (options: Record<string, unknown>) => void;
-  render: (
-    id: string,
-    source: string,
-  ) => string | { svg?: string } | Promise<string | { svg?: string }>;
-}
+export {
+  MAX_MERMAID_SOURCE_LENGTH,
+  mermaidRuntimeFromGlobal,
+  normalizeMermaidSource,
+} from "./mermaidValidation";
+export type { MermaidRuntime } from "./mermaidValidation";
 
 export interface RenderingEnhancer {
   dispose(): void;
@@ -17,7 +22,6 @@ export interface RenderingEnhancer {
 }
 
 const MERMAID_SELECTOR = '[data-mm-mermaid="true"]';
-const MAX_MERMAID_SOURCE_LENGTH = 200_000;
 const configuredThemes = new WeakMap<object, string>();
 let nextMermaidId = 0;
 
@@ -234,25 +238,6 @@ function initializeRuntimeTheme(
     themeVariables: variables,
   });
   configuredThemes.set(runtimeObject, signature);
-}
-
-function runtimeFromGlobal(): MermaidRuntime | undefined {
-  if (typeof globalThis === "undefined") return undefined;
-  const globals = globalThis as unknown as Record<string, unknown>;
-  const candidate =
-    globals.markdownMintMermaid ?? globals.mermaid ?? globals.mermaidRuntime;
-  if (!candidate || typeof candidate !== "object") return undefined;
-  const runtime = candidate as Partial<MermaidRuntime>;
-  return typeof runtime.render === "function"
-    ? (runtime as MermaidRuntime)
-    : undefined;
-}
-
-function stripUnsafeMermaidDirectives(source: string): string {
-  return source
-    .replaceAll(String.fromCharCode(0), "")
-    .replace(/%%\{[\s\S]*?\}%%/g, "")
-    .trim();
 }
 
 export function enhanceMixedTaskCheckboxes(root: ParentNode): void {
@@ -558,7 +543,7 @@ export function enhanceRenderedContent(
     activeElements.add(element);
     retryElements.delete(element);
     element.dataset.mmMermaidState = "rendering";
-    const runtime = runtimeFromGlobal();
+    const runtime = mermaidRuntimeFromGlobal();
     if (!runtime) {
       finishFailure(
         element,
@@ -577,7 +562,7 @@ export function enhanceRenderedContent(
       );
       return;
     }
-    const safeSource = stripUnsafeMermaidDirectives(source);
+    const safeSource = normalizeMermaidSource(source);
     const id = "mm-mermaid-" + String(++nextMermaidId);
     Promise.resolve(runtime.render(id, safeSource))
       .then((result) => {

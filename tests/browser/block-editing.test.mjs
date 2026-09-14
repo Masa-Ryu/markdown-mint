@@ -2650,6 +2650,7 @@ async function testDetailsWithInlineHtmlAttributeTags(page) {
 }
 
 async function testMathAndMermaidHeaders(page) {
+  let mathDialogWidth = 0;
   for (const [kind, source, replacement] of [
     ["math", "$$\nx^2\n$$", "y^3"],
     [
@@ -2690,6 +2691,46 @@ async function testMathAndMermaidHeaders(page) {
       await dialog.getAttribute("data-profile-feature-mode"),
       "edit",
     );
+    assert.equal(await dialog.locator("h2").textContent(), `Edit ${label}`);
+    if (kind === "mermaid") {
+      await page.waitForFunction(
+        () =>
+          document.querySelector(
+            ".mm-profile-feature-dialog[open] .mm-mermaid-validation-status",
+          )?.textContent === "✓ Valid · Flowchart",
+      );
+      assert.equal(
+        await dialog.locator(".mm-mermaid-version").textContent(),
+        "Mermaid 11.17.2",
+      );
+      assert.equal(
+        await dialog.locator(".mm-mermaid-dialog-meta").getAttribute("hidden"),
+        null,
+      );
+      const layout = await dialog.evaluate((element) => {
+        const body = element.querySelector('[data-feature-field="body"]');
+        const rect = element.getBoundingClientRect();
+        const bodyRect = body?.getBoundingClientRect();
+        return {
+          width: rect.width,
+          height: rect.height,
+          bodyHeight: bodyRect?.height ?? 0,
+          bodyFlex: body ? getComputedStyle(body).flex : "",
+        };
+      });
+      assert.ok(layout.width > mathDialogWidth, "Mermaid dialog did not grow");
+      assert.ok(layout.width > 700, "Mermaid dialog is still too narrow");
+      assert.ok(layout.height > 500, "Mermaid dialog is still too short");
+      assert.ok(
+        layout.bodyHeight > 400,
+        "Mermaid editor did not fill the modal",
+      );
+      assert.match(layout.bodyFlex, /1\s+1\s+auto/);
+    } else {
+      mathDialogWidth = await dialog.evaluate(
+        (element) => element.getBoundingClientRect().width,
+      );
+    }
     await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
     await noEdits(page, before, `${kind} cancel`);
     for (const key of ["Enter", "Space"]) {
