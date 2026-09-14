@@ -208,7 +208,7 @@ export function parseTsv(value: string): TableMatrix | null {
 }
 
 export function hasClipboardTableMarkup(value: string): boolean {
-  return /<table(?:\s|>)/i.test(value);
+  return /<table(?=[\s/>])/i.test(value);
 }
 
 /** Reject obviously oversized HTML before handing it to a DOM parser. */

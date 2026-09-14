@@ -6,6 +6,7 @@ import { MAX_CLIPBOARD_TEXT_LENGTH } from "../../src/shared/protocol";
 import {
   createTableNodeFromMatrix,
   detectSpreadsheetPaste,
+  hasClipboardTableMarkup,
   matrixToTsv,
   parseClipboardHtml,
   parseClipboardHtmlWithStatus,
@@ -15,6 +16,14 @@ import {
 } from "../../src/webview/tableClipboard";
 
 describe("table clipboard parsing", () => {
+  it("recognizes table start-tag boundaries including a trailing slash", () => {
+    expect(hasClipboardTableMarkup("<table/>")).toBe(true);
+    expect(hasClipboardTableMarkup("<table />")).toBe(true);
+    expect(hasClipboardTableMarkup("<table>\n")).toBe(true);
+    expect(hasClipboardTableMarkup("<tablefoo>")).toBe(false);
+    expect(hasClipboardTableMarkup("<table-custom>")).toBe(false);
+  });
+
   it("preserves displayed strings, quotes, CRLF rows, and literal punctuation", () => {
     expect(
       parseTsv('00123\t2026/09/14\r\n"a""b"\tA|B\r\n<&>\t日本語'),

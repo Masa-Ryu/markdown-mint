@@ -2781,6 +2781,46 @@ describe("table clipboard integration", () => {
     }
   });
 
+  it("handles self-closing table starts through the clipboard safety path", () => {
+    const html = "<table/><tr><td>A</td><td>B</td></tr>";
+    const commonmark = makeApp(
+      "Before",
+      undefined,
+      false,
+      undefined,
+      "commonmark",
+    );
+    const commonmarkParagraph =
+      commonmark.root.querySelector<HTMLElement>(".ProseMirror > p")!;
+    selectText(commonmark.app, commonmarkParagraph, "Before".length);
+    const commonmarkEvent = dispatchPaste(commonmark.app, {
+      "text/plain": "",
+      "text/html": html,
+    });
+    let commonmarkTables = 0;
+    commonmark.app.view.state.doc.descendants((node) => {
+      if (node.type.name === "table") commonmarkTables += 1;
+    });
+    expect(commonmarkEvent.defaultPrevented).toBe(true);
+    expect(commonmark.app.view.state.doc.textContent).toContain("A\tB");
+    expect(commonmarkTables).toBe(0);
+    expect(commonmark.messages.filter(isEditMessage)).toHaveLength(1);
+    commonmark.app.destroy();
+
+    const github = makeApp("Before");
+    const githubParagraph =
+      github.root.querySelector<HTMLElement>(".ProseMirror > p")!;
+    selectText(github.app, githubParagraph, "Before".length);
+    const githubEvent = dispatchPaste(github.app, {
+      "text/plain": "",
+      "text/html": html,
+    });
+    expect(githubEvent.defaultPrevented).toBe(true);
+    expect(github.app.view.state.doc.child(1).type.name).toBe("table");
+    expect(github.messages.filter(isEditMessage)).toHaveLength(1);
+    github.app.destroy();
+  });
+
   it("imports a valid internal matrix with rich cell content and normalizes row types", () => {
     const rich = schema.nodes.table_header!.create(
       null,
