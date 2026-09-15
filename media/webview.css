@@ -1403,16 +1403,7 @@ textarea:focus-visible {
   color: var(--mm-control-foreground);
 }
 .mm-table-toolbar-button[data-action="row-delete"],
-.mm-table-toolbar-button[data-action="col-delete"] {
-  border-color: color-mix(in srgb, var(--mm-control-border) 70%, transparent);
-}
-.mm-table-toolbar-button[data-action="row-delete"]:hover:not(:disabled),
-.mm-table-toolbar-button[data-action="col-delete"]:hover:not(:disabled) {
-  border-color: var(--mm-contrast-border);
-}
-.mm-table-toolbar-group:last-child {
-  border-color: color-mix(in srgb, var(--mm-control-border) 82%, transparent);
-}
+.mm-table-toolbar-button[data-action="col-delete"],
 .mm-table-toolbar-button[data-action="table-delete"] {
   color: var(--mm-control-foreground);
   border-color: var(
@@ -1420,14 +1411,50 @@ textarea:focus-visible {
     var(--mm-control-border)
   );
 }
-.mm-table-toolbar-button[data-action="table-delete"]:hover:not(:disabled) {
+.mm-table-toolbar-button[data-action="row-delete"]:hover:not(:disabled),
+.mm-table-toolbar-button[data-action="row-delete"]:focus-visible,
+.mm-table-toolbar-button[data-action="col-delete"]:hover:not(:disabled),
+.mm-table-toolbar-button[data-action="col-delete"]:focus-visible,
+.mm-table-toolbar-button[data-action="table-delete"]:hover:not(:disabled),
+.mm-table-toolbar-button[data-action="table-delete"]:focus-visible {
   border-color: var(
     --vscode-inputValidation-errorBorder,
     var(--mm-contrast-border)
   );
-  background: var(
-    --vscode-inputValidation-errorBackground,
-    var(--mm-control-hover-background)
+  background: color-mix(
+    in srgb,
+    var(
+        --vscode-inputValidation-errorBackground,
+        var(--vscode-inputValidation-errorBorder, #f14c4c)
+      )
+      34%,
+    transparent
+  );
+}
+.mm-table-toolbar-group:last-child {
+  border-color: color-mix(in srgb, var(--mm-control-border) 82%, transparent);
+}
+
+.mm-table-delete-preview-overlay {
+  position: fixed;
+  z-index: 1;
+  inset: 0;
+  pointer-events: none;
+}
+.mm-table-delete-preview-rect {
+  position: absolute;
+  box-sizing: border-box;
+}
+.mm-table-delete-preview-rect,
+.mm-document-content .mm-table-delete-preview {
+  background: color-mix(
+    in srgb,
+    var(
+        --vscode-inputValidation-errorBorder,
+        var(--vscode-editorError-foreground, #f14c4c)
+      )
+      10%,
+    transparent
   );
 }
 
@@ -1530,6 +1557,23 @@ body.vscode-high-contrast-light .mm-file-autocomplete-option.is-active {
     border-color: Highlight;
     background: Highlight;
     color: HighlightText;
+  }
+  .mm-table-toolbar-button[data-action="row-delete"]:hover:not(:disabled),
+  .mm-table-toolbar-button[data-action="row-delete"]:focus-visible,
+  .mm-table-toolbar-button[data-action="col-delete"]:hover:not(:disabled),
+  .mm-table-toolbar-button[data-action="col-delete"]:focus-visible,
+  .mm-table-toolbar-button[data-action="table-delete"]:hover:not(:disabled),
+  .mm-table-toolbar-button[data-action="table-delete"]:focus-visible {
+    border-color: Highlight;
+    background: Canvas;
+  }
+  .mm-table-delete-preview-rect {
+    background: transparent;
+    box-shadow: inset 0 0 0 1px Highlight;
+  }
+  .mm-document-content .mm-table-delete-preview {
+    background: Canvas;
+    box-shadow: inset 0 0 0 1px Highlight;
   }
   button:focus-visible,
   select:focus-visible,

@@ -29,7 +29,7 @@ import {
   TextSelection,
 } from "prosemirror-state";
 import type { Transaction } from "prosemirror-state";
-import { EditorView } from "prosemirror-view";
+import { Decoration, DecorationSet, EditorView } from "prosemirror-view";
 import type { ViewMutationRecord } from "prosemirror-view";
 import {
   liftListItem,
@@ -342,6 +342,11 @@ type TableToolbarAction =
   | "table-numbering"
   | "table-delete";
 
+type TableDeletePreviewAction = Extract<
+  TableToolbarAction,
+  "row-delete" | "col-delete" | "table-delete"
+>;
+
 const TRANSIENT_BLANK_META = "markdown-mint-transient-blank";
 const SPREADSHEET_TABLE_PASTE_META = "markdown-mint-spreadsheet-table-paste";
 
@@ -538,6 +543,184 @@ function tableContext(selection: Selection): TableContext | null {
     },
     cellSelection: false,
   };
+}
+
+interface TableDeletePreviewLogicalRect {
+  top: number;
+  left: number;
+  bottom: number;
+  right: number;
+}
+
+interface TableDeletePreviewPixelRect {
+  top: number;
+  left: number;
+  bottom: number;
+  right: number;
+}
+
+function tableDeleteActionDisabled(
+  context: TableContext,
+  action: TableDeletePreviewAction,
+): boolean {
+  if (action === "row-delete")
+    return context.rect.top === 0 && context.rect.bottom === context.map.height;
+  if (action === "col-delete")
+    return context.rect.left === 0 && context.rect.right === context.map.width;
+  return false;
+}
+
+/** Return the logical table area that a row or column delete will remove. */
+function tableDeletePreviewLogicalRect(
+  context: TableContext,
+  action: TableDeletePreviewAction,
+): TableDeletePreviewLogicalRect | null {
+  if (action === "table-delete" || tableDeleteActionDisabled(context, action))
+    return null;
+  if (action === "row-delete") {
+    return {
+      top: context.rect.top,
+      left: 0,
+      bottom: context.rect.bottom,
+      right: context.map.width,
+    };
+  }
+  return {
+    top: 0,
+    left: context.rect.left,
+    bottom: context.map.height,
+    right: context.rect.right,
+  };
+}
+
+function finitePreviewRect(rect: {
+  top: number;
+  left: number;
+  bottom: number;
+  right: number;
+}): boolean {
+  return [rect.top, rect.left, rect.bottom, rect.right].every(Number.isFinite);
+}
+
+function setPreviewBoundary(
+  boundaries: Array<number | undefined>,
+  index: number,
+  value: number,
+): void {
+  if (Number.isFinite(value) && boundaries[index] === undefined)
+    boundaries[index] = value;
+}
+
+function completePreviewBoundaries(
+  measured: Array<number | undefined>,
+  start: number,
+  end: number,
+): number[] | null {
+  const boundaries = measured.slice();
+  boundaries[0] ??= start;
+  boundaries[boundaries.length - 1] ??= end;
+  for (let index = 0; index < boundaries.length; index += 1) {
+    if (boundaries[index] !== undefined) continue;
+    const previous = index - 1;
+    let next = index + 1;
+    while (next < boundaries.length && boundaries[next] === undefined)
+      next += 1;
+    const previousValue = boundaries[previous];
+    const nextValue = boundaries[next];
+    if (previousValue === undefined || nextValue === undefined) return null;
+    const distance = next - previous;
+    boundaries[index] =
+      previousValue +
+      ((nextValue - previousValue) * (index - previous)) / distance;
+  }
+  if (
+    boundaries.some((value) => value === undefined || !Number.isFinite(value))
+  )
+    return null;
+  const completed = boundaries as number[];
+  for (let index = 1; index < completed.length; index += 1) {
+    const current = completed[index];
+    const previous = completed[index - 1];
+    if (current === undefined || previous === undefined || current <= previous)
+      return null;
+  }
+  return completed;
+}
+
+function tableDeletePreviewPixelRects(
+  view: EditorView,
+  context: TableContext,
+  action: TableDeletePreviewAction,
+  tableElement: HTMLElement,
+): TableDeletePreviewPixelRect[] | null {
+  const logicalRect = tableDeletePreviewLogicalRect(context, action);
+  if (!logicalRect) return null;
+  const tableRect = tableElement.getBoundingClientRect();
+  if (!finitePreviewRect(tableRect) || tableRect.right <= tableRect.left)
+    return null;
+
+  const rowElements = Array.from(
+    tableElement.querySelectorAll<HTMLTableRowElement>("tr"),
+  );
+  if (rowElements.length < context.map.height) return null;
+  const rowBoundaries: Array<number | undefined> = Array.from(
+    { length: context.map.height + 1 },
+    () => undefined,
+  );
+  for (let row = 0; row < context.map.height; row += 1) {
+    const rowRect = rowElements[row]?.getBoundingClientRect();
+    if (!rowRect || !finitePreviewRect(rowRect)) continue;
+    setPreviewBoundary(rowBoundaries, row, rowRect.top);
+    setPreviewBoundary(rowBoundaries, row + 1, rowRect.bottom);
+  }
+
+  const columnBoundaries: Array<number | undefined> = Array.from(
+    { length: context.map.width + 1 },
+    () => undefined,
+  );
+  for (const cellPosition of new Set(context.map.map)) {
+    const cellElement = view.nodeDOM(context.tableStart + cellPosition);
+    if (!(cellElement instanceof HTMLElement)) continue;
+    const cellRect = cellElement.getBoundingClientRect();
+    if (!finitePreviewRect(cellRect)) continue;
+    const cell = context.map.findCell(cellPosition);
+    setPreviewBoundary(columnBoundaries, cell.left, cellRect.left);
+    setPreviewBoundary(columnBoundaries, cell.right, cellRect.right);
+  }
+
+  const rows = completePreviewBoundaries(
+    rowBoundaries,
+    tableRect.top,
+    tableRect.bottom,
+  );
+  const columns = completePreviewBoundaries(
+    columnBoundaries,
+    tableRect.left,
+    tableRect.right,
+  );
+  if (!rows || !columns) return null;
+
+  const previews: TableDeletePreviewPixelRect[] = [];
+  if (action === "row-delete") {
+    for (let row = logicalRect.top; row < logicalRect.bottom; row += 1)
+      previews.push({
+        top: rows[row]!,
+        left: columns[logicalRect.left]!,
+        bottom: rows[row + 1]!,
+        right: columns[logicalRect.right]!,
+      });
+  } else {
+    for (let column = logicalRect.left; column < logicalRect.right; column += 1)
+      previews.push({
+        top: rows[logicalRect.top]!,
+        left: columns[column]!,
+        bottom: rows[logicalRect.bottom]!,
+        right: columns[column + 1]!,
+      });
+  }
+  return previews.filter(
+    (preview) => preview.right > preview.left && preview.bottom > preview.top,
+  );
 }
 
 function activeTableCell(
@@ -2219,6 +2402,11 @@ export class MarkdownEditorApp {
   private tableToolbarRevealed = false;
   private tableToolbarRevealRequested = false;
   private tableToolbarRevealTimer: ReturnType<typeof setTimeout> | undefined;
+  private tableDeletePreviewAction: TableDeletePreviewAction | null = null;
+  private tableDeletePreviewDecorations: DecorationSet | null = null;
+  private tableDeletePreviewOverlay: HTMLElement | null = null;
+  private readonly tableDeletePreviewDecorationSource =
+    (): DecorationSet | null => this.tableDeletePreviewDecorations;
   private profileToolbar!: HTMLElement;
   private profileFeatureDialog!: HTMLDialogElement;
   private profileFeatureAlertType!: HTMLSelectElement;
@@ -2353,6 +2541,10 @@ export class MarkdownEditorApp {
     this.updateWritingToolbarState();
   private readonly writingToolbarScrollHandler = (): void =>
     this.updateWritingToolbarState();
+  private readonly tableDeletePreviewResizeHandler = (): void =>
+    this.updateTableDeletePreviewGeometry();
+  private readonly tableDeletePreviewScrollHandler = (): void =>
+    this.updateTableDeletePreviewGeometry();
   private readonly blockGapPointerMoveHandler = (event: PointerEvent): void =>
     this.updateBlockGapFromPointer(event);
   private readonly blockGapPointerOverHandler = (event: PointerEvent): void =>
@@ -2721,9 +2913,18 @@ export class MarkdownEditorApp {
       this.blockGapPointerLeaveHandler,
     );
     window.addEventListener("resize", this.writingToolbarResizeHandler);
+    window.addEventListener("resize", this.tableDeletePreviewResizeHandler);
     this.stage.addEventListener("scroll", this.writingToolbarScrollHandler, {
       passive: true,
     });
+    this.stage.addEventListener(
+      "scroll",
+      this.tableDeletePreviewScrollHandler,
+      {
+        capture: true,
+        passive: true,
+      },
+    );
     document.addEventListener(
       "selectionchange",
       this.tableSelectionChangeHandler,
@@ -2743,6 +2944,7 @@ export class MarkdownEditorApp {
   }
 
   destroy(): void {
+    this.clearTableDeletePreview();
     this.destroyed = true;
     this.derivedViewsRevision += 1;
     this.pendingRejectedEdit = null;
@@ -2773,7 +2975,13 @@ export class MarkdownEditorApp {
     );
     this.view.dom.removeEventListener("click", this.richLinkClickHandler, true);
     window.removeEventListener("resize", this.writingToolbarResizeHandler);
+    window.removeEventListener("resize", this.tableDeletePreviewResizeHandler);
     this.stage.removeEventListener("scroll", this.writingToolbarScrollHandler);
+    this.stage.removeEventListener(
+      "scroll",
+      this.tableDeletePreviewScrollHandler,
+      true,
+    );
     this.stage.removeEventListener(
       "mousedown",
       this.stageBlankPointerDownHandler,
@@ -7191,6 +7399,46 @@ export class MarkdownEditorApp {
           // toolbar receives focus. The command runs from that stable state.
           event.preventDefault();
         });
+        if (
+          action === "row-delete" ||
+          action === "col-delete" ||
+          action === "table-delete"
+        ) {
+          const showPreview = (): void => this.showTableDeletePreview(action);
+          const clearPreview = (): void => this.clearTableDeletePreview();
+          const pointerOver = (event: PointerEvent): void => {
+            if (
+              event.relatedTarget instanceof Node &&
+              button.contains(event.relatedTarget)
+            )
+              return;
+            showPreview();
+          };
+          const pointerOut = (event: PointerEvent): void => {
+            if (
+              event.relatedTarget instanceof Node &&
+              button.contains(event.relatedTarget)
+            )
+              return;
+            clearPreview();
+          };
+          const focusOut = (event: FocusEvent): void => {
+            if (
+              event.relatedTarget instanceof Node &&
+              button.contains(event.relatedTarget)
+            )
+              return;
+            clearPreview();
+          };
+          button.addEventListener("pointerenter", showPreview);
+          button.addEventListener("pointerover", pointerOver);
+          button.addEventListener("pointerleave", clearPreview);
+          button.addEventListener("pointerout", pointerOut);
+          button.addEventListener("focus", showPreview);
+          button.addEventListener("focusin", showPreview);
+          button.addEventListener("blur", clearPreview);
+          button.addEventListener("focusout", focusOut);
+        }
         button.addEventListener("click", () =>
           this.runContextualTableAction(action),
         );
@@ -7231,6 +7479,151 @@ export class MarkdownEditorApp {
       ["table-delete", "Delete table", "Delete table", "table-delete"],
     ]);
     return toolbar;
+  }
+
+  private clearTableDeletePreview(): void {
+    this.tableDeletePreviewAction = null;
+    this.tableDeletePreviewOverlay?.remove();
+    this.tableDeletePreviewOverlay = null;
+    if (this.tableDeletePreviewDecorations) {
+      this.tableDeletePreviewDecorations = null;
+      this.view?.setProps({
+        decorations: this.tableDeletePreviewDecorationSource,
+      });
+    }
+  }
+
+  private renderTableDeletePreviewOverlay(
+    overlay: HTMLElement,
+    previews: TableDeletePreviewPixelRect[],
+  ): void {
+    overlay.replaceChildren();
+    const stageRect = this.stage.getBoundingClientRect();
+    const clipToStage =
+      finitePreviewRect(stageRect) &&
+      stageRect.right > stageRect.left &&
+      stageRect.bottom > stageRect.top;
+    for (const preview of previews) {
+      const left = clipToStage
+        ? Math.max(preview.left, stageRect.left)
+        : preview.left;
+      const top = clipToStage
+        ? Math.max(preview.top, stageRect.top)
+        : preview.top;
+      const right = clipToStage
+        ? Math.min(preview.right, stageRect.right)
+        : preview.right;
+      const bottom = clipToStage
+        ? Math.min(preview.bottom, stageRect.bottom)
+        : preview.bottom;
+      if (right <= left || bottom <= top) continue;
+      const marker = this.root.ownerDocument.createElement("div");
+      marker.className = "mm-table-delete-preview-rect";
+      marker.style.left = `${left}px`;
+      marker.style.top = `${top}px`;
+      marker.style.width = `${right - left}px`;
+      marker.style.height = `${bottom - top}px`;
+      overlay.append(marker);
+    }
+  }
+
+  private updateTableDeletePreviewGeometry(): void {
+    const action = this.tableDeletePreviewAction;
+    const overlay = this.tableDeletePreviewOverlay;
+    if (
+      !action ||
+      !overlay ||
+      action === "table-delete" ||
+      this.destroyed ||
+      !this.view
+    )
+      return;
+    const context = tableContext(this.view.state.selection);
+    const tableElement = context
+      ? this.view.nodeDOM(context.tableStart - 1)
+      : null;
+    if (!context || !(tableElement instanceof HTMLElement)) {
+      this.clearTableDeletePreview();
+      return;
+    }
+    const previews = tableDeletePreviewPixelRects(
+      this.view,
+      context,
+      action,
+      tableElement,
+    );
+    if (!previews?.length) {
+      this.clearTableDeletePreview();
+      return;
+    }
+    this.renderTableDeletePreviewOverlay(overlay, previews);
+  }
+
+  private showTableDeletePreview(action: TableDeletePreviewAction): void {
+    if (
+      this.tableDeletePreviewAction === action &&
+      (this.tableDeletePreviewDecorations || this.tableDeletePreviewOverlay)
+    )
+      return;
+    this.clearTableDeletePreview();
+    if (
+      this.destroyed ||
+      !this.view ||
+      !this.tableToolbar ||
+      this.tableToolbar.hidden
+    )
+      return;
+    const button = this.tableToolbar.querySelector<HTMLButtonElement>(
+      '[data-action="' + action + '"]',
+    );
+    if (!button || button.disabled) return;
+
+    const context = tableContext(this.view.state.selection);
+    if (!context) return;
+
+    if (action !== "table-delete") {
+      // Keep this guard next to the preview path even though the toolbar also
+      // disables commands that would be no-ops.
+      if (!tableDeletePreviewLogicalRect(context, action)) return;
+      const tableElement = this.view.nodeDOM(context.tableStart - 1);
+      if (!(tableElement instanceof HTMLElement)) return;
+      const previews = tableDeletePreviewPixelRects(
+        this.view,
+        context,
+        action,
+        tableElement,
+      );
+      if (!previews?.length) return;
+      const overlay = this.root.ownerDocument.createElement("div");
+      overlay.className = "mm-table-delete-preview-overlay";
+      overlay.setAttribute("aria-hidden", "true");
+      this.tableDeletePreviewAction = action;
+      this.tableDeletePreviewOverlay = overlay;
+      this.root.append(overlay);
+      this.renderTableDeletePreviewOverlay(overlay, previews);
+      return;
+    }
+
+    const cellPositions = new Set(context.map.map);
+    const decorations: Decoration[] = [];
+    for (const cellPosition of cellPositions) {
+      const cell = context.table.nodeAt(cellPosition);
+      if (!cell) continue;
+      const from = context.tableStart + cellPosition;
+      decorations.push(
+        Decoration.node(from, from + cell.nodeSize, {
+          class: "mm-table-delete-preview",
+        }),
+      );
+    }
+    this.tableDeletePreviewDecorations = DecorationSet.create(
+      this.view.state.doc,
+      decorations,
+    );
+    this.tableDeletePreviewAction = action;
+    this.view.setProps({
+      decorations: this.tableDeletePreviewDecorationSource,
+    });
   }
 
   private buildTableDialog(container: HTMLElement): void {
@@ -8143,6 +8536,7 @@ export class MarkdownEditorApp {
   }
 
   private runContextualTableAction(action: TableToolbarAction): void {
+    this.clearTableDeletePreview();
     if (action === "align-left") {
       this.runAlignment("left");
       return;
@@ -8603,6 +8997,7 @@ export class MarkdownEditorApp {
     options: { refreshPreview?: boolean } = {},
   ): void {
     if (this.previewOnly && mode !== "preview" && mode !== "source") return;
+    this.clearTableDeletePreview();
     if (mode !== this.mode) {
       this.closeWritingPopups();
       this.closeEmojiPicker();
@@ -8787,6 +9182,8 @@ export class MarkdownEditorApp {
     options: { allowReveal?: boolean } = {},
   ): void {
     if (this.destroyed || !this.tableToolbar || !this.view) return;
+    const activePreview = this.tableDeletePreviewAction;
+    this.clearTableDeletePreview();
     const updateAlignmentState = (
       active: "left" | "center" | "right" | null,
     ): void => {
@@ -8823,12 +9220,21 @@ export class MarkdownEditorApp {
       this.tableToolbar.querySelectorAll<HTMLButtonElement>(
         ".mm-table-toolbar-button",
       ),
-    ))
-      button.disabled = !actionsEnabled;
+    )) {
+      const action = button.dataset.action;
+      const deleteDisabled =
+        context !== null &&
+        ((action === "row-delete" &&
+          tableDeleteActionDisabled(context, action)) ||
+          (action === "col-delete" &&
+            tableDeleteActionDisabled(context, action)));
+      button.disabled = !actionsEnabled || deleteDisabled;
+    }
 
     this.tableToolbar.hidden = !visible;
     this.tableToolbar.setAttribute("aria-hidden", String(!visible));
     if (!visible || !context) {
+      this.clearTableDeletePreview();
       updateAlignmentState(null);
       this.tableToolbar.removeAttribute("data-table-pos");
       this.updateTableNumberingState(null);
@@ -8859,6 +9265,7 @@ export class MarkdownEditorApp {
 
     this.tableToolbar.dataset.tablePos = String(context.tableStart - 1);
     this.updateTableNumberingState(context);
+    if (activePreview) this.showTableDeletePreview(activePreview);
   }
 
   private postReady(): void {
@@ -9625,6 +10032,7 @@ export class MarkdownEditorApp {
     message: DocumentMessage,
     options: { force?: boolean } = {},
   ): void {
+    this.clearTableDeletePreview();
     if (this.composing) {
       this.pendingExternal = message;
       return;
