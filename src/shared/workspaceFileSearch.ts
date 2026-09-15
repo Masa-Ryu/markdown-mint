@@ -59,13 +59,13 @@ interface MatchScore {
 }
 
 interface ScoredCandidate {
-  readonly candidate: WorkspaceFileCandidate;
+  readonly file: PreparedWorkspaceFile;
   readonly score: MatchScore;
+  readonly documentRelativePath?: string;
 }
 
 interface PreparedWorkspaceFile {
   readonly parsedPath: ParsedPath;
-  readonly workspaceRelativeSegments: readonly string[];
   readonly workspaceRelativePath: string;
   readonly lowerFileName: string;
   readonly lowerWorkspaceRelativePath: string;
@@ -126,7 +126,6 @@ export function createWorkspaceFileSearchIndex(
     const directorySegments = workspaceRelative.slice(0, -1);
     prepared.push({
       parsedPath: parsedFile,
-      workspaceRelativeSegments: workspaceRelative,
       workspaceRelativePath: workspaceRelative.join("/"),
       lowerFileName: fileName.toLowerCase(),
       lowerWorkspaceRelativePath: workspaceRelative.join("/").toLowerCase(),
@@ -148,7 +147,10 @@ export class WorkspaceFileSearch {
   private readonly maxResults: number;
 
   public constructor(maxResults = MAX_WORKSPACE_FILE_SEARCH_RESULTS) {
-    this.maxResults = Math.max(1, Math.min(maxResults, 100));
+    this.maxResults = Math.max(
+      1,
+      Math.min(maxResults, MAX_WORKSPACE_FILE_SEARCH_RESULTS),
+    );
   }
 
   public search(options: WorkspaceFileSearchOptions): WorkspaceFileCandidate[] {
@@ -164,7 +166,6 @@ export class WorkspaceFileSearch {
       1,
       Math.min(options.maxResults ?? this.maxResults, this.maxResults),
     );
-    const scored: ScoredCandidate[] = [];
     const index =
       options.index?.workspaceFolderPath === options.workspaceFolderPath
         ? options.index
@@ -172,30 +173,54 @@ export class WorkspaceFileSearch {
             options.workspaceFolderPath,
             options.files,
           );
+    const pathQuery = normalizePathQuery(query);
+    const topK = new BoundedTopK<ScoredCandidate>(
+      limit,
+      compareScoredCandidates,
+    );
 
     for (const file of index.files) {
       if (options.filter === "image" && !file.isImage) continue;
+      if (!isRelativePathCompatible(document, file.parsedPath)) continue;
 
+      const filenameScore = scoreFilenameCandidate(query, file);
+      if (filenameScore) {
+        topK.add({ file, score: filenameScore });
+        continue;
+      }
+      if (!pathQuery) continue;
+
+      // Path-like queries are uncommon and need the document-relative path
+      // for matching. Ordinary filename queries stay on prepared metadata
+      // until the bounded top-K has been selected.
       const relativeSegmentsFromDocument = relativeSegments(
         { ...document, segments: documentDirectory },
         file.parsedPath,
       );
       if (!relativeSegmentsFromDocument) continue;
       const relativePath = encodeMarkdownPath(relativeSegmentsFromDocument);
-      const score = scoreCandidate(query, file, relativePath);
-      if (score)
-        scored.push({
-          candidate: {
-            fileName: file.fileName,
-            directory: file.directory,
-            relativePath,
-          },
-          score,
+      const pathScore = scorePathCandidate(file, pathQuery, relativePath);
+      if (pathScore)
+        topK.add({
+          file,
+          score: pathScore,
+          documentRelativePath: relativePath,
         });
     }
 
-    scored.sort(compareScoredCandidates);
-    return scored.slice(0, limit).map(({ candidate }) => candidate);
+    return topK.values().flatMap(({ file, documentRelativePath }) => {
+      const relativePath =
+        documentRelativePath ??
+        relativeMarkdownPathFromParsedDocument(document, file.parsedPath);
+      if (!relativePath) return [];
+      return [
+        {
+          fileName: file.fileName,
+          directory: file.directory,
+          relativePath,
+        },
+      ];
+    });
   }
 }
 
@@ -206,6 +231,13 @@ export function relativeMarkdownPath(
 ): string | undefined {
   const document = parsePath(documentPath);
   const target = parsePath(targetPath);
+  return relativeMarkdownPathFromParsedDocument(document, target);
+}
+
+function relativeMarkdownPathFromParsedDocument(
+  document: ParsedPath,
+  target: ParsedPath,
+): string | undefined {
   const relative = relativeSegments(
     { ...document, segments: document.segments.slice(0, -1) },
     target,
@@ -255,9 +287,7 @@ function relativeSegments(
   from: ParsedPath,
   target: ParsedPath,
 ): string[] | undefined {
-  if (from.absolute !== target.absolute) return undefined;
-  if (from.windows !== target.windows && (from.windows || target.windows))
-    return undefined;
+  if (!isRelativePathCompatible(from, target)) return undefined;
 
   const compareCase = from.windows || target.windows;
   const same = (left: string, right: string): boolean =>
@@ -278,18 +308,26 @@ function relativeSegments(
   return result;
 }
 
+function isRelativePathCompatible(
+  from: ParsedPath,
+  target: ParsedPath,
+): boolean {
+  return (
+    from.absolute === target.absolute &&
+    !(from.windows !== target.windows && (from.windows || target.windows))
+  );
+}
+
 function isWithin(root: ParsedPath, value: ParsedPath): boolean {
   const relative = relativeSegments(root, value);
   return Boolean(relative && relative[0] !== "..");
 }
 
-function scoreCandidate(
+function scoreFilenameCandidate(
   query: string,
   file: PreparedWorkspaceFile,
-  documentRelativePath: string,
 ): MatchScore | undefined {
   const lowerFileName = file.lowerFileName;
-  const lowerPath = file.lowerWorkspaceRelativePath;
   if (lowerFileName.startsWith(query)) {
     return {
       category: 0,
@@ -319,14 +357,23 @@ function scoreCandidate(
       relativePath: file.workspaceRelativePath,
     };
   }
-  const pathQuery = query.replaceAll("\\", "/");
-  if (!/\//.test(pathQuery) && !pathQuery.startsWith(".")) return undefined;
+  return undefined;
+}
+
+function scorePathCandidate(
+  file: PreparedWorkspaceFile,
+  pathQuery: string,
+  documentRelativePath: string,
+): MatchScore | undefined {
   const normalizedPathQuery = pathQuery.startsWith("./")
     ? pathQuery.slice(2)
     : pathQuery;
   if (!normalizedPathQuery) return undefined;
   const pathValues = [
-    { value: lowerPath, relativePath: file.workspaceRelativePath },
+    {
+      value: file.lowerWorkspaceRelativePath,
+      relativePath: file.workspaceRelativePath,
+    },
     {
       value: documentRelativePath.toLowerCase(),
       relativePath: documentRelativePath,
@@ -367,6 +414,12 @@ function scoreCandidate(
   };
 }
 
+function normalizePathQuery(query: string): string | undefined {
+  const pathQuery = query.replaceAll("\\", "/");
+  if (!/\//.test(pathQuery) && !pathQuery.startsWith(".")) return undefined;
+  return pathQuery;
+}
+
 function fuzzyMatch(
   query: string,
   value: string,
@@ -399,6 +452,37 @@ function compareScoredCandidates(
     a.nameLength - b.nameLength ||
     compareStrings(a.relativePath, b.relativePath)
   );
+}
+
+class BoundedTopK<T> {
+  private readonly entriesList: T[] = [];
+
+  public constructor(
+    private readonly limit: number,
+    private readonly compare: (left: T, right: T) => number,
+  ) {}
+
+  public add(entry: T): void {
+    if (this.entriesList.length < this.limit) {
+      this.entriesList.push(entry);
+      return;
+    }
+
+    let worstIndex = 0;
+    for (let index = 1; index < this.entriesList.length; index += 1) {
+      if (
+        this.compare(this.entriesList[index]!, this.entriesList[worstIndex]!) >
+        0
+      )
+        worstIndex = index;
+    }
+    if (this.compare(entry, this.entriesList[worstIndex]!) < 0)
+      this.entriesList[worstIndex] = entry;
+  }
+
+  public values(): T[] {
+    return this.entriesList.slice().sort(this.compare);
+  }
 }
 
 function compareStrings(left: string, right: string): number {

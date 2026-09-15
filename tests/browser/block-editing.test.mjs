@@ -2717,6 +2717,168 @@ async function testWorkspaceFileAutocomplete(page) {
   );
 }
 
+function percentile(values, fraction) {
+  const sorted = values.slice().sort((left, right) => left - right);
+  const index = (sorted.length - 1) * fraction;
+  const lower = Math.floor(index);
+  const upper = Math.ceil(index);
+  if (lower === upper) return sorted[lower] ?? 0;
+  const weight = index - lower;
+  return (
+    (sorted[lower] ?? 0) +
+    ((sorted[upper] ?? 0) - (sorted[lower] ?? 0)) * weight
+  );
+}
+
+function summarizeTimings(values) {
+  return {
+    p50: percentile(values, 0.5),
+    p95: percentile(values, 0.95),
+    p99: percentile(values, 0.99),
+    max: Math.max(...values),
+    over100: values.filter((value) => value > 100).length,
+  };
+}
+
+async function loadFileSearchBenchmark(page, source, fileCount) {
+  await page.goto(`${baseUrl}/?workspaceFiles=${fileCount}`, {
+    waitUntil: "domcontentloaded",
+  });
+  await page.waitForFunction(() => window.markdownMint?.view);
+  await page.evaluate(
+    ([markdown]) => window.__markdownMintHarness.deliverExternal(markdown),
+    [source],
+  );
+  await page.waitForFunction(
+    (expected) => window.__markdownMintHarness.document.markdown === expected,
+    source,
+  );
+  await settle(page);
+}
+
+async function benchmarkFileSearchSurface(page, surface, fileCount, samples) {
+  const source = "Target";
+  await loadFileSearchBenchmark(page, source, fileCount);
+  let input;
+  if (surface === "selected-text picker") {
+    await caret(page, `${rich} > p`, 0, -1);
+    await page.locator('[data-testid="toolbar-link"]').click();
+    const picker = page.locator('[data-testid="link-selection-picker"]');
+    await picker.waitFor({ state: "visible" });
+    input = picker.locator('[data-testid="link-picker-input"]');
+  } else if (surface === "Link modal") {
+    await caret(page, `${rich} > p`, -1);
+    await page.locator('[data-testid="toolbar-link"]').click();
+    const dialog = page.locator(
+      'dialog[aria-labelledby="mm-link-dialog-title"]',
+    );
+    await dialog.waitFor({ state: "visible" });
+    input = dialog.locator("input").first();
+  } else {
+    await caret(page, `${rich} > p`, -1);
+    await page.locator('[data-testid="toolbar-image"]').click();
+    const dialog = page.locator(
+      'dialog[aria-labelledby="mm-image-dialog-title"]',
+    );
+    await dialog.waitFor({ state: "visible" });
+    input = dialog.locator("input").first();
+  }
+
+  await page.evaluate(() => {
+    window.__markdownMintDebugFileSearch = true;
+    performance.clearMarks();
+    performance.clearMeasures();
+  });
+  const options = page.locator(".mm-file-autocomplete-option");
+  for (let sample = 0; sample < samples; sample += 1) {
+    await input.fill("");
+    await input.fill("benchmark");
+    await options.first().waitFor({ state: "visible" });
+  }
+  await settle(page);
+  const measurements = await page.evaluate(() => {
+    const byId = new Map();
+    for (const entry of performance.getEntriesByType("mark")) {
+      const match = entry.name.match(
+        /^markdown-mint:file-search:(\d+):(input|host-result|dom-update|paint-opportunity)$/,
+      );
+      if (!match) continue;
+      const [, id, phase] = match;
+      const current = byId.get(id) ?? {};
+      current[phase] = entry.startTime;
+      byId.set(id, current);
+    }
+    return [...byId.values()]
+      .filter(
+        (timing) =>
+          Number.isFinite(timing.input) &&
+          Number.isFinite(timing["host-result"]) &&
+          Number.isFinite(timing["dom-update"]) &&
+          Number.isFinite(timing["paint-opportunity"]),
+      )
+      .map((timing) => ({
+        hostRoundTrip: timing["host-result"] - timing.input,
+        domMutation: timing["dom-update"] - timing["host-result"],
+        paintOpportunity: timing["paint-opportunity"] - timing.input,
+      }));
+  });
+  assert.ok(
+    measurements.length >= samples,
+    `${surface} ${fileCount} benchmark produced ${measurements.length}/${samples} complete timings`,
+  );
+
+  await input.press("Escape");
+  await page.evaluate(() => {
+    window.__markdownMintDebugFileSearch = false;
+  });
+  return {
+    hostRoundTrip: measurements.map((timing) => timing.hostRoundTrip),
+    domMutation: measurements.map((timing) => timing.domMutation),
+    paintOpportunity: measurements.map((timing) => timing.paintOpportunity),
+  };
+}
+
+async function testWorkspaceFileAutocompleteBenchmark(page) {
+  const samples = Math.max(
+    20,
+    Number.parseInt(process.env.MM_FILE_SEARCH_BENCHMARK_SAMPLES ?? "30", 10),
+  );
+  const surfaces = ["Link modal", "Image modal", "selected-text picker"];
+  const rows = [];
+  for (const fileCount of [1000, 10000, 50000]) {
+    for (const surface of surfaces) {
+      const timings = await benchmarkFileSearchSurface(
+        page,
+        surface,
+        fileCount,
+        samples,
+      );
+      for (const [metric, values] of Object.entries(timings))
+        rows.push({ fileCount, surface, metric, ...summarizeTimings(values) });
+    }
+  }
+
+  console.log(
+    "File autocomplete browser harness benchmark (cache-warm mock data)",
+  );
+  console.log(
+    `Samples: ${samples}; hostRoundTrip is harness message handling, domMutation is Webview DOM work, and paintOpportunity is input to the next requestAnimationFrame.`,
+  );
+  console.log(
+    "The requestAnimationFrame timestamp is a paint opportunity, not proof that pixels were painted.",
+  );
+  console.log("");
+  console.log(
+    "| files | surface | metric | p50 ms | p95 ms | p99 ms | max ms | >100ms |",
+  );
+  console.log("| ---: | --- | --- | ---: | ---: | ---: | ---: | ---: |");
+  for (const row of rows) {
+    console.log(
+      `| ${row.fileCount} | ${row.surface} | ${row.metric} | ${row.p50.toFixed(3)} | ${row.p95.toFixed(3)} | ${row.p99.toFixed(3)} | ${row.max.toFixed(3)} | ${row.over100} |`,
+    );
+  }
+}
+
 async function testVerticalGoalAndEmptyEdges(page) {
   const long = "0123456789012345678901234567890123456789";
   for (const middle of [alert("x"), "x"]) {
@@ -3869,7 +4031,7 @@ async function main() {
       deviceScaleFactor: 1,
     });
     page.setDefaultTimeout(8000);
-    for (const test of [
+    const browserTests = [
       testCodeHeader,
       testDetailsAndCodeBlockSelection,
       testAlertHeaderAndSelection,
@@ -3906,7 +4068,10 @@ async function main() {
       testBlankLineRoundTrip,
       testAuthoritativeTerminalWhitespace,
       testDocumentFixtures,
-    ]) {
+    ];
+    if (process.env.MM_FILE_SEARCH_BENCHMARK === "1")
+      browserTests.push(testWorkspaceFileAutocompleteBenchmark);
+    for (const test of browserTests) {
       if (
         process.env.MM_BLOCK_BROWSER_CASE &&
         !test.name.includes(process.env.MM_BLOCK_BROWSER_CASE)

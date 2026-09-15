@@ -51,6 +51,15 @@ try {
         "tests",
         "md",
       ),
+      ...(process.env.MM_FILE_SEARCH_HOST_BENCHMARK === "1"
+        ? { MM_FILE_SEARCH_HOST_BENCHMARK: "1" }
+        : {}),
+      ...(process.env.MM_FILE_SEARCH_BENCHMARK_SAMPLES
+        ? {
+            MM_FILE_SEARCH_BENCHMARK_SAMPLES:
+              process.env.MM_FILE_SEARCH_BENCHMARK_SAMPLES,
+          }
+        : {}),
     },
     launchArgs: [
       `--user-data-dir=${userDataDirectory}`,

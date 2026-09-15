@@ -44,5 +44,8 @@ describe("Mermaid dialog styles", () => {
     expect(webviewCss).toContain("  background: transparent;\n}");
     expect(webviewCss).toContain("  box-shadow: inset 2px 0 0");
     expect(webviewCss).not.toContain(".mm-file-autocomplete-option:hover");
+    expect(webviewCss).not.toContain(
+      ".mm-file-autocomplete-option:not(.is-active):hover",
+    );
   });
 });

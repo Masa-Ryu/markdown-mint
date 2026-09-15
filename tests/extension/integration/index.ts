@@ -36,6 +36,8 @@ export async function run(): Promise<void> {
   assert.equal(typeof api.renderWithNativeMarkdown, "function");
   await runLinkUriAcceptance(filePath);
   await runWorkspaceFileSearchAcceptance(filePath);
+  if (process.env.MM_FILE_SEARCH_HOST_BENCHMARK === "1")
+    await runWorkspaceFileSearchHostBenchmark(filePath);
   await runRequiredMarkdownFixtureAcceptance(api);
 
   const commands = await vscode.commands.getCommands(true);
@@ -612,6 +614,93 @@ async function runWorkspaceFileSearchAcceptance(
       vscode.ConfigurationTarget.Workspace,
     );
   }
+}
+
+async function runWorkspaceFileSearchHostBenchmark(
+  filePath: string,
+): Promise<void> {
+  const documentUri = vscode.Uri.file(filePath);
+  const workspaceFolder = vscode.workspace.getWorkspaceFolder(documentUri);
+  assert.ok(workspaceFolder, "the benchmark document is in the workspace");
+  const samples = Math.max(
+    20,
+    Number.parseInt(process.env.MM_FILE_SEARCH_BENCHMARK_SAMPLES ?? "100", 10),
+  );
+  const search = new WorkspaceFileSearchHost();
+  const warmupStart = performance.now();
+  await search.warmup(documentUri, workspaceFolder);
+  const warmupMilliseconds = performance.now() - warmupStart;
+  const discovered = await vscode.workspace.findFiles(
+    new vscode.RelativePattern(workspaceFolder, "**/*"),
+    undefined,
+  );
+  const cases = [
+    ["Link modal", "hoge", "all"],
+    ["Image modal", "logo", "image"],
+    ["selected-text picker", "hoge", "all"],
+  ] as const;
+  const rows: Array<{
+    readonly surface: string;
+    readonly p50: number;
+    readonly p95: number;
+    readonly p99: number;
+    readonly max: number;
+    readonly over100: number;
+  }> = [];
+  try {
+    for (const [surface, query, filter] of cases) {
+      const timings: number[] = [];
+      for (let index = 0; index < 20; index += 1)
+        await search.searchFiles(documentUri, workspaceFolder, query, filter);
+      for (let index = 0; index < samples; index += 1) {
+        const start = performance.now();
+        const candidates = await search.searchFiles(
+          documentUri,
+          workspaceFolder,
+          query,
+          filter,
+        );
+        assert.ok(candidates.length > 0, `${surface} benchmark has candidates`);
+        timings.push(performance.now() - start);
+      }
+      const sorted = timings.slice().sort((left, right) => left - right);
+      rows.push({
+        surface,
+        p50: percentile(sorted, 0.5),
+        p95: percentile(sorted, 0.95),
+        p99: percentile(sorted, 0.99),
+        max: sorted.at(-1) ?? 0,
+        over100: timings.filter((value) => value > 100).length,
+      });
+    }
+  } finally {
+    search.dispose();
+  }
+
+  console.log(
+    `Real VS Code Extension Host file search benchmark (cache-warm; ${discovered.length} discovered files; index warm-up ${warmupMilliseconds.toFixed(3)}ms)`,
+  );
+  console.log(
+    "These timings cover the Host searchFiles call only; Webview message transport, DOM mutation, and paint opportunity are measured separately by the browser harness.",
+  );
+  console.log("| surface | p50 ms | p95 ms | p99 ms | max ms | >100ms |");
+  console.log("| --- | ---: | ---: | ---: | ---: | ---: |");
+  for (const row of rows)
+    console.log(
+      `| ${row.surface} | ${row.p50.toFixed(3)} | ${row.p95.toFixed(3)} | ${row.p99.toFixed(3)} | ${row.max.toFixed(3)} | ${row.over100} |`,
+    );
+}
+
+function percentile(sorted: readonly number[], fraction: number): number {
+  const index = (sorted.length - 1) * fraction;
+  const lower = Math.floor(index);
+  const upper = Math.ceil(index);
+  if (lower === upper) return sorted[lower] ?? 0;
+  const weight = index - lower;
+  return (
+    (sorted[lower] ?? 0) +
+    ((sorted[upper] ?? 0) - (sorted[lower] ?? 0)) * weight
+  );
 }
 
 async function runRequiredMarkdownFixtureAcceptance(api: {

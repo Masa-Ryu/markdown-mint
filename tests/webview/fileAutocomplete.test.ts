@@ -158,6 +158,41 @@ describe("FileAutocomplete active candidate interaction", () => {
     autocomplete.dispose();
   });
 
+  it("updates active presentation without rebuilding candidate DOM", () => {
+    const { input, autocomplete } = createAutocomplete();
+    dispatchInput(input, "h");
+    autocomplete.setCandidates([candidate("alpha.md"), candidate("beta.md")]);
+    const popup = document.querySelector<HTMLElement>(".mm-file-autocomplete")!;
+    const first = popup.querySelector<HTMLButtonElement>(
+      '[data-mm-file-autocomplete-option="0"]',
+    )!;
+    const second = popup.querySelector<HTMLButtonElement>(
+      '[data-mm-file-autocomplete-option="1"]',
+    )!;
+    const replaceChildren = vi.spyOn(popup, "replaceChildren");
+
+    dispatchKey(input, "ArrowDown");
+
+    expect(replaceChildren).not.toHaveBeenCalled();
+    expect(popup.querySelectorAll(".is-active")).toHaveLength(1);
+    expect(first.isConnected).toBe(true);
+    expect(second.isConnected).toBe(true);
+    expect(first.getAttribute("aria-selected")).toBe("false");
+    expect(second.getAttribute("aria-selected")).toBe("true");
+    expect(input.getAttribute("aria-activedescendant")).toBe(second.id);
+    expect(
+      popup.parentElement?.querySelector<HTMLElement>(
+        ".mm-file-autocomplete-footer",
+      )?.textContent,
+    ).toBe("./beta.md");
+
+    dispatchPointer(first, "pointermove");
+    expect(replaceChildren).not.toHaveBeenCalled();
+    expect(first.classList.contains("is-active")).toBe(true);
+    expect(second.classList.contains("is-active")).toBe(false);
+    autocomplete.dispose();
+  });
+
   it("preserves the active candidate when async results are refreshed", () => {
     const { input, autocomplete } = createAutocomplete();
     dispatchInput(input, "h");

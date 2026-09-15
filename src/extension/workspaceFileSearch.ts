@@ -11,8 +11,8 @@ import {
 /**
  * Host-side adapter for workspace discovery. VS Code owns the filesystem
  * lookup and applies files.exclude when findFiles is called without an
- * explicit exclude glob. Results are cached per workspace folder so a second
- * keystroke only reranks the already-discovered URIs.
+ * explicit exclude glob. Results are cached per workspace folder and scheme
+ * so a second keystroke only reranks the already-prepared index.
  */
 export class WorkspaceFileSearchHost implements vscode.Disposable {
   private readonly search = new RankedWorkspaceFileSearch();
@@ -20,7 +20,11 @@ export class WorkspaceFileSearchHost implements vscode.Disposable {
     string,
     Promise<readonly vscode.Uri[]>
   >();
-  private readonly indexCache = new Map<string, WorkspaceFileSearchIndex>();
+  private readonly indexCache = new Map<
+    string,
+    Promise<WorkspaceFileSearchIndex>
+  >();
+  private readonly warmupCache = new Map<string, Promise<void>>();
   private readonly disposables: vscode.Disposable[];
 
   public constructor() {
@@ -55,22 +59,7 @@ export class WorkspaceFileSearchHost implements vscode.Disposable {
     if (!workspaceFolder || !isWorkspaceFileSearchQuery(query)) return [];
     const key = workspaceFolder.uri.toString(true);
     try {
-      const discovered = await this.discoverFiles(workspaceFolder);
-      const indexKey = `${key}|${documentUri.scheme}|${documentUri.authority}`;
-      let index = this.indexCache.get(indexKey);
-      if (!index) {
-        index = createWorkspaceFileSearchIndex(
-          workspaceFolder.uri.path,
-          discovered
-            .filter(
-              (uri) =>
-                uri.scheme === documentUri.scheme &&
-                uri.authority === documentUri.authority,
-            )
-            .map((uri) => ({ path: uri.path })),
-        );
-        this.indexCache.set(indexKey, index);
-      }
+      const index = await this.getOrCreateIndex(documentUri, workspaceFolder);
       return this.search.search({
         documentPath: documentUri.path,
         workspaceFolderPath: workspaceFolder.uri.path,
@@ -89,19 +78,38 @@ export class WorkspaceFileSearchHost implements vscode.Disposable {
     }
   }
 
-  /** Start discovery without blocking the editor or waiting for a query. */
-  public warmup(workspaceFolder: vscode.WorkspaceFolder | undefined): void {
-    if (!workspaceFolder) return;
-    const key = workspaceFolder.uri.toString(true);
-    void this.discoverFiles(workspaceFolder).catch(() => {
-      this.fileCache.delete(key);
-      this.deleteIndexesForWorkspace(key);
-    });
+  /**
+   * Prepare discovery and the URI-scoped search index before the first query.
+   * The returned promise is shared for simultaneous warm-ups of the same
+   * workspace/scheme/authority tuple.
+   */
+  public warmup(
+    documentUri: vscode.Uri,
+    workspaceFolder: vscode.WorkspaceFolder | undefined,
+  ): Promise<void> {
+    if (!workspaceFolder) return Promise.resolve();
+    const indexKey = this.indexKey(documentUri, workspaceFolder);
+    const cached = this.warmupCache.get(indexKey);
+    if (cached) return cached;
+
+    const workspaceKey = workspaceFolder.uri.toString(true);
+    const warmup = this.getOrCreateIndex(documentUri, workspaceFolder).then(
+      () => undefined,
+      () => {
+        this.fileCache.delete(workspaceKey);
+        this.deleteIndexesForWorkspace(workspaceKey);
+        if (this.warmupCache.get(indexKey) === warmup)
+          this.warmupCache.delete(indexKey);
+      },
+    );
+    this.warmupCache.set(indexKey, warmup);
+    return warmup;
   }
 
   public clear(): void {
     this.fileCache.clear();
     this.indexCache.clear();
+    this.warmupCache.clear();
   }
 
   public dispose(): void {
@@ -125,9 +133,43 @@ export class WorkspaceFileSearchHost implements vscode.Disposable {
     return files;
   }
 
+  private getOrCreateIndex(
+    documentUri: vscode.Uri,
+    workspaceFolder: vscode.WorkspaceFolder,
+  ): Promise<WorkspaceFileSearchIndex> {
+    const indexKey = this.indexKey(documentUri, workspaceFolder);
+    const cached = this.indexCache.get(indexKey);
+    if (cached) return cached;
+
+    const index = this.discoverFiles(workspaceFolder).then((discovered) =>
+      createWorkspaceFileSearchIndex(
+        workspaceFolder.uri.path,
+        discovered
+          .filter(
+            (uri) =>
+              uri.scheme === documentUri.scheme &&
+              uri.authority === documentUri.authority,
+          )
+          .map((uri) => ({ path: uri.path })),
+      ),
+    );
+    this.indexCache.set(indexKey, index);
+    return index;
+  }
+
+  private indexKey(
+    documentUri: vscode.Uri,
+    workspaceFolder: vscode.WorkspaceFolder,
+  ): string {
+    return `${workspaceFolder.uri.toString(true)}|${documentUri.scheme}|${documentUri.authority}`;
+  }
+
   private deleteIndexesForWorkspace(key: string): void {
     for (const indexKey of this.indexCache.keys()) {
       if (indexKey.startsWith(`${key}|`)) this.indexCache.delete(indexKey);
+    }
+    for (const warmupKey of this.warmupCache.keys()) {
+      if (warmupKey.startsWith(`${key}|`)) this.warmupCache.delete(warmupKey);
     }
   }
 }

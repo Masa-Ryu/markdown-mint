@@ -146,7 +146,25 @@
       const optionalString = value => value === undefined || (typeof value === 'string' && value.length <= 160);
       const versionValue = value => Number.isSafeInteger(value) && value >= 1;
       const optionalVersion = value => value === undefined || versionValue(value);
-      const browserWorkspaceFiles = [
+      const requestedWorkspaceFileCount = Number.parseInt(
+        new URLSearchParams(location.search).get('workspaceFiles') ?? '',
+        10
+      );
+      const benchmarkWorkspaceFiles = Number.isSafeInteger(requestedWorkspaceFileCount) && requestedWorkspaceFileCount > 0
+        ? Array.from({ length: requestedWorkspaceFileCount }, (_, index) => {
+            const group = String(Math.floor(index / 100)).padStart(3, '0');
+            const number = String(index).padStart(5, '0');
+            const extension = index % 2 === 0 ? '.png' : '.md';
+            return {
+              fileName: `benchmark-${number}${extension}`,
+              directory: `docs/benchmark/${group}/`,
+              relativePath: `../docs/benchmark/${group}/benchmark-${number}${extension}`
+            };
+          })
+        : [];
+      const browserWorkspaceFiles = benchmarkWorkspaceFiles.length > 0
+        ? benchmarkWorkspaceFiles
+        : [
         { fileName: 'hoge.pdf', directory: 'specs/', relativePath: '../specs/hoge.pdf' },
         { fileName: 'hoge-design.md', directory: 'docs/', relativePath: '../docs/hoge-design.md' },
         { fileName: 'how-to-use.md', directory: 'docs/', relativePath: '../docs/how-to-use.md' },

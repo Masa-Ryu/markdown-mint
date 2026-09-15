@@ -970,6 +970,41 @@ describe("MarkdownMintEditorProvider", () => {
     provider.dispose();
   });
 
+  it("warms the URI-scoped index and shares concurrent warm-ups", async () => {
+    vscode.__state.reset();
+    const workspaceFolder = {
+      uri: vscode.Uri.file("/workspace"),
+      name: "workspace",
+      index: 0,
+    };
+    vscode.__state.workspaceFolder = workspaceFolder;
+    const { WorkspaceFileSearchHost } =
+      await import("../../src/extension/workspaceFileSearch");
+    const documentUri = vscode.__state.document.uri;
+    const search = new WorkspaceFileSearchHost();
+    const firstWarmup = search.warmup(
+      documentUri as never,
+      workspaceFolder as never,
+    );
+    const secondWarmup = search.warmup(
+      documentUri as never,
+      workspaceFolder as never,
+    );
+
+    expect(secondWarmup).toBe(firstWarmup);
+    await firstWarmup;
+    const candidates = await search.searchFiles(
+      documentUri as never,
+      workspaceFolder as never,
+      "hoge",
+      "all",
+    );
+
+    expect(candidates[0]?.relativePath).toBe("./hoge%20manual.pdf");
+    expect(vscode.__state.findFilesCalls).toHaveLength(1);
+    search.dispose();
+  });
+
   it("searches only the active workspace folder and returns encoded relative paths", async () => {
     vscode.__state.reset();
     vscode.__state.workspaceFolder = {

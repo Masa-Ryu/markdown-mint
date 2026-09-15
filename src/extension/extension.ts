@@ -741,6 +741,7 @@ export class MarkdownMintEditorProvider
         return;
       case "workspace-file-search-warmup":
         this.workspaceFileSearch.warmup(
+          session.state.uri,
           vscode.workspace.getWorkspaceFolder(session.state.uri),
         );
         return;

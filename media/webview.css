@@ -903,12 +903,6 @@ textarea:focus-visible {
   cursor: pointer;
   outline: none;
 }
-.mm-file-autocomplete-option:not(.is-active):hover {
-  background: var(
-    --vscode-list-hoverBackground,
-    var(--mm-control-hover-background)
-  );
-}
 .mm-file-autocomplete-option.is-active {
   color: var(
     --vscode-list-activeSelectionForeground,
@@ -1520,8 +1514,7 @@ body.vscode-high-contrast-light .mm-file-autocomplete-option.is-active {
   }
   button:hover:not(:disabled),
   select:hover:not(:disabled),
-  .mm-table-grid-cell.is-preview,
-  .mm-file-autocomplete-option:not(.is-active):hover {
+  .mm-table-grid-cell.is-preview {
     border-color: Highlight;
   }
   .mm-file-autocomplete-option.is-active {

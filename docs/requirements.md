@@ -146,6 +146,47 @@ scheme validation rejects `javascript`, `command`, `vscode`,
 `vscode-insiders`, `data`, and every other unapproved scheme; the protocol also
 caps untrusted hrefs with `MAX_RESOURCE_URL_LENGTH`.
 
+## Rich Editor workspace file autocomplete
+
+Link and Image dialogs, together with the selected-text Link picker, share one
+workspace-file autocomplete controller. The candidate list uses a flat normal
+layout with filename-first rendering, an ellipsized directory, an internally
+scrollable list, and one `activeIndex` as the source of truth. Arrow navigation
+and real pointer movement update only the previous and next rows,
+`aria-selected`, `aria-activedescendant`, the path footer, and list scroll
+position; they do not rebuild candidate DOM. Non-active CSS `:hover` does not
+add a selection background, while high-contrast and forced-colors active-row
+outlines remain available.
+
+The Extension Host warms both `findFiles` discovery and the prepared
+scheme/authority-specific search index when the Link or Image UI opens. In
+flight warm-ups for the same workspace, scheme, and authority share one
+Promise. Cache-warm filename queries score prepared metadata first, materialize
+document-relative Markdown paths only for the bounded top ten, and preserve
+the existing deterministic ranking. `.git/**`, `node_modules/**`, and the
+configured VS Code `files.exclude` behavior remain excluded as before.
+
+The focused unit and Chromium regressions cover state transitions, stale
+responses, active-row DOM reuse, warm-up sharing, flat styling, three entry
+points, and the required fixture display checks. The cache-warm benchmark
+commands are:
+
+- `npm run benchmark:file-search` — shared ranking at 1k, 10k, and 50k
+  synthetic files.
+- `npm run benchmark:file-search:browser` — Chromium browser harness at the
+  same sizes for Link modal, Image modal, and selected-text picker.
+- `npm run benchmark:file-search:extension` — real VS Code Extension Host
+  `WorkspaceFileSearchHost.searchFiles` on the acceptance workspace.
+
+Benchmark reports keep Host/harness message handling, Webview DOM mutation,
+and `requestAnimationFrame` paint opportunity separate. `dom-update` means
+that the candidate DOM mutation returned; a `requestAnimationFrame` timestamp
+is only an opportunity for painting and does not prove that pixels were
+painted. The public VS Code acceptance API does not expose the native Webview
+DOM, so an end-to-end native Extension Host message/DOM/paint measurement and
+the real operating-system IME candidate UI remain unverified manual
+boundaries.
+
 ## Image file drag-and-drop import (0.2.0)
 
 Image insertion is documented as Shift + drag-and-drop from Finder, Windows
