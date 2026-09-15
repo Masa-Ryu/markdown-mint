@@ -1694,9 +1694,14 @@ describe("bounded writing controls", () => {
     const { app, root } = makeApp("one");
     selectTrailingEmptyParagraph(app);
     const { panel } = openEmptyLinePopup(root);
-    const items = insertPopupItems(root);
+    const items = Array.from(
+      panel.querySelectorAll<HTMLButtonElement>(
+        'button[role="menuitem"]:not([hidden])',
+      ),
+    );
 
     expect(document.activeElement).toBe(items[0]);
+    expect(items).toHaveLength(12);
 
     dispatchPopupKey(panel, "ArrowRight");
     expect(document.activeElement).toBe(items[1]);
@@ -1705,11 +1710,19 @@ describe("bounded writing controls", () => {
 
     items[7]!.focus();
     dispatchPopupKey(panel, "ArrowDown");
-    expect(document.activeElement).toBe(items[1]);
+    expect(document.activeElement).toBe(items[9]);
+
+    items[6]!.focus();
+    dispatchPopupKey(panel, "ArrowDown");
+    expect(document.activeElement).toBe(items[8]);
+
+    items[8]!.focus();
+    dispatchPopupKey(panel, "ArrowUp");
+    expect(document.activeElement).toBe(items[6]);
 
     items[0]!.focus();
     dispatchPopupKey(panel, "ArrowLeft");
-    expect(document.activeElement).toBe(items[7]);
+    expect(document.activeElement).toBe(items[11]);
     dispatchPopupKey(panel, "ArrowRight");
     expect(document.activeElement).toBe(items[0]);
   });
@@ -1821,6 +1834,45 @@ describe("bounded writing controls", () => {
     expect(app.view.state.doc.textContent).not.toContain("/");
     expect(editMessages(messages)).toHaveLength(before + 1);
   });
+
+  it.each(["escape", "cancel"] as const)(
+    "returns editor focus when a slash Alert dialog closes with %s",
+    (closeMethod) => {
+      const { app, root, messages } = makeApp("one");
+      prepareTrailingEmptyParagraph(app, messages);
+      const before = editMessages(messages).length;
+
+      expect(dispatchTextInput(app, "/")).toBe(true);
+      const alert = root.querySelector<HTMLButtonElement>(
+        '.mm-empty-line-popup [data-insert-profile-feature="alert"]',
+      )!;
+      alert.focus();
+      alert.click();
+
+      const panel = root.querySelector<HTMLElement>(".mm-empty-line-popup")!;
+      const dialog = root.querySelector<HTMLDialogElement>(
+        ".mm-profile-feature-dialog",
+      )!;
+      expect(dialog.open).toBe(true);
+
+      if (closeMethod === "escape") {
+        dialog.dispatchEvent(
+          new Event("cancel", { bubbles: true, cancelable: true }),
+        );
+      } else {
+        dialog
+          .querySelector<HTMLButtonElement>("button:not([type='submit'])")!
+          .click();
+      }
+
+      expect(dialog.open).toBe(false);
+      expect(panel.hidden).toBe(true);
+      expect(document.activeElement).toBe(app.view.dom);
+      expect(document.activeElement).not.toBe(alert);
+      expect(app.view.state.doc.textContent).toBe("one");
+      expect(editMessages(messages)).toHaveLength(before);
+    },
+  );
 
   it("updates Insert block profile items when the profile changes", () => {
     const { app, root } = makeApp("one", "github");
@@ -1963,7 +2015,11 @@ describe("bounded writing controls", () => {
     const { app, root } = makeApp("one");
     selectTrailingEmptyParagraph(app);
     const { panel } = openEmptyLinePopup(root);
-    const items = insertPopupItems(root);
+    const items = Array.from(
+      panel.querySelectorAll<HTMLButtonElement>(
+        'button[role="menuitem"]:not([hidden])',
+      ),
+    );
 
     for (const [from, to] of [
       [0, 2],
@@ -1972,8 +2028,12 @@ describe("bounded writing controls", () => {
       [3, 5],
       [4, 6],
       [5, 7],
-      [6, 0],
-      [7, 1],
+      [6, 8],
+      [7, 9],
+      [8, 10],
+      [9, 11],
+      [10, 0],
+      [11, 1],
     ] as Array<[number, number]>) {
       items[from]!.focus();
       dispatchPopupKey(panel, "ArrowDown");
@@ -1981,8 +2041,18 @@ describe("bounded writing controls", () => {
     }
 
     for (const [from, to] of [
+      [0, 10],
+      [1, 11],
+      [2, 0],
+      [3, 1],
+      [4, 2],
+      [5, 3],
       [6, 4],
       [7, 5],
+      [8, 6],
+      [9, 7],
+      [10, 8],
+      [11, 9],
     ] as Array<[number, number]>) {
       items[from]!.focus();
       dispatchPopupKey(panel, "ArrowUp");

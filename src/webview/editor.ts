@@ -5348,7 +5348,17 @@ export class MarkdownEditorApp {
         }
       } else if (returnNode instanceof HTMLElement && returnNode.isConnected)
         returnNode.focus({ preventScroll: true });
-      else if (button?.isConnected) button.focus();
+      else {
+        if (
+          button &&
+          button.isConnected &&
+          !button.hidden &&
+          !button.closest("[hidden]") &&
+          !button.closest('[aria-hidden="true"]')
+        )
+          button.focus();
+        else this.view.focus();
+      }
     }
   }
 
@@ -6026,15 +6036,7 @@ export class MarkdownEditorApp {
       );
       if (!visibleItems.length) return;
       const activeItem = document.activeElement as HTMLButtonElement;
-      const profileNavigation = Boolean(
-        activeItem?.dataset.insertProfileFeature,
-      );
-      const items = visibleItems.filter((item) =>
-        profileNavigation
-          ? Boolean(item.dataset.insertProfileFeature)
-          : !item.dataset.insertProfileFeature,
-      );
-      if (!items.length) return;
+      const items = visibleItems;
       const current = items.indexOf(activeItem);
       let next = -1;
       if (event.key === "Home")
