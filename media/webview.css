@@ -505,6 +505,14 @@ textarea:focus-visible {
   min-height: 100%;
   cursor: text;
 }
+.mm-rich-panel .mm-image-importing {
+  display: inline-block;
+  margin-inline: 0.25em;
+  color: var(--vscode-descriptionForeground, var(--mm-disabled-foreground));
+  font-size: 0.85em;
+  font-style: italic;
+  pointer-events: none;
+}
 .mm-rich-panel .ProseMirror:focus {
   outline: none;
 }

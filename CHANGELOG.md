@@ -15,6 +15,21 @@
   checks the final serialized Markdown against the shared two-million UTF-16
   code-unit source limit before committing the ProseMirror transaction.
 
+## 0.2.0
+
+- Add local PNG, JPEG/JPG, GIF, WebP, and SVG image import to the Rich Editor
+  via Shift + drag-and-drop from files or workspace resources. Imported images
+  are stored in a sibling `images/` directory and inserted with portable,
+  URL-safe relative Markdown paths.
+- Make image import safe under concurrent drops and filename collisions without
+  overwriting existing files, while keeping filenames with URL-special
+  characters usable in Markdown.
+- Preserve the intended drop position across asynchronous imports and document
+  edits, reject invalid insertion locations before saving, and cleanly handle
+  failed imports without modifying the Markdown document.
+
+## 0.1.0
+
 - Improve Mermaid Insert and Edit dialogs with a large, viewport-bounded,
   editor-first layout and accessible source labeling.
 - Use concise `Insert Mermaid` and `Edit Mermaid` titles without changing the
