@@ -22,11 +22,11 @@ import {
   renderMath as renderMathHtml,
 } from "./visualRendering";
 import { codeFenceFor } from "./codeBlockSerialization";
-import infoIconAsset from "../../assets/info-icon.svg?raw";
-import lightbulbAsset from "../../assets/lightbulb.svg?raw";
-import warningTriangleAsset from "../../assets/warning-triangle.svg?raw";
-import alertOctagonAsset from "../../assets/alert-octagon.svg?raw";
-import alertCommentAsset from "../../assets/alert-comment.svg?raw";
+import infoIconAsset from "../../assets/menu/github/info-icon.svg?raw";
+import lightbulbAsset from "../../assets/menu/github/lightbulb.svg?raw";
+import warningTriangleAsset from "../../assets/menu/github/warning-triangle.svg?raw";
+import alertOctagonAsset from "../../assets/menu/github/alert-octagon.svg?raw";
+import alertCommentAsset from "../../assets/menu/github/alert-comment.svg?raw";
 import { parseAlertSource } from "./alerts";
 import {
   detailsTagRanges,

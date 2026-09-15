@@ -3184,7 +3184,10 @@ async function testDocumentFixtures(page) {
     ["gitlab-test-class-B.md", "gitlab"],
   ];
   for (const [filename, profile] of fixtures) {
-    const source = await readFile(resolve(repository, "md", filename), "utf8");
+    const source = await readFile(
+      resolve(repository, "tests", "md", filename),
+      "utf8",
+    );
     for (const mode of ["rich", "preview", "native"]) {
       if (mode === "native") {
         await page.goto(

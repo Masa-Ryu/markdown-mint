@@ -7,7 +7,7 @@ GitHub/GitLab Markdown support, and full access to the underlying `.md` source.
 
 **Write visually. Stay in Markdown.**
 
-![markdown mint demo](./images/demo1.gif)
+![markdown mint demo](./docs/media/demo1.gif)
 
 ## Features
 

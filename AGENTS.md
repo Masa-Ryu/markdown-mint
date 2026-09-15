@@ -26,11 +26,11 @@ If a behavior requires visual or IME inspection, record the manual check in
 the requirements documentation.
 
 テスト時には以下のファイルで正しく表示されていることを確認すること。
-- ./md/common-test.md
-- ./md/github-test.md
-- ./md/github-test-class-B.md
-- ./md/gitlab-test.md
-- ./md/gitlab-test-class-B.md
+- ./tests/md/common-test.md
+- ./tests/md/github-test.md
+- ./tests/md/github-test-class-B.md
+- ./tests/md/gitlab-test.md
+- ./tests/md/gitlab-test-class-B.md
 
 ## Commits and Pull Requests
 

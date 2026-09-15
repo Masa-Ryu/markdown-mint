@@ -27,6 +27,29 @@ system IME candidate UI remains unverified.
 | Q03 webview security                   | Webviews use a nonce-based strict CSP, bounded `localResourceRoots`, safe image/link rendering, bounded message fields, and no arbitrary command or filesystem bridge.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | Q04 profile and resource limits        | Markdown sources are capped at two million UTF-16 code units, clipboard matrices are capped at 10,000 cells with whole-paste rejection, spreadsheet TSV/HTML payloads reuse the shared clipboard text bound, and final spreadsheet serialization is checked before commit. Operation ids and resource URLs are bounded, and relative local images resolve through scoped webview resources.                                                                                                                                                                                                                                                                                                                                        |
 
+## Repository layout and VSIX package boundary
+
+Repository assets are separated by their consumer:
+
+- `assets/icon/` — Marketplace extension icon (`icon.png`).
+- `assets/menu/common/` — Markdown Mint common UI / toolbar icons.
+- `assets/menu/github/` — GitHub-specific Alert icons.
+
+SVG sources remain build-time `?raw` imports and are embedded into the
+JavaScript bundles; the runtime `media/` CSS remains separate.
+
+README-only media is stored under `docs/media/`, and the Markdown fixtures are
+under `tests/md/`. The GitHub Markdown test suite, including its local images,
+is under `tests/github-markdown-test-suite/`. The `.vscodeignore` package
+boundary excludes `tests/**`, `docs/**`, and build-embedded `assets/**/*.svg`,
+while retaining `assets/icon/icon.png` because it is registered as the
+extension icon in `package.json`.
+
+`npm run package` now verifies both the bundled formatter and the generated
+VSIX. The VSIX check requires the runtime files and extension icon, rejects
+repository-only test/docs/source files and standalone SVG/demo assets, and
+enforces the package-size budget.
+
 ## Synchronization, save, and recovery boundary
 
 The host `TextDocument` remains the sole authoritative source. Webview input is
@@ -63,8 +86,9 @@ replacement banner for these internal states. Only an actual save failure or
 an external change that cannot be safely integrated requires a standard VS Code
 notification; the preserved source and local draft remain available at that
 boundary. The acceptance fixtures used for the current manual/browser check
-are `md/common-test.md`, `md/github-test.md`, `md/github-test-class-B.md`,
-`md/gitlab-test.md`, and `md/gitlab-test-class-B.md`.
+are `tests/md/common-test.md`, `tests/md/github-test.md`,
+`tests/md/github-test-class-B.md`, `tests/md/gitlab-test.md`, and
+`tests/md/gitlab-test-class-B.md`.
 
 ## Current UI refinement
 
@@ -501,9 +525,10 @@ Validation is recorded separately for real Chromium keyboard/mouse/layout
 checks and VS Code native APIs. `npm run test:browser:blocks` covers header
 clicks, cancel/unchanged edits, selection retention, exact source updates,
 bidirectional boundaries, wrapped Alert rows, focus, nested/closed Details,
-and rendered-block passage. It also loads `md/common-test.md`,
-`md/github-test.md`, `md/github-test-class-B.md`, `md/gitlab-test.md`, and
-`md/gitlab-test-class-B.md` in rich, dedicated preview, and the native CSS
+and rendered-block passage. It also loads `tests/md/common-test.md`,
+`tests/md/github-test.md`, `tests/md/github-test-class-B.md`,
+`tests/md/gitlab-test.md`, and `tests/md/gitlab-test-class-B.md` in rich,
+dedicated preview, and the native CSS
 fixture, saving screenshots in `output/playwright/block-editing/`.
 
 The final 0.0.32 verification on 2026-09-12 passed `npm run compile`,
