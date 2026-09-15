@@ -49,7 +49,10 @@ async function renderDocumentFixture(filename) {
     }).then(() => import(pathToFileURL(outfile).href));
   }
   const core = await nativeRenderer;
-  const source = await readFile(resolve(repository, "md", filename), "utf8");
+  const source = await readFile(
+    resolve(repository, "tests", "md", filename),
+    "utf8",
+  );
   return core.renderMarkdown(source, profile);
 }
 

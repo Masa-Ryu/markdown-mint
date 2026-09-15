@@ -18,6 +18,8 @@ const detailsInput = ".mm-details-summary-input";
 const detailsToggle = ".mm-details-toggle";
 const undoShortcut = process.platform === "darwin" ? "Meta+z" : "Control+z";
 const primaryLinkModifier = process.platform === "darwin" ? "Meta" : "Control";
+const redoShortcut =
+  process.platform === "darwin" ? "Meta+Shift+z" : "Control+y";
 const fence = (language, source) =>
   `\u0060\u0060\u0060${language}\n${source}\n\u0060\u0060\u0060`;
 const blocks = (...values) => values.join("\n\n");
@@ -1675,6 +1677,56 @@ async function testTableNavigation(page) {
   await page.keyboard.press("ArrowRight");
   assert.equal((await selection(page)).text, "After");
   await noEdits(page, before, "table vertical navigation");
+}
+
+async function testSpreadsheetTablePasteHistory(page) {
+  const source = blocks(
+    "Before",
+    "| H1 | H2 |\n| --- | --- |\n| A1 | A2 |",
+    "After",
+  );
+  await load(page, source);
+  await caret(page, `${rich} > p:first-child`, -1);
+  await page.evaluate(() => {
+    const clipboardData = new DataTransfer();
+    clipboardData.setData("text/plain", "Name\tScore\nAlice\t90");
+    const event = new ClipboardEvent("paste", {
+      bubbles: true,
+      cancelable: true,
+      clipboardData,
+    });
+    const editor = document.querySelector(".mm-rich-panel .ProseMirror");
+    if (!editor) throw new Error("Rich Editor was not rendered");
+    editor.dispatchEvent(event);
+  });
+  const changed = blocks(
+    "Before",
+    "| Name | Score |\n| --- | --- |\n| Alice | 90 |",
+    "| H1 | H2 |\n| --- | --- |\n| A1 | A2 |",
+    "After",
+  );
+  await expectSource(page, changed);
+  assert.equal(
+    await page.locator(`${rich} > table`).count(),
+    2,
+    "spreadsheet paste did not insert one table block",
+  );
+
+  await page.keyboard.press(undoShortcut);
+  await expectSource(page, source);
+  assert.equal(
+    await page.locator(`${rich} > table`).count(),
+    1,
+    "one Undo did not remove the pasted table",
+  );
+
+  await page.keyboard.press(redoShortcut);
+  await expectSource(page, changed);
+  assert.equal(
+    await page.locator(`${rich} > table`).count(),
+    2,
+    "one Redo did not restore the pasted table",
+  );
 }
 
 async function testNestedBlockquoteTableNavigation(page) {
@@ -3468,7 +3520,10 @@ async function testDocumentFixtures(page) {
     ["gitlab-test-class-B.md", "gitlab"],
   ];
   for (const [filename, profile] of fixtures) {
-    const source = await readFile(resolve(repository, "md", filename), "utf8");
+    const source = await readFile(
+      resolve(repository, "tests", "md", filename),
+      "utf8",
+    );
     for (const mode of ["rich", "preview", "native"]) {
       if (mode === "native") {
         await page.goto(
@@ -3607,6 +3662,7 @@ async function main() {
       testArrowDocumentEdges,
       testWrappedVerticalNavigation,
       testTableNavigation,
+      testSpreadsheetTablePasteHistory,
       testNestedBlockquoteTableNavigation,
       testCodeVerticalNavigation,
       testExpandedCodeVerticalNavigation,
