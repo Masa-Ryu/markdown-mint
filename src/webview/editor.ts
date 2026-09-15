@@ -29,7 +29,7 @@ import {
   TextSelection,
 } from "prosemirror-state";
 import type { Transaction } from "prosemirror-state";
-import { EditorView } from "prosemirror-view";
+import { Decoration, DecorationSet, EditorView } from "prosemirror-view";
 import type { ViewMutationRecord } from "prosemirror-view";
 import {
   liftListItem,
@@ -334,6 +334,11 @@ type TableToolbarAction =
   | "align-right"
   | "table-numbering"
   | "table-delete";
+
+type TableDeletePreviewAction = Extract<
+  TableToolbarAction,
+  "row-delete" | "col-delete" | "table-delete"
+>;
 
 const TRANSIENT_BLANK_META = "markdown-mint-transient-blank";
 const SPREADSHEET_TABLE_PASTE_META = "markdown-mint-spreadsheet-table-paste";
@@ -2191,6 +2196,10 @@ export class MarkdownEditorApp {
   private tableToolbarRevealed = false;
   private tableToolbarRevealRequested = false;
   private tableToolbarRevealTimer: ReturnType<typeof setTimeout> | undefined;
+  private tableDeletePreviewAction: TableDeletePreviewAction | null = null;
+  private tableDeletePreviewDecorations: DecorationSet | null = null;
+  private readonly tableDeletePreviewDecorationSource =
+    (): DecorationSet | null => this.tableDeletePreviewDecorations;
   private profileToolbar!: HTMLElement;
   private profileFeatureDialog!: HTMLDialogElement;
   private profileFeatureAlertType!: HTMLSelectElement;
@@ -2662,6 +2671,7 @@ export class MarkdownEditorApp {
   }
 
   destroy(): void {
+    this.clearTableDeletePreview();
     this.destroyed = true;
     this.derivedViewsRevision += 1;
     this.pendingRejectedEdit = null;
@@ -6910,6 +6920,46 @@ export class MarkdownEditorApp {
           // toolbar receives focus. The command runs from that stable state.
           event.preventDefault();
         });
+        if (
+          action === "row-delete" ||
+          action === "col-delete" ||
+          action === "table-delete"
+        ) {
+          const showPreview = (): void => this.showTableDeletePreview(action);
+          const clearPreview = (): void => this.clearTableDeletePreview();
+          const pointerOver = (event: PointerEvent): void => {
+            if (
+              event.relatedTarget instanceof Node &&
+              button.contains(event.relatedTarget)
+            )
+              return;
+            showPreview();
+          };
+          const pointerOut = (event: PointerEvent): void => {
+            if (
+              event.relatedTarget instanceof Node &&
+              button.contains(event.relatedTarget)
+            )
+              return;
+            clearPreview();
+          };
+          const focusOut = (event: FocusEvent): void => {
+            if (
+              event.relatedTarget instanceof Node &&
+              button.contains(event.relatedTarget)
+            )
+              return;
+            clearPreview();
+          };
+          button.addEventListener("pointerenter", showPreview);
+          button.addEventListener("pointerover", pointerOver);
+          button.addEventListener("pointerleave", clearPreview);
+          button.addEventListener("pointerout", pointerOut);
+          button.addEventListener("focus", showPreview);
+          button.addEventListener("focusin", showPreview);
+          button.addEventListener("blur", clearPreview);
+          button.addEventListener("focusout", focusOut);
+        }
         button.addEventListener("click", () =>
           this.runContextualTableAction(action),
         );
@@ -6950,6 +7000,82 @@ export class MarkdownEditorApp {
       ["table-delete", "Delete table", "Delete table", "table-delete"],
     ]);
     return toolbar;
+  }
+
+  private clearTableDeletePreview(): void {
+    this.tableDeletePreviewAction = null;
+    if (this.tableDeletePreviewDecorations) {
+      this.tableDeletePreviewDecorations = null;
+      this.view?.setProps({
+        decorations: this.tableDeletePreviewDecorationSource,
+      });
+    }
+  }
+
+  private showTableDeletePreview(action: TableDeletePreviewAction): void {
+    if (
+      this.tableDeletePreviewAction === action &&
+      this.tableDeletePreviewDecorations
+    )
+      return;
+    this.clearTableDeletePreview();
+    if (
+      this.destroyed ||
+      !this.view ||
+      !this.tableToolbar ||
+      this.tableToolbar.hidden
+    )
+      return;
+    const button = this.tableToolbar.querySelector<HTMLButtonElement>(
+      '[data-action="' + action + '"]',
+    );
+    if (!button || button.disabled) return;
+
+    const context = tableContext(this.view.state.selection);
+    if (!context) return;
+    this.tableDeletePreviewAction = action;
+    const { map, rect } = context;
+    const cellPositions = new Set<number>();
+    const includeCell = (row: number, column: number): void => {
+      const cellPosition = map.map[row * map.width + column];
+      if (cellPosition !== undefined) cellPositions.add(cellPosition);
+    };
+
+    if (action === "table-delete") {
+      for (const cellPosition of map.map) cellPositions.add(cellPosition);
+    } else if (action === "row-delete") {
+      // prosemirror-tables refuses to delete the entire table through
+      // deleteRow. Showing no target keeps the preview honest for that case.
+      if (rect.top === 0 && rect.bottom === map.height) return;
+      for (let row = rect.top; row < rect.bottom; row += 1)
+        for (let column = 0; column < map.width; column += 1)
+          includeCell(row, column);
+    } else {
+      // deleteColumn likewise treats a full-width selection as a no-op.
+      if (rect.left === 0 && rect.right === map.width) return;
+      for (let row = 0; row < map.height; row += 1)
+        for (let column = rect.left; column < rect.right; column += 1)
+          includeCell(row, column);
+    }
+
+    const decorations: Decoration[] = [];
+    for (const cellPosition of cellPositions) {
+      const cell = context.table.nodeAt(cellPosition);
+      if (!cell) continue;
+      const from = context.tableStart + cellPosition;
+      decorations.push(
+        Decoration.node(from, from + cell.nodeSize, {
+          class: "mm-table-delete-preview",
+        }),
+      );
+    }
+    this.tableDeletePreviewDecorations = DecorationSet.create(
+      this.view.state.doc,
+      decorations,
+    );
+    this.view.setProps({
+      decorations: this.tableDeletePreviewDecorationSource,
+    });
   }
 
   private buildTableDialog(container: HTMLElement): void {
@@ -7552,6 +7678,7 @@ export class MarkdownEditorApp {
   }
 
   private runContextualTableAction(action: TableToolbarAction): void {
+    this.clearTableDeletePreview();
     if (action === "align-left") {
       this.runAlignment("left");
       return;
@@ -8012,6 +8139,7 @@ export class MarkdownEditorApp {
     options: { refreshPreview?: boolean } = {},
   ): void {
     if (this.previewOnly && mode !== "preview" && mode !== "source") return;
+    this.clearTableDeletePreview();
     if (mode !== this.mode) {
       this.closeWritingPopups();
       this.closeEmojiPicker();
@@ -8174,6 +8302,8 @@ export class MarkdownEditorApp {
     options: { allowReveal?: boolean } = {},
   ): void {
     if (this.destroyed || !this.tableToolbar || !this.view) return;
+    const activePreview = this.tableDeletePreviewAction;
+    this.clearTableDeletePreview();
     const updateAlignmentState = (
       active: "left" | "center" | "right" | null,
     ): void => {
@@ -8216,6 +8346,7 @@ export class MarkdownEditorApp {
     this.tableToolbar.hidden = !visible;
     this.tableToolbar.setAttribute("aria-hidden", String(!visible));
     if (!visible || !context) {
+      this.clearTableDeletePreview();
       updateAlignmentState(null);
       this.tableToolbar.removeAttribute("data-table-pos");
       this.updateTableNumberingState(null);
@@ -8246,6 +8377,7 @@ export class MarkdownEditorApp {
 
     this.tableToolbar.dataset.tablePos = String(context.tableStart - 1);
     this.updateTableNumberingState(context);
+    if (activePreview) this.showTableDeletePreview(activePreview);
   }
 
   private postReady(): void {
@@ -9008,6 +9140,7 @@ export class MarkdownEditorApp {
     message: DocumentMessage,
     options: { force?: boolean } = {},
   ): void {
+    this.clearTableDeletePreview();
     if (this.composing) {
       this.pendingExternal = message;
       return;

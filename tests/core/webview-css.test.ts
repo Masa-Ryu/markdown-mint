@@ -29,3 +29,17 @@ describe("Mermaid dialog styles", () => {
     expect(webviewCss).toContain(".mm-input-dialog {\n  width: min(380px");
   });
 });
+
+describe("table delete styles", () => {
+  it("shares destructive styling across row, column, and table actions", () => {
+    const destructiveGroup =
+      '.mm-table-toolbar-button[data-action="row-delete"],\n' +
+      '.mm-table-toolbar-button[data-action="col-delete"],\n' +
+      '.mm-table-toolbar-button[data-action="table-delete"]';
+    expect(webviewCss).toContain(destructiveGroup);
+    expect(webviewCss).toContain(
+      ".mm-document-content .mm-table-delete-preview",
+    );
+    expect(webviewCss).toContain("--vscode-inputValidation-errorBorder");
+  });
+});

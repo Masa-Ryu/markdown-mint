@@ -1046,6 +1046,154 @@ describe("contextual table toolbar", () => {
     expect(current).toContain(":---:");
   });
 
+  it("previews the logical row, column, and table targets without changing editor state", () => {
+    const source =
+      "| A | B | C |\n| --- | --- | --- |\n| D | E | F |\n| G | H | I |";
+    const { app, root } = makeApp(source);
+    const rows = root.querySelectorAll<HTMLTableRowElement>("tr");
+    const toolbar = root.querySelector<HTMLElement>(".mm-table-toolbar")!;
+    const rowDelete = toolbar.querySelector<HTMLButtonElement>(
+      '[data-action="row-delete"]',
+    )!;
+    const columnDelete = toolbar.querySelector<HTMLButtonElement>(
+      '[data-action="col-delete"]',
+    )!;
+    const tableDelete = toolbar.querySelector<HTMLButtonElement>(
+      '[data-action="table-delete"]',
+    )!;
+    dispatchCellText(app, rows[1]!.children[1]!);
+    const beforeDoc = app.view.state.doc;
+    const beforeSelection = app.view.state.selection;
+
+    rowDelete.dispatchEvent(new Event("pointerenter", { bubbles: true }));
+    expect(rows[1]!.querySelectorAll(".mm-table-delete-preview")).toHaveLength(
+      3,
+    );
+    expect(rows[0]!.querySelector(".mm-table-delete-preview")).toBeNull();
+    expect(rows[2]!.querySelector(".mm-table-delete-preview")).toBeNull();
+    expect(app.view.state.doc).toBe(beforeDoc);
+    expect(app.view.state.selection).toBe(beforeSelection);
+
+    rowDelete.dispatchEvent(new Event("pointerleave", { bubbles: true }));
+    expect(root.querySelector(".mm-table-delete-preview")).toBeNull();
+
+    columnDelete.dispatchEvent(new Event("pointerenter", { bubbles: true }));
+    expect(
+      Array.from(rows, (row) =>
+        row.children[1]?.classList.contains("mm-table-delete-preview"),
+      ),
+    ).toEqual([true, true, true]);
+    expect(
+      Array.from(rows, (row) =>
+        row.children[0]?.classList.contains("mm-table-delete-preview"),
+      ),
+    ).toEqual([false, false, false]);
+
+    columnDelete.dispatchEvent(new Event("pointerleave", { bubbles: true }));
+    tableDelete.dispatchEvent(new Event("pointerenter", { bubbles: true }));
+    expect(root.querySelectorAll(".mm-table-delete-preview")).toHaveLength(9);
+    tableDelete.dispatchEvent(new Event("pointerleave", { bubbles: true }));
+    expect(root.querySelector(".mm-table-delete-preview")).toBeNull();
+  });
+
+  it("updates previews when keyboard focus moves between delete actions", () => {
+    const { app, root } = makeApp(
+      "| A | B | C |\n| --- | --- | --- |\n| D | E | F |\n| G | H | I |",
+    );
+    const rows = root.querySelectorAll<HTMLTableRowElement>("tr");
+    dispatchCellText(app, rows[1]!.children[1]!);
+    const toolbar = root.querySelector<HTMLElement>(".mm-table-toolbar")!;
+    const rowDelete = toolbar.querySelector<HTMLButtonElement>(
+      '[data-action="row-delete"]',
+    )!;
+    const columnDelete = toolbar.querySelector<HTMLButtonElement>(
+      '[data-action="col-delete"]',
+    )!;
+    const tableDelete = toolbar.querySelector<HTMLButtonElement>(
+      '[data-action="table-delete"]',
+    )!;
+
+    rowDelete.focus();
+    expect(rows[1]!.querySelectorAll(".mm-table-delete-preview")).toHaveLength(
+      3,
+    );
+    columnDelete.focus();
+    expect(rows[1]!.querySelectorAll(".mm-table-delete-preview")).toHaveLength(
+      1,
+    );
+    expect(
+      Array.from(rows, (row) =>
+        row.children[1]?.classList.contains("mm-table-delete-preview"),
+      ),
+    ).toEqual([true, true, true]);
+    tableDelete.focus();
+    expect(root.querySelectorAll(".mm-table-delete-preview")).toHaveLength(9);
+    tableDelete.blur();
+    expect(root.querySelector(".mm-table-delete-preview")).toBeNull();
+  });
+
+  it("previews all rows and columns covered by a CellSelection", () => {
+    const { app, root } = makeApp(
+      "| A | B | C | D |\n| --- | --- | --- | --- |\n| E | F | G | H |\n| I | J | K | L |\n| M | N | O | P |",
+    );
+    const rows = root.querySelectorAll<HTMLTableRowElement>("tr");
+    const cells = root.querySelectorAll<HTMLTableCellElement>("td, th");
+    dispatchCellSelection(app, cells[5]!, cells[10]!);
+    const toolbar = root.querySelector<HTMLElement>(".mm-table-toolbar")!;
+    const rowDelete = toolbar.querySelector<HTMLButtonElement>(
+      '[data-action="row-delete"]',
+    )!;
+    const columnDelete = toolbar.querySelector<HTMLButtonElement>(
+      '[data-action="col-delete"]',
+    )!;
+
+    rowDelete.dispatchEvent(new Event("pointerenter", { bubbles: true }));
+    expect(rows[1]!.querySelectorAll(".mm-table-delete-preview")).toHaveLength(
+      4,
+    );
+    expect(rows[2]!.querySelectorAll(".mm-table-delete-preview")).toHaveLength(
+      4,
+    );
+    expect(rows[0]!.querySelector(".mm-table-delete-preview")).toBeNull();
+    expect(rows[3]!.querySelector(".mm-table-delete-preview")).toBeNull();
+
+    columnDelete.dispatchEvent(new Event("pointerenter", { bubbles: true }));
+    expect(
+      Array.from(rows, (row) =>
+        row.children[1]?.classList.contains("mm-table-delete-preview"),
+      ),
+    ).toEqual([true, true, true, true]);
+    expect(
+      Array.from(rows, (row) =>
+        row.children[2]?.classList.contains("mm-table-delete-preview"),
+      ),
+    ).toEqual([true, true, true, true]);
+    expect(
+      Array.from(rows, (row) =>
+        row.children[0]?.classList.contains("mm-table-delete-preview"),
+      ),
+    ).toEqual([false, false, false, false]);
+  });
+
+  it("clears the preview before deleting a row and leaves no stale class", () => {
+    const { app, root, messages } = makeApp(
+      "| A | B | C |\n| --- | --- | --- |\n| D | E | F |\n| G | H | I |",
+    );
+    const rows = root.querySelectorAll<HTMLTableRowElement>("tr");
+    dispatchCellText(app, rows[1]!.children[1]!);
+    const toolbar = root.querySelector<HTMLElement>(".mm-table-toolbar")!;
+    const rowDelete = toolbar.querySelector<HTMLButtonElement>(
+      '[data-action="row-delete"]',
+    )!;
+    rowDelete.dispatchEvent(new Event("pointerenter", { bubbles: true }));
+    expect(root.querySelectorAll(".mm-table-delete-preview")).toHaveLength(3);
+
+    rowDelete.click();
+    expect(app.view.state.doc.firstChild?.childCount).toBe(2);
+    expect(root.querySelector(".mm-table-delete-preview")).toBeNull();
+    expect(messageType(messages, "edit")).toHaveLength(1);
+  });
+
   it("keeps one toolbar visible and disables its actions outside a table", () => {
     const source = "Before\n\n| A | B |\n| --- | --- |\n| C | D |\n\nAfter";
     const { app, root, messages } = makeApp(source);
@@ -1153,8 +1301,11 @@ describe("contextual table toolbar", () => {
     const tableDelete = toolbar.querySelector<HTMLButtonElement>(
       '[data-action="table-delete"]',
     )!;
+    tableDelete.dispatchEvent(new Event("pointerenter", { bubbles: true }));
+    expect(root.querySelectorAll(".mm-table-delete-preview")).toHaveLength(4);
     tableDelete.click();
     expect(root.querySelector("table")).toBeNull();
+    expect(root.querySelector(".mm-table-delete-preview")).toBeNull();
     expect(toolbar.hidden).toBe(false);
     expect(
       Array.from(
