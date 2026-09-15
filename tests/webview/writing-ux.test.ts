@@ -158,7 +158,15 @@ function insertPopupItems(root: HTMLElement): HTMLButtonElement[] {
     root.querySelectorAll<HTMLButtonElement>(
       ".mm-empty-line-popup button[role='menuitem']",
     ),
-  );
+  ).filter((item) => !item.dataset.insertProfileFeature);
+}
+
+function visibleInsertPopupItems(root: HTMLElement): HTMLButtonElement[] {
+  return Array.from(
+    root.querySelectorAll<HTMLButtonElement>(
+      ".mm-empty-line-popup button[role='menuitem']",
+    ),
+  ).filter((item) => !item.hidden && !item.disabled);
 }
 
 function openEmptyLinePopup(root: HTMLElement): {
@@ -462,7 +470,7 @@ describe("bounded writing controls", () => {
     ]);
     const menuItems = Array.from(
       popup.querySelectorAll<HTMLButtonElement>('button[role="menuitem"]'),
-    );
+    ).filter((item) => !item.dataset.insertProfileFeature);
     expect(menuItems.every((item) => !item.hasAttribute("data-tooltip"))).toBe(
       true,
     );
@@ -1438,9 +1446,10 @@ describe("bounded writing controls", () => {
     expect(app.view.state.selection.to).toBe(selection.to);
   });
 
-  it("returns focus to the editor with Escape while preserving the selection", () => {
+  it("collapses the forward selection to its head with Escape", () => {
     const { app, root, messages } = makeApp("hello world");
     const selection = TextSelection.create(app.view.state.doc, 1, 6);
+    const documentBefore = app.view.state.doc;
     app.view.dispatch(app.view.state.tr.setSelection(selection));
     app.view.focus();
     dispatchEditorKey(app, "Tab");
@@ -1455,8 +1464,32 @@ describe("bounded writing controls", () => {
 
     expect(escape.defaultPrevented).toBe(true);
     expect(document.activeElement).toBe(app.view.dom);
-    expect(app.view.state.selection.from).toBe(selection.from);
-    expect(app.view.state.selection.to).toBe(selection.to);
+    expect(app.view.state.selection).toBeInstanceOf(TextSelection);
+    expect(app.view.state.selection.empty).toBe(true);
+    expect(app.view.state.selection.from).toBe(selection.head);
+    expect(app.view.state.selection.to).toBe(selection.head);
+    expect(app.view.state.doc).toBe(documentBefore);
+    expect(floating.hidden).toBe(true);
+    expect(floating.getAttribute("aria-hidden")).toBe("true");
+    expect(editMessages(messages)).toHaveLength(0);
+  });
+
+  it("collapses the backward selection to its head with Escape", () => {
+    const { app, root, messages } = makeApp("hello world");
+    const selection = TextSelection.create(app.view.state.doc, 6, 1);
+    app.view.dispatch(app.view.state.tr.setSelection(selection));
+    app.view.focus();
+    dispatchEditorKey(app, "Tab");
+    const floating = root.querySelector<HTMLElement>(".mm-selection-toolbar")!;
+
+    const escape = dispatchFocusedKey("Escape");
+
+    expect(escape.defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(app.view.dom);
+    expect(app.view.state.selection.empty).toBe(true);
+    expect(app.view.state.selection.from).toBe(selection.head);
+    expect(app.view.state.selection.to).toBe(selection.head);
+    expect(floating.hidden).toBe(true);
     expect(editMessages(messages)).toHaveLength(0);
   });
 
@@ -1661,9 +1694,14 @@ describe("bounded writing controls", () => {
     const { app, root } = makeApp("one");
     selectTrailingEmptyParagraph(app);
     const { panel } = openEmptyLinePopup(root);
-    const items = insertPopupItems(root);
+    const items = Array.from(
+      panel.querySelectorAll<HTMLButtonElement>(
+        'button[role="menuitem"]:not([hidden])',
+      ),
+    );
 
     expect(document.activeElement).toBe(items[0]);
+    expect(items).toHaveLength(12);
 
     dispatchPopupKey(panel, "ArrowRight");
     expect(document.activeElement).toBe(items[1]);
@@ -1672,13 +1710,221 @@ describe("bounded writing controls", () => {
 
     items[7]!.focus();
     dispatchPopupKey(panel, "ArrowDown");
-    expect(document.activeElement).toBe(items[1]);
+    expect(document.activeElement).toBe(items[9]);
+
+    items[6]!.focus();
+    dispatchPopupKey(panel, "ArrowDown");
+    expect(document.activeElement).toBe(items[8]);
+
+    items[8]!.focus();
+    dispatchPopupKey(panel, "ArrowUp");
+    expect(document.activeElement).toBe(items[6]);
 
     items[0]!.focus();
     dispatchPopupKey(panel, "ArrowLeft");
-    expect(document.activeElement).toBe(items[7]);
+    expect(document.activeElement).toBe(items[11]);
     dispatchPopupKey(panel, "ArrowRight");
     expect(document.activeElement).toBe(items[0]);
+  });
+
+  it("cycles through visible Insert block items with Tab without consuming slash", () => {
+    const { app, root, messages } = makeApp("one");
+    prepareTrailingEmptyParagraph(app, messages);
+    const beforeMarkdown = app.view.state.doc;
+    const beforeEdits = editMessages(messages).length;
+
+    expect(dispatchTextInput(app, "/")).toBe(true);
+    const panel = root.querySelector<HTMLElement>(".mm-empty-line-popup")!;
+    const items = visibleInsertPopupItems(root);
+    expect(items[0]).toBe(document.activeElement);
+    expect(items.at(-1)?.dataset.insertProfileFeature).toBe("mermaid");
+
+    for (let index = 1; index < items.length; index += 1) {
+      const tab = dispatchFocusedKey("Tab");
+      expect(tab.defaultPrevented).toBe(true);
+      expect(document.activeElement).toBe(items[index]);
+      expect(panel.hidden).toBe(false);
+    }
+
+    const wrapped = dispatchFocusedKey("Tab");
+    expect(wrapped.defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(items[0]);
+    const backward = dispatchFocusedKey("Tab", { shiftKey: true });
+    expect(backward.defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(items.at(-1));
+    expect(panel.hidden).toBe(false);
+    expect(app.view.state.doc).toBe(beforeMarkdown);
+    expect(app.view.state.doc.textContent).toBe("one");
+    expect(editMessages(messages)).toHaveLength(beforeEdits);
+  });
+
+  it("cycles the shared Insert block popup with Tab when opened from plus", () => {
+    const { app, root, messages } = makeApp("one");
+    prepareTrailingEmptyParagraph(app, messages);
+    const beforeEdits = editMessages(messages).length;
+    const { panel } = openEmptyLinePopup(root);
+    const items = visibleInsertPopupItems(root);
+
+    expect(document.activeElement).toBe(items[0]);
+    const tab = dispatchFocusedKey("Tab");
+    expect(tab.defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(items[1]);
+    const backward = dispatchFocusedKey("Tab", { shiftKey: true });
+    expect(backward.defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(items[0]);
+    expect(panel.hidden).toBe(false);
+    expect(editMessages(messages)).toHaveLength(beforeEdits);
+  });
+
+  it("exposes GitHub block profile features in the Insert block popup", () => {
+    const { app, root, messages } = makeApp("one");
+    prepareTrailingEmptyParagraph(app, messages);
+    const beforeEdits = editMessages(messages).length;
+    const { panel } = openEmptyLinePopup(root);
+    const profileItems = visibleInsertPopupItems(root).filter(
+      (item) => item.dataset.insertProfileFeature,
+    );
+
+    expect(profileItems.map((item) => item.textContent)).toEqual([
+      "Alert",
+      "Details",
+      "Math",
+      "Mermaid diagram",
+    ]);
+    expect(
+      profileItems.every(
+        (item) => item.getAttribute("aria-hidden") === "false",
+      ),
+    ).toBe(true);
+    expect(panel.hidden).toBe(false);
+    expect(editMessages(messages)).toHaveLength(beforeEdits);
+    app.view.focus();
+  });
+
+  it("opens the existing Alert dialog from a slash profile feature item", () => {
+    const { app, root, messages } = makeApp("one");
+    prepareTrailingEmptyParagraph(app, messages);
+    const before = editMessages(messages).length;
+
+    expect(dispatchTextInput(app, "/")).toBe(true);
+    const alert = root.querySelector<HTMLButtonElement>(
+      '.mm-empty-line-popup [data-insert-profile-feature="alert"]',
+    )!;
+    alert.focus();
+    dispatchFocusedKey("Enter");
+    alert.click();
+
+    const dialog = root.querySelector<HTMLDialogElement>(
+      ".mm-profile-feature-dialog",
+    )!;
+    expect(dialog.open).toBe(true);
+    expect(dialog.dataset.profileFeature).toBe("alert");
+    expect(
+      root.querySelector<HTMLElement>(".mm-empty-line-popup")?.hidden,
+    ).toBe(true);
+    expect(app.view.state.doc.textContent).not.toContain("/");
+    expect(editMessages(messages)).toHaveLength(before);
+
+    dialog.querySelector<HTMLButtonElement>('button[type="submit"]')!.click();
+
+    const alertNode = app.view.state.doc.child(1);
+    expect(alertNode?.type.name).toBe("raw_block");
+    expect(alertNode?.attrs.kind).toBe("alert");
+    expect(alertNode?.attrs.source).toBe("> [!NOTE]\n> Alert details");
+    expect(app.view.state.doc.textContent).not.toContain("/");
+    expect(editMessages(messages)).toHaveLength(before + 1);
+  });
+
+  it.each(["escape", "cancel"] as const)(
+    "returns editor focus when a slash Alert dialog closes with %s",
+    (closeMethod) => {
+      const { app, root, messages } = makeApp("one");
+      prepareTrailingEmptyParagraph(app, messages);
+      const before = editMessages(messages).length;
+
+      expect(dispatchTextInput(app, "/")).toBe(true);
+      const alert = root.querySelector<HTMLButtonElement>(
+        '.mm-empty-line-popup [data-insert-profile-feature="alert"]',
+      )!;
+      alert.focus();
+      alert.click();
+
+      const panel = root.querySelector<HTMLElement>(".mm-empty-line-popup")!;
+      const dialog = root.querySelector<HTMLDialogElement>(
+        ".mm-profile-feature-dialog",
+      )!;
+      expect(dialog.open).toBe(true);
+
+      if (closeMethod === "escape") {
+        dialog.dispatchEvent(
+          new Event("cancel", { bubbles: true, cancelable: true }),
+        );
+      } else {
+        dialog
+          .querySelector<HTMLButtonElement>("button:not([type='submit'])")!
+          .click();
+      }
+
+      expect(dialog.open).toBe(false);
+      expect(panel.hidden).toBe(true);
+      expect(document.activeElement).toBe(app.view.dom);
+      expect(document.activeElement).not.toBe(alert);
+      expect(app.view.state.doc.textContent).toBe("one");
+      expect(editMessages(messages)).toHaveLength(before);
+    },
+  );
+
+  it("updates Insert block profile items when the profile changes", () => {
+    const { app, root } = makeApp("one", "github");
+    const profileItems = (): HTMLButtonElement[] =>
+      Array.from(
+        root.querySelectorAll<HTMLButtonElement>(
+          ".mm-empty-line-popup button[role='menuitem']",
+        ),
+      ).filter((item) => item.dataset.insertProfileFeature);
+    const visibleProfileItems = (): HTMLButtonElement[] =>
+      profileItems().filter((item) => !item.hidden && !item.disabled);
+
+    expect(
+      visibleProfileItems().map((item) => item.dataset.insertProfileFeature),
+    ).toEqual(["alert", "details", "math", "mermaid"]);
+
+    app.receiveDocument({
+      protocolVersion: PROTOCOL_VERSION,
+      type: "document",
+      markdown: "one",
+      version: 2,
+      profile: "commonmark",
+      reason: "external",
+    });
+    expect(visibleProfileItems()).toHaveLength(0);
+    expect(
+      profileItems().every(
+        (item) =>
+          item.hidden &&
+          item.disabled &&
+          item.getAttribute("aria-hidden") === "true",
+      ),
+    ).toBe(true);
+
+    app.receiveDocument({
+      protocolVersion: PROTOCOL_VERSION,
+      type: "document",
+      markdown: "one",
+      version: 3,
+      profile: "gitlab",
+      reason: "external",
+    });
+    expect(
+      visibleProfileItems().map((item) => item.dataset.insertProfileFeature),
+    ).toEqual([
+      "alert",
+      "details",
+      "math",
+      "mermaid",
+      "gitlab-toc",
+      "gitlab-description-list",
+    ]);
   });
 
   it("uses keyboard modality for navigation and restores hover on pointermove", () => {
@@ -1769,7 +2015,11 @@ describe("bounded writing controls", () => {
     const { app, root } = makeApp("one");
     selectTrailingEmptyParagraph(app);
     const { panel } = openEmptyLinePopup(root);
-    const items = insertPopupItems(root);
+    const items = Array.from(
+      panel.querySelectorAll<HTMLButtonElement>(
+        'button[role="menuitem"]:not([hidden])',
+      ),
+    );
 
     for (const [from, to] of [
       [0, 2],
@@ -1778,8 +2028,12 @@ describe("bounded writing controls", () => {
       [3, 5],
       [4, 6],
       [5, 7],
-      [6, 0],
-      [7, 1],
+      [6, 8],
+      [7, 9],
+      [8, 10],
+      [9, 11],
+      [10, 0],
+      [11, 1],
     ] as Array<[number, number]>) {
       items[from]!.focus();
       dispatchPopupKey(panel, "ArrowDown");
@@ -1787,8 +2041,18 @@ describe("bounded writing controls", () => {
     }
 
     for (const [from, to] of [
+      [0, 10],
+      [1, 11],
+      [2, 0],
+      [3, 1],
+      [4, 2],
+      [5, 3],
       [6, 4],
       [7, 5],
+      [8, 6],
+      [9, 7],
+      [10, 8],
+      [11, 9],
     ] as Array<[number, number]>) {
       items[from]!.focus();
       dispatchPopupKey(panel, "ArrowUp");

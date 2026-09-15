@@ -7,6 +7,16 @@
 - Preview only the deleted logical row or column across rowspan and colspan
   cells without changing the ProseMirror document, selection, or table layout.
 
+## 0.3.1
+
+- Collapse a Rich Editor Selection Toolbar text selection to its ProseMirror
+  head on Escape without changing Markdown, dirty state, or edit history.
+- Keep the shared `+` and `/` Insert popup's Arrow/Home/End navigation as one
+  continuous two-column grid across standard commands and profile features,
+  while retaining circular Tab and Shift+Tab navigation through enabled items.
+- Prevent Profile Feature dialogs opened from the Insert popup from restoring
+  focus to hidden menu items; Escape and Cancel return focus to the editor.
+
 ## 0.3.0
 
 - Redesign Link and Image file autocomplete with responsive dialogs, a
