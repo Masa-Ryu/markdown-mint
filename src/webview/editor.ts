@@ -101,6 +101,7 @@ import {
   isTableNumbered,
 } from "./tableNumbering";
 import {
+  PROFILE_FEATURES,
   createProfileFeatureCommand,
   getProfileFeatures,
   type ProfileFeatureDefinition,
@@ -2273,6 +2274,10 @@ export class MarkdownEditorApp {
   private popupProfile: DocumentProfile | null = null;
   private slashTrigger: SlashTrigger | null = null;
   private materializingSlash = false;
+  private readonly insertPopupProfileItems = new Map<
+    ProfileFeatureId,
+    HTMLButtonElement
+  >();
   private selectionToolbarSelection: Selection | null = null;
   private selectionToolbarDocumentGeneration = -1;
   private selectionToolbarProfile: DocumentProfile | null = null;
@@ -5508,7 +5513,17 @@ export class MarkdownEditorApp {
         }
       } else if (returnNode instanceof HTMLElement && returnNode.isConnected)
         returnNode.focus({ preventScroll: true });
-      else if (button?.isConnected) button.focus();
+      else {
+        if (
+          button &&
+          button.isConnected &&
+          !button.hidden &&
+          !button.closest("[hidden]") &&
+          !button.closest('[aria-hidden="true"]')
+        )
+          button.focus();
+        else this.view.focus();
+      }
     }
   }
 
@@ -5940,6 +5955,16 @@ export class MarkdownEditorApp {
       if (event.key === "Escape") {
         event.preventDefault();
         this.clearSelectionToolbarSelection();
+        const selection = this.view.state.selection;
+        if (selection instanceof TextSelection && !selection.empty) {
+          this.dispatchTransaction(
+            this.view.state.tr
+              .setSelection(
+                TextSelection.create(this.view.state.doc, selection.head),
+              )
+              .setMeta("addToHistory", false),
+          );
+        }
         this.view.focus();
         return;
       }
@@ -6155,6 +6180,23 @@ export class MarkdownEditorApp {
       undefined,
       "divider",
     );
+    for (const feature of PROFILE_FEATURES.filter(
+      (candidate) => candidate.kind === "block",
+    )) {
+      const item = addMenuButton(
+        feature.label,
+        feature.label,
+        () => {
+          if (feature.id === "gitlab-toc") this.runProfileFeature(feature.id);
+          else this.openProfileFeatureDialog(feature.id, item);
+        },
+        `insert-profile-${feature.id}`,
+      );
+      item.dataset.insertProfileFeature = feature.id;
+      item.hidden = true;
+      item.setAttribute("aria-hidden", "true");
+      this.insertPopupProfileItems.set(feature.id, item);
+    }
     panel.addEventListener("pointermove", () =>
       this.setPopupInputModality(panel, "pointer"),
     );
@@ -6173,7 +6215,21 @@ export class MarkdownEditorApp {
         return;
       }
       if (event.key === "Tab") {
-        this.closeWritingPopups("cancel");
+        this.setPopupInputModality(panel, "keyboard");
+        const enabledItems = Array.from(
+          panel.querySelectorAll<HTMLButtonElement>(
+            'button[role="menuitem"]:not(:disabled):not([hidden])',
+          ),
+        );
+        const current = enabledItems.indexOf(
+          document.activeElement as HTMLButtonElement,
+        );
+        if (current < 0 || enabledItems.length === 0) return;
+        event.preventDefault();
+        const delta = event.shiftKey ? -1 : 1;
+        const next =
+          (current + delta + enabledItems.length) % enabledItems.length;
+        enabledItems[next]?.focus();
         return;
       }
       if (
@@ -6187,13 +6243,15 @@ export class MarkdownEditorApp {
         return;
       this.setPopupInputModality(panel, "keyboard");
       event.preventDefault();
-      const items = Array.from(
-        panel.querySelectorAll<HTMLButtonElement>('button[role="menuitem"]'),
+      const visibleItems = Array.from(
+        panel.querySelectorAll<HTMLButtonElement>(
+          'button[role="menuitem"]:not([hidden])',
+        ),
       );
-      if (!items.length) return;
-      const current = items.indexOf(
-        document.activeElement as HTMLButtonElement,
-      );
+      if (!visibleItems.length) return;
+      const activeItem = document.activeElement as HTMLButtonElement;
+      const items = visibleItems;
+      const current = items.indexOf(activeItem);
       let next = -1;
       if (event.key === "Home")
         next = items.findIndex((item) => !item.disabled);
@@ -6403,6 +6461,7 @@ export class MarkdownEditorApp {
       this.composing
     )
       return false;
+    if (popup === this.insertPopup) this.updateInsertPopupProfileFeatures();
     const retainedSelection = this.popupSelection;
     const retainedGeneration = this.popupDocumentGeneration;
     const retainedProfile = this.popupProfile;
@@ -6541,7 +6600,7 @@ export class MarkdownEditorApp {
 
   private focusPopupItem(popup: HTMLElement, index: number): void {
     const items = popup.querySelectorAll<HTMLButtonElement>(
-      'button[role="menuitem"]:not(:disabled)',
+      'button[role="menuitem"]:not(:disabled):not([hidden])',
     );
     items.item(Math.max(0, Math.min(index, items.length - 1)))?.focus();
   }
@@ -8687,6 +8746,27 @@ export class MarkdownEditorApp {
       button.hidden = !available;
       button.disabled =
         !visible || !available || !this.canUseProfileFeature(id!);
+    }
+    this.updateInsertPopupProfileFeatures();
+  }
+
+  private updateInsertPopupProfileFeatures(): void {
+    if (!this.insertPopup) return;
+    const allowed = new Set(
+      getProfileFeatures(this.profile)
+        .filter((feature) => feature.kind === "block")
+        .map((feature) => feature.id),
+    );
+    const visible =
+      this.initialized &&
+      !this.previewOnly &&
+      !this.parseError &&
+      this.mode === "rich";
+    for (const [id, item] of this.insertPopupProfileItems) {
+      const available = visible && allowed.has(id);
+      item.hidden = !available;
+      item.disabled = !available || !this.canUseProfileFeature(id);
+      item.setAttribute("aria-hidden", String(!available));
     }
   }
 
