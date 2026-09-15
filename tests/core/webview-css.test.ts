@@ -25,7 +25,18 @@ describe("Mermaid dialog styles", () => {
     expect(webviewCss).toContain("> span {\n  display: none;");
   });
 
-  it("leaves the shared dialog size as the compact default", () => {
-    expect(webviewCss).toContain(".mm-input-dialog {\n  width: min(380px");
+  it("gives shared link and image dialogs room for file candidates", () => {
+    expect(webviewCss).toContain(
+      ".mm-input-dialog.mm-link-dialog,\n.mm-input-dialog.mm-image-dialog {\n  width: min(700px, calc(100vw - 48px));",
+    );
+    expect(webviewCss).toContain("max-width: calc(100vw - 48px);");
+    expect(webviewCss).toContain("max-height: calc(100dvh - 24px);");
+    expect(webviewCss).toContain(".mm-link-picker {\n  position: fixed;");
+    expect(webviewCss).toContain("width: min(560px, calc(100vw - 32px));");
+    expect(webviewCss).toContain("position: static;");
+    expect(webviewCss).toContain("height: clamp(96px, 42vh, 320px);");
+    expect(webviewCss).toContain("max-height: min(48vh, 320px);");
+    expect(webviewCss).toContain("overflow-y: auto;");
+    expect(webviewCss).not.toContain(".mm-file-autocomplete-option:hover");
   });
 });

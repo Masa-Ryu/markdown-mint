@@ -151,17 +151,17 @@ function openImageDialog(root: HTMLElement): HTMLDialogElement {
   return dialog;
 }
 
-function openLinkDialog(root: HTMLElement): HTMLDialogElement {
+function openLinkPicker(root: HTMLElement): HTMLElement {
   const button = root.querySelector<HTMLButtonElement>(
     '[data-testid="toolbar-link"]',
   );
   if (!button) throw new Error("link toolbar button is not rendered");
   button.click();
-  const dialog = root.querySelector<HTMLDialogElement>(
-    '[aria-labelledby="mm-link-dialog-title"]',
+  const picker = root.querySelector<HTMLElement>(
+    '[data-testid="link-selection-picker"]',
   );
-  if (!dialog) throw new Error("link dialog is not rendered");
-  return dialog;
+  if (!picker || picker.hidden) throw new Error("link picker is not rendered");
+  return picker;
 }
 
 async function flush(): Promise<void> {
@@ -1602,7 +1602,7 @@ describe("rich editor rendering", () => {
     app.destroy();
   });
 
-  it("searches link files through the host and consumes candidate Enter", async () => {
+  it("uses the selected-text link picker and applies the active candidate", async () => {
     const source = "replace me";
     const { app, root, messages } = makeApp(source);
     app.view.dispatch(
@@ -1610,10 +1610,18 @@ describe("rich editor rendering", () => {
         TextSelection.create(app.view.state.doc, 1, 1 + source.length),
       ),
     );
-    const dialog = openLinkDialog(root);
-    const [linkInput, textInput] = Array.from(
-      dialog.querySelectorAll<HTMLInputElement>("input"),
-    );
+    const picker = openLinkPicker(root);
+    const linkInput = picker.querySelector<HTMLInputElement>("input");
+    expect(linkInput).not.toBeNull();
+    expect(
+      picker.querySelector('input[placeholder="Selected text"]'),
+    ).toBeNull();
+    expect(picker.querySelector('button[type="submit"]')).toBeNull();
+    expect(
+      root.querySelector<HTMLDialogElement>(
+        '[aria-labelledby="mm-link-dialog-title"]',
+      )?.open,
+    ).toBe(false);
     linkInput!.value = "ho";
     linkInput!.dispatchEvent(new Event("input", { bubbles: true }));
     await new Promise<void>((resolve) => setTimeout(resolve, 90));
@@ -1643,7 +1651,7 @@ describe("rich editor rendering", () => {
         },
       }),
     );
-    const options = dialog.querySelectorAll<HTMLButtonElement>(
+    const options = picker.querySelectorAll<HTMLButtonElement>(
       ".mm-file-autocomplete-option",
     );
     expect(options).toHaveLength(2);
@@ -1672,17 +1680,50 @@ describe("rich editor rendering", () => {
     );
     expect(linkInput!.value).toBe("../docs/hoge-design.md");
     expect(
-      dialog.querySelector<HTMLElement>(".mm-file-autocomplete")?.hidden,
+      picker.querySelector<HTMLElement>(".mm-file-autocomplete")?.hidden,
     ).toBe(true);
-    expect(messages.filter(isEditMessage)).toHaveLength(beforeEdits);
-    expect(document.activeElement).toBe(linkInput);
-
-    textInput!.value = "Hoge document";
-    await flush();
-    dialog.querySelector<HTMLButtonElement>('button[type="submit"]')!.click();
+    expect(messages.filter(isEditMessage)).toHaveLength(beforeEdits + 1);
+    expect(picker.hidden).toBe(true);
     expect(lastEditMarkdown(messages)).toBe(
       "[replace me](../docs/hoge-design.md)",
     );
+    app.destroy();
+  });
+
+  it("keeps selected link text unchanged for Escape and IME paths", () => {
+    const source = "replace me";
+    const { app, root, messages } = makeApp(source);
+    const selection = TextSelection.create(
+      app.view.state.doc,
+      1,
+      1 + source.length,
+    );
+    app.view.dispatch(app.view.state.tr.setSelection(selection));
+    const picker = openLinkPicker(root);
+    const input = picker.querySelector<HTMLInputElement>("input")!;
+    input.value = "../docs/guide.md";
+    const composingEnter = new KeyboardEvent("keydown", {
+      key: "Enter",
+      bubbles: true,
+      cancelable: true,
+    });
+    Object.defineProperty(composingEnter, "isComposing", { value: true });
+    input.dispatchEvent(composingEnter);
+    expect(messages.filter(isEditMessage)).toHaveLength(0);
+    expect(picker.hidden).toBe(false);
+
+    input.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "Escape",
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    expect(picker.hidden).toBe(true);
+    expect(app.view.state.selection.from).toBe(selection.from);
+    expect(app.view.state.selection.to).toBe(selection.to);
+    expect(app.view.state.doc.textContent).toBe(source);
+    expect(messages.filter(isEditMessage)).toHaveLength(0);
     app.destroy();
   });
 
@@ -1749,17 +1790,16 @@ describe("rich editor rendering", () => {
     app.destroy();
   });
 
-  it("hides local candidates for external URLs and closes only the list on Escape", async () => {
-    const { app, root, messages } = makeApp("replace me");
+  it("keeps external URLs manual and Escape restores the selected link", async () => {
+    const source = "replace me";
+    const { app, root, messages } = makeApp(source);
     app.view.dispatch(
       app.view.state.tr.setSelection(
         TextSelection.create(app.view.state.doc, 1, 1 + "replace me".length),
       ),
     );
-    const dialog = openLinkDialog(root);
-    const [linkInput] = Array.from(
-      dialog.querySelectorAll<HTMLInputElement>("input"),
-    );
+    const picker = openLinkPicker(root);
+    const linkInput = picker.querySelector<HTMLInputElement>("input");
     linkInput!.value = "ho";
     linkInput!.dispatchEvent(new Event("input", { bubbles: true }));
     await new Promise<void>((resolve) => setTimeout(resolve, 90));
@@ -1783,7 +1823,7 @@ describe("rich editor rendering", () => {
       }),
     );
     expect(
-      dialog.querySelector<HTMLElement>(".mm-file-autocomplete")?.hidden,
+      picker.querySelector<HTMLElement>(".mm-file-autocomplete")?.hidden,
     ).toBe(false);
     linkInput!.dispatchEvent(
       new KeyboardEvent("keydown", {
@@ -1792,19 +1832,33 @@ describe("rich editor rendering", () => {
         cancelable: true,
       }),
     );
-    expect(
-      dialog.querySelector<HTMLElement>(".mm-file-autocomplete")?.hidden,
-    ).toBe(true);
-    expect(document.activeElement).toBe(linkInput);
-    linkInput!.value = "https://example.com";
-    linkInput!.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(picker.hidden).toBe(true);
+    expect(app.view.state.selection.from).toBe(1);
+    expect(app.view.state.selection.to).toBe(1 + source.length);
+    expect(messages.filter(isEditMessage)).toHaveLength(0);
+
+    const reopenedPicker = openLinkPicker(root);
+    const reopenedInput =
+      reopenedPicker.querySelector<HTMLInputElement>("input");
+    reopenedInput!.value = "https://example.com";
+    reopenedInput!.dispatchEvent(new Event("input", { bubbles: true }));
     await flush();
     expect(
       messages.filter(
         (message: any) => message.type === "workspace-file-search",
       ),
     ).toHaveLength(1);
-    expect(messages.filter(isEditMessage)).toHaveLength(0);
+    reopenedInput!.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "Enter",
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    expect(lastEditMarkdown(messages)).toBe(
+      "[replace me](https://example.com)",
+    );
+    expect(reopenedPicker.hidden).toBe(true);
     app.destroy();
   });
 
@@ -1825,22 +1879,27 @@ describe("rich editor rendering", () => {
       ),
     );
 
-    const dialog = openLinkDialog(root);
-    const [linkInput, textInput] = Array.from(
-      dialog.querySelectorAll<HTMLInputElement>("input"),
-    );
+    const picker = openLinkPicker(root);
+    const linkInput = picker.querySelector<HTMLInputElement>("input");
     expect(linkInput?.type).toBe("text");
     expect(linkInput?.getAttribute("type")).toBe("text");
-    expect(linkInput?.placeholder).toBe("./docs/example.md");
+    expect(linkInput?.placeholder).toBe(
+      "./docs/example.md or https://example.com",
+    );
     expect(linkInput?.spellcheck).toBe(false);
     expect(linkInput?.autocapitalize).toBe("off");
     expect(linkInput?.inputMode).toBe("url");
-    expect(dialog.textContent).toContain("Link path or URL");
+    expect(picker.textContent).toContain("Search / URL");
 
     linkInput!.value = href;
     expect(linkInput!.checkValidity()).toBe(true);
-    textInput!.value = "text";
-    dialog.querySelector<HTMLButtonElement>('button[type="submit"]')!.click();
+    linkInput!.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "Enter",
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
 
     expect(
       app.view.state.doc.firstChild?.firstChild?.marks[0]?.attrs.href,
@@ -1858,13 +1917,17 @@ describe("rich editor rendering", () => {
       ),
     );
 
-    const dialog = openLinkDialog(root);
-    const [linkInput] = Array.from(
-      dialog.querySelectorAll<HTMLInputElement>("input"),
-    );
+    const picker = openLinkPicker(root);
+    const linkInput = picker.querySelector<HTMLInputElement>("input");
     expect(linkInput?.value).toBe("../README.md");
     expect(linkInput?.checkValidity()).toBe(true);
-    dialog.querySelector<HTMLButtonElement>('button[type="submit"]')!.click();
+    linkInput!.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "Enter",
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
 
     expect(
       app.view.state.doc.firstChild?.firstChild?.marks[0]?.attrs.href,
@@ -1872,6 +1935,27 @@ describe("rich editor rendering", () => {
     expect(
       serializeMarkdown(app.view.state.doc, parseMarkdown(source, "github")),
     ).toBe(source);
+    app.destroy();
+  });
+
+  it("removes an existing link from the selected-text picker", () => {
+    const source = "[text](../README.md)";
+    const { app, root, messages } = makeApp(source);
+    app.view.dispatch(
+      app.view.state.tr.setSelection(
+        TextSelection.create(app.view.state.doc, 1, 1 + "text".length),
+      ),
+    );
+    const picker = openLinkPicker(root);
+    const remove = picker.querySelector<HTMLButtonElement>(
+      ".mm-link-picker-remove",
+    );
+    expect(remove?.hidden).toBe(false);
+    remove!.click();
+
+    expect(picker.hidden).toBe(true);
+    expect(app.view.state.doc.firstChild?.firstChild?.marks).toHaveLength(0);
+    expect(lastEditMarkdown(messages)).toBe("text");
     app.destroy();
   });
 

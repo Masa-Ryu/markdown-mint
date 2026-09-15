@@ -29,9 +29,8 @@ describe("WorkspaceFileSearch", () => {
       "Hoge.pdf",
       "how-to-use.md",
       "hoge-design.md",
-      "README.md",
     ]);
-    expect(candidates.at(-1)?.directory).toBe("how-to/");
+    expect(candidates.at(-1)?.directory).toBe("docs/");
   });
 
   it("matches fuzzy filenames case-insensitively", () => {
@@ -66,6 +65,60 @@ describe("WorkspaceFileSearch", () => {
     expect(
       candidates.every((candidate) => !candidate.fileName.includes("outside")),
     ).toBe(true);
+  });
+
+  it("does not return files below .git or node_modules", () => {
+    const candidates = search.search({
+      documentPath: "/project/docs/manual.md",
+      workspaceFolderPath: "/project",
+      query: "guide",
+      filter: "all",
+      files: [
+        file("/project/.git/guide.md"),
+        file("/project/node_modules/package/guide.md"),
+        file("/project/src/.GIT/guide.md"),
+        file("/project/src/NODE_MODULES/guide.md"),
+        file("/project/docs/guide.md"),
+      ],
+    });
+
+    expect(candidates).toEqual([
+      {
+        fileName: "guide.md",
+        directory: "docs/",
+        relativePath: "./guide.md",
+      },
+    ]);
+  });
+
+  it("only uses path matching when the query is path-like", () => {
+    const filenameMatches = search.search({
+      documentPath: "/project/docs/manual.md",
+      workspaceFolderPath: "/project",
+      query: "demo",
+      filter: "all",
+      files: [
+        file("/project/output/playwright/README.md"),
+        file("/project/docs/demo.md"),
+      ],
+    });
+    expect(filenameMatches.map((candidate) => candidate.fileName)).toEqual([
+      "demo.md",
+    ]);
+
+    const pathMatches = search.search({
+      documentPath: "/project/docs/manual.md",
+      workspaceFolderPath: "/project",
+      query: "output/",
+      filter: "all",
+      files: [file("/project/output/playwright/README.md")],
+    });
+    expect(pathMatches).toMatchObject([
+      {
+        fileName: "README.md",
+        relativePath: "../output/playwright/README.md",
+      },
+    ]);
   });
 
   it("generates portable relative paths and encodes URI delimiters", () => {

@@ -294,6 +294,8 @@ const vscode = vi.hoisted(() => {
     "/workspace/root.md",
     "/workspace/second/root.md",
     "/workspace-b/docs/hoge manual.pdf",
+    "/workspace/.git/ignored.md",
+    "/workspace/node_modules/ignored.md",
   ]);
   const findFilesCalls: Array<{ include: unknown; exclude: unknown }> = [];
   const openExternalCalls: Uri[] = [];
@@ -1016,6 +1018,29 @@ describe("MarkdownMintEditorProvider", () => {
         ],
       }),
     );
+
+    vscode.__state.panel.webview.receive({
+      protocolVersion: 1,
+      type: "workspace-file-search",
+      requestId: "file-search:excluded",
+      query: "ignored",
+      filter: "all",
+    });
+    await flush();
+    expect(
+      [...vscode.__state.panel.webview.messages]
+        .reverse()
+        .find(
+          (message) =>
+            typeof message === "object" &&
+            message !== null &&
+            (message as { type?: unknown }).type ===
+              "workspace-file-search-result",
+        ),
+    ).toMatchObject({
+      requestId: "file-search:excluded",
+      candidates: [],
+    });
     provider.dispose();
   });
 

@@ -116,6 +116,7 @@ export class WorkspaceFileSearch {
         workspaceRelative[0] === ".."
       )
         continue;
+      if (workspaceRelative.some(isWorkspaceSearchExcludedDirectory)) continue;
 
       const fileName = workspaceRelative.at(-1);
       if (!fileName) continue;
@@ -137,7 +138,12 @@ export class WorkspaceFileSearch {
         directory,
         relativePath,
       };
-      const score = scoreCandidate(query, fileName, workspaceRelativePath);
+      const score = scoreCandidate(
+        query,
+        fileName,
+        workspaceRelativePath,
+        relativePath,
+      );
       if (score) scored.push({ candidate, score });
     }
 
@@ -234,6 +240,7 @@ function scoreCandidate(
   query: string,
   fileName: string,
   workspaceRelativePath: string,
+  documentRelativePath: string,
 ): MatchScore | undefined {
   const lowerFileName = fileName.toLowerCase();
   const lowerPath = workspaceRelativePath.toLowerCase();
@@ -266,24 +273,51 @@ function scoreCandidate(
       relativePath: workspaceRelativePath,
     };
   }
-  const pathIndex = lowerPath.indexOf(query);
-  if (pathIndex >= 0) {
-    return {
-      category: 3,
-      primary: pathIndex,
-      secondary: 0,
-      nameLength: fileName.length,
-      relativePath: workspaceRelativePath,
-    };
-  }
-  const fuzzyPath = fuzzyMatch(query, lowerPath);
-  if (!fuzzyPath) return undefined;
+  const pathQuery = query.replaceAll("\\", "/");
+  if (!/\//.test(pathQuery) && !pathQuery.startsWith(".")) return undefined;
+  const normalizedPathQuery = pathQuery.startsWith("./")
+    ? pathQuery.slice(2)
+    : pathQuery;
+  if (!normalizedPathQuery) return undefined;
+  const pathValues = [
+    { value: lowerPath, relativePath: workspaceRelativePath },
+    {
+      value: documentRelativePath.toLowerCase(),
+      relativePath: documentRelativePath,
+    },
+  ];
+  const pathScores = pathValues.flatMap(({ value, relativePath }) => {
+    const pathIndex = value.indexOf(normalizedPathQuery);
+    if (pathIndex >= 0)
+      return [
+        {
+          primary: pathIndex,
+          secondary: 0,
+          relativePath,
+        },
+      ];
+    const fuzzyPath = fuzzyMatch(normalizedPathQuery, value);
+    return fuzzyPath
+      ? [
+          {
+            primary: fuzzyPath.gaps,
+            secondary: fuzzyPath.start,
+            relativePath,
+          },
+        ]
+      : [];
+  });
+  const bestPath = pathScores.sort(
+    (left, right) =>
+      left.primary - right.primary || left.secondary - right.secondary,
+  )[0];
+  if (!bestPath) return undefined;
   return {
     category: 3,
-    primary: fuzzyPath.gaps,
-    secondary: fuzzyPath.start,
+    primary: bestPath.primary,
+    secondary: bestPath.secondary,
     nameLength: fileName.length,
-    relativePath: workspaceRelativePath,
+    relativePath: bestPath.relativePath,
   };
 }
 
@@ -323,6 +357,11 @@ function compareScoredCandidates(
 
 function compareStrings(left: string, right: string): number {
   return left === right ? 0 : left < right ? -1 : 1;
+}
+
+function isWorkspaceSearchExcludedDirectory(segment: string): boolean {
+  const lower = segment.toLowerCase();
+  return lower === ".git" || lower === "node_modules";
 }
 
 function hasControlCharacter(value: string): boolean {

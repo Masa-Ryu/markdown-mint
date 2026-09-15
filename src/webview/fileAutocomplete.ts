@@ -7,6 +7,8 @@ export interface FileAutocompleteOptions {
   readonly input: HTMLInputElement;
   readonly onQuery: (query: string) => void;
   readonly onSelect?: (candidate: WorkspaceFileCandidate) => void;
+  readonly onEnter?: () => void;
+  readonly onEscape?: () => void;
   readonly debounceMs?: number;
 }
 
@@ -22,16 +24,21 @@ export class FileAutocomplete {
   private readonly onQuery: (query: string) => void;
   private readonly onSelect:
     ((candidate: WorkspaceFileCandidate) => void) | undefined;
+  private readonly onEnter: (() => void) | undefined;
+  private readonly onEscape: (() => void) | undefined;
   private readonly debounceMs: number;
   private readonly popup: HTMLDivElement;
+  private readonly footer: HTMLDivElement;
   private readonly inputHandler: () => void;
   private readonly keydownHandler: (event: KeyboardEvent) => void;
+  private readonly pointerMoveHandler: (event: PointerEvent) => void;
   private readonly pointerDownHandler: (event: PointerEvent) => void;
   private readonly clickHandler: (event: MouseEvent) => void;
   private queryTimer: ReturnType<typeof setTimeout> | undefined;
   private candidates: readonly WorkspaceFileCandidate[] = [];
   private activeIndex = -1;
   private enabled = false;
+  private searchRequested = false;
   private suppressSubmit = false;
   private suppressSubmitTimer: number | undefined;
 
@@ -39,6 +46,8 @@ export class FileAutocomplete {
     this.input = options.input;
     this.onQuery = options.onQuery;
     this.onSelect = options.onSelect;
+    this.onEnter = options.onEnter;
+    this.onEscape = options.onEscape;
     this.debounceMs = Math.max(0, Math.min(options.debounceMs ?? 75, 250));
     const ownerDocument = this.input.ownerDocument;
     this.popup = ownerDocument.createElement("div");
@@ -47,30 +56,43 @@ export class FileAutocomplete {
     this.popup.hidden = true;
     this.popup.setAttribute("role", "listbox");
     this.popup.setAttribute("aria-label", "Workspace files");
+    this.footer = ownerDocument.createElement("div");
+    this.footer.className = "mm-file-autocomplete-footer";
+    this.footer.setAttribute("role", "status");
+    this.footer.setAttribute("aria-live", "polite");
+    this.footer.hidden = true;
     this.input.setAttribute("role", "combobox");
     this.input.setAttribute("aria-autocomplete", "list");
     this.input.setAttribute("aria-controls", this.popup.id);
     this.input.setAttribute("aria-expanded", "false");
     this.input.autocomplete = "off";
-    this.input.parentElement?.append(this.popup);
+    this.input.parentElement?.append(this.popup, this.footer);
 
     this.inputHandler = () => this.handleInput();
     this.keydownHandler = (event) => this.handleKeyDown(event);
+    this.pointerMoveHandler = (event) => {
+      const index = this.optionIndex(event.target);
+      if (index !== undefined) this.setActiveIndex(index);
+    };
     this.pointerDownHandler = (event) => {
       const target = event.target;
       if (target instanceof Node && this.popup.contains(target))
         event.preventDefault();
+      const index = this.optionIndex(target);
+      if (index !== undefined) this.setActiveIndex(index);
     };
     this.clickHandler = (event) => this.handleClick(event);
     this.input.addEventListener("input", this.inputHandler);
     this.input.addEventListener("keydown", this.keydownHandler);
+    this.popup.addEventListener("pointermove", this.pointerMoveHandler);
     this.popup.addEventListener("pointerdown", this.pointerDownHandler);
     this.popup.addEventListener("click", this.clickHandler);
   }
 
   public open(): void {
     this.enabled = true;
-    this.clear();
+    this.searchRequested = false;
+    this.resetState();
   }
 
   public close(): void {
@@ -80,25 +102,38 @@ export class FileAutocomplete {
   }
 
   public clear(): void {
+    this.searchRequested = false;
+    this.resetState();
+  }
+
+  private resetState(): void {
     if (this.queryTimer !== undefined) {
       clearTimeout(this.queryTimer);
       this.queryTimer = undefined;
     }
     this.candidates = [];
     this.activeIndex = -1;
-    this.popup.replaceChildren();
-    this.popup.hidden = true;
-    this.input.setAttribute("aria-expanded", "false");
-    this.input.removeAttribute("aria-activedescendant");
+    this.render();
   }
 
   public setCandidates(candidates: readonly WorkspaceFileCandidate[]): void {
-    if (!this.enabled || !isWorkspaceFileSearchQuery(this.input.value)) {
+    if (
+      !this.enabled ||
+      !this.searchRequested ||
+      !isWorkspaceFileSearchQuery(this.input.value)
+    ) {
       this.clear();
       return;
     }
+    const activePath = this.candidates[this.activeIndex]?.relativePath;
     this.candidates = candidates.slice(0, 10).filter(isSafeCandidate);
-    this.activeIndex = this.candidates.length > 0 ? 0 : -1;
+    const retainedIndex = activePath
+      ? this.candidates.findIndex(
+          (candidate) => candidate.relativePath === activePath,
+        )
+      : -1;
+    this.activeIndex =
+      retainedIndex >= 0 ? retainedIndex : this.candidates.length > 0 ? 0 : -1;
     this.render();
   }
 
@@ -117,15 +152,18 @@ export class FileAutocomplete {
     this.close();
     this.input.removeEventListener("input", this.inputHandler);
     this.input.removeEventListener("keydown", this.keydownHandler);
+    this.popup.removeEventListener("pointermove", this.pointerMoveHandler);
     this.popup.removeEventListener("pointerdown", this.pointerDownHandler);
     this.popup.removeEventListener("click", this.clickHandler);
     this.popup.remove();
+    this.footer.remove();
   }
 
   private handleInput(): void {
     this.suppressSubmit = false;
-    this.clear();
-    if (!this.enabled || !isWorkspaceFileSearchQuery(this.input.value)) return;
+    this.searchRequested = isWorkspaceFileSearchQuery(this.input.value);
+    this.resetState();
+    if (!this.enabled || !this.searchRequested) return;
     const query = this.input.value.trim();
     const schedule = (): void => {
       this.queryTimer = undefined;
@@ -142,16 +180,33 @@ export class FileAutocomplete {
 
   private handleKeyDown(event: KeyboardEvent): void {
     if (event.isComposing || event.keyCode === 229) return;
-    const visible = !this.popup.hidden && this.candidates.length > 0;
+    const visible = !this.popup.hidden;
+    const plainEnter =
+      event.key === "Enter" &&
+      !event.ctrlKey &&
+      !event.metaKey &&
+      !event.altKey &&
+      !event.shiftKey;
     if (event.key === "Escape" && visible) {
       event.preventDefault();
       event.stopPropagation();
-      this.clear();
-      this.input.focus();
+      if (this.onEscape) this.onEscape();
+      else {
+        this.clear();
+        this.input.focus();
+      }
       return;
     }
-    if (!visible) return;
+    if (!visible) {
+      if (plainEnter && this.input.value.trim() && this.onEnter) {
+        event.preventDefault();
+        event.stopPropagation();
+        this.onEnter();
+      }
+      return;
+    }
     if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      if (this.candidates.length === 0) return;
       event.preventDefault();
       event.stopPropagation();
       const delta = event.key === "ArrowDown" ? 1 : -1;
@@ -161,18 +216,16 @@ export class FileAutocomplete {
       this.render();
       return;
     }
-    if (
-      event.key === "Enter" &&
-      !event.ctrlKey &&
-      !event.metaKey &&
-      !event.altKey &&
-      !event.shiftKey
-    ) {
-      const candidate = this.candidates[this.activeIndex];
-      if (!candidate) return;
+    if (plainEnter && this.candidates[this.activeIndex]) {
       event.preventDefault();
       event.stopPropagation();
-      this.select(candidate, true);
+      this.selectActive(true);
+      return;
+    }
+    if (plainEnter && this.input.value.trim() && this.onEnter) {
+      event.preventDefault();
+      event.stopPropagation();
+      this.onEnter();
     }
   }
 
@@ -183,22 +236,42 @@ export class FileAutocomplete {
       "[data-mm-file-autocomplete-option]",
     );
     if (!option) return;
-    const index = Number(option.dataset.mmFileAutocompleteOption);
-    const candidate = this.candidates[index];
-    if (!candidate) return;
+    const index = this.optionIndex(option);
+    if (index === undefined) return;
     event.preventDefault();
-    this.select(candidate, false);
+    this.setActiveIndex(index);
+    this.selectActive(false);
   }
 
-  private select(
-    candidate: WorkspaceFileCandidate,
-    suppressSubmit: boolean,
-  ): void {
+  private selectActive(suppressSubmit: boolean): void {
+    const candidate = this.candidates[this.activeIndex];
+    if (!candidate) return;
     this.input.value = candidate.relativePath;
-    this.clear();
+    this.searchRequested = false;
+    this.resetState();
     if (suppressSubmit) this.setSubmitSuppression();
     this.input.focus();
     this.onSelect?.(candidate);
+  }
+
+  private setActiveIndex(index: number): void {
+    if (!this.candidates[index] || this.activeIndex === index) return;
+    this.activeIndex = index;
+    this.render();
+  }
+
+  private optionIndex(target: EventTarget | null): number | undefined {
+    if (!(target instanceof Element)) return undefined;
+    const option = target.closest<HTMLButtonElement>(
+      "[data-mm-file-autocomplete-option]",
+    );
+    if (!option || !this.popup.contains(option)) return undefined;
+    const index = Number(option.dataset.mmFileAutocompleteOption);
+    return Number.isInteger(index) &&
+      index >= 0 &&
+      index < this.candidates.length
+      ? index
+      : undefined;
   }
 
   private setSubmitSuppression(): void {
@@ -221,15 +294,31 @@ export class FileAutocomplete {
 
   private render(): void {
     this.popup.replaceChildren();
-    this.popup.hidden = this.candidates.length === 0;
-    this.input.setAttribute("aria-expanded", String(!this.popup.hidden));
+    const visible =
+      this.enabled &&
+      this.searchRequested &&
+      isWorkspaceFileSearchQuery(this.input.value);
+    this.popup.hidden = !visible;
+    this.footer.hidden = !visible;
+    this.input.setAttribute("aria-expanded", String(visible));
     this.input.removeAttribute("aria-activedescendant");
-    if (this.popup.hidden) return;
+    this.footer.textContent = "";
+    if (!visible) return;
+
+    if (this.candidates.length === 0) {
+      const empty = this.input.ownerDocument.createElement("div");
+      empty.className = "mm-file-autocomplete-empty";
+      empty.textContent = "No matching workspace files.";
+      this.popup.append(empty);
+      this.footer.textContent = "Enter a path or URL manually.";
+      return;
+    }
 
     this.candidates.forEach((candidate, index) => {
       const option = this.input.ownerDocument.createElement("button");
       option.type = "button";
       option.className = "mm-file-autocomplete-option";
+      option.tabIndex = -1;
       option.dataset.mmFileAutocompleteOption = String(index);
       option.id = `${this.popup.id}-option-${index}`;
       option.setAttribute("role", "option");
@@ -240,6 +329,7 @@ export class FileAutocomplete {
       const directory = this.input.ownerDocument.createElement("span");
       directory.className = "mm-file-autocomplete-directory";
       directory.textContent = candidate.directory;
+      option.title = candidate.relativePath;
       option.append(name, directory);
       this.popup.append(option);
     });
@@ -249,12 +339,20 @@ export class FileAutocomplete {
     if (active) {
       active.classList.add("is-active");
       this.input.setAttribute("aria-activedescendant", active.id);
-      try {
-        active.scrollIntoView({ block: "nearest" });
-      } catch {
-        // jsdom and older embedded WebViews may not implement scrollIntoView.
-      }
+      this.footer.textContent =
+        this.candidates[this.activeIndex]?.relativePath ?? "";
+      this.ensureActiveVisible(active);
     }
+  }
+
+  private ensureActiveVisible(active: HTMLElement): void {
+    const top = active.offsetTop;
+    const bottom = top + active.offsetHeight;
+    const visibleBottom = this.popup.scrollTop + this.popup.clientHeight;
+    if (this.popup.clientHeight <= 0) return;
+    if (top < this.popup.scrollTop) this.popup.scrollTop = top;
+    else if (bottom > visibleBottom)
+      this.popup.scrollTop = bottom - this.popup.clientHeight;
   }
 }
 

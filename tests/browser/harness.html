@@ -152,7 +152,12 @@
         { fileName: 'how-to-use.md', directory: 'docs/', relativePath: '../docs/how-to-use.md' },
         { fileName: 'logo.png', directory: 'assets/', relativePath: '../assets/logo.png' },
         { fileName: 'logo-dark.svg', directory: 'assets/', relativePath: '../assets/logo-dark.svg' },
-        { fileName: 'manual.pdf', directory: 'docs/', relativePath: './manual.pdf' }
+        { fileName: 'manual.pdf', directory: 'docs/', relativePath: './manual.pdf' },
+        ...Array.from({ length: 10 }, (_, index) => ({
+          fileName: `candidate-${String(index + 1).padStart(2, '0')}.md`,
+          directory: 'docs/candidates/',
+          relativePath: `../docs/candidates/candidate-${String(index + 1).padStart(2, '0')}.md`
+        }))
       ];
       const searchWorkspaceFiles = (query, filter) => {
         const lower = query.trim().toLowerCase();

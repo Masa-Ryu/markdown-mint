@@ -2228,15 +2228,24 @@ async function testRichEditorLinks(page) {
 async function testWorkspaceFileAutocomplete(page) {
   await load(page, "Target");
   await caret(page, `${rich} > p`, 0, -1);
-  const linkBefore = await saved(page);
   await page.locator('[data-testid="toolbar-link"]').click();
-  const linkDialog = page.locator(
-    'dialog[aria-labelledby="mm-link-dialog-title"]',
+  const linkPicker = page.locator('[data-testid="link-selection-picker"]');
+  await linkPicker.waitFor({ state: "visible" });
+  assert.equal(
+    await page
+      .locator('dialog[aria-labelledby="mm-link-dialog-title"]:visible')
+      .count(),
+    0,
+    "selected text opens the lightweight picker",
   );
-  await linkDialog.waitFor({ state: "visible" });
-  const linkInput = linkDialog.locator("input").first();
+  assert.equal(
+    await linkPicker.locator('input[placeholder="Selected text"]').count(),
+    0,
+    "selected text does not show a second Link text field",
+  );
+  const linkInput = linkPicker.locator('[data-testid="link-picker-input"]');
   await linkInput.fill("ho");
-  const linkOptions = linkDialog.locator(".mm-file-autocomplete-option");
+  const linkOptions = linkPicker.locator(".mm-file-autocomplete-option");
   await linkOptions.first().waitFor({ state: "visible" });
   assert.equal(
     await linkOptions
@@ -2245,18 +2254,145 @@ async function testWorkspaceFileAutocomplete(page) {
       .textContent(),
     "hoge.pdf",
   );
-  await linkInput.press("ArrowDown");
-  await linkInput.press("Enter");
-  assert.equal(await linkInput.inputValue(), "../docs/hoge-design.md");
+  assert.ok((await linkOptions.count()) > 1, "multiple link candidates render");
   assert.equal(
-    await linkDialog.isVisible(),
-    true,
-    "candidate Enter submitted the dialog",
+    await linkPicker
+      .locator(".mm-file-autocomplete")
+      .evaluate((element) => getComputedStyle(element).position),
+    "static",
+    "candidate list stays in the picker layout",
   );
-  await noEdits(page, linkBefore, "link autocomplete selection");
-  await linkDialog.locator('input[placeholder="Selected text"]').fill("Target");
-  await linkDialog.locator('button[type="submit"]').click();
+  await linkOptions.first().hover();
+  await linkInput.press("ArrowDown");
+  assert.equal(await linkPicker.locator(".is-active").count(), 1);
+  assert.equal(
+    await linkPicker
+      .locator(".is-active .mm-file-autocomplete-name")
+      .textContent(),
+    "hoge-design.md",
+  );
+  const linkOptionBackgrounds = await linkOptions.evaluateAll((options) =>
+    options.map((option) => getComputedStyle(option).backgroundColor),
+  );
+  assert.notEqual(
+    linkOptionBackgrounds[0],
+    linkOptionBackgrounds[1],
+    "a stationary hover does not add a second active highlight",
+  );
+  await linkOptions.first().hover();
+  assert.equal(await linkPicker.locator(".is-active").count(), 1);
+  assert.equal(
+    await linkPicker
+      .locator(".is-active .mm-file-autocomplete-name")
+      .textContent(),
+    "hoge.pdf",
+    "real pointer movement changes the active candidate",
+  );
+  await linkOptions.nth(1).hover();
+  await linkInput.press("Enter");
+  assert.equal(
+    await linkPicker.isVisible(),
+    false,
+    "selected text applies through the active candidate",
+  );
   await expectSource(page, "[Target](../docs/hoge-design.md)");
+
+  await load(page, "Target");
+  await caret(page, `${rich} > p`, 0, -1);
+  await page.locator('[data-testid="toolbar-link"]').click();
+  const clickPicker = page.locator('[data-testid="link-selection-picker"]');
+  const clickInput = clickPicker.locator('[data-testid="link-picker-input"]');
+  await clickInput.fill("ho");
+  const clickOptions = clickPicker.locator(".mm-file-autocomplete-option");
+  await clickOptions.first().waitFor({ state: "visible" });
+  await clickOptions.nth(1).click();
+  await expectSource(page, "[Target](../docs/hoge-design.md)");
+
+  await load(page, "Target");
+  await caret(page, `${rich} > p`, 0, -1);
+  await page.locator('[data-testid="toolbar-link"]').click();
+  const externalPicker = page.locator('[data-testid="link-selection-picker"]');
+  await externalPicker.waitFor({ state: "visible" });
+  const externalInput = externalPicker.locator(
+    '[data-testid="link-picker-input"]',
+  );
+  await externalInput.fill("https://example.com");
+  await externalInput.press("Enter");
+  await expectSource(page, "[Target](https://example.com)");
+
+  await load(page, "Target");
+  await caret(page, `${rich} > p`, 0, -1);
+  await page.locator('[data-testid="toolbar-link"]').click();
+  const scrollPicker = page.locator('[data-testid="link-selection-picker"]');
+  await scrollPicker.waitFor({ state: "visible" });
+  const scrollInput = scrollPicker.locator('[data-testid="link-picker-input"]');
+  await scrollInput.fill("candidate");
+  const scrollOptions = scrollPicker.locator(".mm-file-autocomplete-option");
+  await scrollOptions.first().waitFor({ state: "visible" });
+  const beforeScroll = await page.evaluate(() => ({
+    window: window.scrollY,
+    document: document.documentElement.scrollTop,
+    body: document.body.scrollTop,
+    stage: document.querySelector(".mm-stage")?.scrollTop ?? 0,
+  }));
+  for (let index = 0; index < 9; index += 1)
+    await scrollInput.press("ArrowDown");
+  const afterScroll = await page.evaluate(() => ({
+    window: window.scrollY,
+    document: document.documentElement.scrollTop,
+    body: document.body.scrollTop,
+    stage: document.querySelector(".mm-stage")?.scrollTop ?? 0,
+    list:
+      document.querySelector(
+        '[data-testid="link-selection-picker"] .mm-file-autocomplete',
+      )?.scrollTop ?? 0,
+  }));
+  assert.deepEqual(
+    {
+      window: afterScroll.window,
+      document: afterScroll.document,
+      body: afterScroll.body,
+      stage: afterScroll.stage,
+    },
+    {
+      window: beforeScroll.window,
+      document: beforeScroll.document,
+      body: beforeScroll.body,
+      stage: beforeScroll.stage,
+    },
+    "candidate navigation does not scroll the editor or outer viewport",
+  );
+  assert.ok(afterScroll.list > 0, "only the candidate list scrolls");
+  await scrollInput.press("Escape");
+
+  await load(page, "Target");
+  await caret(page, `${rich} > p`, -1);
+  const linkBefore = await saved(page);
+  await page.locator('[data-testid="toolbar-link"]').click();
+  const linkDialog = page.locator(
+    'dialog[aria-labelledby="mm-link-dialog-title"]',
+  );
+  await linkDialog.waitFor({ state: "visible" });
+  const linkText = linkDialog.locator('input[placeholder="Selected text"]');
+  const linkModalInput = linkDialog.locator("input").first();
+  await linkText.fill("Custom label");
+  await linkModalInput.fill("ho");
+  const linkModalOptions = linkDialog.locator(".mm-file-autocomplete-option");
+  await linkModalOptions.first().waitFor({ state: "visible" });
+  assert.equal(
+    await linkDialog
+      .locator(".mm-file-autocomplete")
+      .evaluate((element) => getComputedStyle(element).position),
+    "static",
+    "modal candidate list stays in normal layout",
+  );
+  await linkModalInput.press("Enter");
+  assert.equal(await linkDialog.isVisible(), true);
+  assert.equal(await linkModalInput.inputValue(), "../specs/hoge.pdf");
+  assert.equal(await linkText.inputValue(), "Custom label");
+  await noEdits(page, linkBefore, "link modal candidate selection");
+  await linkDialog.getByRole("button", { name: "Insert link" }).click();
+  await expectSource(page, "Target[Custom label](../specs/hoge.pdf)");
 
   await load(page, "Target");
   await caret(page, `${rich} > p`, 0, -1);
@@ -2279,12 +2415,31 @@ async function testWorkspaceFileAutocomplete(page) {
       .textContent(),
     "logo.png",
   );
+  assert.ok(
+    (await imageOptions.count()) > 1,
+    "multiple image candidates render",
+  );
+  assert.equal(
+    await imageDialog
+      .locator(".mm-file-autocomplete")
+      .evaluate((element) => getComputedStyle(element).position),
+    "static",
+    "image candidate list stays in normal layout",
+  );
+  await imageOptions.nth(1).hover();
+  assert.equal(await imageDialog.locator(".is-active").count(), 1);
+  assert.equal(
+    await imageDialog
+      .locator(".is-active .mm-file-autocomplete-name")
+      .textContent(),
+    "logo-dark.svg",
+  );
   await imageInput.press("Enter");
-  assert.equal(await imageInput.inputValue(), "../assets/logo.png");
+  assert.equal(await imageInput.inputValue(), "../assets/logo-dark.svg");
   assert.equal(await altInput.inputValue(), "Keep alt");
   await noEdits(page, imageBefore, "image autocomplete selection");
-  await imageDialog.locator('button[type="submit"]').click();
-  await expectSource(page, "![Keep alt](../assets/logo.png)");
+  await imageDialog.getByRole("button", { name: "Insert image" }).click();
+  await expectSource(page, "![Keep alt](../assets/logo-dark.svg)");
 }
 
 async function testVerticalGoalAndEmptyEdges(page) {
