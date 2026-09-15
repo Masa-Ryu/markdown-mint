@@ -234,6 +234,38 @@ describe("FileAutocomplete active candidate interaction", () => {
     autocomplete.dispose();
   });
 
+  it("blocks Enter while loading and allows manual Enter after an empty result", () => {
+    const selected = vi.fn();
+    const onEnter = vi.fn();
+    const { input, autocomplete } = createAutocomplete(selected, onEnter);
+
+    dispatchInput(input, "ho");
+    expect(autocomplete.isSearchPending()).toBe(true);
+
+    for (const init of [{}, { ctrlKey: true }, { metaKey: true }]) {
+      const enter = dispatchKey(input, "Enter", init);
+      expect(enter.defaultPrevented).toBe(true);
+    }
+    expect(selected).not.toHaveBeenCalled();
+    expect(onEnter).not.toHaveBeenCalled();
+
+    // A late result only updates the candidates. It must not replay the
+    // Enter that was ignored while the request was pending.
+    autocomplete.setCandidates([candidate("hoge.pdf")]);
+    expect(selected).not.toHaveBeenCalled();
+    expect(autocomplete.isSearchPending()).toBe(false);
+
+    dispatchKey(input, "Enter");
+    expect(selected).toHaveBeenCalledWith(candidate("hoge.pdf"));
+
+    dispatchInput(input, "./missing.md");
+    autocomplete.setCandidates([]);
+    expect(autocomplete.isSearchPending()).toBe(false);
+    dispatchKey(input, "Enter");
+    expect(onEnter).toHaveBeenCalledTimes(1);
+    autocomplete.dispose();
+  });
+
   it("does not apply an IME Enter and can submit a manual destination", () => {
     const onEnter = vi.fn();
     const { input, autocomplete } = createAutocomplete(

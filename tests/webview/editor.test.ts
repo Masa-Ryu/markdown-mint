@@ -22,6 +22,7 @@ import {
   type EditorInitialDocument,
   type VSCodeApiLike,
 } from "../../src/webview/editor";
+import { installModalSubmitShortcut } from "../../src/webview/modalSubmitShortcut";
 
 function documentFixture(
   markdown = "# Title\n\nParagraph",
@@ -1633,6 +1634,150 @@ describe("rich editor rendering", () => {
     );
     app.destroy();
   });
+
+  it("does not submit a selected link while its workspace search is loading", () => {
+    const source = "replace me";
+    const { app, root, messages } = makeApp(source);
+    app.view.dispatch(
+      app.view.state.tr.setSelection(
+        TextSelection.create(app.view.state.doc, 1, 1 + source.length),
+      ),
+    );
+    const picker = openLinkPicker(root);
+    const input = picker.querySelector<HTMLInputElement>("input")!;
+    input.value = "ho";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+
+    const enter = new KeyboardEvent("keydown", {
+      key: "Enter",
+      bubbles: true,
+      cancelable: true,
+    });
+    input.dispatchEvent(enter);
+    expect(enter.defaultPrevented).toBe(true);
+    expect(picker.hidden).toBe(false);
+    expect(app.view.state.doc.textContent).toBe(source);
+    expect(messages.filter(isEditMessage)).toHaveLength(0);
+
+    const request = messages.filter(isWorkspaceFileSearchMessage).at(-1)!;
+    receiveHostMessage({
+      protocolVersion: PROTOCOL_VERSION,
+      type: "workspace-file-search-result",
+      requestId: request.requestId,
+      candidates: [
+        {
+          fileName: "hoge.pdf",
+          directory: "docs/",
+          relativePath: "./hoge.pdf",
+        },
+      ],
+    });
+    expect(messages.filter(isEditMessage)).toHaveLength(0);
+    expect(
+      picker.querySelector(".mm-file-autocomplete-option")?.textContent,
+    ).toContain("hoge.pdf");
+
+    input.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "Enter",
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    expect(picker.hidden).toBe(true);
+    expect(lastEditMarkdown(messages)).toBe("[replace me](./hoge.pdf)");
+    app.destroy();
+  });
+
+  it.each([
+    ["link", "./missing.md", "[replace me](./missing.md)replace me"],
+    ["image", "./missing.png", "![alt](./missing.png)replace me"],
+  ] as const)(
+    "blocks %s modal submission while workspace search is loading",
+    async (kind, manualPath, expected) => {
+      const source = "replace me";
+      const { app, root, messages } = makeApp(source);
+      app.view.dispatch(
+        app.view.state.tr.setSelection(
+          TextSelection.create(app.view.state.doc, 1),
+        ),
+      );
+      const button = root.querySelector<HTMLButtonElement>(
+        `[data-testid="toolbar-${kind}"]`,
+      )!;
+      button.click();
+      const dialog = root.querySelector<HTMLDialogElement>(
+        `[aria-labelledby="mm-${kind}-dialog-title"]`,
+      )!;
+      const inputs = dialog.querySelectorAll<HTMLInputElement>("input");
+      const destination = inputs[0]!;
+      if (kind === "link") inputs[1]!.value = "replace me";
+      else inputs[1]!.value = "alt";
+      const disposeShortcut = installModalSubmitShortcut(root, "Linux x86_64");
+      try {
+        destination.value = kind === "link" ? "ho" : "lo";
+        destination.dispatchEvent(new Event("input", { bubbles: true }));
+        const beforeEdits = messages.filter(isEditMessage).length;
+
+        const enter = new KeyboardEvent("keydown", {
+          key: "Enter",
+          bubbles: true,
+          cancelable: true,
+        });
+        destination.dispatchEvent(enter);
+        expect(enter.defaultPrevented).toBe(true);
+
+        const modifiedEnter = new KeyboardEvent("keydown", {
+          key: "Enter",
+          ctrlKey: true,
+          bubbles: true,
+          cancelable: true,
+        });
+        destination.dispatchEvent(modifiedEnter);
+        await flush();
+        expect(modifiedEnter.defaultPrevented).toBe(true);
+
+        dialog
+          .querySelector<HTMLButtonElement>('button[type="submit"]')!
+          .click();
+        await flush();
+        expect(messages.filter(isEditMessage)).toHaveLength(beforeEdits);
+        expect(dialog.hasAttribute("open")).toBe(true);
+
+        const loadingRequest = messages
+          .filter(isWorkspaceFileSearchMessage)
+          .at(-1)!;
+        receiveHostMessage({
+          protocolVersion: PROTOCOL_VERSION,
+          type: "workspace-file-search-result",
+          requestId: loadingRequest.requestId,
+          candidates: [],
+        });
+        expect(
+          dialog.querySelector<HTMLElement>(".mm-file-autocomplete")?.dataset,
+        ).toMatchObject({ searchState: "empty" });
+
+        destination.value = manualPath;
+        destination.dispatchEvent(new Event("input", { bubbles: true }));
+        const manualRequest = messages
+          .filter(isWorkspaceFileSearchMessage)
+          .at(-1)!;
+        receiveHostMessage({
+          protocolVersion: PROTOCOL_VERSION,
+          type: "workspace-file-search-result",
+          requestId: manualRequest.requestId,
+          candidates: [],
+        });
+        dialog
+          .querySelector<HTMLButtonElement>('button[type="submit"]')!
+          .click();
+        expect(lastEditMarkdown(messages)).toBe(expected);
+      } finally {
+        disposeShortcut();
+        app.destroy();
+      }
+    },
+  );
 
   it("uses the selected-text link picker and applies the active candidate", async () => {
     const source = "replace me";

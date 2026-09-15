@@ -133,6 +133,16 @@ export class FileAutocomplete {
     this.resetResults();
   }
 
+  /** Return whether Enter must wait for the current workspace search result. */
+  public isSearchPending(): boolean {
+    return (
+      this.enabled &&
+      this.searchRequested &&
+      this.searchState === "loading" &&
+      isWorkspaceFileSearchQuery(this.input.value)
+    );
+  }
+
   public setCandidates(candidates: readonly WorkspaceFileCandidate[]): void {
     if (
       !this.enabled ||
@@ -216,6 +226,11 @@ export class FileAutocomplete {
       !event.metaKey &&
       !event.altKey &&
       !event.shiftKey;
+    if (event.key === "Enter" && this.isSearchPending()) {
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
     if (event.key === "Escape" && visible) {
       event.preventDefault();
       event.stopPropagation();

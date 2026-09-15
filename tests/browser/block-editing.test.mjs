@@ -40,8 +40,19 @@ async function settle(page) {
   );
 }
 
-async function load(page, source, profile = "github", mode = "rich") {
-  await page.goto(`${baseUrl}/${mode === "preview" ? "?mode=preview" : ""}`, {
+async function load(
+  page,
+  source,
+  profile = "github",
+  mode = "rich",
+  workspaceSearchDelay = 0,
+) {
+  const params = new URLSearchParams();
+  if (mode === "preview") params.set("mode", "preview");
+  if (workspaceSearchDelay > 0)
+    params.set("workspaceSearchDelay", String(workspaceSearchDelay));
+  const query = params.toString();
+  await page.goto(`${baseUrl}/${query ? `?${query}` : ""}`, {
     waitUntil: "domcontentloaded",
   });
   await page.waitForFunction(() => window.markdownMint?.view);
@@ -2717,6 +2728,90 @@ async function testWorkspaceFileAutocomplete(page) {
   );
 }
 
+async function testWorkspaceFileAutocompleteLoading(page) {
+  await load(page, "Target", "github", "rich", 1000);
+  await caret(page, `${rich} > p`, 0, -1);
+  const pickerBefore = await saved(page);
+  await page.locator('[data-testid="toolbar-link"]').click();
+  const picker = page.locator('[data-testid="link-selection-picker"]');
+  const pickerInput = picker.locator('[data-testid="link-picker-input"]');
+  await pickerInput.fill("ho");
+  await pickerInput.press("Enter");
+  assert.equal(
+    await picker.isVisible(),
+    true,
+    "loading Enter closed the selected-text picker",
+  );
+  await noEdits(page, pickerBefore, "selected-text loading Enter");
+  const pickerOptions = picker.locator(".mm-file-autocomplete-option");
+  await pickerOptions.first().waitFor({ state: "visible" });
+  assert.equal(
+    await picker.isVisible(),
+    true,
+    "a delayed result replayed the ignored selected-text Enter",
+  );
+  await pickerInput.press("Enter");
+  await expectSource(page, "[Target](../specs/hoge.pdf)");
+
+  const assertLoadingModal = async (kind, query, label) => {
+    await load(page, "Target", "github", "rich", 1000);
+    await caret(page, `${rich} > p`, -1);
+    const before = await saved(page);
+    await page.locator(`[data-testid="toolbar-${kind}"]`).click();
+    const dialog = page.locator(
+      `dialog[aria-labelledby="mm-${kind}-dialog-title"]`,
+    );
+    await dialog.waitFor({ state: "visible" });
+    const destination = dialog.locator("input").first();
+    if (kind === "link")
+      await dialog.locator('input[placeholder="Selected text"]').fill("Label");
+    else await dialog.locator("input").nth(1).fill("Alt text");
+    await destination.fill(query);
+
+    await destination.press("Enter");
+    await noEdits(page, before, `${label} plain Enter`);
+    assert.equal(
+      await dialog.isVisible(),
+      true,
+      `${label} plain Enter closed the dialog`,
+    );
+
+    await destination.press(`${primaryLinkModifier}+Enter`);
+    await noEdits(page, before, `${label} modified Enter`);
+    assert.equal(
+      await dialog.isVisible(),
+      true,
+      `${label} modified Enter closed the dialog`,
+    );
+
+    await dialog
+      .getByRole("button", {
+        name: kind === "link" ? "Insert link" : "Insert image",
+      })
+      .click();
+    await noEdits(page, before, `${label} button submit`);
+    assert.equal(
+      await dialog.isVisible(),
+      true,
+      `${label} button submit closed the dialog`,
+    );
+
+    await dialog.locator(".mm-file-autocomplete-option").first().waitFor({
+      state: "visible",
+    });
+    await noEdits(page, before, `${label} delayed result`);
+    await page.keyboard.press("Escape");
+    assert.equal(
+      await page.locator("dialog[open]").count(),
+      0,
+      `${label} could not be cancelled after the delayed result`,
+    );
+  };
+
+  await assertLoadingModal("link", "ho", "link modal loading");
+  await assertLoadingModal("image", "lo", "image modal loading");
+}
+
 function percentile(values, fraction) {
   const sorted = values.slice().sort((left, right) => left - right);
   const index = (sorted.length - 1) * fraction;
@@ -4055,6 +4150,7 @@ async function main() {
       testRichEditorLinks,
       testModalEscapeCancellation,
       testWorkspaceFileAutocomplete,
+      testWorkspaceFileAutocompleteLoading,
       testVerticalGoalAndEmptyEdges,
       testNestedDetailsAndComposition,
       testRenderedTraversal,

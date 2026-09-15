@@ -4848,6 +4848,7 @@ export class MarkdownEditorApp {
     );
     linkForm.addEventListener("submit", (event) => {
       event.preventDefault();
+      if (this.linkAutocomplete.isSearchPending()) return;
       if (this.linkAutocomplete.consumeSubmit()) return;
       this.applyLink(this.linkUrlInput.value.trim(), this.linkTextInput.value);
       this.closeDialog(link);
@@ -4897,6 +4898,7 @@ export class MarkdownEditorApp {
     );
     imageForm.addEventListener("submit", (event) => {
       event.preventDefault();
+      if (this.imageAutocomplete.isSearchPending()) return;
       if (this.imageAutocomplete.consumeSubmit()) return;
       this.applyImage(
         this.imageUrlInput.value.trim(),

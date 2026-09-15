@@ -150,6 +150,13 @@
         new URLSearchParams(location.search).get('workspaceFiles') ?? '',
         10
       );
+      const requestedWorkspaceSearchDelay = Number.parseInt(
+        new URLSearchParams(location.search).get('workspaceSearchDelay') ?? '',
+        10
+      );
+      const workspaceSearchDelay = Number.isSafeInteger(requestedWorkspaceSearchDelay) && requestedWorkspaceSearchDelay > 0
+        ? Math.min(requestedWorkspaceSearchDelay, 5000)
+        : 0;
       const benchmarkWorkspaceFiles = Number.isSafeInteger(requestedWorkspaceFileCount) && requestedWorkspaceFileCount > 0
         ? Array.from({ length: requestedWorkspaceFileCount }, (_, index) => {
             const group = String(Math.floor(index / 100)).padStart(3, '0');
@@ -361,7 +368,9 @@
             // The browser harness verifies the Webview transport only. The
             // extension host owns URI classification and the actual opener.
           } else if (message.type === 'workspace-file-search') {
-            deliver({ type: 'workspace-file-search-result', requestId: message.requestId, candidates: searchWorkspaceFiles(message.query, message.filter) });
+            const sendResult = () => deliver({ type: 'workspace-file-search-result', requestId: message.requestId, candidates: searchWorkspaceFiles(message.query, message.filter) });
+            if (workspaceSearchDelay > 0) setTimeout(sendResult, workspaceSearchDelay);
+            else sendResult();
           }
         },
         getState: () => clone(state),
