@@ -17,6 +17,7 @@ const detailsTitle = ".mm-details-summary";
 const detailsInput = ".mm-details-summary-input";
 const detailsToggle = ".mm-details-toggle";
 const undoShortcut = process.platform === "darwin" ? "Meta+z" : "Control+z";
+const primaryLinkModifier = process.platform === "darwin" ? "Meta" : "Control";
 const redoShortcut =
   process.platform === "darwin" ? "Meta+Shift+z" : "Control+y";
 const fence = (language, source) =>
@@ -39,8 +40,19 @@ async function settle(page) {
   );
 }
 
-async function load(page, source, profile = "github", mode = "rich") {
-  await page.goto(`${baseUrl}/${mode === "preview" ? "?mode=preview" : ""}`, {
+async function load(
+  page,
+  source,
+  profile = "github",
+  mode = "rich",
+  workspaceSearchDelay = 0,
+) {
+  const params = new URLSearchParams();
+  if (mode === "preview") params.set("mode", "preview");
+  if (workspaceSearchDelay > 0)
+    params.set("workspaceSearchDelay", String(workspaceSearchDelay));
+  const query = params.toString();
+  await page.goto(`${baseUrl}/${query ? `?${query}` : ""}`, {
     waitUntil: "domcontentloaded",
   });
   await page.waitForFunction(() => window.markdownMint?.view);
@@ -218,6 +230,22 @@ async function testCodeHeader(page) {
   );
   await page.keyboard.press("Escape");
   await noEdits(page, before, "cancel language chooser");
+  await page.locator(".mm-code-language-trigger").click();
+  await page
+    .locator(
+      '.mm-code-language-menu:not([hidden]) [data-mm-language-option=""]',
+    )
+    .click();
+  await page
+    .locator(".mm-code-language-confirm-dialog[open]")
+    .waitFor({ state: "visible" });
+  await page.keyboard.press("Escape");
+  assert.equal(
+    await page.locator("dialog[open]").count(),
+    0,
+    "code language removal Escape left an open dialog",
+  );
+  await noEdits(page, before, "cancel code language removal confirmation");
   await page.locator(".mm-code-language-trigger").click();
   await input.fill("custom-language");
   await page.keyboard.press("Enter");
@@ -2158,6 +2186,794 @@ async function testSelectionAndModifiers(page) {
   await noEdits(page, before, "selection and modified arrows");
 }
 
+async function testRichEditorLinks(page) {
+  await load(page, "[README](../README.md)");
+  const plainBefore = await saved(page);
+  const plainLink = page.locator(`${rich} a[href]`);
+  await plainLink.click();
+  await noEdits(page, plainBefore, "plain Rich Editor link click");
+  assert.equal(
+    await page.evaluate(
+      () =>
+        window.__markdownMintHarness.messages.filter(
+          (message) => message.type === "open-link",
+        ).length,
+    ),
+    0,
+    "plain link click sent an open-link message",
+  );
+
+  await load(page, "[README](../README.md)");
+  const relativeBefore = await saved(page);
+  await page
+    .locator(`${rich} a[href]`)
+    .click({ modifiers: [primaryLinkModifier] });
+  await page.waitForFunction(
+    () =>
+      window.__markdownMintHarness.messages.filter(
+        (message) => message.type === "open-link",
+      ).length === 1,
+  );
+  const relativeOpen = await page.evaluate(() =>
+    window.__markdownMintHarness.messages.find(
+      (message) => message.type === "open-link",
+    ),
+  );
+  assert.deepEqual(relativeOpen, {
+    protocolVersion: 1,
+    type: "open-link",
+    href: "../README.md",
+  });
+  await noEdits(
+    page,
+    relativeBefore,
+    "modified relative Rich Editor link click",
+  );
+
+  await load(page, "[Example](https://example.com)");
+  const externalBefore = await saved(page);
+  await page
+    .locator(`${rich} a[href]`)
+    .click({ modifiers: [primaryLinkModifier] });
+  await page.waitForFunction(
+    () =>
+      window.__markdownMintHarness.messages.filter(
+        (message) => message.type === "open-link",
+      ).length === 1,
+  );
+  const externalOpen = await page.evaluate(() =>
+    window.__markdownMintHarness.messages.find(
+      (message) => message.type === "open-link",
+    ),
+  );
+  assert.equal(externalOpen.href, "https://example.com");
+  await noEdits(
+    page,
+    externalBefore,
+    "modified external Rich Editor link click",
+  );
+
+  await load(page, "[Section](#section)\n\n# Section");
+  const fragmentBefore = await saved(page);
+  await page.evaluate(() => {
+    const target = document.querySelector("#section");
+    if (!target) throw new Error("heading fragment target is not rendered");
+    window.__markdownMintFragmentScrolls = 0;
+    target.scrollIntoView = () => {
+      window.__markdownMintFragmentScrolls += 1;
+    };
+  });
+  await page
+    .locator(`${rich} a[href="#section"]`)
+    .click({ modifiers: [primaryLinkModifier] });
+  await page.waitForFunction(() => window.__markdownMintFragmentScrolls === 1);
+  assert.equal(
+    await page.evaluate(
+      () =>
+        window.__markdownMintHarness.messages.filter(
+          (message) => message.type === "open-link",
+        ).length,
+    ),
+    0,
+  );
+  await noEdits(page, fragmentBefore, "heading fragment navigation");
+
+  await load(page, "[[_TOC_]]\n\n# Section", "gitlab");
+  const tocBefore = await saved(page);
+  await page.evaluate(() => {
+    const target = document.querySelector("#section");
+    if (!target) throw new Error("TOC fragment target is not rendered");
+    window.__markdownMintFragmentScrolls = 0;
+    target.scrollIntoView = () => {
+      window.__markdownMintFragmentScrolls += 1;
+    };
+  });
+  await page
+    .locator(`${rich} .table-of-contents a[href]`)
+    .click({ modifiers: [primaryLinkModifier] });
+  await page.waitForFunction(() => window.__markdownMintFragmentScrolls === 1);
+  assert.equal(
+    await page.evaluate(
+      () =>
+        window.__markdownMintHarness.messages.filter(
+          (message) => message.type === "open-link",
+        ).length,
+    ),
+    0,
+  );
+  await noEdits(page, tocBefore, "TOC fragment navigation");
+}
+
+async function testModalEscapeCancellation(page) {
+  const expectEditorContinuation = async (expected, label) => {
+    await caret(page, `${rich} > p:first-child`, -1);
+    await page.keyboard.type("X");
+    await expectSource(page, expected);
+    assert.equal(
+      await page.locator("dialog[open]").count(),
+      0,
+      `${label}: dialog reopened while continuing to edit`,
+    );
+  };
+
+  await load(page, "Before");
+  await caret(page, `${rich} > p:first-child`, -1);
+  const linkBefore = await saved(page);
+  const linkButton = page.locator('[data-testid="toolbar-link"]');
+  await linkButton.click();
+  const linkDialog = page.locator(
+    'dialog[aria-labelledby="mm-link-dialog-title"]',
+  );
+  await linkDialog.waitFor({ state: "visible" });
+  await linkDialog.locator("input").first().fill("./changed.md");
+  await page.keyboard.press("Escape");
+  assert.equal(
+    await page.locator("dialog[open]").count(),
+    0,
+    "Link Escape left an open dialog",
+  );
+  assert.equal(
+    await linkButton.evaluate((element) => document.activeElement === element),
+    true,
+    "Link Escape did not restore focus to its invoker",
+  );
+  await noEdits(page, linkBefore, "Link modal Escape cancellation");
+  await expectEditorContinuation("BeforeX", "Link modal Escape");
+
+  await load(page, "Before");
+  await caret(page, `${rich} > p:first-child`, -1);
+  const imageBefore = await saved(page);
+  const imageButton = page.locator('[data-testid="toolbar-image"]');
+  await imageButton.click();
+  const imageDialog = page.locator(
+    'dialog[aria-labelledby="mm-image-dialog-title"]',
+  );
+  await imageDialog.waitFor({ state: "visible" });
+  await imageDialog.locator("input").first().fill("./changed.png");
+  await page.keyboard.press("Escape");
+  assert.equal(
+    await page.locator("dialog[open]").count(),
+    0,
+    "Image Escape left an open dialog",
+  );
+  assert.equal(
+    await imageButton.evaluate((element) => document.activeElement === element),
+    true,
+    "Image Escape did not restore focus to its invoker",
+  );
+  await noEdits(page, imageBefore, "Image modal Escape cancellation");
+  await expectEditorContinuation("BeforeX", "Image modal Escape");
+
+  await load(page, "Before");
+  const tableBefore = await saved(page);
+  const tableButton = page.locator('[data-testid="toolbar-table"]');
+  await tableButton.click();
+  await page.locator(".mm-table-dialog[open]").waitFor({ state: "visible" });
+  await page.keyboard.press("Escape");
+  assert.equal(
+    await page.locator("dialog[open]").count(),
+    0,
+    "Table Escape left an open dialog",
+  );
+  await noEdits(page, tableBefore, "Table modal Escape cancellation");
+  await expectEditorContinuation("BeforeX", "Table modal Escape");
+
+  await load(page, "Before");
+  const emojiBefore = await saved(page);
+  const emojiButton = page.locator('[data-testid="toolbar-emoji"]');
+  await emojiButton.click();
+  await page.locator(".mm-emoji-dialog[open]").waitFor({ state: "visible" });
+  await page.keyboard.press("Escape");
+  assert.equal(
+    await page.locator("dialog[open]").count(),
+    0,
+    "Emoji Escape left an open dialog",
+  );
+  await noEdits(page, emojiBefore, "Emoji modal Escape cancellation");
+  await expectEditorContinuation("BeforeX", "Emoji modal Escape");
+
+  await load(page, "Before");
+  const mermaidBefore = await saved(page);
+  const mermaidButton = page.locator('[data-profile-feature="mermaid"]');
+  await mermaidButton.click();
+  const mermaidDialog = page.locator('[data-feature-dialog="true"][open]');
+  await mermaidDialog.waitFor({ state: "visible" });
+  await mermaidDialog
+    .locator('[data-feature-field="body"]')
+    .fill("flowchart TD\n    A --> B");
+  await page.keyboard.press("Escape");
+  assert.equal(
+    await page.locator("dialog[open]").count(),
+    0,
+    "ProfileFeature Escape left an open dialog",
+  );
+  await noEdits(
+    page,
+    mermaidBefore,
+    "ProfileFeature modal Escape cancellation",
+  );
+  await expectEditorContinuation("BeforeX", "ProfileFeature modal Escape");
+}
+
+async function testWorkspaceFileAutocomplete(page) {
+  await load(page, "Target");
+  await caret(page, `${rich} > p`, 0, -1);
+  await page.locator('[data-testid="toolbar-link"]').click();
+  const linkPicker = page.locator('[data-testid="link-selection-picker"]');
+  await linkPicker.waitFor({ state: "visible" });
+  assert.equal(
+    await page
+      .locator('dialog[aria-labelledby="mm-link-dialog-title"]:visible')
+      .count(),
+    0,
+    "selected text opens the lightweight picker",
+  );
+  assert.equal(
+    await linkPicker.locator('input[placeholder="Selected text"]').count(),
+    0,
+    "selected text does not show a second Link text field",
+  );
+  assert.ok(
+    await page.evaluate(() =>
+      window.__markdownMintHarness.messages.some(
+        (message) => message.type === "workspace-file-search-warmup",
+      ),
+    ),
+    "opening the Link picker did not start workspace search warmup",
+  );
+  const linkInput = linkPicker.locator('[data-testid="link-picker-input"]');
+  await page.evaluate(() => {
+    window.__markdownMintDebugFileSearch = true;
+    performance.clearMarks();
+  });
+  await linkInput.fill("ho");
+  const linkOptions = linkPicker.locator(".mm-file-autocomplete-option");
+  await linkOptions.first().waitFor({ state: "visible" });
+  const searchTiming = await page.evaluate(() => {
+    const phases = new Map();
+    for (const entry of performance.getEntriesByType("mark")) {
+      const match = entry.name.match(
+        /^markdown-mint:file-search:(\d+):(input|dom-update)$/,
+      );
+      if (!match) continue;
+      const [, id, phase] = match;
+      const current = phases.get(id) ?? {};
+      current[phase] = entry.startTime;
+      phases.set(id, current);
+    }
+    return [...phases.values()].at(-1) ?? {};
+  });
+  assert.ok(
+    Number.isFinite(searchTiming.input) &&
+      Number.isFinite(searchTiming["dom-update"]),
+    "file search timing marks were not recorded",
+  );
+  assert.ok(
+    searchTiming["dom-update"] - searchTiming.input <= 100,
+    `cached workspace search rendered too slowly: ${searchTiming["dom-update"] - searchTiming.input}ms`,
+  );
+  assert.equal(
+    await linkOptions
+      .first()
+      .locator(".mm-file-autocomplete-name")
+      .textContent(),
+    "hoge.pdf",
+  );
+  assert.ok((await linkOptions.count()) > 1, "multiple link candidates render");
+  assert.equal(
+    await linkPicker
+      .locator(".mm-file-autocomplete")
+      .evaluate((element) => getComputedStyle(element).position),
+    "static",
+    "candidate list stays in the picker layout",
+  );
+  const listStyle = await linkPicker
+    .locator(".mm-file-autocomplete")
+    .evaluate((element) => {
+      const style = getComputedStyle(element);
+      return {
+        boxShadow: style.boxShadow,
+        borderStyle: style.borderStyle,
+        borderRadius: style.borderRadius,
+      };
+    });
+  assert.equal(
+    listStyle.boxShadow,
+    "none",
+    "candidate list has a panel shadow",
+  );
+  assert.equal(
+    listStyle.borderStyle,
+    "none",
+    "candidate list retains a strong outer border",
+  );
+  assert.equal(
+    listStyle.borderRadius,
+    "0px",
+    "candidate list retains rounded corners",
+  );
+  assert.equal(
+    await linkPicker
+      .locator(".mm-file-autocomplete")
+      .getAttribute("data-search-state"),
+    "results",
+  );
+  const initialFooter = await linkPicker
+    .locator(".mm-file-autocomplete-footer")
+    .textContent();
+  assert.equal(initialFooter, "../specs/hoge.pdf");
+  await linkOptions.first().hover();
+  await linkInput.press("ArrowDown");
+  assert.equal(await linkPicker.locator(".is-active").count(), 1);
+  assert.equal(
+    await linkPicker
+      .locator(".is-active .mm-file-autocomplete-name")
+      .textContent(),
+    "hoge-design.md",
+  );
+  assert.equal(
+    await linkPicker.locator(".mm-file-autocomplete-footer").textContent(),
+    "../docs/hoge-design.md",
+    "footer did not follow the active candidate",
+  );
+  const linkOptionBackgrounds = await linkOptions.evaluateAll((options) =>
+    options.map((option) => getComputedStyle(option).backgroundColor),
+  );
+  assert.notEqual(
+    linkOptionBackgrounds[0],
+    linkOptionBackgrounds[1],
+    "a stationary hover does not add a second active highlight",
+  );
+  await linkOptions.first().hover();
+  assert.equal(await linkPicker.locator(".is-active").count(), 1);
+  assert.equal(
+    await linkPicker
+      .locator(".is-active .mm-file-autocomplete-name")
+      .textContent(),
+    "hoge.pdf",
+    "real pointer movement changes the active candidate",
+  );
+  await linkOptions.nth(1).hover();
+  await linkInput.press("Enter");
+  assert.equal(
+    await linkPicker.isVisible(),
+    false,
+    "selected text applies through the active candidate",
+  );
+  await expectSource(page, "[Target](../docs/hoge-design.md)");
+
+  await load(page, "Target");
+  await caret(page, `${rich} > p`, 0, -1);
+  await page.locator('[data-testid="toolbar-link"]').click();
+  const clickPicker = page.locator('[data-testid="link-selection-picker"]');
+  const clickInput = clickPicker.locator('[data-testid="link-picker-input"]');
+  await clickInput.fill("ho");
+  const clickOptions = clickPicker.locator(".mm-file-autocomplete-option");
+  await clickOptions.first().waitFor({ state: "visible" });
+  await clickOptions.nth(1).click();
+  await expectSource(page, "[Target](../docs/hoge-design.md)");
+
+  await load(page, "Target");
+  await caret(page, `${rich} > p`, 0, -1);
+  await page.locator('[data-testid="toolbar-link"]').click();
+  const externalPicker = page.locator('[data-testid="link-selection-picker"]');
+  await externalPicker.waitFor({ state: "visible" });
+  const externalInput = externalPicker.locator(
+    '[data-testid="link-picker-input"]',
+  );
+  await externalInput.fill("https://example.com");
+  await externalInput.press("Enter");
+  await expectSource(page, "[Target](https://example.com)");
+
+  await load(page, "Target");
+  await caret(page, `${rich} > p`, 0, -1);
+  await page.locator('[data-testid="toolbar-link"]').click();
+  const scrollPicker = page.locator('[data-testid="link-selection-picker"]');
+  await scrollPicker.waitFor({ state: "visible" });
+  const scrollInput = scrollPicker.locator('[data-testid="link-picker-input"]');
+  await scrollInput.fill("candidate");
+  const scrollOptions = scrollPicker.locator(".mm-file-autocomplete-option");
+  await scrollOptions.first().waitFor({ state: "visible" });
+  const beforeScroll = await page.evaluate(() => ({
+    window: window.scrollY,
+    document: document.documentElement.scrollTop,
+    body: document.body.scrollTop,
+    stage: document.querySelector(".mm-stage")?.scrollTop ?? 0,
+  }));
+  for (let index = 0; index < 9; index += 1)
+    await scrollInput.press("ArrowDown");
+  const afterScroll = await page.evaluate(() => ({
+    window: window.scrollY,
+    document: document.documentElement.scrollTop,
+    body: document.body.scrollTop,
+    stage: document.querySelector(".mm-stage")?.scrollTop ?? 0,
+    list:
+      document.querySelector(
+        '[data-testid="link-selection-picker"] .mm-file-autocomplete',
+      )?.scrollTop ?? 0,
+  }));
+  assert.deepEqual(
+    {
+      window: afterScroll.window,
+      document: afterScroll.document,
+      body: afterScroll.body,
+      stage: afterScroll.stage,
+    },
+    {
+      window: beforeScroll.window,
+      document: beforeScroll.document,
+      body: beforeScroll.body,
+      stage: beforeScroll.stage,
+    },
+    "candidate navigation does not scroll the editor or outer viewport",
+  );
+  assert.ok(afterScroll.list > 0, "only the candidate list scrolls");
+  await scrollInput.press("Escape");
+
+  await load(page, "Target");
+  await caret(page, `${rich} > p`, -1);
+  const linkBefore = await saved(page);
+  await page.locator('[data-testid="toolbar-link"]').click();
+  const linkDialog = page.locator(
+    'dialog[aria-labelledby="mm-link-dialog-title"]',
+  );
+  await linkDialog.waitFor({ state: "visible" });
+  const linkText = linkDialog.locator('input[placeholder="Selected text"]');
+  const linkModalInput = linkDialog.locator("input").first();
+  await linkText.fill("Custom label");
+  await linkModalInput.fill("ho");
+  const linkModalOptions = linkDialog.locator(".mm-file-autocomplete-option");
+  await linkModalOptions.first().waitFor({ state: "visible" });
+  assert.equal(
+    await linkDialog
+      .locator(".mm-file-autocomplete")
+      .evaluate((element) => getComputedStyle(element).position),
+    "static",
+    "modal candidate list stays in normal layout",
+  );
+  await linkModalInput.press("Enter");
+  assert.equal(await linkDialog.isVisible(), true);
+  assert.equal(await linkModalInput.inputValue(), "../specs/hoge.pdf");
+  assert.equal(await linkText.inputValue(), "Custom label");
+  await noEdits(page, linkBefore, "link modal candidate selection");
+  await linkDialog.getByRole("button", { name: "Insert link" }).click();
+  await expectSource(page, "Target[Custom label](../specs/hoge.pdf)");
+
+  await load(page, "Target");
+  await caret(page, `${rich} > p`, 0, -1);
+  const imageBefore = await saved(page);
+  await page.locator('[data-testid="toolbar-image"]').click();
+  const imageDialog = page.locator(
+    'dialog[aria-labelledby="mm-image-dialog-title"]',
+  );
+  await imageDialog.waitFor({ state: "visible" });
+  const imageInput = imageDialog.locator("input").first();
+  const altInput = imageDialog.locator("input").nth(1);
+  await altInput.fill("Keep alt");
+  await imageInput.fill("lo");
+  const imageOptions = imageDialog.locator(".mm-file-autocomplete-option");
+  await imageOptions.first().waitFor({ state: "visible" });
+  assert.equal(
+    await imageOptions
+      .first()
+      .locator(".mm-file-autocomplete-name")
+      .textContent(),
+    "logo.png",
+  );
+  assert.ok(
+    (await imageOptions.count()) > 1,
+    "multiple image candidates render",
+  );
+  assert.equal(
+    await imageDialog
+      .locator(".mm-file-autocomplete")
+      .evaluate((element) => getComputedStyle(element).position),
+    "static",
+    "image candidate list stays in normal layout",
+  );
+  await imageOptions.nth(1).hover();
+  assert.equal(await imageDialog.locator(".is-active").count(), 1);
+  assert.equal(
+    await imageDialog
+      .locator(".is-active .mm-file-autocomplete-name")
+      .textContent(),
+    "logo-dark.svg",
+  );
+  await imageInput.press("Enter");
+  assert.equal(await imageInput.inputValue(), "../assets/logo-dark.svg");
+  assert.equal(await altInput.inputValue(), "Keep alt");
+  await noEdits(page, imageBefore, "image autocomplete selection");
+  await imageDialog.getByRole("button", { name: "Insert image" }).click();
+  await expectSource(page, "![Keep alt](../assets/logo-dark.svg)");
+
+  await load(page, "Target");
+  await caret(page, `${rich} > p`, 0, -1);
+  await page.locator('[data-testid="toolbar-link"]').click();
+  const excludedPicker = page.locator('[data-testid="link-selection-picker"]');
+  const excludedInput = excludedPicker.locator(
+    '[data-testid="link-picker-input"]',
+  );
+  await excludedInput.fill("guide");
+  const excludedList = excludedPicker.locator(".mm-file-autocomplete");
+  await excludedList.waitFor({ state: "visible" });
+  assert.equal(
+    await excludedList.locator(".mm-file-autocomplete-option").count(),
+    0,
+    ".git/node_modules candidates leaked into the picker",
+  );
+  assert.equal(
+    await excludedList.getAttribute("data-search-state"),
+    "empty",
+    "excluded-only query did not resolve to the empty state",
+  );
+}
+
+async function testWorkspaceFileAutocompleteLoading(page) {
+  await load(page, "Target", "github", "rich", 1000);
+  await caret(page, `${rich} > p`, 0, -1);
+  const pickerBefore = await saved(page);
+  await page.locator('[data-testid="toolbar-link"]').click();
+  const picker = page.locator('[data-testid="link-selection-picker"]');
+  const pickerInput = picker.locator('[data-testid="link-picker-input"]');
+  await pickerInput.fill("ho");
+  await pickerInput.press("Enter");
+  assert.equal(
+    await picker.isVisible(),
+    true,
+    "loading Enter closed the selected-text picker",
+  );
+  await noEdits(page, pickerBefore, "selected-text loading Enter");
+  const pickerOptions = picker.locator(".mm-file-autocomplete-option");
+  await pickerOptions.first().waitFor({ state: "visible" });
+  assert.equal(
+    await picker.isVisible(),
+    true,
+    "a delayed result replayed the ignored selected-text Enter",
+  );
+  await pickerInput.press("Enter");
+  await expectSource(page, "[Target](../specs/hoge.pdf)");
+
+  const assertLoadingModal = async (kind, query, label) => {
+    await load(page, "Target", "github", "rich", 1000);
+    await caret(page, `${rich} > p`, -1);
+    const before = await saved(page);
+    await page.locator(`[data-testid="toolbar-${kind}"]`).click();
+    const dialog = page.locator(
+      `dialog[aria-labelledby="mm-${kind}-dialog-title"]`,
+    );
+    await dialog.waitFor({ state: "visible" });
+    const destination = dialog.locator("input").first();
+    if (kind === "link")
+      await dialog.locator('input[placeholder="Selected text"]').fill("Label");
+    else await dialog.locator("input").nth(1).fill("Alt text");
+    await destination.fill(query);
+
+    await destination.press("Enter");
+    await noEdits(page, before, `${label} plain Enter`);
+    assert.equal(
+      await dialog.isVisible(),
+      true,
+      `${label} plain Enter closed the dialog`,
+    );
+
+    await destination.press(`${primaryLinkModifier}+Enter`);
+    await noEdits(page, before, `${label} modified Enter`);
+    assert.equal(
+      await dialog.isVisible(),
+      true,
+      `${label} modified Enter closed the dialog`,
+    );
+
+    await dialog
+      .getByRole("button", {
+        name: kind === "link" ? "Insert link" : "Insert image",
+      })
+      .click();
+    await noEdits(page, before, `${label} button submit`);
+    assert.equal(
+      await dialog.isVisible(),
+      true,
+      `${label} button submit closed the dialog`,
+    );
+
+    await dialog.locator(".mm-file-autocomplete-option").first().waitFor({
+      state: "visible",
+    });
+    await noEdits(page, before, `${label} delayed result`);
+    await page.keyboard.press("Escape");
+    assert.equal(
+      await page.locator("dialog[open]").count(),
+      0,
+      `${label} could not be cancelled after the delayed result`,
+    );
+  };
+
+  await assertLoadingModal("link", "ho", "link modal loading");
+  await assertLoadingModal("image", "lo", "image modal loading");
+}
+
+function percentile(values, fraction) {
+  const sorted = values.slice().sort((left, right) => left - right);
+  const index = (sorted.length - 1) * fraction;
+  const lower = Math.floor(index);
+  const upper = Math.ceil(index);
+  if (lower === upper) return sorted[lower] ?? 0;
+  const weight = index - lower;
+  return (
+    (sorted[lower] ?? 0) +
+    ((sorted[upper] ?? 0) - (sorted[lower] ?? 0)) * weight
+  );
+}
+
+function summarizeTimings(values) {
+  return {
+    p50: percentile(values, 0.5),
+    p95: percentile(values, 0.95),
+    p99: percentile(values, 0.99),
+    max: Math.max(...values),
+    over100: values.filter((value) => value > 100).length,
+  };
+}
+
+async function loadFileSearchBenchmark(page, source, fileCount) {
+  await page.goto(`${baseUrl}/?workspaceFiles=${fileCount}`, {
+    waitUntil: "domcontentloaded",
+  });
+  await page.waitForFunction(() => window.markdownMint?.view);
+  await page.evaluate(
+    ([markdown]) => window.__markdownMintHarness.deliverExternal(markdown),
+    [source],
+  );
+  await page.waitForFunction(
+    (expected) => window.__markdownMintHarness.document.markdown === expected,
+    source,
+  );
+  await settle(page);
+}
+
+async function benchmarkFileSearchSurface(page, surface, fileCount, samples) {
+  const source = "Target";
+  await loadFileSearchBenchmark(page, source, fileCount);
+  let input;
+  if (surface === "selected-text picker") {
+    await caret(page, `${rich} > p`, 0, -1);
+    await page.locator('[data-testid="toolbar-link"]').click();
+    const picker = page.locator('[data-testid="link-selection-picker"]');
+    await picker.waitFor({ state: "visible" });
+    input = picker.locator('[data-testid="link-picker-input"]');
+  } else if (surface === "Link modal") {
+    await caret(page, `${rich} > p`, -1);
+    await page.locator('[data-testid="toolbar-link"]').click();
+    const dialog = page.locator(
+      'dialog[aria-labelledby="mm-link-dialog-title"]',
+    );
+    await dialog.waitFor({ state: "visible" });
+    input = dialog.locator("input").first();
+  } else {
+    await caret(page, `${rich} > p`, -1);
+    await page.locator('[data-testid="toolbar-image"]').click();
+    const dialog = page.locator(
+      'dialog[aria-labelledby="mm-image-dialog-title"]',
+    );
+    await dialog.waitFor({ state: "visible" });
+    input = dialog.locator("input").first();
+  }
+
+  await page.evaluate(() => {
+    window.__markdownMintDebugFileSearch = true;
+    performance.clearMarks();
+    performance.clearMeasures();
+  });
+  const options = page.locator(".mm-file-autocomplete-option");
+  for (let sample = 0; sample < samples; sample += 1) {
+    await input.fill("");
+    await input.fill("benchmark");
+    await options.first().waitFor({ state: "visible" });
+  }
+  await settle(page);
+  const measurements = await page.evaluate(() => {
+    const byId = new Map();
+    for (const entry of performance.getEntriesByType("mark")) {
+      const match = entry.name.match(
+        /^markdown-mint:file-search:(\d+):(input|host-result|dom-update|paint-opportunity)$/,
+      );
+      if (!match) continue;
+      const [, id, phase] = match;
+      const current = byId.get(id) ?? {};
+      current[phase] = entry.startTime;
+      byId.set(id, current);
+    }
+    return [...byId.values()]
+      .filter(
+        (timing) =>
+          Number.isFinite(timing.input) &&
+          Number.isFinite(timing["host-result"]) &&
+          Number.isFinite(timing["dom-update"]) &&
+          Number.isFinite(timing["paint-opportunity"]),
+      )
+      .map((timing) => ({
+        hostRoundTrip: timing["host-result"] - timing.input,
+        domMutation: timing["dom-update"] - timing["host-result"],
+        paintOpportunity: timing["paint-opportunity"] - timing.input,
+      }));
+  });
+  assert.ok(
+    measurements.length >= samples,
+    `${surface} ${fileCount} benchmark produced ${measurements.length}/${samples} complete timings`,
+  );
+
+  await input.press("Escape");
+  await page.evaluate(() => {
+    window.__markdownMintDebugFileSearch = false;
+  });
+  return {
+    hostRoundTrip: measurements.map((timing) => timing.hostRoundTrip),
+    domMutation: measurements.map((timing) => timing.domMutation),
+    paintOpportunity: measurements.map((timing) => timing.paintOpportunity),
+  };
+}
+
+async function testWorkspaceFileAutocompleteBenchmark(page) {
+  const samples = Math.max(
+    20,
+    Number.parseInt(process.env.MM_FILE_SEARCH_BENCHMARK_SAMPLES ?? "30", 10),
+  );
+  const surfaces = ["Link modal", "Image modal", "selected-text picker"];
+  const rows = [];
+  for (const fileCount of [1000, 10000, 50000]) {
+    for (const surface of surfaces) {
+      const timings = await benchmarkFileSearchSurface(
+        page,
+        surface,
+        fileCount,
+        samples,
+      );
+      for (const [metric, values] of Object.entries(timings))
+        rows.push({ fileCount, surface, metric, ...summarizeTimings(values) });
+    }
+  }
+
+  console.log(
+    "File autocomplete browser harness benchmark (cache-warm mock data)",
+  );
+  console.log(
+    `Samples: ${samples}; hostRoundTrip is harness message handling, domMutation is Webview DOM work, and paintOpportunity is input to the next requestAnimationFrame.`,
+  );
+  console.log(
+    "The requestAnimationFrame timestamp is a paint opportunity, not proof that pixels were painted.",
+  );
+  console.log("");
+  console.log(
+    "| files | surface | metric | p50 ms | p95 ms | p99 ms | max ms | >100ms |",
+  );
+  console.log("| ---: | --- | --- | ---: | ---: | ---: | ---: | ---: |");
+  for (const row of rows) {
+    console.log(
+      `| ${row.fileCount} | ${row.surface} | ${row.metric} | ${row.p50.toFixed(3)} | ${row.p95.toFixed(3)} | ${row.p99.toFixed(3)} | ${row.max.toFixed(3)} | ${row.over100} |`,
+    );
+  }
+}
+
 async function testVerticalGoalAndEmptyEdges(page) {
   const long = "0123456789012345678901234567890123456789";
   for (const middle of [alert("x"), "x"]) {
@@ -3310,7 +4126,7 @@ async function main() {
       deviceScaleFactor: 1,
     });
     page.setDefaultTimeout(8000);
-    for (const test of [
+    const browserTests = [
       testCodeHeader,
       testDetailsAndCodeBlockSelection,
       testAlertHeaderAndSelection,
@@ -3331,6 +4147,10 @@ async function main() {
       testCodeVerticalNavigation,
       testExpandedCodeVerticalNavigation,
       testSelectionAndModifiers,
+      testRichEditorLinks,
+      testModalEscapeCancellation,
+      testWorkspaceFileAutocomplete,
+      testWorkspaceFileAutocompleteLoading,
       testVerticalGoalAndEmptyEdges,
       testNestedDetailsAndComposition,
       testRenderedTraversal,
@@ -3344,7 +4164,10 @@ async function main() {
       testBlankLineRoundTrip,
       testAuthoritativeTerminalWhitespace,
       testDocumentFixtures,
-    ]) {
+    ];
+    if (process.env.MM_FILE_SEARCH_BENCHMARK === "1")
+      browserTests.push(testWorkspaceFileAutocompleteBenchmark);
+    for (const test of browserTests) {
       if (
         process.env.MM_BLOCK_BROWSER_CASE &&
         !test.name.includes(process.env.MM_BLOCK_BROWSER_CASE)

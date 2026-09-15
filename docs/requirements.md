@@ -118,6 +118,75 @@ including Ctrl/Cmd+Enter, require a current successful validation result.
 The renderer continues to use the existing strict security configuration and
 sanitization path.
 
+## Rich Editor link navigation
+
+The Rich Editor follows links only for the platform primary modifier: Cmd+Click
+on macOS and Ctrl+Click on Windows/Linux. Ordinary clicks still reach
+ProseMirror for caret placement, selection, and link-text editing, while the
+Rich Editor prevents the Webview's default navigation. Hovering a link uses the
+existing tooltip mechanism to show the platform-specific follow-link hint.
+
+External `http`, `https`, `mailto`, and `tel` destinations are sent as the raw
+DOM `href` to the Extension Host and opened with `vscode.env.openExternal`.
+Relative paths are resolved with `vscode.Uri` from the current document URI;
+root-relative paths use the document's workspace folder and never fall back to
+the filesystem root. Percent-encoded path components are decoded before they
+are passed to `vscode.Uri.joinPath`; raw query and fragment delimiters retain
+their existing split behavior, and malformed percent escapes are rejected.
+Existing targets are opened with `vscode.open`, preserving VS Code's normal
+editor association. A missing target produces a concise notification only when
+the user invokes the link.
+
+Fragment-only links use the existing `id` attributes inside the current Rich
+Editor DOM, including generated heading, TOC, and footnote targets. They do not
+send a Host message or create Markdown, dirty-state, or undo changes. A
+file-plus-fragment link opens the file and safely ignores the fragment. The
+Dedicated Preview and VS Code native Markdown Preview are unchanged. Host-side
+scheme validation rejects `javascript`, `command`, `vscode`,
+`vscode-insiders`, `data`, and every other unapproved scheme; the protocol also
+caps untrusted hrefs with `MAX_RESOURCE_URL_LENGTH`.
+
+## Rich Editor workspace file autocomplete
+
+Link and Image dialogs, together with the selected-text Link picker, share one
+workspace-file autocomplete controller. The candidate list uses a flat normal
+layout with filename-first rendering, an ellipsized directory, an internally
+scrollable list, and one `activeIndex` as the source of truth. Arrow navigation
+and real pointer movement update only the previous and next rows,
+`aria-selected`, `aria-activedescendant`, the path footer, and list scroll
+position; they do not rebuild candidate DOM. Non-active CSS `:hover` does not
+add a selection background, while high-contrast and forced-colors active-row
+outlines remain available.
+
+The Extension Host warms both `findFiles` discovery and the prepared
+scheme/authority-specific search index when the Link or Image UI opens. In
+flight warm-ups for the same workspace, scheme, and authority share one
+Promise. Cache-warm filename queries score prepared metadata first, materialize
+document-relative Markdown paths only for the bounded top ten, and preserve
+the existing deterministic ranking. `.git/**`, `node_modules/**`, and the
+configured VS Code `files.exclude` behavior remain excluded as before.
+
+The focused unit and Chromium regressions cover state transitions, stale
+responses, active-row DOM reuse, warm-up sharing, flat styling, three entry
+points, and the required fixture display checks. The cache-warm benchmark
+commands are:
+
+- `npm run benchmark:file-search` — shared ranking at 1k, 10k, and 50k
+  synthetic files.
+- `npm run benchmark:file-search:browser` — Chromium browser harness at the
+  same sizes for Link modal, Image modal, and selected-text picker.
+- `npm run benchmark:file-search:extension` — real VS Code Extension Host
+  `WorkspaceFileSearchHost.searchFiles` on the acceptance workspace.
+
+Benchmark reports keep Host/harness message handling, Webview DOM mutation,
+and `requestAnimationFrame` paint opportunity separate. `dom-update` means
+that the candidate DOM mutation returned; a `requestAnimationFrame` timestamp
+is only an opportunity for painting and does not prove that pixels were
+painted. The public VS Code acceptance API does not expose the native Webview
+DOM, so an end-to-end native Extension Host message/DOM/paint measurement and
+the real operating-system IME candidate UI remain unverified manual
+boundaries.
+
 ## Image file drag-and-drop import (0.2.0)
 
 Image insertion is documented as Shift + drag-and-drop from Finder, Windows

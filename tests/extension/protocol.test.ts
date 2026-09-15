@@ -245,6 +245,143 @@ describe("Markdown Mint wire protocol", () => {
     ).toBe(false);
   });
 
+  it("accepts a raw link href at the protocol boundary and enforces its cap", () => {
+    const href = "../docs/guide.md#section";
+    expect(
+      parseWebviewMessage({
+        protocolVersion: PROTOCOL_VERSION,
+        type: "open-link",
+        href,
+      }),
+    ).toEqual({
+      protocolVersion: PROTOCOL_VERSION,
+      type: "open-link",
+      href,
+    });
+    for (const validHref of [
+      "https://example.com",
+      "mailto:user@example.com",
+      "../README.md",
+      "./docs/guide.md",
+      "/docs/guide.md",
+    ]) {
+      expect(
+        parseWebviewMessage({
+          protocolVersion: PROTOCOL_VERSION,
+          type: "open-link",
+          href: validHref,
+        }),
+      ).toMatchObject({
+        protocolVersion: PROTOCOL_VERSION,
+        type: "open-link",
+        href: validHref,
+      });
+    }
+    expect(
+      parseWebviewMessage({
+        protocolVersion: PROTOCOL_VERSION,
+        type: "open-link",
+        href: "x".repeat(MAX_RESOURCE_URL_LENGTH),
+      }),
+    ).toEqual({
+      protocolVersion: PROTOCOL_VERSION,
+      type: "open-link",
+      href: "x".repeat(MAX_RESOURCE_URL_LENGTH),
+    });
+    expect(
+      parseWebviewMessage({
+        protocolVersion: PROTOCOL_VERSION,
+        type: "open-link",
+        href: "x".repeat(MAX_RESOURCE_URL_LENGTH + 1),
+      }),
+    ).toBeUndefined();
+    expect(
+      parseWebviewMessage({
+        protocolVersion: PROTOCOL_VERSION,
+        type: "open-link",
+        href: "",
+      }),
+    ).toBeUndefined();
+    expect(
+      parseWebviewMessage({
+        protocolVersion: PROTOCOL_VERSION,
+        type: "open-link",
+        href: 42,
+      }),
+    ).toBeUndefined();
+    expect(
+      parseWebviewMessage({
+        protocolVersion: PROTOCOL_VERSION + 1,
+        type: "open-link",
+        href,
+      }),
+    ).toBeUndefined();
+  });
+
+  it("validates bounded workspace file search requests and results", () => {
+    expect(
+      parseWebviewMessage({
+        protocolVersion: PROTOCOL_VERSION,
+        type: "workspace-file-search-warmup",
+      }),
+    ).toEqual({
+      protocolVersion: PROTOCOL_VERSION,
+      type: "workspace-file-search-warmup",
+    });
+    expect(
+      parseWebviewMessage({
+        protocolVersion: PROTOCOL_VERSION,
+        type: "workspace-file-search",
+        requestId: "file-search:1",
+        query: "hoge",
+        filter: "image",
+      }),
+    ).toEqual({
+      protocolVersion: PROTOCOL_VERSION,
+      type: "workspace-file-search",
+      requestId: "file-search:1",
+      query: "hoge",
+      filter: "image",
+    });
+    expect(
+      isHostMessage({
+        protocolVersion: PROTOCOL_VERSION,
+        type: "workspace-file-search-result",
+        requestId: "file-search:1",
+        candidates: [
+          {
+            fileName: "hoge manual.pdf",
+            directory: "specs/",
+            relativePath: "../specs/hoge%20manual.pdf",
+          },
+        ],
+      }),
+    ).toBe(true);
+    expect(
+      parseWebviewMessage({
+        protocolVersion: PROTOCOL_VERSION,
+        type: "workspace-file-search",
+        requestId: "file-search:1",
+        query: "x".repeat(257),
+        filter: "all",
+      }),
+    ).toBeUndefined();
+    expect(
+      isHostMessage({
+        protocolVersion: PROTOCOL_VERSION,
+        type: "workspace-file-search-result",
+        requestId: "file-search:1",
+        candidates: [
+          {
+            fileName: "unsafe.md",
+            directory: "docs/",
+            relativePath: "./unsafe#fragment.md",
+          },
+        ],
+      }),
+    ).toBe(false);
+  });
+
   it("validates image import requests and correlated results", () => {
     expect(
       parseWebviewMessage({

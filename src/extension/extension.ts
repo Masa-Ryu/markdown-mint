@@ -36,9 +36,14 @@ import {
   type SaveMessage,
   type SaveResultMessage,
   type UserNotificationMessage,
+  type WorkspaceFileSearchMessage,
+  type WorkspaceFileSearchResultMessage,
   isMarkdownProfile,
+  isSafeLinkHref,
   parseWebviewMessage,
 } from "../shared/protocol";
+import { classifyLinkNavigation } from "./linkNavigation";
+import { WorkspaceFileSearchHost } from "./workspaceFileSearch";
 
 export const VIEW_TYPE = MARKDOWN_MINT_VIEW_TYPE;
 export const PREVIEW_VIEW_TYPE = "markdownMint.preview";
@@ -279,10 +284,12 @@ export class MarkdownMintEditorProvider
   private readonly previewPanels = new Map<string, vscode.WebviewPanel>();
   private readonly subscriptions: vscode.Disposable[] = [];
   private readonly output: vscode.OutputChannel;
+  private readonly workspaceFileSearch = new WorkspaceFileSearchHost();
   private lastDocumentUri: vscode.Uri | undefined;
 
   public constructor(private readonly context: vscode.ExtensionContext) {
     this.output = vscode.window.createOutputChannel("Markdown Mint");
+    this.subscriptions.push(this.workspaceFileSearch);
     this.subscriptions.push(
       this.output,
       vscode.workspace.onDidChangeTextDocument((event) =>
@@ -726,6 +733,18 @@ export class MarkdownMintEditorProvider
       case "clipboard-write":
         await this.handleClipboardWrite(session, message);
         return;
+      case "open-link":
+        await this.handleOpenLink(session, message);
+        return;
+      case "workspace-file-search":
+        await this.handleWorkspaceFileSearch(session, message);
+        return;
+      case "workspace-file-search-warmup":
+        this.workspaceFileSearch.warmup(
+          session.state.uri,
+          vscode.workspace.getWorkspaceFolder(session.state.uri),
+        );
+        return;
       case "image-import":
         await this.enqueue(session.state, () =>
           this.handleImageImport(session, message),
@@ -856,6 +875,89 @@ export class MarkdownMintEditorProvider
         ).slice(0, 1_024),
       });
     }
+  }
+
+  private async handleOpenLink(
+    session: PanelSession,
+    message: Extract<WebviewMessage, { type: "open-link" }>,
+  ): Promise<void> {
+    if (!isSafeLinkHref(message.href)) {
+      void vscode.window.showWarningMessage("The link could not be opened.");
+      return;
+    }
+
+    const target = classifyLinkNavigation(
+      message.href,
+      session.state.uri,
+      vscode.workspace.getWorkspaceFolder(session.state.uri),
+    );
+    if (target.kind === "fragment") return;
+    if (target.kind === "invalid") {
+      const text =
+        target.reason === "workspace-required"
+          ? `The link target could not be resolved outside a workspace: ${message.href}`
+          : target.reason === "unsupported-scheme" ||
+              target.reason === "network-path"
+            ? `The link target is not allowed: ${message.href}`
+            : `The link target could not be opened: ${message.href}`;
+      void vscode.window.showWarningMessage(text);
+      return;
+    }
+
+    if (target.kind === "external") {
+      try {
+        const opened = await vscode.env.openExternal(target.uri);
+        if (!opened)
+          void vscode.window.showWarningMessage(
+            `The link target could not be opened: ${message.href}`,
+          );
+      } catch {
+        void vscode.window.showWarningMessage(
+          `The link target could not be opened: ${message.href}`,
+        );
+      }
+      return;
+    }
+
+    const fileUri = target.uri.with({ query: "", fragment: "" });
+    try {
+      await vscode.workspace.fs.stat(fileUri);
+    } catch {
+      void vscode.window.showWarningMessage(
+        `Link target was not found: ${message.href}`,
+      );
+      return;
+    }
+    try {
+      await vscode.commands.executeCommand("vscode.open", target.uri);
+    } catch {
+      void vscode.window.showWarningMessage(
+        `The link target could not be opened: ${message.href}`,
+      );
+    }
+  }
+
+  private async handleWorkspaceFileSearch(
+    session: PanelSession,
+    message: WorkspaceFileSearchMessage,
+  ): Promise<void> {
+    const workspaceFolder = vscode.workspace.getWorkspaceFolder(
+      session.state.uri,
+    );
+    const candidates = await this.workspaceFileSearch.searchFiles(
+      session.state.uri,
+      workspaceFolder,
+      message.query,
+      message.filter,
+    );
+    const result: WorkspaceFileSearchResultMessage = {
+      protocolVersion: PROTOCOL_VERSION,
+      type: "workspace-file-search-result",
+      requestId: message.requestId,
+      candidates,
+    };
+    if (this.sessions.get(session.panel) === session)
+      this.post(session, result);
   }
 
   private async handleImageImport(

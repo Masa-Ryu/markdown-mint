@@ -40,6 +40,7 @@ import { liftTarget } from "prosemirror-transform";
 import {
   isHostMessage,
   MAX_CLIPBOARD_TEXT_LENGTH,
+  MAX_FILE_SEARCH_QUERY_LENGTH,
   MAX_MARKDOWN_LENGTH,
   PROTOCOL_VERSION,
   type ClipboardResultMessage,
@@ -47,7 +48,9 @@ import {
   type PreviewMessage as HostPreviewMessage,
   type PreviewTypography,
   type SaveResultMessage,
+  type WorkspaceFileSearchResultMessage,
 } from "../shared/protocol";
+import { isWorkspaceFileSearchQuery } from "../shared/workspaceFileSearch";
 import {
   createStarterPlugin,
   getStarterState,
@@ -57,6 +60,7 @@ import {
   type StarterPluginState,
 } from "./starter";
 import { createWritingInputRules } from "./input-rules";
+import { FileAutocomplete } from "./fileAutocomplete";
 import { BodyNavigation } from "./bodyNavigation";
 import {
   BlockBoundarySelection,
@@ -264,6 +268,8 @@ interface SavedSelection {
   from: number;
   to: number;
 }
+
+type WorkspaceSearchTarget = "link-picker" | "link-modal" | "image-modal";
 
 interface TransientBlankRange {
   /** Positions in the current document covering only generated paragraphs. */
@@ -1856,7 +1862,7 @@ class CodeBlockNodeView {
   stopEvent(event: Event): boolean {
     return (
       event.target instanceof Element &&
-      event.target.closest("input,select,textarea,button") !== null
+      event.target.closest("input,select,textarea,button,dialog") !== null
     );
   }
 
@@ -2356,11 +2362,32 @@ export class MarkdownEditorApp {
   private documentGeneration = 0;
   private starterOriginalSource: string | undefined;
   private linkDialog!: HTMLDialogElement;
+  private linkDialogInvokingButton: HTMLButtonElement | null = null;
   private linkUrlInput!: HTMLInputElement;
   private linkTextInput!: HTMLInputElement;
+  private linkAutocomplete!: FileAutocomplete;
+  private linkPicker!: HTMLElement;
+  private linkPickerInput!: HTMLInputElement;
+  private linkPickerAutocomplete!: FileAutocomplete;
+  private linkPickerRemoveButton!: HTMLButtonElement;
+  private linkPickerSelection: Selection | null = null;
+  private linkPickerDocumentGeneration = -1;
+  private linkPickerProfile: DocumentProfile | null = null;
+  private linkPickerOpen = false;
   private imageDialog!: HTMLDialogElement;
+  private imageDialogInvokingButton: HTMLButtonElement | null = null;
   private imageUrlInput!: HTMLInputElement;
   private imageAltInput!: HTMLInputElement;
+  private imageAutocomplete!: FileAutocomplete;
+  private workspaceSearchSequence = 0;
+  private readonly pendingWorkspaceSearch = new Map<
+    WorkspaceSearchTarget,
+    {
+      readonly requestId: string;
+      readonly query: string;
+      readonly generation: number;
+    }
+  >();
   private emojiDialog!: HTMLDialogElement;
   private emojiSearchInput!: HTMLInputElement;
   private emojiGrid!: HTMLElement;
@@ -2412,6 +2439,10 @@ export class MarkdownEditorApp {
   private tableDialogSelection: TableDialogSelection | null = null;
   private tableDialogInvokingButton: HTMLButtonElement | null = null;
   private tableDialogOpen = false;
+  private readonly fallbackDialogCancelHandlers = new Map<
+    HTMLDialogElement,
+    (event: KeyboardEvent) => void
+  >();
   private tableDialogColumns = 3;
   private tableDialogRows = 3;
   private tableDialogPreviewColumns = 3;
@@ -2446,6 +2477,24 @@ export class MarkdownEditorApp {
   private tooltip!: HTMLElement;
   private tooltipTarget: HTMLElement | null = null;
   private tooltipPreviousDescribedBy: string | null = null;
+  private readonly richLinkMouseDownHandler = (event: MouseEvent): void => {
+    const anchor = this.richLinkFor(event.target);
+    if (!anchor || event.button !== 0 || !this.linkModifierPressed(event))
+      return;
+    // Keep the browser's native mouse sequence intact so it still emits the
+    // follow-up click. The click handler owns default-navigation prevention.
+    event.stopPropagation();
+  };
+  private readonly richLinkClickHandler = (event: MouseEvent): void => {
+    const anchor = this.richLinkFor(event.target);
+    if (!anchor || event.button !== 0) return;
+    // A normal click must still reach ProseMirror so it can place the caret or
+    // extend a selection, but it must never navigate the Webview itself.
+    event.preventDefault();
+    if (!this.linkModifierPressed(event)) return;
+    event.stopPropagation();
+    this.followRichLink(anchor);
+  };
   private readonly tooltipPointerOverHandler = (event: PointerEvent): void => {
     const target = this.tooltipTargetFor(event.target);
     if (target) this.showTooltip(target);
@@ -2505,6 +2554,12 @@ export class MarkdownEditorApp {
   };
   private readonly writingPointerDownHandler = (event: PointerEvent): void => {
     this.requestTableToolbarReveal(event.target);
+    if (this.linkPickerOpen) {
+      const target = event.target;
+      if (target instanceof Node && this.linkPicker.contains(target)) return;
+      this.closeLinkPicker(true);
+      return;
+    }
     const active = this.activePopup;
     if (!active) return;
     const target = event.target;
@@ -2517,6 +2572,12 @@ export class MarkdownEditorApp {
   };
   private readonly writingFocusInHandler = (event: FocusEvent): void => {
     if (this.materializingSlash) return;
+    if (this.linkPickerOpen) {
+      const target = event.target;
+      if (target instanceof Node && this.linkPicker.contains(target)) return;
+      this.closeLinkPicker(true);
+      return;
+    }
     const active = this.activePopup;
     if (!active) return;
     const target = event.target;
@@ -2540,7 +2601,13 @@ export class MarkdownEditorApp {
     this.handleBlankDocumentPointer(event);
   };
   private readonly writingKeyDownHandler = (event: KeyboardEvent): void => {
-    if (event.key !== "Escape" || !this.activePopup) return;
+    if (event.key !== "Escape") return;
+    if (this.linkPickerOpen) {
+      event.preventDefault();
+      this.closeLinkPicker(true);
+      return;
+    }
+    if (!this.activePopup) return;
     const returnFocus = this.popupReturnFocus ?? this.activePopupToggle;
     const returnToEditor = this.isInsertPopupAnchor(returnFocus);
     this.closeWritingPopups("cancel");
@@ -2632,6 +2699,7 @@ export class MarkdownEditorApp {
       this.emptyLineButton,
       this.blockGapButton,
     );
+    this.buildLinkPicker(this.stage);
     this.root.append(this.stage);
     this.compatibilityEl = makeElement("span", {
       class: "mm-compatibility",
@@ -2806,6 +2874,14 @@ export class MarkdownEditorApp {
     if (this.parseError || !this.initialized) {
       this.view.setProps({ editable: () => false });
     }
+    if (this.mode === "rich") {
+      this.view.dom.addEventListener(
+        "mousedown",
+        this.richLinkMouseDownHandler,
+        true,
+      );
+      this.view.dom.addEventListener("click", this.richLinkClickHandler, true);
+    }
     this.sync = new SyncController(this.version, this.vscode, initial.markdown);
     this.messageHandler = (event) => this.handleMessage(event.data);
     window.addEventListener("message", this.messageHandler);
@@ -2887,6 +2963,12 @@ export class MarkdownEditorApp {
     }
     this.pendingClipboard.clear();
     window.removeEventListener("message", this.messageHandler);
+    this.view.dom.removeEventListener(
+      "mousedown",
+      this.richLinkMouseDownHandler,
+      true,
+    );
+    this.view.dom.removeEventListener("click", this.richLinkClickHandler, true);
     window.removeEventListener("resize", this.writingToolbarResizeHandler);
     window.removeEventListener("resize", this.tableDeletePreviewResizeHandler);
     this.stage.removeEventListener("scroll", this.writingToolbarScrollHandler);
@@ -2921,6 +3003,12 @@ export class MarkdownEditorApp {
     document.removeEventListener("focusin", this.writingFocusInHandler);
     document.removeEventListener("keydown", this.writingKeyDownHandler);
     this.closeWritingPopups();
+    this.closeLinkPicker(false);
+    this.linkAutocomplete?.dispose();
+    this.linkPickerAutocomplete?.dispose();
+    this.imageAutocomplete?.dispose();
+    for (const dialog of this.fallbackDialogCancelHandlers.keys())
+      this.removeFallbackDialogCancel(dialog);
     this.clearBlockGapInsert();
     this.closeEmojiPicker();
     this.closeProfileFeatureDialog();
@@ -4356,6 +4444,7 @@ export class MarkdownEditorApp {
       button.disabled = !inTable || this.profile === "commonmark";
     if (editingDisabled) {
       this.closeWritingPopups();
+      this.closeLinkPicker(false);
       this.closeEmojiPicker();
       this.invalidateProfileFeatureDialog();
     }
@@ -4379,6 +4468,7 @@ export class MarkdownEditorApp {
     this.syncPaused = true;
     if (this.tableDialogOpen) this.closeTableDialog(message);
     this.closeWritingPopups();
+    this.closeLinkPicker(false);
     this.closeEmojiPicker();
     this.invalidateProfileFeatureDialog();
     // Lock native inputs first so text accepted before the rejection is part
@@ -4447,9 +4537,11 @@ export class MarkdownEditorApp {
   private tooltipTargetFor(target: EventTarget | null): HTMLElement | null {
     if (!(target instanceof Element)) return null;
     if (target === this.tooltip || this.tooltip?.contains(target)) return null;
-    const candidate = target.closest<HTMLElement>("[data-tooltip]");
+    const candidate = target.closest<HTMLElement>("[data-tooltip], a[href]");
     if (!candidate || !this.root.contains(candidate)) return null;
-    return candidate.dataset.tooltip?.trim() ? candidate : null;
+    return candidate.dataset.tooltip?.trim() || this.richLinkFor(candidate)
+      ? candidate
+      : null;
   }
 
   private setTooltip(element: HTMLElement, label: string): void {
@@ -4458,7 +4550,14 @@ export class MarkdownEditorApp {
   }
 
   private showTooltip(target: HTMLElement): void {
-    const label = target.dataset.tooltip?.trim();
+    const configuredLabel = target.dataset.tooltip?.trim();
+    const label =
+      configuredLabel ||
+      (this.richLinkFor(target)
+        ? isMac()
+          ? "Cmd+Click to follow link"
+          : "Ctrl+Click to follow link"
+        : "");
     if (!label || this.destroyed) return;
     if (this.tooltipTarget !== target) {
       this.hideTooltip();
@@ -4477,6 +4576,50 @@ export class MarkdownEditorApp {
     this.tooltip.hidden = false;
     this.tooltip.setAttribute("aria-hidden", "false");
     this.positionTooltip(target);
+  }
+
+  private richLinkFor(target: EventTarget | null): HTMLAnchorElement | null {
+    if (this.mode !== "rich" || !this.view || !(target instanceof Element))
+      return null;
+    const anchor = target.closest<HTMLAnchorElement>("a[href]");
+    return anchor && this.view.dom.contains(anchor) ? anchor : null;
+  }
+
+  private linkModifierPressed(event: MouseEvent): boolean {
+    return isMac()
+      ? event.metaKey && !event.altKey
+      : event.ctrlKey && !event.altKey;
+  }
+
+  private followRichLink(anchor: HTMLAnchorElement): void {
+    const href = anchor.getAttribute("href");
+    if (!href) return;
+    if (href.startsWith("#")) {
+      this.scrollToRichFragment(href.slice(1));
+      return;
+    }
+    this.vscode?.postMessage({
+      protocolVersion: PROTOCOL_VERSION,
+      type: "open-link",
+      href,
+    });
+  }
+
+  private scrollToRichFragment(fragment: string): void {
+    if (!fragment) return;
+    const candidates = Array.from(
+      this.view.dom.querySelectorAll<HTMLElement>("[id]"),
+    );
+    let target = candidates.find((element) => element.id === fragment);
+    if (!target) {
+      try {
+        const decoded = decodeURIComponent(fragment);
+        target = candidates.find((element) => element.id === decoded);
+      } catch {
+        // A malformed percent escape cannot identify an existing DOM id.
+      }
+    }
+    target?.scrollIntoView?.({ block: "start" });
   }
 
   private hideTooltip(): void {
@@ -4721,10 +4864,10 @@ export class MarkdownEditorApp {
       "inline-code",
       "code",
     );
-    addButton(
+    const linkButton = addButton(
       "",
       "Insert link",
-      () => this.insertLink(),
+      () => this.insertLink(linkButton),
       "toolbar-link",
       primary,
       false,
@@ -4734,7 +4877,7 @@ export class MarkdownEditorApp {
     const imageButton = addButton(
       "",
       "Insert image",
-      () => this.insertImage(),
+      () => this.insertImage(imageButton),
       "toolbar-image",
       primary,
       false,
@@ -4861,22 +5004,27 @@ export class MarkdownEditorApp {
       return input;
     };
     const link = document.createElement("dialog");
-    link.className = "mm-input-dialog";
+    link.className = "mm-input-dialog mm-link-dialog";
     link.setAttribute("aria-labelledby", "mm-link-dialog-title");
     const linkForm = document.createElement("form");
     linkForm.className = "mm-dialog-form";
     const linkTitle = document.createElement("h2");
     linkTitle.id = "mm-link-dialog-title";
     linkTitle.textContent = "Insert link";
-    this.linkUrlInput = makeField(
-      "Link path or URL",
-      "text",
-      "./docs/example.md",
-    );
+    this.linkUrlInput = makeField("Destination", "text", "./docs/example.md");
     this.linkUrlInput.spellcheck = false;
     this.linkUrlInput.autocapitalize = "off";
     this.linkUrlInput.inputMode = "url";
-    this.linkTextInput = makeField("Text", "text", "Selected text");
+    this.linkAutocomplete = new FileAutocomplete({
+      input: this.linkUrlInput,
+      onQuery: (query) => this.requestWorkspaceFileSearch("link-modal", query),
+      onSelect: (candidate) => {
+        if (!this.linkTextInput.value.trim())
+          this.linkTextInput.value = candidate.fileName;
+      },
+      onEscape: () => this.closeDialog(link),
+    });
+    this.linkTextInput = makeField("Link text", "text", "Selected text");
     const linkActions = document.createElement("div");
     linkActions.className = "mm-dialog-actions";
     const linkCancel = document.createElement("button");
@@ -4898,7 +5046,7 @@ export class MarkdownEditorApp {
     });
     const linkApply = document.createElement("button");
     linkApply.type = "submit";
-    linkApply.textContent = "Apply";
+    linkApply.textContent = "Insert link";
     linkActions.append(linkCancel, unlink, linkApply);
     linkForm.append(
       linkTitle,
@@ -4908,7 +5056,13 @@ export class MarkdownEditorApp {
     );
     linkForm.addEventListener("submit", (event) => {
       event.preventDefault();
+      if (this.linkAutocomplete.isSearchPending()) return;
+      if (this.linkAutocomplete.consumeSubmit()) return;
       this.applyLink(this.linkUrlInput.value.trim(), this.linkTextInput.value);
+      this.closeDialog(link);
+    });
+    link.addEventListener("cancel", (event) => {
+      event.preventDefault();
       this.closeDialog(link);
     });
     link.append(linkForm);
@@ -4916,7 +5070,7 @@ export class MarkdownEditorApp {
     this.linkDialog = link;
 
     const image = document.createElement("dialog");
-    image.className = "mm-input-dialog";
+    image.className = "mm-input-dialog mm-image-dialog";
     image.setAttribute("aria-labelledby", "mm-image-dialog-title");
     const imageForm = document.createElement("form");
     imageForm.className = "mm-dialog-form";
@@ -4928,6 +5082,11 @@ export class MarkdownEditorApp {
       "text",
       "./images/example.png",
     );
+    this.imageAutocomplete = new FileAutocomplete({
+      input: this.imageUrlInput,
+      onQuery: (query) => this.requestWorkspaceFileSearch("image-modal", query),
+      onEscape: () => this.closeDialog(image),
+    });
     this.imageAltInput = makeField("Alt text", "text", "Description");
     const imageActions = document.createElement("div");
     imageActions.className = "mm-dialog-actions";
@@ -4937,7 +5096,7 @@ export class MarkdownEditorApp {
     imageCancel.addEventListener("click", () => this.closeDialog(image));
     const imageApply = document.createElement("button");
     imageApply.type = "submit";
-    imageApply.textContent = "Apply";
+    imageApply.textContent = "Insert image";
     imageActions.append(imageCancel, imageApply);
     imageForm.append(
       imageTitle,
@@ -4947,10 +5106,16 @@ export class MarkdownEditorApp {
     );
     imageForm.addEventListener("submit", (event) => {
       event.preventDefault();
+      if (this.imageAutocomplete.isSearchPending()) return;
+      if (this.imageAutocomplete.consumeSubmit()) return;
       this.applyImage(
         this.imageUrlInput.value.trim(),
         this.imageAltInput.value,
       );
+      this.closeDialog(image);
+    });
+    image.addEventListener("cancel", (event) => {
+      event.preventDefault();
       this.closeDialog(image);
     });
     image.append(imageForm);
@@ -5922,6 +6087,55 @@ export class MarkdownEditorApp {
     this.closeEmojiPicker(false);
   }
 
+  private buildLinkPicker(container: HTMLElement): void {
+    const picker = document.createElement("section");
+    picker.className = "mm-link-picker";
+    picker.dataset.testid = "link-selection-picker";
+    picker.setAttribute("role", "dialog");
+    picker.setAttribute("aria-label", "Insert link");
+    picker.setAttribute("aria-hidden", "true");
+    picker.hidden = true;
+
+    const field = document.createElement("label");
+    field.className = "mm-dialog-field mm-link-picker-field";
+    const caption = document.createElement("span");
+    caption.textContent = "Search / URL";
+    const input = document.createElement("input");
+    input.type = "text";
+    input.placeholder = "./docs/example.md or https://example.com";
+    input.spellcheck = false;
+    input.autocapitalize = "off";
+    input.inputMode = "url";
+    input.dataset.testid = "link-picker-input";
+    input.setAttribute("aria-label", "Link path or URL");
+    field.append(caption, input);
+
+    this.linkPickerInput = input;
+    this.linkPickerAutocomplete = new FileAutocomplete({
+      input,
+      onQuery: (query) => this.requestWorkspaceFileSearch("link-picker", query),
+      onSelect: (candidate) =>
+        this.applyLinkPickerDestination(candidate.relativePath),
+      onEnter: () => this.applyLinkPickerDestination(input.value.trim()),
+      onEscape: () => this.closeLinkPicker(true),
+    });
+
+    const actions = document.createElement("div");
+    actions.className = "mm-link-picker-actions";
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "mm-link-picker-remove";
+    remove.textContent = "Remove link";
+    remove.hidden = true;
+    remove.addEventListener("click", () => this.removeLinkFromPicker());
+    actions.append(remove);
+    picker.append(field, actions);
+    container.append(picker);
+
+    this.linkPicker = picker;
+    this.linkPickerRemoveButton = remove;
+  }
+
   private buildSelectionToolbar(): HTMLElement {
     const toolbar = makeElement("div", {
       class: "mm-floating-toolbar mm-selection-toolbar",
@@ -6135,10 +6349,10 @@ export class MarkdownEditorApp {
       "table",
     );
     tableButton.dataset.gfmOnly = "true";
-    addMenuButton(
+    const imageMenuButton = addMenuButton(
       "Image",
       "Insert image",
-      () => this.insertImage(),
+      () => this.insertImage(imageMenuButton),
       undefined,
       "image",
     );
@@ -6436,6 +6650,7 @@ export class MarkdownEditorApp {
       this.materializeSlashTrigger();
       return;
     }
+    this.closeLinkPicker(false);
     const gapPopupOpen = this.activePopupToggle === this.blockGapButton;
     this.slashTrigger = null;
     this.clearWritingPopupState();
@@ -6541,6 +6756,12 @@ export class MarkdownEditorApp {
 
   private updateSelectionToolbar(selection = this.view.state.selection): void {
     if (!this.selectionToolbar || !this.stage || !this.view) return;
+    if (this.linkPickerOpen) {
+      this.selectionToolbar.hidden = true;
+      this.selectionToolbar.setAttribute("aria-hidden", "true");
+      this.clearSelectionToolbarSelection();
+      return;
+    }
     for (const button of Array.from(
       this.selectionToolbar.querySelectorAll<HTMLButtonElement>("[data-mark]"),
     )) {
@@ -7040,6 +7261,7 @@ export class MarkdownEditorApp {
     this.updateEmptyLineInsert(this.view.state.selection);
     this.updateBlockGapInsert();
     this.positionWritingPopup();
+    this.positionLinkPicker();
   }
 
   private requestTableToolbarReveal(target: EventTarget | null): void {
@@ -7788,17 +8010,172 @@ export class MarkdownEditorApp {
   }
 
   private openDialog(dialog: HTMLDialogElement): void {
+    this.removeFallbackDialogCancel(dialog);
     try {
-      if (typeof dialog.showModal === "function") dialog.showModal();
-      else dialog.setAttribute("open", "true");
+      if (typeof dialog.showModal === "function") {
+        // Keep the browser's native modal/cancel behavior whenever it is
+        // available. The fallback below is only for hosts without
+        // HTMLDialogElement.showModal().
+        dialog.showModal();
+        return;
+      }
     } catch {
-      dialog.setAttribute("open", "true");
+      // A host may expose showModal but fail to implement it. Treat that the
+      // same as an unavailable native dialog and retain Escape cancellation.
     }
+    dialog.setAttribute("open", "true");
+    this.installFallbackDialogCancel(dialog);
   }
 
   private closeDialog(dialog: HTMLDialogElement): void {
+    let invokingButton: HTMLButtonElement | null = null;
+    let restoreFocus = false;
+    if (dialog === this.linkDialog) this.linkAutocomplete.close();
+    if (dialog === this.linkDialog) {
+      invokingButton = this.linkDialogInvokingButton;
+      this.linkDialogInvokingButton = null;
+      this.savedSelection = null;
+      restoreFocus = true;
+    }
+    if (dialog === this.imageDialog) {
+      this.imageAutocomplete.close();
+      invokingButton = this.imageDialogInvokingButton;
+      this.imageDialogInvokingButton = null;
+      this.savedSelection = null;
+      restoreFocus = true;
+    }
+    this.removeFallbackDialogCancel(dialog);
     if (typeof dialog.close === "function") dialog.close();
     else dialog.removeAttribute("open");
+    if (restoreFocus) {
+      if (invokingButton?.isConnected)
+        invokingButton.focus({ preventScroll: true });
+      else if (!this.destroyed) this.view.focus();
+    }
+  }
+
+  private installFallbackDialogCancel(dialog: HTMLDialogElement): void {
+    if (this.fallbackDialogCancelHandlers.has(dialog)) return;
+    const handler = (event: KeyboardEvent): void => {
+      if (
+        event.key !== "Escape" ||
+        event.isComposing ||
+        event.keyCode === 229 ||
+        !dialog.hasAttribute("open")
+      )
+        return;
+      event.preventDefault();
+      event.stopPropagation();
+      const cancelEvent = new Event("cancel", { cancelable: true });
+      const canceled = !dialog.dispatchEvent(cancelEvent);
+      if (!dialog.hasAttribute("open")) {
+        this.removeFallbackDialogCancel(dialog);
+        return;
+      }
+      if (!canceled) this.closeDialog(dialog);
+    };
+    this.fallbackDialogCancelHandlers.set(dialog, handler);
+    dialog.addEventListener("keydown", handler);
+  }
+
+  private removeFallbackDialogCancel(dialog: HTMLDialogElement): void {
+    const handler = this.fallbackDialogCancelHandlers.get(dialog);
+    if (!handler) return;
+    dialog.removeEventListener("keydown", handler);
+    this.fallbackDialogCancelHandlers.delete(dialog);
+  }
+
+  private requestWorkspaceFileSearch(
+    target: WorkspaceSearchTarget,
+    query: string,
+  ): void {
+    if (
+      !this.vscode ||
+      !this.initialized ||
+      this.previewOnly ||
+      query.length > MAX_FILE_SEARCH_QUERY_LENGTH
+    )
+      return;
+    const requestId = `file-search:${++this.workspaceSearchSequence}`;
+    this.pendingWorkspaceSearch.set(target, {
+      requestId,
+      query,
+      generation: this.documentGeneration,
+    });
+    this.vscode.postMessage({
+      protocolVersion: PROTOCOL_VERSION,
+      type: "workspace-file-search",
+      requestId,
+      query,
+      filter: target === "image-modal" ? "image" : "all",
+    });
+  }
+
+  private warmupWorkspaceFileSearch(): void {
+    if (!this.vscode || !this.initialized || this.previewOnly) return;
+    this.vscode.postMessage({
+      protocolVersion: PROTOCOL_VERSION,
+      type: "workspace-file-search-warmup",
+    });
+  }
+
+  private receiveWorkspaceFileSearch(
+    message: WorkspaceFileSearchResultMessage,
+  ): void {
+    let target: WorkspaceSearchTarget | undefined;
+    for (const [candidateTarget, pending] of this.pendingWorkspaceSearch) {
+      if (pending.requestId === message.requestId) {
+        target = candidateTarget;
+        break;
+      }
+    }
+    if (!target) return;
+    const pending = this.pendingWorkspaceSearch.get(target);
+    this.pendingWorkspaceSearch.delete(target);
+    if (!pending) return;
+    const input = this.workspaceSearchInput(target);
+    const autocomplete = this.workspaceSearchAutocomplete(target);
+    if (
+      pending.generation !== this.documentGeneration ||
+      pending.query !== input.value.trim() ||
+      !isWorkspaceFileSearchQuery(input.value)
+    )
+      return;
+    autocomplete.setCandidates(message.candidates);
+    if (target === "link-picker") this.positionLinkPicker();
+  }
+
+  private clearWorkspaceFileSearch(): void {
+    this.pendingWorkspaceSearch.clear();
+    this.linkAutocomplete?.clear();
+    this.linkPickerAutocomplete?.clear();
+    this.imageAutocomplete?.clear();
+  }
+
+  private workspaceSearchInput(
+    target: WorkspaceSearchTarget,
+  ): HTMLInputElement {
+    switch (target) {
+      case "link-picker":
+        return this.linkPickerInput;
+      case "link-modal":
+        return this.linkUrlInput;
+      case "image-modal":
+        return this.imageUrlInput;
+    }
+  }
+
+  private workspaceSearchAutocomplete(
+    target: WorkspaceSearchTarget,
+  ): FileAutocomplete {
+    switch (target) {
+      case "link-picker":
+        return this.linkPickerAutocomplete;
+      case "link-modal":
+        return this.linkAutocomplete;
+      case "image-modal":
+        return this.imageAutocomplete;
+    }
   }
 
   private restoreSelectionObject(selection: Selection | null): boolean {
@@ -7828,28 +8205,177 @@ export class MarkdownEditorApp {
     return { from, to };
   }
 
-  private insertLink(): void {
-    const { from, to } = this.view.state.selection;
-    this.savedSelection = { from, to };
+  private linkHrefForSelection(selection: Selection): string {
     const linkMark = this.schema.marks.link;
-    this.linkUrlInput.value = "";
-    this.linkTextInput.value = this.view.state.doc.textBetween(
-      from,
-      to,
-      "\n",
-      "\n",
-    );
-    if (linkMark) {
-      let href = "";
-      this.view.state.doc.nodesBetween(from, to, (node) => {
-        const mark = node.marks.find(
-          (candidate) => candidate.type === linkMark,
-        );
-        if (mark?.attrs.href && !href) href = String(mark.attrs.href);
-      });
-      this.linkUrlInput.value = href;
+    if (!linkMark) return "";
+    if (selection.empty) {
+      const mark = selection.$from
+        .marks()
+        .find((candidate) => candidate.type === linkMark);
+      return mark?.attrs.href ? String(mark.attrs.href) : "";
     }
+    let href = "";
+    this.view.state.doc.nodesBetween(selection.from, selection.to, (node) => {
+      const mark = node.marks.find((candidate) => candidate.type === linkMark);
+      if (mark?.attrs.href && !href) href = String(mark.attrs.href);
+    });
+    return href;
+  }
+
+  private openLinkPicker(selection: Selection, href: string): void {
+    if (!(selection instanceof TextSelection) || selection.empty) return;
+    this.closeWritingPopups();
+    this.closeEmojiPicker();
+    this.savedSelection = { from: selection.from, to: selection.to };
+    this.linkPickerSelection = selection;
+    this.linkPickerDocumentGeneration = this.documentGeneration;
+    this.linkPickerProfile = this.profile;
+    this.linkPickerOpen = true;
+    this.linkPicker.hidden = false;
+    this.linkPicker.setAttribute("aria-hidden", "false");
+    this.linkPickerRemoveButton.hidden = !href;
+    this.linkPickerInput.value = href;
+    this.linkPickerAutocomplete.open();
+    this.selectionToolbar.hidden = true;
+    this.selectionToolbar.setAttribute("aria-hidden", "true");
+    this.clearSelectionToolbarSelection();
+    this.positionLinkPicker();
+    this.linkPickerInput.focus();
+  }
+
+  private closeLinkPicker(restoreSelection: boolean): void {
+    if (!this.linkPickerOpen) return;
+    const selection = this.linkPickerSelection;
+    const canRestore = Boolean(
+      restoreSelection &&
+      selection &&
+      this.linkPickerDocumentGeneration === this.documentGeneration &&
+      this.linkPickerProfile === this.profile &&
+      selection.$from.doc === this.view.state.doc,
+    );
+    this.linkPickerOpen = false;
+    this.pendingWorkspaceSearch.delete("link-picker");
+    this.linkPickerAutocomplete.close();
+    this.linkPicker.hidden = true;
+    this.linkPicker.setAttribute("aria-hidden", "true");
+    this.linkPicker.style.removeProperty("left");
+    this.linkPicker.style.removeProperty("top");
+    this.linkPickerSelection = null;
+    this.linkPickerDocumentGeneration = -1;
+    this.linkPickerProfile = null;
+    this.linkPickerRemoveButton.hidden = true;
+    this.savedSelection = null;
+    if (canRestore && selection) {
+      this.restoreSelectionObject(selection);
+      this.updateSelectionToolbar(selection);
+    }
+  }
+
+  private applyLinkPickerDestination(href: string): void {
+    if (!href) return;
+    const selection = this.linkPickerSelection;
+    const valid = Boolean(
+      selection &&
+      this.linkPickerDocumentGeneration === this.documentGeneration &&
+      this.linkPickerProfile === this.profile &&
+      selection.$from.doc === this.view.state.doc,
+    );
+    this.closeLinkPicker(false);
+    if (!valid || !selection || !this.restoreSelectionObject(selection)) {
+      this.setNotice(
+        "The document changed while the link picker was open; nothing was applied.",
+        "error",
+      );
+      return;
+    }
+    this.savedSelection = { from: selection.from, to: selection.to };
+    this.applyLink(href, "");
+    this.savedSelection = null;
+  }
+
+  private removeLinkFromPicker(): void {
+    const selection = this.linkPickerSelection;
+    const valid = Boolean(
+      selection &&
+      this.linkPickerDocumentGeneration === this.documentGeneration &&
+      this.linkPickerProfile === this.profile &&
+      selection.$from.doc === this.view.state.doc,
+    );
+    this.closeLinkPicker(false);
+    const mark = this.schema.marks.link;
+    if (
+      !valid ||
+      !selection ||
+      !mark ||
+      !this.restoreSelectionObject(selection)
+    ) {
+      if (!valid)
+        this.setNotice(
+          "The document changed while the link picker was open; nothing was removed.",
+          "error",
+        );
+      return;
+    }
+    this.dispatchTransaction(
+      this.view.state.tr.removeMark(selection.from, selection.to, mark),
+    );
+  }
+
+  private positionLinkPicker(): void {
+    if (
+      !this.linkPickerOpen ||
+      this.linkPicker.hidden ||
+      !this.linkPickerSelection
+    )
+      return;
+    let from: ReturnType<EditorView["coordsAtPos"]>;
+    let to: ReturnType<EditorView["coordsAtPos"]>;
+    try {
+      from = this.view.coordsAtPos(this.linkPickerSelection.from);
+      to = this.view.coordsAtPos(this.linkPickerSelection.to);
+    } catch {
+      return;
+    }
+    const pickerRect = this.linkPicker.getBoundingClientRect();
+    const width = pickerRect.width || 560;
+    const height = pickerRect.height || 240;
+    const viewportWidth =
+      window.innerWidth || document.documentElement.clientWidth;
+    const viewportHeight =
+      window.innerHeight || document.documentElement.clientHeight;
+    let left = (from.left + to.right) / 2 - width / 2;
+    let top = to.bottom + 8;
+    if (
+      viewportHeight > 0 &&
+      top + height > viewportHeight - 8 &&
+      from.top - height - 8 >= 8
+    )
+      top = from.top - height - 8;
+    left = Math.max(8, Math.min(left, Math.max(8, viewportWidth - width - 8)));
+    top = Math.max(8, Math.min(top, Math.max(8, viewportHeight - height - 8)));
+    this.linkPicker.style.left = `${Math.round(left)}px`;
+    this.linkPicker.style.top = `${Math.round(top)}px`;
+  }
+
+  private insertLink(invokingButton?: HTMLButtonElement): void {
+    this.warmupWorkspaceFileSearch();
+    const selection = this.view.state.selection;
+    const { from, to } = selection;
+    this.savedSelection = { from, to };
+    const href = this.linkHrefForSelection(selection);
+    if (selection instanceof TextSelection && !selection.empty) {
+      this.linkDialogInvokingButton = null;
+      this.openLinkPicker(selection, href);
+      return;
+    }
+    this.linkDialogInvokingButton = invokingButton ?? null;
+    this.linkUrlInput.value = "";
+    this.linkTextInput.value = selection.empty
+      ? ""
+      : this.view.state.doc.textBetween(from, to, "\n", "\n");
+    this.linkUrlInput.value = href;
     this.openDialog(this.linkDialog);
+    this.linkAutocomplete.open();
     this.linkUrlInput.focus();
   }
 
@@ -7860,7 +8386,10 @@ export class MarkdownEditorApp {
     const link = mark.create({ href });
     if (selection.from === selection.to && text) {
       this.dispatchTransaction(
-        this.view.state.tr.replaceSelectionWith(this.schema.text(text, [link])),
+        this.view.state.tr.replaceSelectionWith(
+          this.schema.text(text, [link]),
+          false,
+        ),
       );
     } else {
       this.dispatchTransaction(
@@ -7869,14 +8398,17 @@ export class MarkdownEditorApp {
     }
   }
 
-  private insertImage(): void {
+  private insertImage(invokingButton?: HTMLButtonElement): void {
+    this.warmupWorkspaceFileSearch();
     this.savedSelection = {
       from: this.view.state.selection.from,
       to: this.view.state.selection.to,
     };
+    this.imageDialogInvokingButton = invokingButton ?? null;
     this.imageUrlInput.value = "";
     this.imageAltInput.value = "";
     this.openDialog(this.imageDialog);
+    this.imageAutocomplete.open();
     this.imageUrlInput.focus();
   }
 
@@ -8524,6 +9056,7 @@ export class MarkdownEditorApp {
     this.updateEmptyLineInsert(selection);
     this.updateBlockGapInsert();
     this.positionWritingPopup();
+    this.positionLinkPicker();
   }
 
   private updateProfileToolbar(): void {
@@ -8934,6 +9467,8 @@ export class MarkdownEditorApp {
       this.handleSaveResult(message);
     } else if (message.type === "clipboard-result") {
       this.resolveClipboard(message);
+    } else if (message.type === "workspace-file-search-result") {
+      this.receiveWorkspaceFileSearch(message);
     } else if (message.type === "image-import-result") {
       this.imageImport.handleResult(this.view, message);
     } else if (message.type === "error") {
@@ -8968,6 +9503,7 @@ export class MarkdownEditorApp {
   }
 
   private receivePreview(message: HostPreviewMessage): void {
+    this.clearWorkspaceFileSearch();
     this.clipboardAvailable = message.clipboardAvailable === true;
     if (
       message.version < this.version ||
@@ -9066,6 +9602,7 @@ export class MarkdownEditorApp {
   }
 
   receiveDocument(message: DocumentMessage): void {
+    this.clearWorkspaceFileSearch();
     this.clipboardAvailable = message.clipboardAvailable === true;
     if (message.documentId) this.documentId = message.documentId;
     if (message.reason === "save") {
@@ -9474,6 +10011,7 @@ export class MarkdownEditorApp {
           "The document changed while the table dialog was open; nothing was inserted.",
         );
       this.closeWritingPopups();
+      this.closeLinkPicker(false);
       this.closeEmojiPicker();
       this.transientBlanks = null;
       this.documentGeneration += 1;

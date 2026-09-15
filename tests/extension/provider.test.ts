@@ -3,6 +3,20 @@ import MarkdownIt from "markdown-it";
 
 const vscode = vi.hoisted(() => {
   type Listener = (...args: never[]) => void;
+  function normalizePath(value: string): string {
+    const absolute = value.startsWith("/");
+    const segments: string[] = [];
+    for (const segment of value.split("/")) {
+      if (!segment || segment === ".") continue;
+      if (segment === ".." && segments.length > 0 && segments.at(-1) !== "..") {
+        segments.pop();
+      } else if (segment !== ".." || !absolute) {
+        segments.push(segment);
+      }
+    }
+    const normalized = segments.join("/");
+    return absolute ? `/${normalized}` : normalized;
+  }
   class Disposable {
     public constructor(
       public readonly disposeHandler: () => void = () => undefined,
@@ -13,30 +27,111 @@ const vscode = vi.hoisted(() => {
   }
   class Uri {
     public readonly scheme: string;
+    public readonly authority: string;
     public readonly fsPath: string;
     public readonly path: string;
-    private constructor(value: string) {
-      this.scheme = value.includes(":")
-        ? value.slice(0, value.indexOf(":"))
-        : "file";
-      this.fsPath =
-        this.scheme === "file" ? value.replace(/^file:\/\//, "") : value;
-      this.path = this.fsPath;
+    public readonly query: string;
+    public readonly fragment: string;
+    private constructor(
+      value: string,
+      components?: {
+        scheme: string;
+        authority: string;
+        path: string;
+        query: string;
+        fragment: string;
+      },
+    ) {
+      if (components) {
+        this.scheme = components.scheme;
+        this.authority = components.authority;
+        this.path = normalizePath(
+          components.path || (components.scheme === "file" ? "/" : ""),
+        );
+        this.query = components.query;
+        this.fragment = components.fragment;
+        this.fsPath = this.path;
+        return;
+      }
+      const schemeMatch = value.match(/^([a-z][a-z0-9+.-]*):/i);
+      this.scheme = schemeMatch?.[1] ?? "file";
+      const rest = schemeMatch ? value.slice(schemeMatch[0].length) : value;
+      const hash = rest.indexOf("#");
+      const withoutFragment = hash < 0 ? rest : rest.slice(0, hash);
+      this.fragment = hash < 0 ? "" : rest.slice(hash + 1);
+      const query = withoutFragment.indexOf("?");
+      const resource =
+        query < 0 ? withoutFragment : withoutFragment.slice(0, query);
+      this.query = query < 0 ? "" : withoutFragment.slice(query + 1);
+      const authorityMatch = resource.match(/^\/\/([^/]*)(\/.*)?$/);
+      this.authority = authorityMatch?.[1] ?? "";
+      const resourcePath = authorityMatch
+        ? (authorityMatch[2] ?? "/")
+        : resource;
+      this.path = normalizePath(
+        this.scheme === "file" && this.authority
+          ? `//${this.authority}${resourcePath}`
+          : resourcePath || (this.scheme === "file" ? "/" : ""),
+      );
+      this.fsPath = this.scheme === "file" ? this.path : this.path;
     }
     public static file(value: string): Uri {
-      return new Uri(value);
+      return new Uri(`file://${value}`);
     }
     public static parse(value: string): Uri {
       return new Uri(value);
     }
     public static joinPath(base: Uri, ...parts: string[]): Uri {
-      return new Uri(
-        `${base.scheme === "file" ? "file://" : ""}${[base.fsPath, ...parts].join("/")}`,
+      return Uri.fromComponents(
+        base.scheme,
+        base.authority,
+        normalizePath([base.path, ...parts].join("/")),
+        base.query,
+        base.fragment,
+      );
+    }
+    public static fromComponents(
+      scheme: string,
+      authority: string,
+      path: string,
+      query: string,
+      fragment: string,
+    ): Uri {
+      return new Uri("", { scheme, authority, path, query, fragment });
+    }
+    public with(options: {
+      scheme?: string;
+      authority?: string;
+      path?: string;
+      query?: string;
+      fragment?: string;
+    }): Uri {
+      return Uri.fromComponents(
+        options.scheme ?? this.scheme,
+        options.authority ?? this.authority,
+        options.path ?? this.path,
+        options.query ?? this.query,
+        options.fragment ?? this.fragment,
       );
     }
     public toString(): string {
-      return this.scheme === "file" ? `file://${this.fsPath}` : this.fsPath;
+      const authorityPart = this.authority ? `//${this.authority}` : "";
+      const pathPart =
+        authorityPart && !this.path.startsWith("/")
+          ? `/${this.path}`
+          : this.path;
+      return `${this.scheme}:${
+        this.scheme === "file" && !authorityPart ? "//" : authorityPart
+      }${pathPart}${
+        this.query ? `?${this.query}` : ""
+      }${this.fragment ? `#${this.fragment}` : ""}`;
     }
+  }
+  class RelativePattern {
+    public constructor(
+      public readonly base: unknown,
+      public readonly pattern: string,
+    ) {}
   }
   class Position {
     public constructor(
@@ -157,8 +252,9 @@ const vscode = vi.hoisted(() => {
     }
   }
 
-  const documentUri = Uri.file("/workspace/doc.md");
+  const documentUri = Uri.file("/workspace/docs/manual.md");
   const document = new TextDocument(documentUri, "# Original");
+  let workspaceFolder: { uri: Uri; name: string; index: number } | undefined;
   const textDocumentListeners: Array<(event: TextDocumentChangeEvent) => void> =
     [];
   const saveListeners: Array<
@@ -188,6 +284,23 @@ const vscode = vi.hoisted(() => {
     level: "info" | "warning" | "error";
     message: string;
   }> = [];
+  const existingFiles = new Set([
+    "/workspace/docs/guide.md",
+    "/workspace/docs/hoge manual.pdf",
+    "/workspace/docs/design spec.pdf",
+    "/workspace/docs/c#-guide.md",
+    "/workspace/docs/question?guide.md",
+    "/workspace/README.md",
+    "/workspace/root.md",
+    "/workspace/second/root.md",
+    "/workspace-b/docs/hoge manual.pdf",
+    "/workspace/.git/ignored.md",
+    "/workspace/node_modules/ignored.md",
+  ]);
+  const findFilesCalls: Array<{ include: unknown; exclude: unknown }> = [];
+  const openExternalCalls: Uri[] = [];
+  let openExternalResult = true;
+  let openExternalError: Error | undefined;
   const configurationUpdates: Array<{
     section: string;
     key: string;
@@ -260,6 +373,11 @@ const vscode = vi.hoisted(() => {
     fs: {
       async readFile(): Promise<Uint8Array> {
         throw new Error("test file does not exist");
+      },
+      async stat(uri: Uri): Promise<unknown> {
+        if (!existingFiles.has(uri.fsPath))
+          throw new Error(`test file does not exist: ${uri.fsPath}`);
+        return { type: 1, ctime: 0, mtime: 0, size: 0 };
       },
     },
     textDocuments: [document],
@@ -361,8 +479,15 @@ const vscode = vi.hoisted(() => {
         },
       };
     },
-    getWorkspaceFolder(): undefined {
-      return undefined;
+    getWorkspaceFolder():
+      { uri: Uri; name: string; index: number } | undefined {
+      return workspaceFolder;
+    },
+    findFiles(include: unknown, exclude?: unknown): Promise<Uri[]> {
+      findFilesCalls.push({ include, exclude });
+      return Promise.resolve(
+        [...existingFiles].map((filePath) => Uri.file(filePath)),
+      );
     },
   };
   const TextDocumentChangeReason = { Undo: 1, Redo: 2 } as const;
@@ -403,6 +528,13 @@ const vscode = vi.hoisted(() => {
     },
     registerCommand(): Disposable {
       return new Disposable();
+    },
+  };
+  const env = {
+    async openExternal(uri: Uri): Promise<boolean> {
+      openExternalCalls.push(uri);
+      if (openExternalError) throw openExternalError;
+      return openExternalResult;
     },
   };
   const languages = {
@@ -470,12 +602,18 @@ const vscode = vi.hoisted(() => {
     configurationUpdates.length = 0;
     commandCalls.length = 0;
     openWithError = undefined;
+    openExternalCalls.length = 0;
+    findFilesCalls.length = 0;
+    openExternalResult = true;
+    openExternalError = undefined;
+    workspaceFolder = undefined;
   };
   return {
     Disposable,
     Uri,
     Position,
     Range,
+    RelativePattern,
     TextEdit,
     WorkspaceEdit,
     TextDocument,
@@ -486,6 +624,7 @@ const vscode = vi.hoisted(() => {
     window,
     workspace,
     commands,
+    env,
     languages,
     TextDocumentChangeReason,
     __state: {
@@ -504,6 +643,29 @@ const vscode = vi.hoisted(() => {
       userNotifications,
       configurationUpdates,
       commandCalls,
+      openExternalCalls,
+      findFilesCalls,
+      get openExternalResult(): boolean {
+        return openExternalResult;
+      },
+      set openExternalResult(value: boolean) {
+        openExternalResult = value;
+      },
+      get openExternalError(): Error | undefined {
+        return openExternalError;
+      },
+      set openExternalError(value: Error | undefined) {
+        openExternalError = value;
+      },
+      get workspaceFolder():
+        { uri: Uri; name: string; index: number } | undefined {
+        return workspaceFolder;
+      },
+      set workspaceFolder(
+        value: { uri: Uri; name: string; index: number } | undefined,
+      ) {
+        workspaceFolder = value;
+      },
       get openWithError(): Error | undefined {
         return openWithError;
       },
@@ -600,7 +762,7 @@ describe("MarkdownMintEditorProvider", () => {
     expect(openWithCall).toEqual({
       command: "vscode.openWith",
       args: [
-        expect.objectContaining({ fsPath: "/workspace/doc.md" }),
+        expect.objectContaining({ fsPath: "/workspace/docs/manual.md" }),
         "default",
         expect.objectContaining({
           viewColumn: 2,
@@ -609,6 +771,439 @@ describe("MarkdownMintEditorProvider", () => {
         }),
       ],
     });
+    provider.dispose();
+  });
+
+  it.each([
+    "https://example.com/docs?q=1#section",
+    "mailto:user@example.com",
+    "tel:+1-555-0100",
+  ])("opens an allowed external link through VS Code: %s", async (href) => {
+    vscode.__state.reset();
+    const provider = new MarkdownMintEditorProvider(context() as never);
+    const document = vscode.__state.document;
+    await provider.resolveCustomTextEditor(
+      document as never,
+      vscode.__state.panel as never,
+      {} as never,
+    );
+    vscode.__state.panel.webview.receive({ protocolVersion: 1, type: "ready" });
+    vscode.__state.panel.webview.receive({
+      protocolVersion: 1,
+      type: "open-link",
+      href,
+    });
+    await flush();
+
+    expect(
+      vscode.__state.openExternalCalls.map((uri: { toString(): string }) =>
+        uri.toString(),
+      ),
+    ).toEqual([href]);
+    expect(
+      vscode.__state.commandCalls.some(
+        (call: { command: string }) => call.command === "vscode.open",
+      ),
+    ).toBe(false);
+    expect(document.getText()).toBe("# Original");
+    expect(vscode.__state.userNotifications).toHaveLength(0);
+    provider.dispose();
+  });
+
+  it.each([
+    ["./guide.md", "/workspace/docs/guide.md"],
+    ["./hoge%20manual.pdf", "/workspace/docs/hoge manual.pdf"],
+    ["../docs/design%20spec.pdf", "/workspace/docs/design spec.pdf"],
+    ["./c%23-guide.md", "/workspace/docs/c#-guide.md"],
+    ["./question%3Fguide.md", "/workspace/docs/question?guide.md"],
+    ["../README.md", "/workspace/README.md"],
+    ["/root.md", "/workspace/root.md"],
+  ])(
+    "opens a local link with the correct URI base: %s",
+    async (href, fsPath) => {
+      vscode.__state.reset();
+      vscode.__state.workspaceFolder = {
+        uri: vscode.Uri.file("/workspace"),
+        name: "workspace",
+        index: 0,
+      };
+      const provider = new MarkdownMintEditorProvider(context() as never);
+      const document = vscode.__state.document;
+      await provider.resolveCustomTextEditor(
+        document as never,
+        vscode.__state.panel as never,
+        {} as never,
+      );
+      vscode.__state.panel.webview.receive({
+        protocolVersion: 1,
+        type: "ready",
+      });
+      vscode.__state.panel.webview.receive({
+        protocolVersion: 1,
+        type: "open-link",
+        href,
+      });
+      await flush();
+
+      const openCall = [...vscode.__state.commandCalls]
+        .reverse()
+        .find((call: { command: string }) => call.command === "vscode.open");
+      expect(openCall?.args[0]).toMatchObject({ fsPath });
+      expect(vscode.__state.openExternalCalls).toHaveLength(0);
+      expect(vscode.__state.userNotifications).toHaveLength(0);
+      expect(document.getText()).toBe("# Original");
+      provider.dispose();
+    },
+  );
+
+  it("uses the selected workspace folder for a root-relative link in a multi-root workspace", async () => {
+    vscode.__state.reset();
+    vscode.__state.workspaceFolder = {
+      uri: vscode.Uri.file("/workspace/second"),
+      name: "second",
+      index: 1,
+    };
+    const provider = new MarkdownMintEditorProvider(context() as never);
+    const document = vscode.__state.document;
+    await provider.resolveCustomTextEditor(
+      document as never,
+      vscode.__state.panel as never,
+      {} as never,
+    );
+    vscode.__state.panel.webview.receive({ protocolVersion: 1, type: "ready" });
+    vscode.__state.panel.webview.receive({
+      protocolVersion: 1,
+      type: "open-link",
+      href: "/root.md",
+    });
+    await flush();
+
+    const openCall = [...vscode.__state.commandCalls]
+      .reverse()
+      .find((call: { command: string }) => call.command === "vscode.open");
+    expect(openCall?.args[0]).toMatchObject({
+      fsPath: "/workspace/second/root.md",
+    });
+    provider.dispose();
+  });
+
+  it("does not resolve a root-relative link against the filesystem root outside a workspace", async () => {
+    vscode.__state.reset();
+    const provider = new MarkdownMintEditorProvider(context() as never);
+    const document = vscode.__state.document;
+    await provider.resolveCustomTextEditor(
+      document as never,
+      vscode.__state.panel as never,
+      {} as never,
+    );
+    vscode.__state.panel.webview.receive({ protocolVersion: 1, type: "ready" });
+    vscode.__state.panel.webview.receive({
+      protocolVersion: 1,
+      type: "open-link",
+      href: "/docs/guide.md",
+    });
+    await flush();
+
+    expect(vscode.__state.openExternalCalls).toHaveLength(0);
+    expect(vscode.__state.commandCalls).not.toContainEqual(
+      expect.objectContaining({ command: "vscode.open" }),
+    );
+    expect(vscode.__state.userNotifications.at(-1)).toMatchObject({
+      level: "warning",
+      message: expect.stringContaining("outside a workspace"),
+    });
+    provider.dispose();
+  });
+
+  it("preserves remote URI scheme and authority during relative resolution", async () => {
+    const documentUri = vscode.Uri.parse(
+      "vscode-remote://ssh-remote+dev/workspace/docs/manual.md",
+    );
+    const workspaceFolder = {
+      uri: vscode.Uri.parse("vscode-remote://ssh-remote+dev/workspace"),
+      name: "remote",
+      index: 0,
+    };
+    const { classifyLinkNavigation } =
+      await import("../../src/extension/linkNavigation");
+    const target = classifyLinkNavigation(
+      "./design%20spec.pdf",
+      documentUri as never,
+      workspaceFolder as never,
+    );
+
+    expect(target).toMatchObject({
+      kind: "internal",
+      uri: {
+        scheme: "vscode-remote",
+        authority: "ssh-remote+dev",
+        path: "/workspace/docs/design spec.pdf",
+      },
+    });
+  });
+
+  it("rejects malformed percent escapes before opening a local link", async () => {
+    vscode.__state.reset();
+    const provider = new MarkdownMintEditorProvider(context() as never);
+    const document = vscode.__state.document;
+    await provider.resolveCustomTextEditor(
+      document as never,
+      vscode.__state.panel as never,
+      {} as never,
+    );
+    vscode.__state.panel.webview.receive({ protocolVersion: 1, type: "ready" });
+    vscode.__state.panel.webview.receive({
+      protocolVersion: 1,
+      type: "open-link",
+      href: "./broken%2",
+    });
+    await flush();
+
+    expect(vscode.__state.commandCalls).not.toContainEqual(
+      expect.objectContaining({ command: "vscode.open" }),
+    );
+    expect(vscode.__state.openExternalCalls).toHaveLength(0);
+    expect(vscode.__state.userNotifications.at(-1)).toMatchObject({
+      level: "warning",
+      message: "The link target could not be opened: ./broken%2",
+    });
+    provider.dispose();
+  });
+
+  it("warms the URI-scoped index and shares concurrent warm-ups", async () => {
+    vscode.__state.reset();
+    const workspaceFolder = {
+      uri: vscode.Uri.file("/workspace"),
+      name: "workspace",
+      index: 0,
+    };
+    vscode.__state.workspaceFolder = workspaceFolder;
+    const { WorkspaceFileSearchHost } =
+      await import("../../src/extension/workspaceFileSearch");
+    const documentUri = vscode.__state.document.uri;
+    const search = new WorkspaceFileSearchHost();
+    const firstWarmup = search.warmup(
+      documentUri as never,
+      workspaceFolder as never,
+    );
+    const secondWarmup = search.warmup(
+      documentUri as never,
+      workspaceFolder as never,
+    );
+
+    expect(secondWarmup).toBe(firstWarmup);
+    await firstWarmup;
+    const candidates = await search.searchFiles(
+      documentUri as never,
+      workspaceFolder as never,
+      "hoge",
+      "all",
+    );
+
+    expect(candidates[0]?.relativePath).toBe("./hoge%20manual.pdf");
+    expect(vscode.__state.findFilesCalls).toHaveLength(1);
+    search.dispose();
+  });
+
+  it("searches only the active workspace folder and returns encoded relative paths", async () => {
+    vscode.__state.reset();
+    vscode.__state.workspaceFolder = {
+      uri: vscode.Uri.file("/workspace"),
+      name: "workspace",
+      index: 0,
+    };
+    const provider = new MarkdownMintEditorProvider(context() as never);
+    const document = vscode.__state.document;
+    await provider.resolveCustomTextEditor(
+      document as never,
+      vscode.__state.panel as never,
+      {} as never,
+    );
+    vscode.__state.panel.webview.receive({ protocolVersion: 1, type: "ready" });
+    vscode.__state.panel.webview.receive({
+      protocolVersion: 1,
+      type: "workspace-file-search-warmup",
+    });
+    await flush();
+    expect(vscode.__state.findFilesCalls).toHaveLength(1);
+    vscode.__state.panel.webview.receive({
+      protocolVersion: 1,
+      type: "workspace-file-search",
+      requestId: "file-search:1",
+      query: "hoge",
+      filter: "all",
+    });
+    await flush();
+
+    expect(vscode.__state.findFilesCalls).toEqual([
+      {
+        include: expect.objectContaining({
+          base: expect.objectContaining({
+            uri: expect.objectContaining({ fsPath: "/workspace" }),
+          }),
+          pattern: "**/*",
+        }),
+        exclude: undefined,
+      },
+    ]);
+    expect(vscode.__state.panel.webview.messages).toContainEqual(
+      expect.objectContaining({
+        type: "workspace-file-search-result",
+        requestId: "file-search:1",
+        candidates: [
+          expect.objectContaining({
+            fileName: "hoge manual.pdf",
+            directory: "docs/",
+            relativePath: "./hoge%20manual.pdf",
+          }),
+        ],
+      }),
+    );
+
+    vscode.__state.panel.webview.receive({
+      protocolVersion: 1,
+      type: "workspace-file-search",
+      requestId: "file-search:excluded",
+      query: "ignored",
+      filter: "all",
+    });
+    await flush();
+    expect(
+      [...vscode.__state.panel.webview.messages]
+        .reverse()
+        .find(
+          (message) =>
+            typeof message === "object" &&
+            message !== null &&
+            (message as { type?: unknown }).type ===
+              "workspace-file-search-result",
+        ),
+    ).toMatchObject({
+      requestId: "file-search:excluded",
+      candidates: [],
+    });
+    provider.dispose();
+  });
+
+  it("returns no file candidates when the document is outside a workspace", async () => {
+    vscode.__state.reset();
+    const provider = new MarkdownMintEditorProvider(context() as never);
+    const document = vscode.__state.document;
+    await provider.resolveCustomTextEditor(
+      document as never,
+      vscode.__state.panel as never,
+      {} as never,
+    );
+    vscode.__state.panel.webview.receive({ protocolVersion: 1, type: "ready" });
+    vscode.__state.panel.webview.receive({
+      protocolVersion: 1,
+      type: "workspace-file-search",
+      requestId: "file-search:outside",
+      query: "hoge",
+      filter: "all",
+    });
+    await flush();
+
+    expect(vscode.__state.findFilesCalls).toHaveLength(0);
+    expect(vscode.__state.panel.webview.messages).toContainEqual(
+      expect.objectContaining({
+        type: "workspace-file-search-result",
+        requestId: "file-search:outside",
+        candidates: [],
+      }),
+    );
+    provider.dispose();
+  });
+
+  it("opens a separate file and ignores its fragment", async () => {
+    vscode.__state.reset();
+    const provider = new MarkdownMintEditorProvider(context() as never);
+    const document = vscode.__state.document;
+    await provider.resolveCustomTextEditor(
+      document as never,
+      vscode.__state.panel as never,
+      {} as never,
+    );
+    vscode.__state.panel.webview.receive({ protocolVersion: 1, type: "ready" });
+    vscode.__state.panel.webview.receive({
+      protocolVersion: 1,
+      type: "open-link",
+      href: "./guide.md?mode=read#missing-heading",
+    });
+    await flush();
+
+    const openCall = [...vscode.__state.commandCalls]
+      .reverse()
+      .find((call: { command: string }) => call.command === "vscode.open");
+    expect(openCall?.args[0]).toMatchObject({
+      fsPath: "/workspace/docs/guide.md",
+      query: "mode=read",
+      fragment: "",
+    });
+    expect(vscode.__state.userNotifications).toHaveLength(0);
+    provider.dispose();
+  });
+
+  it("reports a missing local link without opening or editing anything", async () => {
+    vscode.__state.reset();
+    const provider = new MarkdownMintEditorProvider(context() as never);
+    const document = vscode.__state.document;
+    await provider.resolveCustomTextEditor(
+      document as never,
+      vscode.__state.panel as never,
+      {} as never,
+    );
+    vscode.__state.panel.webview.receive({ protocolVersion: 1, type: "ready" });
+    vscode.__state.panel.webview.receive({
+      protocolVersion: 1,
+      type: "open-link",
+      href: "./missing.md",
+    });
+    await flush();
+
+    expect(vscode.__state.commandCalls).not.toContainEqual(
+      expect.objectContaining({ command: "vscode.open" }),
+    );
+    expect(vscode.__state.userNotifications).toContainEqual({
+      level: "warning",
+      message: "Link target was not found: ./missing.md",
+    });
+    expect(document.getText()).toBe("# Original");
+    provider.dispose();
+  });
+
+  it.each([
+    "javascript:alert(1)",
+    "command:workbench.action.files.openFile",
+    "vscode://file/workspace/README.md",
+    "vscode-insiders://file/workspace/README.md",
+    "data:text/plain,unsafe",
+    "//example.com/unsafe",
+  ])("rejects an unsafe link without invoking an opener: %s", async (href) => {
+    vscode.__state.reset();
+    const provider = new MarkdownMintEditorProvider(context() as never);
+    const document = vscode.__state.document;
+    await provider.resolveCustomTextEditor(
+      document as never,
+      vscode.__state.panel as never,
+      {} as never,
+    );
+    vscode.__state.panel.webview.receive({ protocolVersion: 1, type: "ready" });
+    vscode.__state.panel.webview.receive({
+      protocolVersion: 1,
+      type: "open-link",
+      href,
+    });
+    await flush();
+
+    expect(vscode.__state.openExternalCalls).toHaveLength(0);
+    expect(vscode.__state.commandCalls).not.toContainEqual(
+      expect.objectContaining({ command: "vscode.open" }),
+    );
+    expect(vscode.__state.userNotifications.at(-1)).toMatchObject({
+      level: "warning",
+    });
+    expect(document.getText()).toBe("# Original");
     provider.dispose();
   });
 
@@ -1135,7 +1730,7 @@ describe("MarkdownMintEditorProvider", () => {
     const tokens = markdownIt.parse("![alt](assets/images/icon.png)", env);
     const html = markdownIt.renderer.render(tokens, markdownIt.options, env);
     expect(html).toContain(
-      'src="vscode-resource:/workspace/assets/images/icon.png"',
+      'src="vscode-resource:/workspace/docs/assets/images/icon.png"',
     );
   });
 });

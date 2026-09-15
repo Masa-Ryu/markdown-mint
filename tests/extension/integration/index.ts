@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
-import { readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import * as path from "node:path";
 import * as vscode from "vscode";
+import { classifyLinkNavigation } from "../../../src/extension/linkNavigation";
+import { WorkspaceFileSearchHost } from "../../../src/extension/workspaceFileSearch";
+import { isImageFileName } from "../../../src/shared/workspaceFileSearch";
 
 const VIEW_TYPE = "markdownMint.editor";
 const TEST_FILE = process.env.MARKDOWN_MINT_TEST_FILE;
@@ -31,6 +34,10 @@ export async function run(): Promise<void> {
   const api = await extension.activate();
   assert.equal(typeof api.extendMarkdownIt, "function");
   assert.equal(typeof api.renderWithNativeMarkdown, "function");
+  await runLinkUriAcceptance(filePath);
+  await runWorkspaceFileSearchAcceptance(filePath);
+  if (process.env.MM_FILE_SEARCH_HOST_BENCHMARK === "1")
+    await runWorkspaceFileSearchHostBenchmark(filePath);
   await runRequiredMarkdownFixtureAcceptance(api);
 
   const commands = await vscode.commands.getCommands(true);
@@ -389,6 +396,311 @@ export async function run(): Promise<void> {
     vscode.ConfigurationTarget.Workspace,
   );
   await vscode.commands.executeCommand("workbench.action.closeAllEditors");
+}
+
+async function runLinkUriAcceptance(filePath: string): Promise<void> {
+  const documentPath = path.join(path.dirname(filePath), "docs", "manual.md");
+  await mkdir(path.dirname(documentPath), { recursive: true });
+  await writeFile(documentPath, "# Link URI acceptance\n");
+
+  const documentUri = vscode.Uri.file(documentPath);
+  const workspaceFolder = vscode.workspace.getWorkspaceFolder(documentUri);
+  assert.ok(workspaceFolder, "the link document is inside the test workspace");
+
+  const localCases = [
+    ["./hoge%20manual.pdf", "hoge manual.pdf"],
+    ["../docs/design%20spec.pdf", "design spec.pdf"],
+    ["./c%23-guide.md", "c#-guide.md"],
+  ] as const;
+  for (const [href, filename] of localCases) {
+    const expectedPath = path.join(path.dirname(documentPath), filename);
+    await writeFile(expectedPath, "link target\n");
+    const target = classifyLinkNavigation(href, documentUri, workspaceFolder);
+    assert.equal(target.kind, "internal", href);
+    if (target.kind !== "internal") continue;
+    assert.equal(target.uri.scheme, documentUri.scheme, href);
+    assert.equal(target.uri.authority, documentUri.authority, href);
+    assert.equal(target.uri.fsPath, expectedPath, href);
+    await vscode.workspace.fs.stat(target.uri);
+  }
+
+  const questionTarget = classifyLinkNavigation(
+    "./question%3Fguide.md",
+    documentUri,
+    workspaceFolder,
+  );
+  assert.equal(questionTarget.kind, "internal");
+  if (questionTarget.kind === "internal") {
+    const expectedQuestionUri = vscode.Uri.file(
+      path.join(path.dirname(documentPath), "question?guide.md"),
+    );
+    assert.equal(questionTarget.uri.path, expectedQuestionUri.path);
+    assert.equal(questionTarget.uri.query, "");
+    assert.equal(questionTarget.uri.fragment, "");
+  }
+
+  const malformed = classifyLinkNavigation(
+    "./broken%2",
+    documentUri,
+    workspaceFolder,
+  );
+  assert.deepEqual(malformed, {
+    kind: "invalid",
+    reason: "malformed",
+  });
+
+  const remoteDocument = vscode.Uri.parse(
+    "vscode-remote://ssh-remote+dev/workspace/docs/manual.md",
+  );
+  const remoteWorkspace = {
+    uri: vscode.Uri.parse("vscode-remote://ssh-remote+dev/workspace"),
+    name: "remote",
+    index: 0,
+  } satisfies vscode.WorkspaceFolder;
+  const remoteTarget = classifyLinkNavigation(
+    "./design%20spec.pdf",
+    remoteDocument,
+    remoteWorkspace,
+  );
+  assert.equal(remoteTarget.kind, "internal");
+  if (remoteTarget.kind === "internal") {
+    assert.equal(remoteTarget.uri.scheme, "vscode-remote");
+    assert.equal(remoteTarget.uri.authority, "ssh-remote+dev");
+    assert.equal(remoteTarget.uri.path, "/workspace/docs/design spec.pdf");
+  }
+}
+
+async function runWorkspaceFileSearchAcceptance(
+  filePath: string,
+): Promise<void> {
+  const documentPath = path.join(path.dirname(filePath), "docs", "search.md");
+  const documentDirectory = path.dirname(documentPath);
+  const specsDirectory = path.join(path.dirname(documentDirectory), "specs");
+  const assetsDirectory = path.join(documentDirectory, "assets");
+  const excludedDirectory = path.join(
+    path.dirname(documentDirectory),
+    "excluded",
+  );
+  await mkdir(documentDirectory, { recursive: true });
+  await mkdir(specsDirectory, { recursive: true });
+  await mkdir(assetsDirectory, { recursive: true });
+  await mkdir(excludedDirectory, { recursive: true });
+  await writeFile(documentPath, "# Search acceptance\n");
+  await writeFile(path.join(documentDirectory, "hoge manual.pdf"), "pdf\n");
+  await writeFile(path.join(specsDirectory, "design spec.pdf"), "pdf\n");
+  await writeFile(path.join(documentDirectory, "c#-guide.md"), "guide\n");
+  await writeFile(path.join(documentDirectory, "percent%guide.md"), "guide\n");
+  await writeFile(path.join(excludedDirectory, "hidden.md"), "hidden\n");
+  for (const extension of [
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".gif",
+    ".webp",
+    ".svg",
+    ".avif",
+    ".bmp",
+  ])
+    await writeFile(path.join(assetsDirectory, `logo${extension}`), "image\n");
+  await writeFile(path.join(assetsDirectory, "notes.md"), "not image\n");
+
+  const documentUri = vscode.Uri.file(documentPath);
+  const workspaceFolder = vscode.workspace.getWorkspaceFolder(documentUri);
+  assert.ok(workspaceFolder, "the autocomplete document is in the workspace");
+  const filesConfiguration = vscode.workspace.getConfiguration(
+    "files",
+    documentUri,
+  );
+  await filesConfiguration.update(
+    "exclude",
+    { "**/excluded/**": true },
+    vscode.ConfigurationTarget.Workspace,
+  );
+  const search = new WorkspaceFileSearchHost();
+  try {
+    const linkCandidates = await search.searchFiles(
+      documentUri,
+      workspaceFolder,
+      "hoge",
+      "all",
+    );
+    assert.deepEqual(linkCandidates[0], {
+      fileName: "hoge manual.pdf",
+      directory: "docs/",
+      relativePath: "./hoge%20manual.pdf",
+    });
+
+    const percentCandidates = await search.searchFiles(
+      documentUri,
+      workspaceFolder,
+      "percent",
+      "all",
+    );
+    assert.equal(percentCandidates[0]?.relativePath, "./percent%25guide.md");
+
+    const parentCandidates = await search.searchFiles(
+      documentUri,
+      workspaceFolder,
+      "../specs/design",
+      "all",
+    );
+    assert.equal(
+      parentCandidates[0]?.relativePath,
+      "../specs/design%20spec.pdf",
+    );
+
+    const imageCandidates = await search.searchFiles(
+      documentUri,
+      workspaceFolder,
+      "logo",
+      "image",
+    );
+    assert.equal(imageCandidates.length, 8);
+    assert.ok(
+      imageCandidates.every((candidate) => isImageFileName(candidate.fileName)),
+    );
+    assert.equal(
+      imageCandidates.some((candidate) => candidate.fileName === "notes.md"),
+      false,
+    );
+
+    const hiddenCandidates = await search.searchFiles(
+      documentUri,
+      workspaceFolder,
+      "hidden",
+      "all",
+    );
+    assert.deepEqual(hiddenCandidates, []);
+
+    const generatedLink = linkCandidates[0];
+    assert.ok(generatedLink, "a real workspace candidate is returned");
+    const resolved = classifyLinkNavigation(
+      generatedLink.relativePath,
+      documentUri,
+      workspaceFolder,
+    );
+    assert.equal(resolved.kind, "internal");
+    if (resolved.kind === "internal") {
+      assert.equal(
+        resolved.uri.fsPath,
+        path.join(documentDirectory, "hoge manual.pdf"),
+      );
+      await vscode.workspace.fs.stat(resolved.uri);
+    }
+
+    const generatedPercentLink = percentCandidates[0];
+    assert.ok(
+      generatedPercentLink,
+      "the percent filename candidate is returned",
+    );
+    const resolvedPercent = classifyLinkNavigation(
+      generatedPercentLink.relativePath,
+      documentUri,
+      workspaceFolder,
+    );
+    assert.equal(resolvedPercent.kind, "internal");
+    if (resolvedPercent.kind === "internal") {
+      assert.equal(
+        resolvedPercent.uri.fsPath,
+        path.join(documentDirectory, "percent%guide.md"),
+      );
+      await vscode.workspace.fs.stat(resolvedPercent.uri);
+    }
+  } finally {
+    search.dispose();
+    await filesConfiguration.update(
+      "exclude",
+      undefined,
+      vscode.ConfigurationTarget.Workspace,
+    );
+  }
+}
+
+async function runWorkspaceFileSearchHostBenchmark(
+  filePath: string,
+): Promise<void> {
+  const documentUri = vscode.Uri.file(filePath);
+  const workspaceFolder = vscode.workspace.getWorkspaceFolder(documentUri);
+  assert.ok(workspaceFolder, "the benchmark document is in the workspace");
+  const samples = Math.max(
+    20,
+    Number.parseInt(process.env.MM_FILE_SEARCH_BENCHMARK_SAMPLES ?? "100", 10),
+  );
+  const search = new WorkspaceFileSearchHost();
+  const warmupStart = performance.now();
+  await search.warmup(documentUri, workspaceFolder);
+  const warmupMilliseconds = performance.now() - warmupStart;
+  const discovered = await vscode.workspace.findFiles(
+    new vscode.RelativePattern(workspaceFolder, "**/*"),
+    undefined,
+  );
+  const cases = [
+    ["Link modal", "hoge", "all"],
+    ["Image modal", "logo", "image"],
+    ["selected-text picker", "hoge", "all"],
+  ] as const;
+  const rows: Array<{
+    readonly surface: string;
+    readonly p50: number;
+    readonly p95: number;
+    readonly p99: number;
+    readonly max: number;
+    readonly over100: number;
+  }> = [];
+  try {
+    for (const [surface, query, filter] of cases) {
+      const timings: number[] = [];
+      for (let index = 0; index < 20; index += 1)
+        await search.searchFiles(documentUri, workspaceFolder, query, filter);
+      for (let index = 0; index < samples; index += 1) {
+        const start = performance.now();
+        const candidates = await search.searchFiles(
+          documentUri,
+          workspaceFolder,
+          query,
+          filter,
+        );
+        assert.ok(candidates.length > 0, `${surface} benchmark has candidates`);
+        timings.push(performance.now() - start);
+      }
+      const sorted = timings.slice().sort((left, right) => left - right);
+      rows.push({
+        surface,
+        p50: percentile(sorted, 0.5),
+        p95: percentile(sorted, 0.95),
+        p99: percentile(sorted, 0.99),
+        max: sorted.at(-1) ?? 0,
+        over100: timings.filter((value) => value > 100).length,
+      });
+    }
+  } finally {
+    search.dispose();
+  }
+
+  console.log(
+    `Real VS Code Extension Host file search benchmark (cache-warm; ${discovered.length} discovered files; index warm-up ${warmupMilliseconds.toFixed(3)}ms)`,
+  );
+  console.log(
+    "These timings cover the Host searchFiles call only; Webview message transport, DOM mutation, and paint opportunity are measured separately by the browser harness.",
+  );
+  console.log("| surface | p50 ms | p95 ms | p99 ms | max ms | >100ms |");
+  console.log("| --- | ---: | ---: | ---: | ---: | ---: |");
+  for (const row of rows)
+    console.log(
+      `| ${row.surface} | ${row.p50.toFixed(3)} | ${row.p95.toFixed(3)} | ${row.p99.toFixed(3)} | ${row.max.toFixed(3)} | ${row.over100} |`,
+    );
+}
+
+function percentile(sorted: readonly number[], fraction: number): number {
+  const index = (sorted.length - 1) * fraction;
+  const lower = Math.floor(index);
+  const upper = Math.ceil(index);
+  if (lower === upper) return sorted[lower] ?? 0;
+  const weight = index - lower;
+  return (
+    (sorted[lower] ?? 0) +
+    ((sorted[upper] ?? 0) - (sorted[lower] ?? 0)) * weight
+  );
 }
 
 async function runRequiredMarkdownFixtureAcceptance(api: {

@@ -9,6 +9,10 @@ export const MAX_OPERATION_ID_LENGTH = 160;
 export const MAX_RESOURCE_URL_LENGTH = 8_192;
 export const MAX_DOCUMENT_ID_LENGTH = 2_048;
 export const MAX_CLIPBOARD_TEXT_LENGTH = MAX_MARKDOWN_LENGTH;
+export const MAX_FILE_SEARCH_QUERY_LENGTH = 256;
+export const MAX_FILE_SEARCH_CANDIDATES = 10;
+export const MAX_FILE_SEARCH_PATH_LENGTH = MAX_RESOURCE_URL_LENGTH;
+export const MAX_FILE_SEARCH_NAME_LENGTH = 1_024;
 export const MAX_IMAGE_IMPORT_BYTES = 10 * 1024 * 1024;
 export const MAX_IMAGE_IMPORT_BASE64_LENGTH =
   Math.ceil(MAX_IMAGE_IMPORT_BYTES / 3) * 4;
@@ -120,6 +124,41 @@ export interface ClipboardWriteMessage {
   readonly type: "clipboard-write";
   readonly requestId: string;
   readonly text: string;
+}
+
+export interface OpenLinkMessage {
+  readonly protocolVersion: typeof PROTOCOL_VERSION;
+  readonly type: "open-link";
+  /** The raw href attribute from the Rich Editor anchor. */
+  readonly href: string;
+}
+
+export type WorkspaceFileSearchFilter = "all" | "image";
+
+export interface WorkspaceFileSearchMessage {
+  readonly protocolVersion: typeof PROTOCOL_VERSION;
+  readonly type: "workspace-file-search";
+  readonly requestId: string;
+  readonly query: string;
+  readonly filter: WorkspaceFileSearchFilter;
+}
+
+export interface WorkspaceFileSearchWarmupMessage {
+  readonly protocolVersion: typeof PROTOCOL_VERSION;
+  readonly type: "workspace-file-search-warmup";
+}
+
+export interface WorkspaceFileSearchCandidateMessage {
+  readonly fileName: string;
+  readonly directory: string;
+  readonly relativePath: string;
+}
+
+export interface WorkspaceFileSearchResultMessage {
+  readonly protocolVersion: typeof PROTOCOL_VERSION;
+  readonly type: "workspace-file-search-result";
+  readonly requestId: string;
+  readonly candidates: readonly WorkspaceFileSearchCandidateMessage[];
 }
 
 export interface ClipboardResultMessage {
@@ -261,6 +300,9 @@ export type WebviewMessage =
   | PreviewRequestMessage
   | RecoverDraftMessage
   | ClipboardWriteMessage
+  | OpenLinkMessage
+  | WorkspaceFileSearchMessage
+  | WorkspaceFileSearchWarmupMessage
   | ImageImportMessage
   | ImageImportUriMessage
   | UserNotificationMessage;
@@ -273,6 +315,7 @@ export type HostMessage =
   | SaveResultMessage
   | RecoveryOpenedMessage
   | ClipboardResultMessage
+  | WorkspaceFileSearchResultMessage
   | ImageImportResultMessage
   | ErrorMessage;
 
@@ -387,6 +430,14 @@ export function isHostMessage(value: unknown): value is HostMessage {
       isOperationId(value.requestId) &&
       typeof value.success === "boolean" &&
       optionalMessage(value.message)
+    );
+  }
+  if (value.type === "workspace-file-search-result") {
+    return (
+      isOperationId(value.requestId) &&
+      Array.isArray(value.candidates) &&
+      value.candidates.length <= MAX_FILE_SEARCH_CANDIDATES &&
+      value.candidates.every(isWorkspaceFileSearchCandidate)
     );
   }
   if (value.type === "image-import-result") {
@@ -545,6 +596,31 @@ export function parseWebviewMessage(
             text: value.text,
           }
         : undefined;
+    case "open-link":
+      return isSafeLinkHref(value.href)
+        ? {
+            protocolVersion: PROTOCOL_VERSION,
+            type: "open-link",
+            href: value.href,
+          }
+        : undefined;
+    case "workspace-file-search":
+      return isOperationId(value.requestId) &&
+        isSafeFileSearchQuery(value.query) &&
+        isWorkspaceFileSearchFilter(value.filter)
+        ? {
+            protocolVersion: PROTOCOL_VERSION,
+            type: "workspace-file-search",
+            requestId: value.requestId,
+            query: value.query,
+            filter: value.filter,
+          }
+        : undefined;
+    case "workspace-file-search-warmup":
+      return {
+        protocolVersion: PROTOCOL_VERSION,
+        type: "workspace-file-search-warmup",
+      };
     case "image-import":
       return isOperationId(value.requestId) &&
         isImageImportFileName(value.fileName) &&
@@ -623,6 +699,20 @@ function isSafeClipboardText(value: unknown): value is string {
   return typeof value === "string" && value.length <= MAX_CLIPBOARD_TEXT_LENGTH;
 }
 
+function isWorkspaceFileSearchFilter(
+  value: unknown,
+): value is WorkspaceFileSearchFilter {
+  return value === "all" || value === "image";
+}
+
+function isSafeFileSearchQuery(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length <= MAX_FILE_SEARCH_QUERY_LENGTH &&
+    !hasControlCharacter(value)
+  );
+}
+
 function isImageImportFileName(value: unknown): value is string {
   return (
     typeof value === "string" &&
@@ -657,12 +747,63 @@ function isRelativeImagePath(value: unknown): value is string {
   );
 }
 
+function isWorkspaceFileSearchCandidate(
+  value: unknown,
+): value is WorkspaceFileSearchCandidateMessage {
+  if (!isRecord(value)) return false;
+  return (
+    isSafeFileSearchName(value.fileName) &&
+    isSafeFileSearchDirectory(value.directory) &&
+    isSafeFileSearchPath(value.relativePath)
+  );
+}
+
+function isSafeFileSearchName(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    value.length <= MAX_FILE_SEARCH_NAME_LENGTH &&
+    !hasControlCharacter(value)
+  );
+}
+
+function isSafeFileSearchDirectory(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    value.length <= MAX_FILE_SEARCH_PATH_LENGTH &&
+    !hasControlCharacter(value) &&
+    !value.includes("\\")
+  );
+}
+
+function isSafeFileSearchPath(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    value.length <= MAX_FILE_SEARCH_PATH_LENGTH &&
+    /^(?:\.\/|\.\.\/)/.test(value) &&
+    !hasControlCharacter(value) &&
+    !value.includes("\\") &&
+    !value.includes("?") &&
+    !value.includes("#")
+  );
+}
+
 function hasControlCharacter(value: string): boolean {
   for (const character of value) {
     const code = character.charCodeAt(0);
     if (code <= 0x1f || (code >= 0x7f && code <= 0x9f)) return true;
   }
   return false;
+}
+
+export function isSafeLinkHref(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    value.length <= MAX_RESOURCE_URL_LENGTH
+  );
 }
 
 function optionalResourceUrl(value: unknown): value is string | undefined {

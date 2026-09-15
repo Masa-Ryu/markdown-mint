@@ -48,7 +48,7 @@ describe("table clipboard parsing", () => {
       readFileSync(
         resolve(
           process.cwd(),
-          "github-markdown-test-suite/assets/clipboard-3x4.tsv",
+          "tests/github-markdown-test-suite/assets/clipboard-3x4.tsv",
         ),
         "utf8",
       ),
