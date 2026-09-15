@@ -97,6 +97,29 @@ The focused browser checks were complete in that build. Native integration was
 exercised separately there; native VS Code visual geometry is kept distinct
 from the browser evidence.
 
+## Selection and Insert popup interaction refinement
+
+In the Rich Editor, pressing Escape from the Selection Toolbar returns focus to
+the editor and collapses a non-empty text selection at its ProseMirror head.
+This is a selection-only transaction with history disabled, so it does not
+change Markdown, dirty state, or host edit messages. The toolbar is hidden after
+the collapse, while dialogs and other modal Escape behavior remain separate.
+
+The shared empty-line Insert popup, opened from either `+` or `/`, keeps focus
+inside its visible, enabled menu items when Tab or Shift+Tab is pressed and
+wraps at either end. Arrow/Home/End navigation remains the existing grid
+behavior. Slash navigation alone does not materialize or consume `/`; Escape
+continues to materialize one literal slash. Block Profile Features are
+generated from `PROFILE_FEATURES` and filtered through `getProfileFeatures` for
+the active GitHub, GitLab, or CommonMark profile. GitHub therefore exposes
+Alert, Details, Math, and Mermaid diagram through the shared existing dialogs,
+while CommonMark exposes none of these profile-specific items.
+
+The corresponding `tests/webview/writing-ux.test.ts` coverage checks forward and
+backward selections, plus/slash Tab wrapping, no-edit slash navigation, Alert
+dialog insertion, accessibility state, and profile switching. Native operating
+system focus traversal and IME candidate UI remain separate manual checks.
+
 ## Mermaid editor modal (0.1.0)
 
 Mermaid Insert and Edit dialogs use a large, viewport-bounded layout with the
