@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.3.0
+
+- Redesign Link and Image file autocomplete with responsive dialogs, a
+  selection-aware Link picker, single active-candidate keyboard and pointer
+  behavior, and workspace-file search exclusions for `.git` and
+  `node_modules`.
+- Preserve raw Markdown destinations, percent-encoded filenames, external
+  link handling, query and fragment behavior, and remote/virtual workspace URI
+  scheme and authority values.
+
 ## 0.20.0
 
 - Interpret multi-cell TSV, HTML-table, and Markdown Mint internal clipboard
