@@ -1811,6 +1811,61 @@ describe("rich editor rendering", () => {
     app.destroy();
   });
 
+  it("cancels Link and Image dialogs on Escape through the dialog fallback", () => {
+    const source = "replace me";
+    const { app, root, messages } = makeApp(source);
+    app.view.dispatch(
+      app.view.state.tr.setSelection(
+        TextSelection.create(app.view.state.doc, 1),
+      ),
+    );
+
+    const linkButton = root.querySelector<HTMLButtonElement>(
+      '[data-testid="toolbar-link"]',
+    )!;
+    linkButton.click();
+    const linkDialog = root.querySelector<HTMLDialogElement>(
+      '[aria-labelledby="mm-link-dialog-title"]',
+    )!;
+    const linkInput = linkDialog.querySelector<HTMLInputElement>("input")!;
+    linkInput.value = "./changed.md";
+    const linkEscape = new KeyboardEvent("keydown", {
+      key: "Escape",
+      bubbles: true,
+      cancelable: true,
+    });
+    linkInput.dispatchEvent(linkEscape);
+
+    expect(linkEscape.defaultPrevented).toBe(true);
+    expect(linkDialog.hasAttribute("open")).toBe(false);
+    expect(document.activeElement).toBe(linkButton);
+    expect(app.view.state.doc.textContent).toBe(source);
+    expect(messages.filter(isEditMessage)).toHaveLength(0);
+
+    const imageButton = root.querySelector<HTMLButtonElement>(
+      '[data-testid="toolbar-image"]',
+    )!;
+    imageButton.click();
+    const imageDialog = root.querySelector<HTMLDialogElement>(
+      '[aria-labelledby="mm-image-dialog-title"]',
+    )!;
+    const imageInput = imageDialog.querySelector<HTMLInputElement>("input")!;
+    imageInput.value = "./changed.png";
+    const imageEscape = new KeyboardEvent("keydown", {
+      key: "Escape",
+      bubbles: true,
+      cancelable: true,
+    });
+    imageInput.dispatchEvent(imageEscape);
+
+    expect(imageEscape.defaultPrevented).toBe(true);
+    expect(imageDialog.hasAttribute("open")).toBe(false);
+    expect(document.activeElement).toBe(imageButton);
+    expect(app.view.state.doc.textContent).toBe(source);
+    expect(messages.filter(isEditMessage)).toHaveLength(0);
+    app.destroy();
+  });
+
   it("keeps external URLs manual and Escape restores the selected link", async () => {
     const source = "replace me";
     const { app, root, messages } = makeApp(source);

@@ -1679,7 +1679,7 @@ class CodeBlockNodeView {
   stopEvent(event: Event): boolean {
     return (
       event.target instanceof Element &&
-      event.target.closest("input,select,textarea,button") !== null
+      event.target.closest("input,select,textarea,button,dialog") !== null
     );
   }
 
@@ -2179,6 +2179,7 @@ export class MarkdownEditorApp {
   private documentGeneration = 0;
   private starterOriginalSource: string | undefined;
   private linkDialog!: HTMLDialogElement;
+  private linkDialogInvokingButton: HTMLButtonElement | null = null;
   private linkUrlInput!: HTMLInputElement;
   private linkTextInput!: HTMLInputElement;
   private linkAutocomplete!: FileAutocomplete;
@@ -2191,6 +2192,7 @@ export class MarkdownEditorApp {
   private linkPickerProfile: DocumentProfile | null = null;
   private linkPickerOpen = false;
   private imageDialog!: HTMLDialogElement;
+  private imageDialogInvokingButton: HTMLButtonElement | null = null;
   private imageUrlInput!: HTMLInputElement;
   private imageAltInput!: HTMLInputElement;
   private imageAutocomplete!: FileAutocomplete;
@@ -2249,6 +2251,10 @@ export class MarkdownEditorApp {
   private tableDialogSelection: TableDialogSelection | null = null;
   private tableDialogInvokingButton: HTMLButtonElement | null = null;
   private tableDialogOpen = false;
+  private readonly fallbackDialogCancelHandlers = new Map<
+    HTMLDialogElement,
+    (event: KeyboardEvent) => void
+  >();
   private tableDialogColumns = 3;
   private tableDialogRows = 3;
   private tableDialogPreviewColumns = 3;
@@ -2793,6 +2799,8 @@ export class MarkdownEditorApp {
     this.linkAutocomplete?.dispose();
     this.linkPickerAutocomplete?.dispose();
     this.imageAutocomplete?.dispose();
+    for (const dialog of this.fallbackDialogCancelHandlers.keys())
+      this.removeFallbackDialogCancel(dialog);
     this.clearBlockGapInsert();
     this.closeEmojiPicker();
     this.closeProfileFeatureDialog();
@@ -4648,10 +4656,10 @@ export class MarkdownEditorApp {
       "inline-code",
       "code",
     );
-    addButton(
+    const linkButton = addButton(
       "",
       "Insert link",
-      () => this.insertLink(),
+      () => this.insertLink(linkButton),
       "toolbar-link",
       primary,
       false,
@@ -4661,7 +4669,7 @@ export class MarkdownEditorApp {
     const imageButton = addButton(
       "",
       "Insert image",
-      () => this.insertImage(),
+      () => this.insertImage(imageButton),
       "toolbar-image",
       primary,
       false,
@@ -4806,6 +4814,7 @@ export class MarkdownEditorApp {
         if (!this.linkTextInput.value.trim())
           this.linkTextInput.value = candidate.fileName;
       },
+      onEscape: () => this.closeDialog(link),
     });
     this.linkTextInput = makeField("Link text", "text", "Selected text");
     const linkActions = document.createElement("div");
@@ -4867,6 +4876,7 @@ export class MarkdownEditorApp {
     this.imageAutocomplete = new FileAutocomplete({
       input: this.imageUrlInput,
       onQuery: (query) => this.requestWorkspaceFileSearch("image-modal", query),
+      onEscape: () => this.closeDialog(image),
     });
     this.imageAltInput = makeField("Alt text", "text", "Description");
     const imageActions = document.createElement("div");
@@ -6129,10 +6139,10 @@ export class MarkdownEditorApp {
       "table",
     );
     tableButton.dataset.gfmOnly = "true";
-    addMenuButton(
+    const imageMenuButton = addMenuButton(
       "Image",
       "Insert image",
-      () => this.insertImage(),
+      () => this.insertImage(imageMenuButton),
       undefined,
       "image",
     );
@@ -7605,19 +7615,79 @@ export class MarkdownEditorApp {
   }
 
   private openDialog(dialog: HTMLDialogElement): void {
+    this.removeFallbackDialogCancel(dialog);
     try {
-      if (typeof dialog.showModal === "function") dialog.showModal();
-      else dialog.setAttribute("open", "true");
+      if (typeof dialog.showModal === "function") {
+        // Keep the browser's native modal/cancel behavior whenever it is
+        // available. The fallback below is only for hosts without
+        // HTMLDialogElement.showModal().
+        dialog.showModal();
+        return;
+      }
     } catch {
-      dialog.setAttribute("open", "true");
+      // A host may expose showModal but fail to implement it. Treat that the
+      // same as an unavailable native dialog and retain Escape cancellation.
     }
+    dialog.setAttribute("open", "true");
+    this.installFallbackDialogCancel(dialog);
   }
 
   private closeDialog(dialog: HTMLDialogElement): void {
+    let invokingButton: HTMLButtonElement | null = null;
+    let restoreFocus = false;
     if (dialog === this.linkDialog) this.linkAutocomplete.close();
-    if (dialog === this.imageDialog) this.imageAutocomplete.close();
+    if (dialog === this.linkDialog) {
+      invokingButton = this.linkDialogInvokingButton;
+      this.linkDialogInvokingButton = null;
+      this.savedSelection = null;
+      restoreFocus = true;
+    }
+    if (dialog === this.imageDialog) {
+      this.imageAutocomplete.close();
+      invokingButton = this.imageDialogInvokingButton;
+      this.imageDialogInvokingButton = null;
+      this.savedSelection = null;
+      restoreFocus = true;
+    }
+    this.removeFallbackDialogCancel(dialog);
     if (typeof dialog.close === "function") dialog.close();
     else dialog.removeAttribute("open");
+    if (restoreFocus) {
+      if (invokingButton?.isConnected)
+        invokingButton.focus({ preventScroll: true });
+      else if (!this.destroyed) this.view.focus();
+    }
+  }
+
+  private installFallbackDialogCancel(dialog: HTMLDialogElement): void {
+    if (this.fallbackDialogCancelHandlers.has(dialog)) return;
+    const handler = (event: KeyboardEvent): void => {
+      if (
+        event.key !== "Escape" ||
+        event.isComposing ||
+        event.keyCode === 229 ||
+        !dialog.hasAttribute("open")
+      )
+        return;
+      event.preventDefault();
+      event.stopPropagation();
+      const cancelEvent = new Event("cancel", { cancelable: true });
+      const canceled = !dialog.dispatchEvent(cancelEvent);
+      if (!dialog.hasAttribute("open")) {
+        this.removeFallbackDialogCancel(dialog);
+        return;
+      }
+      if (!canceled) this.closeDialog(dialog);
+    };
+    this.fallbackDialogCancelHandlers.set(dialog, handler);
+    dialog.addEventListener("keydown", handler);
+  }
+
+  private removeFallbackDialogCancel(dialog: HTMLDialogElement): void {
+    const handler = this.fallbackDialogCancelHandlers.get(dialog);
+    if (!handler) return;
+    dialog.removeEventListener("keydown", handler);
+    this.fallbackDialogCancelHandlers.delete(dialog);
   }
 
   private requestWorkspaceFileSearch(
@@ -7886,15 +7956,17 @@ export class MarkdownEditorApp {
     this.linkPicker.style.top = `${Math.round(top)}px`;
   }
 
-  private insertLink(): void {
+  private insertLink(invokingButton?: HTMLButtonElement): void {
     const selection = this.view.state.selection;
     const { from, to } = selection;
     this.savedSelection = { from, to };
     const href = this.linkHrefForSelection(selection);
     if (selection instanceof TextSelection && !selection.empty) {
+      this.linkDialogInvokingButton = null;
       this.openLinkPicker(selection, href);
       return;
     }
+    this.linkDialogInvokingButton = invokingButton ?? null;
     this.linkUrlInput.value = "";
     this.linkTextInput.value = selection.empty
       ? ""
@@ -7924,11 +7996,12 @@ export class MarkdownEditorApp {
     }
   }
 
-  private insertImage(): void {
+  private insertImage(invokingButton?: HTMLButtonElement): void {
     this.savedSelection = {
       from: this.view.state.selection.from,
       to: this.view.state.selection.to,
     };
+    this.imageDialogInvokingButton = invokingButton ?? null;
     this.imageUrlInput.value = "";
     this.imageAltInput.value = "";
     this.openDialog(this.imageDialog);

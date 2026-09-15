@@ -220,6 +220,22 @@ async function testCodeHeader(page) {
   await page.keyboard.press("Escape");
   await noEdits(page, before, "cancel language chooser");
   await page.locator(".mm-code-language-trigger").click();
+  await page
+    .locator(
+      '.mm-code-language-menu:not([hidden]) [data-mm-language-option=""]',
+    )
+    .click();
+  await page
+    .locator(".mm-code-language-confirm-dialog[open]")
+    .waitFor({ state: "visible" });
+  await page.keyboard.press("Escape");
+  assert.equal(
+    await page.locator("dialog[open]").count(),
+    0,
+    "code language removal Escape left an open dialog",
+  );
+  await noEdits(page, before, "cancel code language removal confirmation");
+  await page.locator(".mm-code-language-trigger").click();
   await input.fill("custom-language");
   await page.keyboard.press("Enter");
   await expectSource(
@@ -2277,6 +2293,117 @@ async function testRichEditorLinks(page) {
   await noEdits(page, tocBefore, "TOC fragment navigation");
 }
 
+async function testModalEscapeCancellation(page) {
+  const expectEditorContinuation = async (expected, label) => {
+    await caret(page, `${rich} > p:first-child`, -1);
+    await page.keyboard.type("X");
+    await expectSource(page, expected);
+    assert.equal(
+      await page.locator("dialog[open]").count(),
+      0,
+      `${label}: dialog reopened while continuing to edit`,
+    );
+  };
+
+  await load(page, "Before");
+  await caret(page, `${rich} > p:first-child`, -1);
+  const linkBefore = await saved(page);
+  const linkButton = page.locator('[data-testid="toolbar-link"]');
+  await linkButton.click();
+  const linkDialog = page.locator(
+    'dialog[aria-labelledby="mm-link-dialog-title"]',
+  );
+  await linkDialog.waitFor({ state: "visible" });
+  await linkDialog.locator("input").first().fill("./changed.md");
+  await page.keyboard.press("Escape");
+  assert.equal(
+    await page.locator("dialog[open]").count(),
+    0,
+    "Link Escape left an open dialog",
+  );
+  assert.equal(
+    await linkButton.evaluate((element) => document.activeElement === element),
+    true,
+    "Link Escape did not restore focus to its invoker",
+  );
+  await noEdits(page, linkBefore, "Link modal Escape cancellation");
+  await expectEditorContinuation("BeforeX", "Link modal Escape");
+
+  await load(page, "Before");
+  await caret(page, `${rich} > p:first-child`, -1);
+  const imageBefore = await saved(page);
+  const imageButton = page.locator('[data-testid="toolbar-image"]');
+  await imageButton.click();
+  const imageDialog = page.locator(
+    'dialog[aria-labelledby="mm-image-dialog-title"]',
+  );
+  await imageDialog.waitFor({ state: "visible" });
+  await imageDialog.locator("input").first().fill("./changed.png");
+  await page.keyboard.press("Escape");
+  assert.equal(
+    await page.locator("dialog[open]").count(),
+    0,
+    "Image Escape left an open dialog",
+  );
+  assert.equal(
+    await imageButton.evaluate((element) => document.activeElement === element),
+    true,
+    "Image Escape did not restore focus to its invoker",
+  );
+  await noEdits(page, imageBefore, "Image modal Escape cancellation");
+  await expectEditorContinuation("BeforeX", "Image modal Escape");
+
+  await load(page, "Before");
+  const tableBefore = await saved(page);
+  const tableButton = page.locator('[data-testid="toolbar-table"]');
+  await tableButton.click();
+  await page.locator(".mm-table-dialog[open]").waitFor({ state: "visible" });
+  await page.keyboard.press("Escape");
+  assert.equal(
+    await page.locator("dialog[open]").count(),
+    0,
+    "Table Escape left an open dialog",
+  );
+  await noEdits(page, tableBefore, "Table modal Escape cancellation");
+  await expectEditorContinuation("BeforeX", "Table modal Escape");
+
+  await load(page, "Before");
+  const emojiBefore = await saved(page);
+  const emojiButton = page.locator('[data-testid="toolbar-emoji"]');
+  await emojiButton.click();
+  await page.locator(".mm-emoji-dialog[open]").waitFor({ state: "visible" });
+  await page.keyboard.press("Escape");
+  assert.equal(
+    await page.locator("dialog[open]").count(),
+    0,
+    "Emoji Escape left an open dialog",
+  );
+  await noEdits(page, emojiBefore, "Emoji modal Escape cancellation");
+  await expectEditorContinuation("BeforeX", "Emoji modal Escape");
+
+  await load(page, "Before");
+  const mermaidBefore = await saved(page);
+  const mermaidButton = page.locator('[data-profile-feature="mermaid"]');
+  await mermaidButton.click();
+  const mermaidDialog = page.locator('[data-feature-dialog="true"][open]');
+  await mermaidDialog.waitFor({ state: "visible" });
+  await mermaidDialog
+    .locator('[data-feature-field="body"]')
+    .fill("flowchart TD\n    A --> B");
+  await page.keyboard.press("Escape");
+  assert.equal(
+    await page.locator("dialog[open]").count(),
+    0,
+    "ProfileFeature Escape left an open dialog",
+  );
+  await noEdits(
+    page,
+    mermaidBefore,
+    "ProfileFeature modal Escape cancellation",
+  );
+  await expectEditorContinuation("BeforeX", "ProfileFeature modal Escape");
+}
+
 async function testWorkspaceFileAutocomplete(page) {
   await load(page, "Target");
   await caret(page, `${rich} > p`, 0, -1);
@@ -3668,6 +3795,7 @@ async function main() {
       testExpandedCodeVerticalNavigation,
       testSelectionAndModifiers,
       testRichEditorLinks,
+      testModalEscapeCancellation,
       testWorkspaceFileAutocomplete,
       testVerticalGoalAndEmptyEdges,
       testNestedDetailsAndComposition,
