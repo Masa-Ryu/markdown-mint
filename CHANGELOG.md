@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.20.0
+
+- Interpret multi-cell TSV, HTML-table, and Markdown Mint internal clipboard
+  payloads pasted outside the Rich Editor's existing tables as a header-first
+  Markdown table, while keeping ordinary multiline text, one-cell pastes,
+  CommonMark, code, raw, and native text-oriented surfaces on their normal
+  paste paths.
+- Preserve displayed cell strings and internal rich content where safe, use
+  the internal → TSV → HTML priority lazily, reject malformed or oversized
+  matrices as a whole at the shared 10,000-cell limit, and keep the existing
+  table paste, expansion, copy, cut, and selection behavior. Table HTML with
+  no safe fallback never reaches the native HTML parser, and spreadsheet paste
+  checks the final serialized Markdown against the shared two-million UTF-16
+  code-unit source limit before committing the ProseMirror transaction.
+
 ## 0.2.0
 
 - Add local PNG, JPEG/JPG, GIF, WebP, and SVG image import to the Rich Editor

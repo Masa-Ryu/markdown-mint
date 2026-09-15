@@ -18,12 +18,7 @@ import {
   wrapIn,
 } from "prosemirror-commands";
 import { keymap } from "prosemirror-keymap";
-import {
-  DOMSerializer,
-  Fragment,
-  type ResolvedPos,
-  Node as PMNode,
-} from "prosemirror-model";
+import { Fragment, type ResolvedPos, Node as PMNode } from "prosemirror-model";
 import type { Schema } from "prosemirror-model";
 import {
   EditorState,
@@ -44,6 +39,8 @@ import {
 import { liftTarget } from "prosemirror-transform";
 import {
   isHostMessage,
+  MAX_CLIPBOARD_TEXT_LENGTH,
+  MAX_MARKDOWN_LENGTH,
   PROTOCOL_VERSION,
   type ClipboardResultMessage,
   type EditRejectedMessage,
@@ -131,6 +128,24 @@ import {
 } from "../core/visualRendering";
 import { isBlankSpacingNode } from "../core";
 import { mergeMarkdownSnapshots } from "../shared/threeWayMerge";
+import {
+  createEmptyTableNode,
+  createTableNodeFromMatrix,
+  detectSpreadsheetPaste,
+  cellFromClipboard,
+  hasClipboardTableMarkup,
+  matrixToHtml,
+  matrixToTsv,
+  MAX_CLIPBOARD_CELLS,
+  parseClipboardHtml,
+  parseClipboardHtmlWithStatus,
+  parseInternalMatrix,
+  parseInternalMatrixWithStatus,
+  parseTsv,
+  parseTsvWithStatus,
+  TABLE_CLIPBOARD_MIME,
+  tableSelectionMatrix,
+} from "./tableClipboard";
 import {
   ImageImportController,
   type ImageImportControllerOptions,
@@ -245,14 +260,6 @@ export interface PendingEdit {
   markdown: string;
 }
 
-export interface TableMatrix {
-  values: string[][];
-  rows: number;
-  columns: number;
-  /** ProseMirror JSON is used only for our bounded internal clipboard MIME. */
-  cellJson?: unknown[][];
-}
-
 interface SavedSelection {
   from: number;
   to: number;
@@ -299,6 +306,11 @@ interface TableDialogSelection {
   documentGeneration: number;
 }
 
+interface TableInsertionOptions {
+  spreadsheetPaste?: boolean;
+  onRejected?: () => void;
+}
+
 interface ProfileFeatureEditTarget {
   position: number;
   node: PMNode;
@@ -323,9 +335,8 @@ type TableToolbarAction =
   | "table-numbering"
   | "table-delete";
 
-const TABLE_CLIPBOARD_MIME = "application/x-markdown-mint-table";
-const MAX_CLIPBOARD_CELLS = 10_000;
 const TRANSIENT_BLANK_META = "markdown-mint-transient-blank";
+const SPREADSHEET_TABLE_PASTE_META = "markdown-mint-spreadsheet-table-paste";
 
 const COMMON_EMOJI: ReadonlyArray<{
   emoji: string;
@@ -382,15 +393,6 @@ function isMac(): boolean {
     typeof navigator !== "undefined" &&
     /Mac|iPhone|iPad/.test(navigator.platform)
   );
-}
-
-function escapeHtml(value: string): string {
-  return value
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#39;");
 }
 
 function resolveDisplayUrl(source: string, base: string | undefined): string {
@@ -602,210 +604,39 @@ function selectionForDocument(selection: Selection, doc: PMNode): Selection {
   }
 }
 
-function cellText(cell: PMNode): string {
-  // textBetween keeps hard breaks as newlines while still returning a useful
-  // plain-text representation for the system clipboard.
-  return cell
-    .textBetween(0, cell.content.size, "\n", "\n")
-    .replace(/\u00a0/g, " ");
-}
-
-function tableSelectionMatrix(selection: CellSelection): TableMatrix | null {
-  const selected = selectedTableRect(selection);
-  if (!selected) return null;
-  const { table, map, rect, tableStart } = selected;
-  const values: string[][] = [];
-  const cellJson: unknown[][] = [];
-  for (let row = rect.top; row < rect.bottom; row += 1) {
-    const line: string[] = [];
-    const jsonLine: unknown[] = [];
-    for (let column = rect.left; column < rect.right; column += 1) {
-      const pos = map.positionAt(row, column, table);
-      const cell = table.nodeAt(pos);
-      line.push(cell ? cellText(cell) : "");
-      jsonLine.push(cell?.toJSON() ?? null);
-    }
-    values.push(line);
-    cellJson.push(jsonLine);
-  }
-  // Keep the values even when the selected table is empty. `tableStart` is
-  // intentionally read above to make this helper fail early for malformed
-  // selections in a way that is easy to diagnose in browser tests.
-  void tableStart;
-  return {
-    values,
-    rows: values.length,
-    columns: values[0]?.length ?? 0,
-    cellJson,
-  };
-}
-
-function matrixToTsv(matrix: TableMatrix): string {
-  const quote = (cell: string) =>
-    /[\t\n\r"]/.test(cell) ? `"${cell.replaceAll('"', '""')}"` : cell;
-  return matrix.values.map((row) => row.map(quote).join("\t")).join("\n");
-}
-
-function matrixToHtml(matrix: TableMatrix, schema: Schema): string {
-  const serializer = DOMSerializer.fromSchema(schema);
-  return `<table><tbody>${matrix.values
-    .map(
-      (row, rowIndex) =>
-        `<tr>${row
-          .map((cell, columnIndex) => {
-            const json = matrix.cellJson?.[rowIndex]?.[columnIndex];
-            try {
-              if (json) {
-                const cellNode: PMNode = PMNode.fromJSON(schema, json);
-                const holder = document.createElement("div");
-                holder.appendChild(
-                  serializer.serializeFragment(cellNode.content),
-                );
-                return `<td>${holder.innerHTML}</td>`;
-              }
-            } catch {
-              // The plain text fallback below is the safe behavior for stale data.
-            }
-            return `<td>${escapeHtml(cell).replace(/\n/g, "<br>")}</td>`;
-          })
-          .join("")}</tr>`,
-    )
-    .join("")}</tbody></table>`;
-}
-
-function parseTsv(value: string): TableMatrix | null {
-  if (!value.includes("\t") && !value.includes("\n") && !value.includes("\r"))
-    return null;
-  const values: string[][] = [];
-  let row: string[] = [];
-  let field = "";
-  let quoted = false;
-  for (let index = 0; index < value.length; index += 1) {
-    const character = value[index];
-    if (character === '"') {
-      if (quoted && value[index + 1] === '"') {
-        field += '"';
-        index += 1;
-      } else {
-        quoted = !quoted;
-      }
-    } else if (!quoted && character === "\t") {
-      row.push(field);
-      field = "";
-    } else if (!quoted && (character === "\n" || character === "\r")) {
-      if (character === "\r" && value[index + 1] === "\n") index += 1;
-      row.push(field);
-      values.push(row);
-      row = [];
-      field = "";
-    } else {
-      field += character;
-    }
-  }
-  row.push(field);
-  // Clipboard implementations append a final newline. It does not represent
-  // an additional row, while an intentionally blank middle row does.
-  if (!(row.length === 1 && row[0] === "" && values.length > 0))
-    values.push(row);
-  const columns = Math.max(0, ...values.map((row) => row.length));
-  for (const row of values) while (row.length < columns) row.push("");
-  return { values, rows: values.length, columns };
-}
-
-function parseClipboardHtml(value: string): TableMatrix | null {
-  if (!value || typeof DOMParser === "undefined") return null;
-  const parsed = new DOMParser().parseFromString(value, "text/html");
-  const table = parsed.querySelector("table");
-  if (!table) return null;
-  const extractText = (cell: Element): string => {
-    const walker = parsed.createTreeWalker(cell, NodeFilter.SHOW_ALL);
-    let output = "";
-    let node: Node | null;
-    while ((node = walker.nextNode())) {
-      if (node.nodeType === Node.TEXT_NODE) output += node.textContent ?? "";
-      else if (
-        node.nodeType === Node.ELEMENT_NODE &&
-        (node as Element).tagName === "BR"
-      )
-        output += "\n";
-    }
-    return output;
-  };
-  const rows = Array.from(table.querySelectorAll("tr")).map((row) =>
-    Array.from(row.querySelectorAll(":scope > th, :scope > td")).map((cell) =>
-      extractText(cell),
+function isTextOrientedPasteTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof Element)) return false;
+  return Boolean(
+    target.closest(
+      "textarea, input, .mm-source-textarea, .mm-alert-body-editor, .mm-code-block-pre, .mm-code-block-view, .mm-rendered-node, .mm-diagram-source, .mm-math-block",
     ),
   );
-  if (!rows.length) return null;
-  const columns = Math.max(0, ...rows.map((row) => row.length));
-  for (const row of rows) while (row.length < columns) row.push("");
-  return { values: rows, rows: rows.length, columns };
 }
 
-function parseInternalMatrix(value: string): TableMatrix | null {
-  if (!value || value.length > 2_000_000) return null;
-  try {
-    const parsed = JSON.parse(value) as {
-      values?: unknown;
-      cellJson?: unknown;
-    };
+function isTextOrientedPasteSelection(selection: Selection): boolean {
+  if (
+    selection instanceof NodeSelection &&
+    ["code_block", "raw_block", "raw_inline"].includes(selection.node.type.name)
+  )
+    return true;
+  for (let depth = selection.$from.depth; depth > 0; depth -= 1) {
     if (
-      !Array.isArray(parsed.values) ||
-      parsed.values.length === 0 ||
-      parsed.values.length > MAX_CLIPBOARD_CELLS
-    )
-      return null;
-    const values = parsed.values.map((row) =>
-      Array.isArray(row)
-        ? row.map((cell) => (typeof cell === "string" ? cell : ""))
-        : null,
-    );
-    if (
-      values.some(
-        (row) => !row || row.length === 0 || row.length > MAX_CLIPBOARD_CELLS,
+      ["code_block", "raw_block", "raw_inline"].includes(
+        selection.$from.node(depth).type.name,
       )
     )
-      return null;
-    const rows = values as string[][];
-    const columns = Math.max(...rows.map((row) => row.length));
-    if (rows.length * columns > MAX_CLIPBOARD_CELLS) return null;
-    for (const row of rows) while (row.length < columns) row.push("");
-    const result: TableMatrix = { values: rows, rows: rows.length, columns };
-    if (Array.isArray(parsed.cellJson))
-      result.cellJson = parsed.cellJson as unknown[][];
-    return result;
-  } catch {
-    return null;
+      return true;
   }
+  return false;
 }
 
-function safeCellContent(schema: Schema, cell: PMNode, text: string): PMNode {
-  const paragraphType = schema.nodes.paragraph;
-  if (!paragraphType) return cell;
-  const paragraph = paragraphType.create(
-    null,
-    text ? schema.text(text) : undefined,
-  );
-  return cell.type.create(cell.attrs, paragraph);
-}
-
-function cellFromClipboard(
-  schema: Schema,
-  target: PMNode,
-  text: string,
-  json: unknown,
-): PMNode {
+function readClipboardData(clipboard: DataTransfer, type: string): string {
   try {
-    if (json && typeof json === "object") {
-      const candidate = PMNode.fromJSON(schema, json);
-      const role = candidate.type.spec.tableRole;
-      if (role === "cell" || role === "header_cell")
-        return target.type.create(target.attrs, candidate.content);
-    }
+    const value = clipboard.getData(type);
+    return typeof value === "string" ? value : "";
   } catch {
-    // Clipboard data is untrusted. Fall through to a text-only cell.
+    return "";
   }
-  return safeCellContent(schema, target, text);
 }
 
 function replaceTableCells(
@@ -3558,7 +3389,7 @@ export class MarkdownEditorApp {
     return false;
   }
 
-  private dispatchTransaction(tr: Transaction): void {
+  private dispatchTransaction(tr: Transaction): boolean {
     const oldSelection = this.view.state.selection;
     const rootTransientMeta = tr.getMeta(TRANSIENT_BLANK_META) as
       TransientBlankTransactionMeta | undefined;
@@ -3569,6 +3400,11 @@ export class MarkdownEditorApp {
     const committedTransient =
       rootTransientMeta?.kind !== "append" &&
       this.commitTransientBlanksInTransaction(tr);
+    if (
+      tr.getMeta(SPREADSHEET_TABLE_PASTE_META) === true &&
+      !this.spreadsheetPasteWithinMarkdownLimit(tr, committedTransient)
+    )
+      return false;
     const applied = this.view.state.applyTransaction(tr);
     const transactions = applied.transactions;
     const editTarget = this.profileFeatureEditTarget;
@@ -3602,33 +3438,8 @@ export class MarkdownEditorApp {
     if (committedTransient && applied.transactions.length > 0)
       this.transientBlanks = null;
 
-    if (appendMeta?.kind === "append") {
-      let from = Number(appendMeta.from);
-      let to = Number(appendMeta.to);
-      const count = Number(appendMeta.count ?? 1);
-      const metaIndex = transactions.findIndex(
-        (transaction) =>
-          (
-            transaction.getMeta(TRANSIENT_BLANK_META) as
-              TransientBlankTransactionMeta | undefined
-          )?.kind === "append",
-      );
-      if (metaIndex >= 0) {
-        for (const transaction of transactions.slice(metaIndex + 1)) {
-          from = transaction.mapping.map(from, 1);
-          to = transaction.mapping.map(to, -1);
-          if (to < from) to = from;
-        }
-      }
-      if (
-        Number.isFinite(from) &&
-        Number.isFinite(to) &&
-        to > from &&
-        Number.isInteger(count) &&
-        count > 0
-      )
-        this.transientBlanks = { from, to, count };
-    }
+    const appendedTransient = this.mapAppendedTransientBlankRange(transactions);
+    if (appendedTransient) this.transientBlanks = appendedTransient;
 
     let transientOnly = false;
     let discardedTransient = false;
@@ -3712,6 +3523,7 @@ export class MarkdownEditorApp {
       this.updateToolbarState(oldSelection, this.view.state.selection, {
         revealTableToolbar: selectionSet || docChanged || discardedTransient,
       });
+    return true;
   }
 
   private commitTransientBlanksInTransaction(tr: Transaction): boolean {
@@ -3762,6 +3574,40 @@ export class MarkdownEditorApp {
     if (range.to < range.from) range.to = range.from;
   }
 
+  private mapAppendedTransientBlankRange(
+    transactions: readonly Transaction[],
+  ): TransientBlankRange | null {
+    const metaIndex = transactions.findIndex(
+      (transaction) =>
+        (
+          transaction.getMeta(TRANSIENT_BLANK_META) as
+            TransientBlankTransactionMeta | undefined
+        )?.kind === "append",
+    );
+    if (metaIndex < 0) return null;
+    const appendMeta = transactions[metaIndex]?.getMeta(
+      TRANSIENT_BLANK_META,
+    ) as TransientBlankTransactionMeta | undefined;
+    if (appendMeta?.kind !== "append") return null;
+    let from = Number(appendMeta.from);
+    let to = Number(appendMeta.to);
+    const count = Number(appendMeta.count ?? 1);
+    for (const transaction of transactions.slice(metaIndex + 1)) {
+      from = transaction.mapping.map(from, 1);
+      to = transaction.mapping.map(to, -1);
+      if (to < from) to = from;
+    }
+    if (
+      !Number.isFinite(from) ||
+      !Number.isFinite(to) ||
+      to <= from ||
+      !Number.isInteger(count) ||
+      count <= 0
+    )
+      return null;
+    return { from, to, count };
+  }
+
   private transientBlankNodes(): Array<{
     node: PMNode;
     from: number;
@@ -3775,7 +3621,14 @@ export class MarkdownEditorApp {
   private transientBlankHasContent(): boolean {
     const range = this.transientBlanks;
     if (!range) return false;
-    const nodes = this.transientBlankNodes();
+    return this.transientBlankHasContentInState(this.view.state, range);
+  }
+
+  private transientBlankHasContentInState(
+    state: EditorState,
+    range: TransientBlankRange,
+  ): boolean {
+    const nodes = topLevelRangeNodes(state.doc, range);
     if (nodes.length !== range.count) return true;
     return nodes.some(
       ({ node }) => node.type.name !== "paragraph" || node.content.size > 0,
@@ -3833,24 +3686,95 @@ export class MarkdownEditorApp {
     return this.serializeCurrent() ?? this.lastValidMarkdown;
   }
 
+  private transientBlankRangeAfterTransactions(
+    transactions: readonly Transaction[],
+    committedTransient: boolean,
+  ): TransientBlankRange | null {
+    const appended = this.mapAppendedTransientBlankRange(transactions);
+    if (appended) return appended;
+    if (committedTransient || !this.transientBlanks) return null;
+    const range = { ...this.transientBlanks };
+    for (const transaction of transactions) {
+      range.from = transaction.mapping.map(range.from, 1);
+      range.to = transaction.mapping.map(range.to, -1);
+      if (range.to < range.from) range.to = range.from;
+    }
+    return range;
+  }
+
+  private documentForSerializationForState(
+    state: EditorState,
+    transientBlanks: TransientBlankRange | null,
+  ): PMNode {
+    if (
+      !transientBlanks ||
+      this.transientBlankHasContentInState(state, transientBlanks)
+    )
+      return state.doc;
+    return removeTopLevelRange(state.doc, transientBlanks);
+  }
+
+  private serializeMarkdownForState(
+    state: EditorState,
+    transientBlanks: TransientBlankRange | null,
+  ): string {
+    const serialized = this.core.serializeMarkdown(
+      this.documentForSerializationForState(state, transientBlanks),
+      this.previousSnapshot,
+    );
+    return serializeStarterSource(
+      state,
+      this.starterOriginalSource,
+      serialized,
+    );
+  }
+
+  /**
+   * Check a spreadsheet table paste against the final source before the
+   * ProseMirror state is committed. The candidate uses the same plugin,
+   * starter-source, and transient-blank serialization path as a real edit.
+   */
+  private spreadsheetPasteWithinMarkdownLimit(
+    tr: Transaction,
+    committedTransient: boolean,
+  ): boolean {
+    const applied = this.view.state.applyTransaction(tr);
+    const transientBlanks = this.transientBlankRangeAfterTransactions(
+      applied.transactions,
+      committedTransient,
+    );
+    let markdown: string;
+    try {
+      markdown = this.serializeMarkdownForState(applied.state, transientBlanks);
+    } catch {
+      this.notifyHost(
+        "warning",
+        "Table paste could not be serialized safely and was rejected.",
+      );
+      return false;
+    }
+    if (markdown.length <= MAX_MARKDOWN_LENGTH) return true;
+    this.notifyHost(
+      "warning",
+      `Table paste would exceed the ${MAX_MARKDOWN_LENGTH.toLocaleString("en-US")}-character Markdown source limit.`,
+    );
+    return false;
+  }
+
   private documentForSerialization(): PMNode {
-    const range = this.transientBlanks;
-    if (!range || this.transientBlankHasContent()) return this.view.state.doc;
-    return removeTopLevelRange(this.view.state.doc, range);
+    return this.documentForSerializationForState(
+      this.view.state,
+      this.transientBlanks,
+    );
   }
 
   private serializeCurrent(): string | null {
     if (this.parseError && this.preservedSource !== null)
       return this.preservedSource;
     try {
-      const serialized = this.core.serializeMarkdown(
-        this.documentForSerialization(),
-        this.previousSnapshot,
-      );
-      const markdown = serializeStarterSource(
+      const markdown = this.serializeMarkdownForState(
         this.view.state,
-        this.starterOriginalSource,
-        serialized,
+        this.transientBlanks,
       );
       this.serializationError = null;
       this.lastNotificationKey = null;
@@ -7871,26 +7795,32 @@ export class MarkdownEditorApp {
       this.setNotice("Tables are unavailable in CommonMark.");
       return false;
     }
-    const table = this.schema.nodes.table;
-    const row = this.schema.nodes.table_row;
-    const cell = this.schema.nodes.table_cell;
-    const header = this.schema.nodes.table_header ?? cell;
-    const paragraph = this.schema.nodes.paragraph;
-    if (!table || !row || !cell || !header || !paragraph) return false;
-    const normalizedColumns = Math.max(1, Math.min(20, Math.round(columns)));
-    const normalizedRows = Math.max(1, Math.min(50, Math.round(rows)));
-    const makeCells = (type: typeof cell): PMNode[] =>
-      Array.from({ length: normalizedColumns }, () =>
-        type.create(null, paragraph.create()),
-      );
-    const headerCells = makeCells(header);
-    const bodyRows = Array.from({ length: normalizedRows - 1 }, () =>
-      row.create(null, makeCells(cell)),
+    const normalizedColumns = Math.max(
+      1,
+      Math.min(20, Math.round(Number.isFinite(columns) ? columns : 3)),
     );
-    const node = table.create(null, [
-      row.create(null, headerCells),
-      ...bodyRows,
-    ]);
+    const normalizedRows = Math.max(
+      1,
+      Math.min(50, Math.round(Number.isFinite(rows) ? rows : 3)),
+    );
+    const node = createEmptyTableNode(
+      this.schema,
+      normalizedColumns,
+      normalizedRows,
+    );
+    if (!node) return false;
+    return this.insertTableNode(node, savedSelection);
+  }
+
+  /** Insert an already-sized table without applying the Insert Table limits. */
+  private insertTableNode(
+    node: PMNode,
+    savedSelection: Selection = this.view.state.selection,
+    options: TableInsertionOptions = {},
+  ): boolean {
+    const table = this.schema.nodes.table;
+    const paragraph = this.schema.nodes.paragraph;
+    if (!table || !paragraph) return false;
     const state = this.view.state;
     let transaction: Transaction;
     try {
@@ -7972,8 +7902,13 @@ export class MarkdownEditorApp {
         }
       }
     }
+    if (options.spreadsheetPaste)
+      transaction = transaction.setMeta(SPREADSHEET_TABLE_PASTE_META, true);
     transaction.scrollIntoView();
-    this.dispatchTransaction(transaction);
+    if (!this.dispatchTransaction(transaction)) {
+      options.onRejected?.();
+      return false;
+    }
     this.view.focus();
     return true;
   }
@@ -9524,39 +9459,243 @@ export class MarkdownEditorApp {
 
   private handlePaste(view: EditorView, event: ClipboardEvent): boolean {
     if (!event.clipboardData) return false;
-    if (view.state.selection instanceof BlockBoundarySelection) {
-      // Materialize the insertion point, then let ProseMirror's native paste
-      // pipeline handle the clipboard payload and its MIME-specific parsing.
-      this.materializeBoundary(view.state.selection.head);
+    const selection = view.state.selection;
+    if (
+      isTextOrientedPasteTarget(event.target) ||
+      isTextOrientedPasteSelection(selection)
+    )
+      return false;
+
+    const payload = {
+      internal: readClipboardData(event.clipboardData, TABLE_CLIPBOARD_MIME),
+      text: readClipboardData(event.clipboardData, "text/plain"),
+      html: readClipboardData(event.clipboardData, "text/html"),
+    };
+    const context = tableContext(selection);
+    if (!context) {
+      const detected = detectSpreadsheetPaste(payload);
+      const hasHtmlTable = hasClipboardTableMarkup(payload.html);
+      // CommonMark keeps ProseMirror's plain-text paste behavior even when a
+      // spreadsheet also supplies HTML. This avoids letting the generic
+      // clipboard parser turn an HTML table into a Markdown table.
+      if (this.profile === "commonmark") {
+        const tableFallbackText =
+          payload.text ||
+          (detected.kind === "matrix" || detected.kind === "single-cell"
+            ? matrixToTsv(detected.matrix)
+            : "");
+        if (hasHtmlTable) {
+          if (
+            this.canEditBlock() &&
+            tableFallbackText &&
+            tableFallbackText.length <= MAX_CLIPBOARD_TEXT_LENGTH
+          ) {
+            if (
+              selection instanceof BlockBoundarySelection &&
+              !this.materializeBoundary(selection.head)
+            )
+              return false;
+            this.view.pasteText(tableFallbackText, event);
+            event.preventDefault();
+            return true;
+          }
+          this.notifyHost(
+            "warning",
+            detected.kind === "too-large"
+              ? `Table paste is too large. Markdown Mint supports up to ${MAX_CLIPBOARD_CELLS.toLocaleString("en-US")} pasted cells.`
+              : "Table paste could not be parsed safely and was rejected.",
+          );
+          event.preventDefault();
+          return true;
+        }
+        if (this.canEditBlock() && detected.kind !== "none") {
+          if (selection instanceof BlockBoundarySelection) {
+            if (!this.materializeBoundary(selection.head)) return false;
+          }
+          const plainText =
+            payload.text ||
+            (detected.kind === "matrix" || detected.kind === "single-cell"
+              ? matrixToTsv(detected.matrix)
+              : "");
+          if (plainText) {
+            this.view.pasteText(plainText, event);
+            event.preventDefault();
+            return true;
+          }
+        }
+        if (selection instanceof BlockBoundarySelection)
+          this.materializeBoundary(selection.head);
+        return false;
+      }
+      if (!this.canEditBlock()) {
+        if (hasHtmlTable) {
+          event.preventDefault();
+          return true;
+        }
+        if (selection instanceof BlockBoundarySelection)
+          this.materializeBoundary(selection.head);
+        return false;
+      }
+      if (
+        !(selection instanceof TextSelection) &&
+        !(selection instanceof BlockBoundarySelection)
+      )
+        return false;
+
+      if (detected.kind === "too-large") {
+        this.notifyHost(
+          "warning",
+          `Table paste is too large. Markdown Mint supports up to ${MAX_CLIPBOARD_CELLS.toLocaleString("en-US")} pasted cells.`,
+        );
+        event.preventDefault();
+        return true;
+      }
+      if (detected.kind === "single-cell") {
+        const value = payload.text || detected.matrix.values[0]?.[0] || "";
+        if (!value) return false;
+        if (selection instanceof BlockBoundarySelection) {
+          if (!this.materializeBoundary(selection.head)) return false;
+        }
+        this.view.pasteText(value, event);
+        event.preventDefault();
+        return true;
+      }
+      if (detected.kind === "matrix") {
+        const tableNode = createTableNodeFromMatrix(
+          this.schema,
+          detected.matrix,
+        );
+        let pasteRejected = false;
+        if (
+          tableNode &&
+          this.insertTableNode(tableNode, selection, {
+            spreadsheetPaste: true,
+            onRejected: () => {
+              pasteRejected = true;
+            },
+          })
+        ) {
+          event.preventDefault();
+          return true;
+        }
+        if (pasteRejected) {
+          event.preventDefault();
+          return true;
+        }
+      }
+      if (hasHtmlTable) {
+        if (
+          payload.text &&
+          payload.text.length <= MAX_CLIPBOARD_TEXT_LENGTH &&
+          (selection instanceof TextSelection ||
+            selection instanceof BlockBoundarySelection)
+        ) {
+          if (
+            selection instanceof BlockBoundarySelection &&
+            !this.materializeBoundary(selection.head)
+          )
+            return false;
+          this.view.pasteText(payload.text, event);
+          event.preventDefault();
+          return true;
+        }
+        this.notifyHost(
+          "warning",
+          "Table paste could not be parsed safely and was rejected.",
+        );
+        event.preventDefault();
+        return true;
+      }
+      if (selection instanceof BlockBoundarySelection)
+        // Materialize the insertion point, then let ProseMirror's native paste
+        // pipeline handle non-table clipboard payloads.
+        this.materializeBoundary(selection.head);
       return false;
     }
-    const context = tableContext(view.state.selection);
-    if (!context) return false;
-    const html = event.clipboardData.getData("text/html");
-    const text = event.clipboardData.getData("text/plain");
-    const internal = parseInternalMatrix(
-      event.clipboardData.getData(TABLE_CLIPBOARD_MIME),
-    );
-    const htmlMatrix = parseClipboardHtml(html);
-    const tsvMatrix = parseTsv(text);
-    const isCellSelection = view.state.selection instanceof CellSelection;
+
+    const isCellSelection = selection instanceof CellSelection;
+    const hasHtmlTable = hasClipboardTableMarkup(payload.html);
+
+    // Evaluate clipboard flavors in priority order and stop as soon as one
+    // valid candidate is found. In particular, a lower-priority malformed or
+    // oversized HTML flavor must not veto valid internal Markdown Mint or TSV
+    // data.
+    const internalResult = parseInternalMatrixWithStatus(payload.internal);
+    if (internalResult.failure === "too-large") {
+      this.notifyHost(
+        "warning",
+        `Table paste is too large. Markdown Mint supports up to ${MAX_CLIPBOARD_CELLS.toLocaleString("en-US")} pasted cells.`,
+      );
+      event.preventDefault();
+      return true;
+    }
+    let matrix = internalResult.matrix;
+    if (!matrix) {
+      const tsvResult = parseTsvWithStatus(
+        payload.text.includes("\t") ? payload.text : "",
+      );
+      if (tsvResult.failure === "too-large") {
+        this.notifyHost(
+          "warning",
+          `Table paste is too large. Markdown Mint supports up to ${MAX_CLIPBOARD_CELLS.toLocaleString("en-US")} pasted cells.`,
+        );
+        event.preventDefault();
+        return true;
+      }
+      matrix = tsvResult.matrix;
+    }
+    if (!matrix && hasHtmlTable) {
+      const htmlResult = parseClipboardHtmlWithStatus(payload.html);
+      if (htmlResult.failure === "too-large") {
+        this.notifyHost(
+          "warning",
+          `Table paste is too large. Markdown Mint supports up to ${MAX_CLIPBOARD_CELLS.toLocaleString("en-US")} pasted cells.`,
+        );
+        event.preventDefault();
+        return true;
+      }
+      matrix = htmlResult.matrix;
+    }
+
     // Plain text in an ordinary text selection must continue through
     // ProseMirror's native paste pipeline. Only table-shaped clipboard data
     // (or a CellSelection, which has historically accepted a 1x1 fallback)
-    // belongs to the table replacement path.
-    if (!isCellSelection && !internal && !htmlMatrix && !tsvMatrix)
+    // belongs to the table replacement path. A table-shaped HTML flavor with
+    // no safe matrix must never fall through to ProseMirror's HTML parser.
+    if (!isCellSelection && !matrix) {
+      if (hasHtmlTable) {
+        if (payload.text && payload.text.length <= MAX_CLIPBOARD_TEXT_LENGTH) {
+          this.view.pasteText(payload.text, event);
+          event.preventDefault();
+          return true;
+        }
+        this.notifyHost(
+          "warning",
+          "Table paste could not be parsed safely and was rejected.",
+        );
+        event.preventDefault();
+        return true;
+      }
       return false;
+    }
     if (this.profile === "commonmark") {
       this.setNotice("Table paste is unavailable in CommonMark.");
       event.preventDefault();
       return true;
     }
-    const matrix =
-      internal ??
-      htmlMatrix ??
-      tsvMatrix ??
-      (text ? { values: [[text]], rows: 1, columns: 1 } : null);
-    if (!matrix) return false;
+    if (!matrix && payload.text)
+      matrix = { values: [[payload.text]], rows: 1, columns: 1 };
+    if (!matrix) {
+      if (hasHtmlTable) {
+        this.notifyHost(
+          "warning",
+          "Table paste could not be parsed safely and was rejected.",
+        );
+        event.preventDefault();
+        return true;
+      }
+      return false;
+    }
     const selectedRows = context.rect.bottom - context.rect.top;
     const selectedColumns = context.rect.right - context.rect.left;
     if (
@@ -9578,7 +9717,11 @@ export class MarkdownEditorApp {
       matrix.cellJson,
     );
     this.dispatchTransaction(
-      this.replaceTablePreservingSelection(view.state.tr, context, tableNode),
+      this.replaceTablePreservingSelection(
+        view.state.tr,
+        context,
+        tableNode,
+      ).setMeta(SPREADSHEET_TABLE_PASTE_META, true),
     );
     event.preventDefault();
     return true;
@@ -9597,3 +9740,5 @@ export {
   parseTsv,
   tableSelectionMatrix,
 };
+
+export type { TableMatrix } from "./tableClipboard";
