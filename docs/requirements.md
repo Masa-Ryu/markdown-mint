@@ -29,10 +29,14 @@ system IME candidate UI remains unverified.
 
 ## Repository layout and VSIX package boundary
 
-Repository assets are separated by their consumer. `assets/menu/` contains
-toolbar and table-operation SVGs, while `assets/icon/` contains the Marketplace
-PNG and Alert/status SVGs. SVG sources remain build-time `?raw` imports and are
-embedded into the JavaScript bundles; the runtime `media/` CSS remains separate.
+Repository assets are separated by their consumer:
+
+- `assets/icon/` — Marketplace extension icon (`icon.png`).
+- `assets/menu/common/` — Markdown Mint common UI / toolbar icons.
+- `assets/menu/github/` — GitHub-specific Alert icons.
+
+SVG sources remain build-time `?raw` imports and are embedded into the
+JavaScript bundles; the runtime `media/` CSS remains separate.
 
 README-only media is stored under `docs/media/`, and the Markdown fixtures are
 under `tests/md/`. The GitHub Markdown test suite, including its local images,
