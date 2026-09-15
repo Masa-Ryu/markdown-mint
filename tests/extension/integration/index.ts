@@ -539,7 +539,7 @@ async function runWorkspaceFileSearchAcceptance(
     const parentCandidates = await search.searchFiles(
       documentUri,
       workspaceFolder,
-      "design spec",
+      "../specs/design",
       "all",
     );
     assert.equal(
