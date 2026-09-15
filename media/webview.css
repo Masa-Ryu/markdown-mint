@@ -853,14 +853,14 @@ textarea:focus-visible {
   max-height: min(48vh, 320px);
   margin-top: 6px;
   overflow-y: auto;
-  border: 1px solid var(--vscode-quickInput-foreground, var(--mm-control-border));
-  border-radius: 4px;
-  background: var(--vscode-quickInput-background, var(--mm-control-background));
-  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.28);
+  border: 0;
+  border-radius: 0;
+  background: transparent;
 }
 .mm-file-autocomplete[hidden] {
   display: none;
 }
+.mm-file-autocomplete-loading,
 .mm-file-autocomplete-empty {
   display: grid;
   min-height: 100%;
@@ -869,9 +869,15 @@ textarea:focus-visible {
   color: var(--vscode-descriptionForeground, var(--mm-control-foreground));
   text-align: center;
 }
+.mm-file-autocomplete-loading {
+  color: var(--vscode-descriptionForeground, var(--mm-control-foreground));
+}
 .mm-file-autocomplete-footer {
   min-width: 0;
-  margin-top: 5px;
+  margin-top: 8px;
+  padding: 6px 2px 0;
+  border-top: 1px solid
+    var(--vscode-textSeparator-foreground, var(--mm-control-border));
   overflow: hidden;
   color: var(--vscode-descriptionForeground, var(--mm-control-foreground));
   font-size: 0.85em;
@@ -897,6 +903,12 @@ textarea:focus-visible {
   cursor: pointer;
   outline: none;
 }
+.mm-file-autocomplete-option:not(.is-active):hover {
+  background: var(
+    --vscode-list-hoverBackground,
+    var(--mm-control-hover-background)
+  );
+}
 .mm-file-autocomplete-option.is-active {
   color: var(
     --vscode-list-activeSelectionForeground,
@@ -906,6 +918,8 @@ textarea:focus-visible {
     --vscode-list-activeSelectionBackground,
     var(--mm-control-hover-background)
   );
+  box-shadow: inset 2px 0 0
+    var(--vscode-contrastActiveBorder, var(--vscode-focusBorder, #007fd4));
   outline: none;
 }
 .mm-file-autocomplete-name {
@@ -1481,6 +1495,11 @@ body.vscode-high-contrast-light .mm-empty-line-insert,
 body.vscode-high-contrast-light .mm-block-gap-insert {
   border-color: var(--mm-contrast-border);
 }
+body.vscode-high-contrast .mm-file-autocomplete-option.is-active,
+body.vscode-high-contrast-light .mm-file-autocomplete-option.is-active {
+  outline: 1px solid var(--mm-contrast-border);
+  outline-offset: -1px;
+}
 
 @media (forced-colors: active) {
   button,
@@ -1501,8 +1520,13 @@ body.vscode-high-contrast-light .mm-block-gap-insert {
   }
   button:hover:not(:disabled),
   select:hover:not(:disabled),
-  .mm-table-grid-cell.is-preview {
+  .mm-table-grid-cell.is-preview,
+  .mm-file-autocomplete-option:not(.is-active):hover {
     border-color: Highlight;
+  }
+  .mm-file-autocomplete-option.is-active {
+    outline: 1px solid Highlight;
+    outline-offset: -1px;
   }
   .mm-popup-toggle[aria-expanded="true"],
   .mm-empty-line-insert:hover,

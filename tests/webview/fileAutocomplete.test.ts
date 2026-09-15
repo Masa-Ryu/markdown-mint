@@ -1,5 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { FileAutocomplete } from "../../src/webview/fileAutocomplete";
+import {
+  DEFAULT_FILE_AUTOCOMPLETE_DEBOUNCE_MS,
+  FileAutocomplete,
+} from "../../src/webview/fileAutocomplete";
 import type { WorkspaceFileCandidate } from "../../src/shared/workspaceFileSearch";
 
 function candidate(
@@ -60,6 +63,72 @@ afterEach(() => {
 });
 
 describe("FileAutocomplete active candidate interaction", () => {
+  it("dispatches the default search without the legacy 75ms debounce", () => {
+    expect(DEFAULT_FILE_AUTOCOMPLETE_DEBOUNCE_MS).toBe(0);
+    const onQuery = vi.fn();
+    const input = document.createElement("input");
+    document.body.append(input);
+    const autocomplete = new FileAutocomplete({
+      input,
+      onQuery,
+    });
+    autocomplete.open();
+
+    dispatchInput(input, "h");
+
+    expect(onQuery).toHaveBeenCalledWith("h");
+    autocomplete.dispose();
+  });
+
+  it("separates loading, results, and empty states", () => {
+    const { input, autocomplete } = createAutocomplete();
+    dispatchInput(input, "h");
+    const popup = document.querySelector<HTMLElement>(".mm-file-autocomplete")!;
+
+    expect(popup.dataset.searchState).toBe("loading");
+    expect(popup.querySelector(".mm-file-autocomplete-loading")).not.toBeNull();
+    expect(popup.querySelector(".mm-file-autocomplete-empty")).toBeNull();
+
+    autocomplete.setCandidates([candidate("alpha.md")]);
+    expect(popup.dataset.searchState).toBe("results");
+    expect(popup.querySelector(".mm-file-autocomplete-loading")).toBeNull();
+    expect(popup.querySelector(".mm-file-autocomplete-option")).not.toBeNull();
+
+    autocomplete.setCandidates([]);
+    expect(popup.dataset.searchState).toBe("empty");
+    expect(popup.querySelector(".mm-file-autocomplete-loading")).toBeNull();
+    expect(popup.querySelector(".mm-file-autocomplete-empty")).not.toBeNull();
+    expect(
+      popup.parentElement?.querySelector<HTMLElement>(
+        ".mm-file-autocomplete-footer",
+      )?.textContent,
+    ).toBe("Enter a path or URL manually.");
+    autocomplete.dispose();
+  });
+
+  it("records the input-to-render timing phases", () => {
+    const timing = vi.fn();
+    const input = document.createElement("input");
+    document.body.append(input);
+    const autocomplete = new FileAutocomplete({
+      input,
+      onQuery: () => undefined,
+      onSearchTiming: timing,
+    });
+    autocomplete.open();
+
+    dispatchInput(input, "h");
+    autocomplete.setCandidates([candidate("alpha.md")]);
+
+    expect(timing.mock.calls.map(([phase]) => phase)).toEqual([
+      "input",
+      "search-dispatch",
+      "host-result",
+      "dom-update",
+    ]);
+    autocomplete.dispose();
+  });
+
   it("keeps keyboard and pointer selection in one activeIndex", () => {
     const { input, autocomplete } = createAutocomplete();
     dispatchInput(input, "h");

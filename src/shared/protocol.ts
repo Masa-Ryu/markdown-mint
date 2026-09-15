@@ -143,6 +143,11 @@ export interface WorkspaceFileSearchMessage {
   readonly filter: WorkspaceFileSearchFilter;
 }
 
+export interface WorkspaceFileSearchWarmupMessage {
+  readonly protocolVersion: typeof PROTOCOL_VERSION;
+  readonly type: "workspace-file-search-warmup";
+}
+
 export interface WorkspaceFileSearchCandidateMessage {
   readonly fileName: string;
   readonly directory: string;
@@ -297,6 +302,7 @@ export type WebviewMessage =
   | ClipboardWriteMessage
   | OpenLinkMessage
   | WorkspaceFileSearchMessage
+  | WorkspaceFileSearchWarmupMessage
   | ImageImportMessage
   | ImageImportUriMessage
   | UserNotificationMessage;
@@ -610,6 +616,11 @@ export function parseWebviewMessage(
             filter: value.filter,
           }
         : undefined;
+    case "workspace-file-search-warmup":
+      return {
+        protocolVersion: PROTOCOL_VERSION,
+        type: "workspace-file-search-warmup",
+      };
     case "image-import":
       return isOperationId(value.requestId) &&
         isImageImportFileName(value.fileName) &&

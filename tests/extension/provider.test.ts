@@ -987,6 +987,12 @@ describe("MarkdownMintEditorProvider", () => {
     vscode.__state.panel.webview.receive({ protocolVersion: 1, type: "ready" });
     vscode.__state.panel.webview.receive({
       protocolVersion: 1,
+      type: "workspace-file-search-warmup",
+    });
+    await flush();
+    expect(vscode.__state.findFilesCalls).toHaveLength(1);
+    vscode.__state.panel.webview.receive({
+      protocolVersion: 1,
       type: "workspace-file-search",
       requestId: "file-search:1",
       query: "hoge",

@@ -153,6 +153,8 @@
         { fileName: 'logo.png', directory: 'assets/', relativePath: '../assets/logo.png' },
         { fileName: 'logo-dark.svg', directory: 'assets/', relativePath: '../assets/logo-dark.svg' },
         { fileName: 'manual.pdf', directory: 'docs/', relativePath: './manual.pdf' },
+        { fileName: 'guide.md', directory: '.git/', relativePath: '../.git/guide.md' },
+        { fileName: 'guide.md', directory: 'node_modules/pkg/', relativePath: '../node_modules/pkg/guide.md' },
         ...Array.from({ length: 10 }, (_, index) => ({
           fileName: `candidate-${String(index + 1).padStart(2, '0')}.md`,
           directory: 'docs/candidates/',
@@ -162,6 +164,7 @@
       const searchWorkspaceFiles = (query, filter) => {
         const lower = query.trim().toLowerCase();
         return browserWorkspaceFiles
+          .filter(candidate => !/(?:^|\/)\.(?:git)(?:\/|$)|(?:^|\/)node_modules(?:\/|$)/i.test(candidate.directory))
           .filter(candidate => filter !== 'image' || /\.(?:png|jpe?g|gif|webp|svg|avif|bmp)$/i.test(candidate.fileName))
           .filter(candidate => `${candidate.fileName} ${candidate.directory}`.toLowerCase().includes(lower))
           .slice(0, 10);
@@ -183,6 +186,7 @@
           case 'recoverDraft': return versionValue(value.baseVersion) && safeOperation(value.operationId) && safeMarkdown(value.markdown);
           case 'open-link': return safeLinkHref(value.href);
           case 'workspace-file-search': return safeOperation(value.requestId) && safeFileSearchQuery(value.query) && (value.filter === 'all' || value.filter === 'image');
+          case 'workspace-file-search-warmup': return true;
           case 'notify': return (value.level === 'info' || value.level === 'warning' || value.level === 'error') && typeof value.message === 'string' && value.message.length <= 1024 && optionalString(value.operationId);
           default: return false;
         }

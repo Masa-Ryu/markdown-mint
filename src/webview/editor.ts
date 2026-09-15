@@ -7716,6 +7716,14 @@ export class MarkdownEditorApp {
     });
   }
 
+  private warmupWorkspaceFileSearch(): void {
+    if (!this.vscode || !this.initialized || this.previewOnly) return;
+    this.vscode.postMessage({
+      protocolVersion: PROTOCOL_VERSION,
+      type: "workspace-file-search-warmup",
+    });
+  }
+
   private receiveWorkspaceFileSearch(
     message: WorkspaceFileSearchResultMessage,
   ): void {
@@ -7736,10 +7744,8 @@ export class MarkdownEditorApp {
       pending.generation !== this.documentGeneration ||
       pending.query !== input.value.trim() ||
       !isWorkspaceFileSearchQuery(input.value)
-    ) {
-      autocomplete.clear();
+    )
       return;
-    }
     autocomplete.setCandidates(message.candidates);
     if (target === "link-picker") this.positionLinkPicker();
   }
@@ -7957,6 +7963,7 @@ export class MarkdownEditorApp {
   }
 
   private insertLink(invokingButton?: HTMLButtonElement): void {
+    this.warmupWorkspaceFileSearch();
     const selection = this.view.state.selection;
     const { from, to } = selection;
     this.savedSelection = { from, to };
@@ -7997,6 +8004,7 @@ export class MarkdownEditorApp {
   }
 
   private insertImage(invokingButton?: HTMLButtonElement): void {
+    this.warmupWorkspaceFileSearch();
     this.savedSelection = {
       from: this.view.state.selection.from,
       to: this.view.state.selection.to,

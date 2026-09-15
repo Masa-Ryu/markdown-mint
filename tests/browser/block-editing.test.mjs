@@ -2422,10 +2422,45 @@ async function testWorkspaceFileAutocomplete(page) {
     0,
     "selected text does not show a second Link text field",
   );
+  assert.ok(
+    await page.evaluate(() =>
+      window.__markdownMintHarness.messages.some(
+        (message) => message.type === "workspace-file-search-warmup",
+      ),
+    ),
+    "opening the Link picker did not start workspace search warmup",
+  );
   const linkInput = linkPicker.locator('[data-testid="link-picker-input"]');
+  await page.evaluate(() => {
+    window.__markdownMintDebugFileSearch = true;
+    performance.clearMarks();
+  });
   await linkInput.fill("ho");
   const linkOptions = linkPicker.locator(".mm-file-autocomplete-option");
   await linkOptions.first().waitFor({ state: "visible" });
+  const searchTiming = await page.evaluate(() => {
+    const phases = new Map();
+    for (const entry of performance.getEntriesByType("mark")) {
+      const match = entry.name.match(
+        /^markdown-mint:file-search:(\d+):(input|dom-update)$/,
+      );
+      if (!match) continue;
+      const [, id, phase] = match;
+      const current = phases.get(id) ?? {};
+      current[phase] = entry.startTime;
+      phases.set(id, current);
+    }
+    return [...phases.values()].at(-1) ?? {};
+  });
+  assert.ok(
+    Number.isFinite(searchTiming.input) &&
+      Number.isFinite(searchTiming["dom-update"]),
+    "file search timing marks were not recorded",
+  );
+  assert.ok(
+    searchTiming["dom-update"] - searchTiming.input <= 100,
+    `cached workspace search rendered too slowly: ${searchTiming["dom-update"] - searchTiming.input}ms`,
+  );
   assert.equal(
     await linkOptions
       .first()
@@ -2441,6 +2476,41 @@ async function testWorkspaceFileAutocomplete(page) {
     "static",
     "candidate list stays in the picker layout",
   );
+  const listStyle = await linkPicker
+    .locator(".mm-file-autocomplete")
+    .evaluate((element) => {
+      const style = getComputedStyle(element);
+      return {
+        boxShadow: style.boxShadow,
+        borderStyle: style.borderStyle,
+        borderRadius: style.borderRadius,
+      };
+    });
+  assert.equal(
+    listStyle.boxShadow,
+    "none",
+    "candidate list has a panel shadow",
+  );
+  assert.equal(
+    listStyle.borderStyle,
+    "none",
+    "candidate list retains a strong outer border",
+  );
+  assert.equal(
+    listStyle.borderRadius,
+    "0px",
+    "candidate list retains rounded corners",
+  );
+  assert.equal(
+    await linkPicker
+      .locator(".mm-file-autocomplete")
+      .getAttribute("data-search-state"),
+    "results",
+  );
+  const initialFooter = await linkPicker
+    .locator(".mm-file-autocomplete-footer")
+    .textContent();
+  assert.equal(initialFooter, "../specs/hoge.pdf");
   await linkOptions.first().hover();
   await linkInput.press("ArrowDown");
   assert.equal(await linkPicker.locator(".is-active").count(), 1);
@@ -2449,6 +2519,11 @@ async function testWorkspaceFileAutocomplete(page) {
       .locator(".is-active .mm-file-autocomplete-name")
       .textContent(),
     "hoge-design.md",
+  );
+  assert.equal(
+    await linkPicker.locator(".mm-file-autocomplete-footer").textContent(),
+    "../docs/hoge-design.md",
+    "footer did not follow the active candidate",
   );
   const linkOptionBackgrounds = await linkOptions.evaluateAll((options) =>
     options.map((option) => getComputedStyle(option).backgroundColor),
@@ -2619,6 +2694,27 @@ async function testWorkspaceFileAutocomplete(page) {
   await noEdits(page, imageBefore, "image autocomplete selection");
   await imageDialog.getByRole("button", { name: "Insert image" }).click();
   await expectSource(page, "![Keep alt](../assets/logo-dark.svg)");
+
+  await load(page, "Target");
+  await caret(page, `${rich} > p`, 0, -1);
+  await page.locator('[data-testid="toolbar-link"]').click();
+  const excludedPicker = page.locator('[data-testid="link-selection-picker"]');
+  const excludedInput = excludedPicker.locator(
+    '[data-testid="link-picker-input"]',
+  );
+  await excludedInput.fill("guide");
+  const excludedList = excludedPicker.locator(".mm-file-autocomplete");
+  await excludedList.waitFor({ state: "visible" });
+  assert.equal(
+    await excludedList.locator(".mm-file-autocomplete-option").count(),
+    0,
+    ".git/node_modules candidates leaked into the picker",
+  );
+  assert.equal(
+    await excludedList.getAttribute("data-search-state"),
+    "empty",
+    "excluded-only query did not resolve to the empty state",
+  );
 }
 
 async function testVerticalGoalAndEmptyEdges(page) {

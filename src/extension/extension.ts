@@ -739,6 +739,11 @@ export class MarkdownMintEditorProvider
       case "workspace-file-search":
         await this.handleWorkspaceFileSearch(session, message);
         return;
+      case "workspace-file-search-warmup":
+        this.workspaceFileSearch.warmup(
+          vscode.workspace.getWorkspaceFolder(session.state.uri),
+        );
+        return;
       case "image-import":
         await this.enqueue(session.state, () =>
           this.handleImageImport(session, message),

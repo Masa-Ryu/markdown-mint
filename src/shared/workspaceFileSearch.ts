@@ -40,6 +40,8 @@ export interface WorkspaceFileSearchOptions {
   readonly query: string;
   readonly filter: WorkspaceFileSearchFilter;
   readonly maxResults?: number;
+  /** Reuse the workspace-normalized file metadata when the host has it. */
+  readonly index?: WorkspaceFileSearchIndex;
 }
 
 interface ParsedPath {
@@ -61,6 +63,22 @@ interface ScoredCandidate {
   readonly score: MatchScore;
 }
 
+interface PreparedWorkspaceFile {
+  readonly parsedPath: ParsedPath;
+  readonly workspaceRelativeSegments: readonly string[];
+  readonly workspaceRelativePath: string;
+  readonly lowerFileName: string;
+  readonly lowerWorkspaceRelativePath: string;
+  readonly fileName: string;
+  readonly directory: string;
+  readonly isImage: boolean;
+}
+
+export interface WorkspaceFileSearchIndex {
+  readonly workspaceFolderPath: string;
+  readonly files: readonly PreparedWorkspaceFile[];
+}
+
 /**
  * Return whether a URL/anchor should be left as a manually entered value.
  * This deliberately recognizes any URI scheme, not just the four schemes
@@ -79,6 +97,47 @@ export function isImageFileName(fileName: string): boolean {
     if (lower.endsWith(extension)) return true;
   }
   return false;
+}
+
+/**
+ * Normalize workspace-relative file metadata once so every keystroke only has
+ * to perform query matching and document-relative path calculation.
+ */
+export function createWorkspaceFileSearchIndex(
+  workspaceFolderPath: string,
+  files: readonly WorkspaceFileEntry[],
+): WorkspaceFileSearchIndex {
+  const workspace = parsePath(workspaceFolderPath);
+  if (!workspace.absolute) return { workspaceFolderPath, files: [] };
+
+  const prepared: PreparedWorkspaceFile[] = [];
+  for (const file of files) {
+    const parsedFile = parsePath(file.path);
+    const workspaceRelative = relativeSegments(workspace, parsedFile);
+    if (
+      !workspaceRelative ||
+      workspaceRelative.length === 0 ||
+      workspaceRelative[0] === ".." ||
+      workspaceRelative.some(isWorkspaceSearchExcludedDirectory)
+    )
+      continue;
+    const fileName = workspaceRelative.at(-1);
+    if (!fileName) continue;
+    const directorySegments = workspaceRelative.slice(0, -1);
+    prepared.push({
+      parsedPath: parsedFile,
+      workspaceRelativeSegments: workspaceRelative,
+      workspaceRelativePath: workspaceRelative.join("/"),
+      lowerFileName: fileName.toLowerCase(),
+      lowerWorkspaceRelativePath: workspaceRelative.join("/").toLowerCase(),
+      fileName,
+      directory: directorySegments.length
+        ? `${directorySegments.join("/")}/`
+        : "./",
+      isImage: isImageFileName(fileName),
+    });
+  }
+  return { workspaceFolderPath, files: prepared };
 }
 
 /**
@@ -106,45 +165,33 @@ export class WorkspaceFileSearch {
       Math.min(options.maxResults ?? this.maxResults, this.maxResults),
     );
     const scored: ScoredCandidate[] = [];
+    const index =
+      options.index?.workspaceFolderPath === options.workspaceFolderPath
+        ? options.index
+        : createWorkspaceFileSearchIndex(
+            options.workspaceFolderPath,
+            options.files,
+          );
 
-    for (const file of options.files) {
-      const parsedFile = parsePath(file.path);
-      const workspaceRelative = relativeSegments(workspace, parsedFile);
-      if (
-        !workspaceRelative ||
-        workspaceRelative.length === 0 ||
-        workspaceRelative[0] === ".."
-      )
-        continue;
-      if (workspaceRelative.some(isWorkspaceSearchExcludedDirectory)) continue;
-
-      const fileName = workspaceRelative.at(-1);
-      if (!fileName) continue;
-      if (options.filter === "image" && !isImageFileName(fileName)) continue;
+    for (const file of index.files) {
+      if (options.filter === "image" && !file.isImage) continue;
 
       const relativeSegmentsFromDocument = relativeSegments(
         { ...document, segments: documentDirectory },
-        parsedFile,
+        file.parsedPath,
       );
       if (!relativeSegmentsFromDocument) continue;
       const relativePath = encodeMarkdownPath(relativeSegmentsFromDocument);
-      const workspaceRelativePath = workspaceRelative.join("/");
-      const directorySegments = workspaceRelative.slice(0, -1);
-      const directory = directorySegments.length
-        ? `${directorySegments.join("/")}/`
-        : "./";
-      const candidate: WorkspaceFileCandidate = {
-        fileName,
-        directory,
-        relativePath,
-      };
-      const score = scoreCandidate(
-        query,
-        fileName,
-        workspaceRelativePath,
-        relativePath,
-      );
-      if (score) scored.push({ candidate, score });
+      const score = scoreCandidate(query, file, relativePath);
+      if (score)
+        scored.push({
+          candidate: {
+            fileName: file.fileName,
+            directory: file.directory,
+            relativePath,
+          },
+          score,
+        });
     }
 
     scored.sort(compareScoredCandidates);
@@ -238,19 +285,18 @@ function isWithin(root: ParsedPath, value: ParsedPath): boolean {
 
 function scoreCandidate(
   query: string,
-  fileName: string,
-  workspaceRelativePath: string,
+  file: PreparedWorkspaceFile,
   documentRelativePath: string,
 ): MatchScore | undefined {
-  const lowerFileName = fileName.toLowerCase();
-  const lowerPath = workspaceRelativePath.toLowerCase();
+  const lowerFileName = file.lowerFileName;
+  const lowerPath = file.lowerWorkspaceRelativePath;
   if (lowerFileName.startsWith(query)) {
     return {
       category: 0,
       primary: 0,
       secondary: 0,
-      nameLength: fileName.length,
-      relativePath: workspaceRelativePath,
+      nameLength: file.fileName.length,
+      relativePath: file.workspaceRelativePath,
     };
   }
   const substringIndex = lowerFileName.indexOf(query);
@@ -259,8 +305,8 @@ function scoreCandidate(
       category: 1,
       primary: substringIndex,
       secondary: 0,
-      nameLength: fileName.length,
-      relativePath: workspaceRelativePath,
+      nameLength: file.fileName.length,
+      relativePath: file.workspaceRelativePath,
     };
   }
   const fuzzyFileName = fuzzyMatch(query, lowerFileName);
@@ -269,8 +315,8 @@ function scoreCandidate(
       category: 2,
       primary: fuzzyFileName.gaps,
       secondary: fuzzyFileName.start,
-      nameLength: fileName.length,
-      relativePath: workspaceRelativePath,
+      nameLength: file.fileName.length,
+      relativePath: file.workspaceRelativePath,
     };
   }
   const pathQuery = query.replaceAll("\\", "/");
@@ -280,7 +326,7 @@ function scoreCandidate(
     : pathQuery;
   if (!normalizedPathQuery) return undefined;
   const pathValues = [
-    { value: lowerPath, relativePath: workspaceRelativePath },
+    { value: lowerPath, relativePath: file.workspaceRelativePath },
     {
       value: documentRelativePath.toLowerCase(),
       relativePath: documentRelativePath,
@@ -316,7 +362,7 @@ function scoreCandidate(
     category: 3,
     primary: bestPath.primary,
     secondary: bestPath.secondary,
-    nameLength: fileName.length,
+    nameLength: file.fileName.length,
     relativePath: bestPath.relativePath,
   };
 }

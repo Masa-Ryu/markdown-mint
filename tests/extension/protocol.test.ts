@@ -322,6 +322,15 @@ describe("Markdown Mint wire protocol", () => {
     expect(
       parseWebviewMessage({
         protocolVersion: PROTOCOL_VERSION,
+        type: "workspace-file-search-warmup",
+      }),
+    ).toEqual({
+      protocolVersion: PROTOCOL_VERSION,
+      type: "workspace-file-search-warmup",
+    });
+    expect(
+      parseWebviewMessage({
+        protocolVersion: PROTOCOL_VERSION,
         type: "workspace-file-search",
         requestId: "file-search:1",
         query: "hoge",

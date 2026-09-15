@@ -56,6 +56,17 @@ function lastEditMarkdown(messages: unknown[]): string {
   return messages.filter(isEditMessage).at(-1)?.markdown ?? "";
 }
 
+function isWorkspaceFileSearchMessage(
+  message: unknown,
+): message is { type: "workspace-file-search"; requestId: string } {
+  if (typeof message !== "object" || message === null) return false;
+  const candidate = message as { type?: unknown; requestId?: unknown };
+  return (
+    candidate.type === "workspace-file-search" &&
+    typeof candidate.requestId === "string"
+  );
+}
+
 function hasMessageType(messages: unknown[], type: string): boolean {
   return messages.some(
     (message) =>
@@ -1745,6 +1756,68 @@ describe("rich editor rendering", () => {
     expect(app.view.state.selection.to).toBe(selection.to);
     expect(app.view.state.doc.textContent).toBe(source);
     expect(messages.filter(isEditMessage)).toHaveLength(0);
+    app.destroy();
+  });
+
+  it("ignores stale workspace search results without replacing the loading state", () => {
+    const source = "replace me";
+    const { app, root, messages } = makeApp(source);
+    app.view.dispatch(
+      app.view.state.tr.setSelection(
+        TextSelection.create(app.view.state.doc, 1, 1 + source.length),
+      ),
+    );
+    const picker = openLinkPicker(root);
+    const input = picker.querySelector<HTMLInputElement>("input")!;
+    input.value = "h";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    input.value = "ho";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    const requests = messages.filter(isWorkspaceFileSearchMessage);
+    expect(requests).toHaveLength(2);
+
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        data: {
+          protocolVersion: PROTOCOL_VERSION,
+          type: "workspace-file-search-result",
+          requestId: requests[0]!.requestId,
+          candidates: [
+            {
+              fileName: "stale.md",
+              directory: "docs/",
+              relativePath: "./stale.md",
+            },
+          ],
+        },
+      }),
+    );
+    expect(
+      picker.querySelector<HTMLElement>(".mm-file-autocomplete")?.dataset,
+    ).toMatchObject({ searchState: "loading" });
+    expect(picker.querySelector(".mm-file-autocomplete-option")).toBeNull();
+
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        data: {
+          protocolVersion: PROTOCOL_VERSION,
+          type: "workspace-file-search-result",
+          requestId: requests[1]!.requestId,
+          candidates: [
+            {
+              fileName: "fresh.md",
+              directory: "docs/",
+              relativePath: "./fresh.md",
+            },
+          ],
+        },
+      }),
+    );
+    expect(
+      picker.querySelector<HTMLElement>(
+        ".mm-file-autocomplete-option .mm-file-autocomplete-name",
+      )?.textContent,
+    ).toBe("fresh.md");
     app.destroy();
   });
 

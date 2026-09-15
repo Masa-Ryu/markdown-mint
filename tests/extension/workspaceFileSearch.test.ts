@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   WorkspaceFileSearch,
+  createWorkspaceFileSearchIndex,
   encodeMarkdownPath,
   isImageFileName,
   isWorkspaceFileSearchQuery,
@@ -80,6 +81,29 @@ describe("WorkspaceFileSearch", () => {
         file("/project/src/NODE_MODULES/guide.md"),
         file("/project/docs/guide.md"),
       ],
+    });
+
+    expect(candidates).toEqual([
+      {
+        fileName: "guide.md",
+        directory: "docs/",
+        relativePath: "./guide.md",
+      },
+    ]);
+  });
+
+  it("reuses workspace-normalized metadata for repeated queries", () => {
+    const index = createWorkspaceFileSearchIndex("/project", [
+      file("/project/docs/guide.md"),
+      file("/project/node_modules/pkg/guide.md"),
+    ]);
+    const candidates = search.search({
+      documentPath: "/project/docs/manual.md",
+      workspaceFolderPath: "/project",
+      query: "guide",
+      filter: "all",
+      files: [],
+      index,
     });
 
     expect(candidates).toEqual([

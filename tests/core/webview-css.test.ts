@@ -37,6 +37,12 @@ describe("Mermaid dialog styles", () => {
     expect(webviewCss).toContain("height: clamp(96px, 42vh, 320px);");
     expect(webviewCss).toContain("max-height: min(48vh, 320px);");
     expect(webviewCss).toContain("overflow-y: auto;");
+    expect(webviewCss).toContain(
+      ".mm-file-autocomplete {\n  position: static;",
+    );
+    expect(webviewCss).toContain("  border: 0;\n  border-radius: 0;");
+    expect(webviewCss).toContain("  background: transparent;\n}");
+    expect(webviewCss).toContain("  box-shadow: inset 2px 0 0");
     expect(webviewCss).not.toContain(".mm-file-autocomplete-option:hover");
   });
 });
