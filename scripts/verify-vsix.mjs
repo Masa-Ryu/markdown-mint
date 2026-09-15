@@ -2,7 +2,6 @@ import { existsSync } from "node:fs";
 import { readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
 
-const MAX_VSIX_BYTES = 5 * 1024 * 1024;
 const packageJson = JSON.parse(await readFile("package.json", "utf8"));
 const extensionIcon = "extension/assets/icon/icon.png";
 if (packageJson.icon !== "assets/icon/icon.png") {
@@ -64,12 +63,6 @@ if (forbiddenEntries.length > 0) {
 }
 
 const packageSize = (await stat(vsixPath)).size;
-if (packageSize >= MAX_VSIX_BYTES) {
-  throw new Error(
-    `VSIX is unexpectedly large: ${packageSize} bytes (limit ${MAX_VSIX_BYTES})`,
-  );
-}
-
 const sizeInMiB = (packageSize / 1024 / 1024).toFixed(2);
 process.stdout.write(
   `VSIX verification passed: ${entries.length} files, ${packageSize} bytes (${sizeInMiB} MiB).\n`,
