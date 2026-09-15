@@ -22,15 +22,17 @@ import {
   type EditorInitialDocument,
   type VSCodeApiLike,
 } from "../../src/webview/editor";
+import { installModalSubmitShortcut } from "../../src/webview/modalSubmitShortcut";
 
 function documentFixture(
   markdown = "# Title\n\nParagraph",
   clipboardAvailable = false,
+  profile: EditorInitialDocument["profile"] = "github",
 ): EditorInitialDocument {
   return {
     markdown,
     version: 1,
-    profile: "github",
+    profile,
     ...(clipboardAvailable ? { clipboardAvailable: true } : {}),
   };
 }
@@ -53,6 +55,26 @@ function isEditMessage(
 
 function lastEditMarkdown(messages: unknown[]): string {
   return messages.filter(isEditMessage).at(-1)?.markdown ?? "";
+}
+
+function isWorkspaceFileSearchMessage(
+  message: unknown,
+): message is { type: "workspace-file-search"; requestId: string } {
+  if (typeof message !== "object" || message === null) return false;
+  const candidate = message as { type?: unknown; requestId?: unknown };
+  return (
+    candidate.type === "workspace-file-search" &&
+    typeof candidate.requestId === "string"
+  );
+}
+
+function hasMessageType(messages: unknown[], type: string): boolean {
+  return messages.some(
+    (message) =>
+      typeof message === "object" &&
+      message !== null &&
+      (message as { type?: unknown }).type === type,
+  );
 }
 
 function dispatchPaste(
@@ -162,17 +184,17 @@ function openImageDialog(root: HTMLElement): HTMLDialogElement {
   return dialog;
 }
 
-function openLinkDialog(root: HTMLElement): HTMLDialogElement {
+function openLinkPicker(root: HTMLElement): HTMLElement {
   const button = root.querySelector<HTMLButtonElement>(
     '[data-testid="toolbar-link"]',
   );
   if (!button) throw new Error("link toolbar button is not rendered");
   button.click();
-  const dialog = root.querySelector<HTMLDialogElement>(
-    '[aria-labelledby="mm-link-dialog-title"]',
+  const picker = root.querySelector<HTMLElement>(
+    '[data-testid="link-selection-picker"]',
   );
-  if (!dialog) throw new Error("link dialog is not rendered");
-  return dialog;
+  if (!picker || picker.hidden) throw new Error("link picker is not rendered");
+  return picker;
 }
 
 async function flush(): Promise<void> {
@@ -227,8 +249,7 @@ function makeApp(
     vscode,
     core: { schema, parseMarkdown, serializeMarkdown, renderMarkdown },
     initialDocument: {
-      ...documentFixture(markdown, clipboardAvailable),
-      profile,
+      ...documentFixture(markdown, clipboardAvailable, profile),
       ...(documentId === undefined ? {} : { documentId }),
     },
   });
@@ -325,6 +346,11 @@ beforeEach(() => {
     Object.defineProperty(Text.prototype, "getClientRects", {
       configurable: true,
       value: () => [],
+    });
+  if (!document.elementFromPoint)
+    Object.defineProperty(document, "elementFromPoint", {
+      configurable: true,
+      value: () => null,
     });
 });
 
@@ -1609,6 +1635,527 @@ describe("rich editor rendering", () => {
     app.destroy();
   });
 
+  it("does not submit a selected link while its workspace search is loading", () => {
+    const source = "replace me";
+    const { app, root, messages } = makeApp(source);
+    app.view.dispatch(
+      app.view.state.tr.setSelection(
+        TextSelection.create(app.view.state.doc, 1, 1 + source.length),
+      ),
+    );
+    const picker = openLinkPicker(root);
+    const input = picker.querySelector<HTMLInputElement>("input")!;
+    input.value = "ho";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+
+    const enter = new KeyboardEvent("keydown", {
+      key: "Enter",
+      bubbles: true,
+      cancelable: true,
+    });
+    input.dispatchEvent(enter);
+    expect(enter.defaultPrevented).toBe(true);
+    expect(picker.hidden).toBe(false);
+    expect(app.view.state.doc.textContent).toBe(source);
+    expect(messages.filter(isEditMessage)).toHaveLength(0);
+
+    const request = messages.filter(isWorkspaceFileSearchMessage).at(-1)!;
+    receiveHostMessage({
+      protocolVersion: PROTOCOL_VERSION,
+      type: "workspace-file-search-result",
+      requestId: request.requestId,
+      candidates: [
+        {
+          fileName: "hoge.pdf",
+          directory: "docs/",
+          relativePath: "./hoge.pdf",
+        },
+      ],
+    });
+    expect(messages.filter(isEditMessage)).toHaveLength(0);
+    expect(
+      picker.querySelector(".mm-file-autocomplete-option")?.textContent,
+    ).toContain("hoge.pdf");
+
+    input.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "Enter",
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    expect(picker.hidden).toBe(true);
+    expect(lastEditMarkdown(messages)).toBe("[replace me](./hoge.pdf)");
+    app.destroy();
+  });
+
+  it.each([
+    ["link", "./missing.md", "[replace me](./missing.md)replace me"],
+    ["image", "./missing.png", "![alt](./missing.png)replace me"],
+  ] as const)(
+    "blocks %s modal submission while workspace search is loading",
+    async (kind, manualPath, expected) => {
+      const source = "replace me";
+      const { app, root, messages } = makeApp(source);
+      app.view.dispatch(
+        app.view.state.tr.setSelection(
+          TextSelection.create(app.view.state.doc, 1),
+        ),
+      );
+      const button = root.querySelector<HTMLButtonElement>(
+        `[data-testid="toolbar-${kind}"]`,
+      )!;
+      button.click();
+      const dialog = root.querySelector<HTMLDialogElement>(
+        `[aria-labelledby="mm-${kind}-dialog-title"]`,
+      )!;
+      const inputs = dialog.querySelectorAll<HTMLInputElement>("input");
+      const destination = inputs[0]!;
+      if (kind === "link") inputs[1]!.value = "replace me";
+      else inputs[1]!.value = "alt";
+      const disposeShortcut = installModalSubmitShortcut(root, "Linux x86_64");
+      try {
+        destination.value = kind === "link" ? "ho" : "lo";
+        destination.dispatchEvent(new Event("input", { bubbles: true }));
+        const beforeEdits = messages.filter(isEditMessage).length;
+
+        const enter = new KeyboardEvent("keydown", {
+          key: "Enter",
+          bubbles: true,
+          cancelable: true,
+        });
+        destination.dispatchEvent(enter);
+        expect(enter.defaultPrevented).toBe(true);
+
+        const modifiedEnter = new KeyboardEvent("keydown", {
+          key: "Enter",
+          ctrlKey: true,
+          bubbles: true,
+          cancelable: true,
+        });
+        destination.dispatchEvent(modifiedEnter);
+        await flush();
+        expect(modifiedEnter.defaultPrevented).toBe(true);
+
+        dialog
+          .querySelector<HTMLButtonElement>('button[type="submit"]')!
+          .click();
+        await flush();
+        expect(messages.filter(isEditMessage)).toHaveLength(beforeEdits);
+        expect(dialog.hasAttribute("open")).toBe(true);
+
+        const loadingRequest = messages
+          .filter(isWorkspaceFileSearchMessage)
+          .at(-1)!;
+        receiveHostMessage({
+          protocolVersion: PROTOCOL_VERSION,
+          type: "workspace-file-search-result",
+          requestId: loadingRequest.requestId,
+          candidates: [],
+        });
+        expect(
+          dialog.querySelector<HTMLElement>(".mm-file-autocomplete")?.dataset,
+        ).toMatchObject({ searchState: "empty" });
+
+        destination.value = manualPath;
+        destination.dispatchEvent(new Event("input", { bubbles: true }));
+        const manualRequest = messages
+          .filter(isWorkspaceFileSearchMessage)
+          .at(-1)!;
+        receiveHostMessage({
+          protocolVersion: PROTOCOL_VERSION,
+          type: "workspace-file-search-result",
+          requestId: manualRequest.requestId,
+          candidates: [],
+        });
+        dialog
+          .querySelector<HTMLButtonElement>('button[type="submit"]')!
+          .click();
+        expect(lastEditMarkdown(messages)).toBe(expected);
+      } finally {
+        disposeShortcut();
+        app.destroy();
+      }
+    },
+  );
+
+  it("uses the selected-text link picker and applies the active candidate", async () => {
+    const source = "replace me";
+    const { app, root, messages } = makeApp(source);
+    app.view.dispatch(
+      app.view.state.tr.setSelection(
+        TextSelection.create(app.view.state.doc, 1, 1 + source.length),
+      ),
+    );
+    const picker = openLinkPicker(root);
+    const linkInput = picker.querySelector<HTMLInputElement>("input");
+    expect(linkInput).not.toBeNull();
+    expect(
+      picker.querySelector('input[placeholder="Selected text"]'),
+    ).toBeNull();
+    expect(picker.querySelector('button[type="submit"]')).toBeNull();
+    expect(
+      root.querySelector<HTMLDialogElement>(
+        '[aria-labelledby="mm-link-dialog-title"]',
+      )?.open,
+    ).toBe(false);
+    linkInput!.value = "ho";
+    linkInput!.dispatchEvent(new Event("input", { bubbles: true }));
+    await new Promise<void>((resolve) => setTimeout(resolve, 90));
+    const request = messages.find(
+      (message: any) => message.type === "workspace-file-search",
+    ) as any;
+    expect(request).toMatchObject({ filter: "all", query: "ho" });
+
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        data: {
+          protocolVersion: PROTOCOL_VERSION,
+          type: "workspace-file-search-result",
+          requestId: request.requestId,
+          candidates: [
+            {
+              fileName: "hoge manual.pdf",
+              directory: "specs/",
+              relativePath: "../specs/hoge%20manual.pdf",
+            },
+            {
+              fileName: "hoge-design.md",
+              directory: "docs/",
+              relativePath: "../docs/hoge-design.md",
+            },
+          ],
+        },
+      }),
+    );
+    const options = picker.querySelectorAll<HTMLButtonElement>(
+      ".mm-file-autocomplete-option",
+    );
+    expect(options).toHaveLength(2);
+    expect(options[0]?.textContent).toContain("hoge manual.pdf");
+    expect(linkInput!.getAttribute("aria-controls")).toMatch(
+      /^mm-file-autocomplete-/,
+    );
+    expect(linkInput!.getAttribute("aria-activedescendant")).toBe(
+      options[0]?.id,
+    );
+
+    const beforeEdits = messages.filter(isEditMessage).length;
+    linkInput!.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "ArrowDown",
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    linkInput!.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "Enter",
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    expect(linkInput!.value).toBe("../docs/hoge-design.md");
+    expect(
+      picker.querySelector<HTMLElement>(".mm-file-autocomplete")?.hidden,
+    ).toBe(true);
+    expect(messages.filter(isEditMessage)).toHaveLength(beforeEdits + 1);
+    expect(picker.hidden).toBe(true);
+    expect(lastEditMarkdown(messages)).toBe(
+      "[replace me](../docs/hoge-design.md)",
+    );
+    app.destroy();
+  });
+
+  it("keeps selected link text unchanged for Escape and IME paths", () => {
+    const source = "replace me";
+    const { app, root, messages } = makeApp(source);
+    const selection = TextSelection.create(
+      app.view.state.doc,
+      1,
+      1 + source.length,
+    );
+    app.view.dispatch(app.view.state.tr.setSelection(selection));
+    const picker = openLinkPicker(root);
+    const input = picker.querySelector<HTMLInputElement>("input")!;
+    input.value = "../docs/guide.md";
+    const composingEnter = new KeyboardEvent("keydown", {
+      key: "Enter",
+      bubbles: true,
+      cancelable: true,
+    });
+    Object.defineProperty(composingEnter, "isComposing", { value: true });
+    input.dispatchEvent(composingEnter);
+    expect(messages.filter(isEditMessage)).toHaveLength(0);
+    expect(picker.hidden).toBe(false);
+
+    input.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "Escape",
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    expect(picker.hidden).toBe(true);
+    expect(app.view.state.selection.from).toBe(selection.from);
+    expect(app.view.state.selection.to).toBe(selection.to);
+    expect(app.view.state.doc.textContent).toBe(source);
+    expect(messages.filter(isEditMessage)).toHaveLength(0);
+    app.destroy();
+  });
+
+  it("ignores stale workspace search results without replacing the loading state", () => {
+    const source = "replace me";
+    const { app, root, messages } = makeApp(source);
+    app.view.dispatch(
+      app.view.state.tr.setSelection(
+        TextSelection.create(app.view.state.doc, 1, 1 + source.length),
+      ),
+    );
+    const picker = openLinkPicker(root);
+    const input = picker.querySelector<HTMLInputElement>("input")!;
+    input.value = "h";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    input.value = "ho";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    const requests = messages.filter(isWorkspaceFileSearchMessage);
+    expect(requests).toHaveLength(2);
+
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        data: {
+          protocolVersion: PROTOCOL_VERSION,
+          type: "workspace-file-search-result",
+          requestId: requests[0]!.requestId,
+          candidates: [
+            {
+              fileName: "stale.md",
+              directory: "docs/",
+              relativePath: "./stale.md",
+            },
+          ],
+        },
+      }),
+    );
+    expect(
+      picker.querySelector<HTMLElement>(".mm-file-autocomplete")?.dataset,
+    ).toMatchObject({ searchState: "loading" });
+    expect(picker.querySelector(".mm-file-autocomplete-option")).toBeNull();
+
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        data: {
+          protocolVersion: PROTOCOL_VERSION,
+          type: "workspace-file-search-result",
+          requestId: requests[1]!.requestId,
+          candidates: [
+            {
+              fileName: "fresh.md",
+              directory: "docs/",
+              relativePath: "./fresh.md",
+            },
+          ],
+        },
+      }),
+    );
+    expect(
+      picker.querySelector<HTMLElement>(
+        ".mm-file-autocomplete-option .mm-file-autocomplete-name",
+      )?.textContent,
+    ).toBe("fresh.md");
+    app.destroy();
+  });
+
+  it("keeps image autocomplete image-only and leaves Alt text untouched", async () => {
+    const source = "replace me";
+    const { app, root, messages } = makeApp(source);
+    app.view.dispatch(
+      app.view.state.tr.setSelection(
+        TextSelection.create(app.view.state.doc, 1, 1 + source.length),
+      ),
+    );
+    const dialog = openImageDialog(root);
+    const [imageInput, altInput] = Array.from(
+      dialog.querySelectorAll<HTMLInputElement>("input"),
+    );
+    altInput!.value = "Keep this alt text";
+    imageInput!.value = "lo";
+    imageInput!.dispatchEvent(new Event("input", { bubbles: true }));
+    await new Promise<void>((resolve) => setTimeout(resolve, 90));
+    const request = messages.find(
+      (message: any) => message.type === "workspace-file-search",
+    ) as any;
+    expect(request).toMatchObject({ filter: "image", query: "lo" });
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        data: {
+          protocolVersion: PROTOCOL_VERSION,
+          type: "workspace-file-search-result",
+          requestId: request.requestId,
+          candidates: [
+            {
+              fileName: "logo.png",
+              directory: "assets/",
+              relativePath: "../assets/logo.png",
+            },
+          ],
+        },
+      }),
+    );
+    expect(
+      dialog.querySelectorAll(".mm-file-autocomplete-option"),
+    ).toHaveLength(1);
+    imageInput!.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "Enter",
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    expect(imageInput!.value).toBe("../assets/logo.png");
+    expect(altInput!.value).toBe("Keep this alt text");
+    expect(messages.filter(isEditMessage)).toHaveLength(0);
+    await flush();
+    dialog.querySelector<HTMLButtonElement>('button[type="submit"]')!.click();
+    expect(app.view.state.doc.firstChild?.firstChild?.attrs.src).toBe(
+      "../assets/logo.png",
+    );
+    expect(app.view.state.doc.firstChild?.firstChild?.attrs.alt).toBe(
+      "Keep this alt text",
+    );
+    expect(lastEditMarkdown(messages)).toBe(
+      "![Keep this alt text](../assets/logo.png)",
+    );
+    app.destroy();
+  });
+
+  it("cancels Link and Image dialogs on Escape through the dialog fallback", () => {
+    const source = "replace me";
+    const { app, root, messages } = makeApp(source);
+    app.view.dispatch(
+      app.view.state.tr.setSelection(
+        TextSelection.create(app.view.state.doc, 1),
+      ),
+    );
+
+    const linkButton = root.querySelector<HTMLButtonElement>(
+      '[data-testid="toolbar-link"]',
+    )!;
+    linkButton.click();
+    const linkDialog = root.querySelector<HTMLDialogElement>(
+      '[aria-labelledby="mm-link-dialog-title"]',
+    )!;
+    const linkInput = linkDialog.querySelector<HTMLInputElement>("input")!;
+    linkInput.value = "./changed.md";
+    const linkEscape = new KeyboardEvent("keydown", {
+      key: "Escape",
+      bubbles: true,
+      cancelable: true,
+    });
+    linkInput.dispatchEvent(linkEscape);
+
+    expect(linkEscape.defaultPrevented).toBe(true);
+    expect(linkDialog.hasAttribute("open")).toBe(false);
+    expect(document.activeElement).toBe(linkButton);
+    expect(app.view.state.doc.textContent).toBe(source);
+    expect(messages.filter(isEditMessage)).toHaveLength(0);
+
+    const imageButton = root.querySelector<HTMLButtonElement>(
+      '[data-testid="toolbar-image"]',
+    )!;
+    imageButton.click();
+    const imageDialog = root.querySelector<HTMLDialogElement>(
+      '[aria-labelledby="mm-image-dialog-title"]',
+    )!;
+    const imageInput = imageDialog.querySelector<HTMLInputElement>("input")!;
+    imageInput.value = "./changed.png";
+    const imageEscape = new KeyboardEvent("keydown", {
+      key: "Escape",
+      bubbles: true,
+      cancelable: true,
+    });
+    imageInput.dispatchEvent(imageEscape);
+
+    expect(imageEscape.defaultPrevented).toBe(true);
+    expect(imageDialog.hasAttribute("open")).toBe(false);
+    expect(document.activeElement).toBe(imageButton);
+    expect(app.view.state.doc.textContent).toBe(source);
+    expect(messages.filter(isEditMessage)).toHaveLength(0);
+    app.destroy();
+  });
+
+  it("keeps external URLs manual and Escape restores the selected link", async () => {
+    const source = "replace me";
+    const { app, root, messages } = makeApp(source);
+    app.view.dispatch(
+      app.view.state.tr.setSelection(
+        TextSelection.create(app.view.state.doc, 1, 1 + "replace me".length),
+      ),
+    );
+    const picker = openLinkPicker(root);
+    const linkInput = picker.querySelector<HTMLInputElement>("input");
+    linkInput!.value = "ho";
+    linkInput!.dispatchEvent(new Event("input", { bubbles: true }));
+    await new Promise<void>((resolve) => setTimeout(resolve, 90));
+    const request = messages.find(
+      (message: any) => message.type === "workspace-file-search",
+    ) as any;
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        data: {
+          protocolVersion: PROTOCOL_VERSION,
+          type: "workspace-file-search-result",
+          requestId: request.requestId,
+          candidates: [
+            {
+              fileName: "hoge.pdf",
+              directory: "docs/",
+              relativePath: "./hoge.pdf",
+            },
+          ],
+        },
+      }),
+    );
+    expect(
+      picker.querySelector<HTMLElement>(".mm-file-autocomplete")?.hidden,
+    ).toBe(false);
+    linkInput!.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "Escape",
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    expect(picker.hidden).toBe(true);
+    expect(app.view.state.selection.from).toBe(1);
+    expect(app.view.state.selection.to).toBe(1 + source.length);
+    expect(messages.filter(isEditMessage)).toHaveLength(0);
+
+    const reopenedPicker = openLinkPicker(root);
+    const reopenedInput =
+      reopenedPicker.querySelector<HTMLInputElement>("input");
+    reopenedInput!.value = "https://example.com";
+    reopenedInput!.dispatchEvent(new Event("input", { bubbles: true }));
+    await flush();
+    expect(
+      messages.filter(
+        (message: any) => message.type === "workspace-file-search",
+      ),
+    ).toHaveLength(1);
+    reopenedInput!.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "Enter",
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    expect(lastEditMarkdown(messages)).toBe(
+      "[replace me](https://example.com)",
+    );
+    expect(reopenedPicker.hidden).toBe(true);
+    app.destroy();
+  });
+
   it.each([
     ["docs/guide.md", "[text](docs/guide.md)"],
     ["./docs/guide.md", "[text](./docs/guide.md)"],
@@ -1626,22 +2173,27 @@ describe("rich editor rendering", () => {
       ),
     );
 
-    const dialog = openLinkDialog(root);
-    const [linkInput, textInput] = Array.from(
-      dialog.querySelectorAll<HTMLInputElement>("input"),
-    );
+    const picker = openLinkPicker(root);
+    const linkInput = picker.querySelector<HTMLInputElement>("input");
     expect(linkInput?.type).toBe("text");
     expect(linkInput?.getAttribute("type")).toBe("text");
-    expect(linkInput?.placeholder).toBe("./docs/example.md");
+    expect(linkInput?.placeholder).toBe(
+      "./docs/example.md or https://example.com",
+    );
     expect(linkInput?.spellcheck).toBe(false);
     expect(linkInput?.autocapitalize).toBe("off");
     expect(linkInput?.inputMode).toBe("url");
-    expect(dialog.textContent).toContain("Link path or URL");
+    expect(picker.textContent).toContain("Search / URL");
 
     linkInput!.value = href;
     expect(linkInput!.checkValidity()).toBe(true);
-    textInput!.value = "text";
-    dialog.querySelector<HTMLButtonElement>('button[type="submit"]')!.click();
+    linkInput!.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "Enter",
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
 
     expect(
       app.view.state.doc.firstChild?.firstChild?.marks[0]?.attrs.href,
@@ -1659,13 +2211,17 @@ describe("rich editor rendering", () => {
       ),
     );
 
-    const dialog = openLinkDialog(root);
-    const [linkInput] = Array.from(
-      dialog.querySelectorAll<HTMLInputElement>("input"),
-    );
+    const picker = openLinkPicker(root);
+    const linkInput = picker.querySelector<HTMLInputElement>("input");
     expect(linkInput?.value).toBe("../README.md");
     expect(linkInput?.checkValidity()).toBe(true);
-    dialog.querySelector<HTMLButtonElement>('button[type="submit"]')!.click();
+    linkInput!.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "Enter",
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
 
     expect(
       app.view.state.doc.firstChild?.firstChild?.marks[0]?.attrs.href,
@@ -1673,6 +2229,27 @@ describe("rich editor rendering", () => {
     expect(
       serializeMarkdown(app.view.state.doc, parseMarkdown(source, "github")),
     ).toBe(source);
+    app.destroy();
+  });
+
+  it("removes an existing link from the selected-text picker", () => {
+    const source = "[text](../README.md)";
+    const { app, root, messages } = makeApp(source);
+    app.view.dispatch(
+      app.view.state.tr.setSelection(
+        TextSelection.create(app.view.state.doc, 1, 1 + "text".length),
+      ),
+    );
+    const picker = openLinkPicker(root);
+    const remove = picker.querySelector<HTMLButtonElement>(
+      ".mm-link-picker-remove",
+    );
+    expect(remove?.hidden).toBe(false);
+    remove!.click();
+
+    expect(picker.hidden).toBe(true);
+    expect(app.view.state.doc.firstChild?.firstChild?.marks).toHaveLength(0);
+    expect(lastEditMarkdown(messages)).toBe("text");
     app.destroy();
   });
 
@@ -2435,6 +3012,202 @@ describe("rich editor rendering", () => {
         ?.getAttribute("aria-pressed"),
     ).toBe("false");
     app.destroy();
+  });
+});
+
+describe("Rich Editor link navigation", () => {
+  function dispatchPrimaryClick(
+    anchor: HTMLAnchorElement,
+    modifiers: Pick<MouseEventInit, "metaKey" | "ctrlKey"> = {},
+  ): { mousedown: MouseEvent; click: MouseEvent } {
+    const mousedown = new MouseEvent("mousedown", {
+      bubbles: true,
+      cancelable: true,
+      button: 0,
+      ...modifiers,
+    });
+    anchor.dispatchEvent(mousedown);
+    const click = new MouseEvent("click", {
+      bubbles: true,
+      cancelable: true,
+      button: 0,
+      ...modifiers,
+    });
+    anchor.dispatchEvent(click);
+    return { mousedown, click };
+  }
+
+  function setPlatform(value: string): () => void {
+    const descriptor = Object.getOwnPropertyDescriptor(
+      Navigator.prototype,
+      "platform",
+    );
+    Object.defineProperty(navigator, "platform", {
+      configurable: true,
+      value,
+    });
+    return () => {
+      if (descriptor) Object.defineProperty(navigator, "platform", descriptor);
+      else delete (navigator as { platform?: string }).platform;
+    };
+  }
+
+  it.each([
+    ["MacIntel", "metaKey"],
+    ["Linux x86_64", "ctrlKey"],
+  ] as const)(
+    "opens an external link with the platform modifier on %s",
+    (platform, modifier) => {
+      const restorePlatform = setPlatform(platform);
+      try {
+        const { app, messages } = makeApp(
+          "[open](https://example.com/a%20b?q=1#section)",
+        );
+        const anchor = app.view.dom.querySelector<HTMLAnchorElement>("a[href]");
+        if (!anchor) throw new Error("link is not rendered");
+
+        const { mousedown, click } = dispatchPrimaryClick(anchor, {
+          [modifier]: true,
+        });
+
+        expect(mousedown.defaultPrevented).toBe(false);
+        expect(click.defaultPrevented).toBe(true);
+        expect(messages).toContainEqual({
+          protocolVersion: PROTOCOL_VERSION,
+          type: "open-link",
+          href: "https://example.com/a%20b?q=1#section",
+        });
+        expect(hasMessageType(messages, "edit")).toBe(false);
+        app.destroy();
+      } finally {
+        restorePlatform();
+      }
+    },
+  );
+
+  it.each([
+    ["MacIntel", "metaKey"],
+    ["Linux x86_64", "ctrlKey"],
+  ] as const)(
+    "preserves a raw relative href with the platform modifier on %s",
+    (platform, modifier) => {
+      const restorePlatform = setPlatform(platform);
+      try {
+        const { app, messages } = makeApp("[open](../README.md)");
+        const anchor = app.view.dom.querySelector<HTMLAnchorElement>("a[href]");
+        if (!anchor) throw new Error("link is not rendered");
+
+        dispatchPrimaryClick(anchor, { [modifier]: true });
+
+        expect(messages).toContainEqual({
+          protocolVersion: PROTOCOL_VERSION,
+          type: "open-link",
+          href: "../README.md",
+        });
+        expect(hasMessageType(messages, "edit")).toBe(false);
+        app.destroy();
+      } finally {
+        restorePlatform();
+      }
+    },
+  );
+
+  it("keeps an ordinary link click in the editor without posting a navigation message", () => {
+    const restorePlatform = setPlatform("Linux x86_64");
+    try {
+      const { app, messages } = makeApp("[open](https://example.com)");
+      const anchor = app.view.dom.querySelector<HTMLAnchorElement>("a[href]");
+      if (!anchor) throw new Error("link is not rendered");
+      let bubbled = false;
+      app.view.dom.addEventListener("click", () => {
+        bubbled = true;
+      });
+
+      const { click } = dispatchPrimaryClick(anchor);
+
+      expect(click.defaultPrevented).toBe(true);
+      expect(click.cancelBubble).toBe(false);
+      expect(bubbled).toBe(true);
+      expect(hasMessageType(messages, "open-link")).toBe(false);
+      expect(hasMessageType(messages, "edit")).toBe(false);
+      app.destroy();
+    } finally {
+      restorePlatform();
+    }
+  });
+
+  it("scrolls to an existing heading id without changing source state", () => {
+    const restorePlatform = setPlatform("Linux x86_64");
+    try {
+      const { app, messages } = makeApp("[jump](#target)\n\n# Target");
+      const anchor = app.view.dom.querySelector<HTMLAnchorElement>("a[href]");
+      const target = app.view.dom.querySelector<HTMLElement>("h1#target");
+      if (!anchor || !target)
+        throw new Error("fragment fixture is not rendered");
+      const scrollIntoView = vi.fn();
+      Object.defineProperty(target, "scrollIntoView", {
+        configurable: true,
+        value: scrollIntoView,
+      });
+
+      dispatchPrimaryClick(anchor, { ctrlKey: true });
+
+      expect(scrollIntoView).toHaveBeenCalledWith({ block: "start" });
+      expect(hasMessageType(messages, "open-link")).toBe(false);
+      expect(hasMessageType(messages, "edit")).toBe(false);
+      app.destroy();
+    } finally {
+      restorePlatform();
+    }
+  });
+
+  it("uses existing GitLab TOC and footnote ids for fragment navigation", () => {
+    const restorePlatform = setPlatform("Linux x86_64");
+    try {
+      const toc = makeApp(
+        "[[_TOC_]]\n\n# Target",
+        undefined,
+        false,
+        undefined,
+        "gitlab",
+      );
+      const tocAnchor = toc.app.view.dom.querySelector<HTMLAnchorElement>(
+        ".table-of-contents a[href]",
+      );
+      const heading = toc.app.view.dom.querySelector<HTMLElement>("h1#target");
+      if (!tocAnchor || !heading)
+        throw new Error("TOC fixture is not rendered");
+      const tocScroll = vi.fn();
+      Object.defineProperty(heading, "scrollIntoView", {
+        configurable: true,
+        value: tocScroll,
+      });
+      dispatchPrimaryClick(tocAnchor, { ctrlKey: true });
+      expect(tocScroll).toHaveBeenCalledWith({ block: "start" });
+      expect(hasMessageType(toc.messages, "open-link")).toBe(false);
+      toc.app.destroy();
+
+      const footnote = makeApp("Reference[^one]\n\n[^one]: note");
+      const footnoteAnchor =
+        footnote.app.view.dom.querySelector<HTMLAnchorElement>(
+          ".footnote-ref a[href]",
+        );
+      const footnoteTarget =
+        footnote.app.view.dom.querySelector<HTMLElement>("#fn-one");
+      if (!footnoteAnchor || !footnoteTarget)
+        throw new Error("footnote fixture is not rendered");
+      const footnoteScroll = vi.fn();
+      Object.defineProperty(footnoteTarget, "scrollIntoView", {
+        configurable: true,
+        value: footnoteScroll,
+      });
+      dispatchPrimaryClick(footnoteAnchor, { ctrlKey: true });
+      expect(footnoteScroll).toHaveBeenCalledWith({ block: "start" });
+      expect(hasMessageType(footnote.messages, "open-link")).toBe(false);
+      footnote.app.destroy();
+    } finally {
+      restorePlatform();
+    }
   });
 });
 

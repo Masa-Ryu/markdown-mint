@@ -140,10 +140,60 @@
       const clone = value => JSON.parse(JSON.stringify(value));
       const isRecord = value => typeof value === 'object' && value !== null && !Array.isArray(value);
       const safeMarkdown = value => typeof value === 'string' && value.length <= 2000000;
+      const safeLinkHref = value => typeof value === 'string' && value.length > 0 && value.length <= 8192;
       const safeOperation = value => typeof value === 'string' && value.length > 0 && value.length <= 160 && /^[a-zA-Z0-9._:-]+$/.test(value);
+      const safeFileSearchQuery = value => typeof value === 'string' && value.length <= 256 && !/[\u0000-\u001f\u007f]/.test(value);
       const optionalString = value => value === undefined || (typeof value === 'string' && value.length <= 160);
       const versionValue = value => Number.isSafeInteger(value) && value >= 1;
       const optionalVersion = value => value === undefined || versionValue(value);
+      const requestedWorkspaceFileCount = Number.parseInt(
+        new URLSearchParams(location.search).get('workspaceFiles') ?? '',
+        10
+      );
+      const requestedWorkspaceSearchDelay = Number.parseInt(
+        new URLSearchParams(location.search).get('workspaceSearchDelay') ?? '',
+        10
+      );
+      const workspaceSearchDelay = Number.isSafeInteger(requestedWorkspaceSearchDelay) && requestedWorkspaceSearchDelay > 0
+        ? Math.min(requestedWorkspaceSearchDelay, 5000)
+        : 0;
+      const benchmarkWorkspaceFiles = Number.isSafeInteger(requestedWorkspaceFileCount) && requestedWorkspaceFileCount > 0
+        ? Array.from({ length: requestedWorkspaceFileCount }, (_, index) => {
+            const group = String(Math.floor(index / 100)).padStart(3, '0');
+            const number = String(index).padStart(5, '0');
+            const extension = index % 2 === 0 ? '.png' : '.md';
+            return {
+              fileName: `benchmark-${number}${extension}`,
+              directory: `docs/benchmark/${group}/`,
+              relativePath: `../docs/benchmark/${group}/benchmark-${number}${extension}`
+            };
+          })
+        : [];
+      const browserWorkspaceFiles = benchmarkWorkspaceFiles.length > 0
+        ? benchmarkWorkspaceFiles
+        : [
+        { fileName: 'hoge.pdf', directory: 'specs/', relativePath: '../specs/hoge.pdf' },
+        { fileName: 'hoge-design.md', directory: 'docs/', relativePath: '../docs/hoge-design.md' },
+        { fileName: 'how-to-use.md', directory: 'docs/', relativePath: '../docs/how-to-use.md' },
+        { fileName: 'logo.png', directory: 'assets/', relativePath: '../assets/logo.png' },
+        { fileName: 'logo-dark.svg', directory: 'assets/', relativePath: '../assets/logo-dark.svg' },
+        { fileName: 'manual.pdf', directory: 'docs/', relativePath: './manual.pdf' },
+        { fileName: 'guide.md', directory: '.git/', relativePath: '../.git/guide.md' },
+        { fileName: 'guide.md', directory: 'node_modules/pkg/', relativePath: '../node_modules/pkg/guide.md' },
+        ...Array.from({ length: 10 }, (_, index) => ({
+          fileName: `candidate-${String(index + 1).padStart(2, '0')}.md`,
+          directory: 'docs/candidates/',
+          relativePath: `../docs/candidates/candidate-${String(index + 1).padStart(2, '0')}.md`
+        }))
+      ];
+      const searchWorkspaceFiles = (query, filter) => {
+        const lower = query.trim().toLowerCase();
+        return browserWorkspaceFiles
+          .filter(candidate => !/(?:^|\/)\.(?:git)(?:\/|$)|(?:^|\/)node_modules(?:\/|$)/i.test(candidate.directory))
+          .filter(candidate => filter !== 'image' || /\.(?:png|jpe?g|gif|webp|svg|avif|bmp)$/i.test(candidate.fileName))
+          .filter(candidate => `${candidate.fileName} ${candidate.directory}`.toLowerCase().includes(lower))
+          .slice(0, 10);
+      };
       // Keep this transport check in lockstep with parseWebviewMessage in
       // src/shared/protocol.ts. The fixture mocks VS Code only; it never
       // bypasses the extension wire contract.
@@ -159,6 +209,9 @@
           case 'format': return versionValue(value.baseVersion) && safeOperation(value.operationId);
           case 'preview': return optionalVersion(value.baseVersion) && optionalString(value.operationId);
           case 'recoverDraft': return versionValue(value.baseVersion) && safeOperation(value.operationId) && safeMarkdown(value.markdown);
+          case 'open-link': return safeLinkHref(value.href);
+          case 'workspace-file-search': return safeOperation(value.requestId) && safeFileSearchQuery(value.query) && (value.filter === 'all' || value.filter === 'image');
+          case 'workspace-file-search-warmup': return true;
           case 'notify': return (value.level === 'info' || value.level === 'warning' || value.level === 'error') && typeof value.message === 'string' && value.message.length <= 1024 && optionalString(value.operationId);
           default: return false;
         }
@@ -311,6 +364,13 @@
               return;
             }
             accept(message.operationId, 'format');
+          } else if (message.type === 'open-link') {
+            // The browser harness verifies the Webview transport only. The
+            // extension host owns URI classification and the actual opener.
+          } else if (message.type === 'workspace-file-search') {
+            const sendResult = () => deliver({ type: 'workspace-file-search-result', requestId: message.requestId, candidates: searchWorkspaceFiles(message.query, message.filter) });
+            if (workspaceSearchDelay > 0) setTimeout(sendResult, workspaceSearchDelay);
+            else sendResult();
           }
         },
         getState: () => clone(state),

@@ -109,7 +109,7 @@ select {
   background: transparent;
 }
 
-button:hover,
+button:hover:not(.mm-file-autocomplete-option),
 select:hover {
   background: var(--mm-control-hover-background);
 }
@@ -590,13 +590,22 @@ textarea:focus-visible {
 }
 
 .mm-input-dialog {
+  box-sizing: border-box;
   width: min(380px, calc(100vw - 30px));
+  max-width: calc(100vw - 30px);
   padding: 0;
   border: 1px solid var(--vscode-menu-border, var(--mm-control-border));
   border-radius: 6px;
   color: var(--mm-control-foreground);
   background: var(--vscode-quickInput-background, var(--mm-control-background));
   box-shadow: 0 14px 32px rgba(0, 0, 0, 0.35);
+}
+.mm-input-dialog.mm-link-dialog,
+.mm-input-dialog.mm-image-dialog {
+  width: min(700px, calc(100vw - 48px));
+  max-width: calc(100vw - 48px);
+  max-height: calc(100dvh - 24px);
+  overflow: hidden;
 }
 .mm-input-dialog::backdrop {
   background: rgba(0, 0, 0, 0.35);
@@ -771,6 +780,7 @@ textarea:focus-visible {
   font-weight: 600;
 }
 .mm-dialog-field {
+  position: relative;
   display: grid;
   gap: 5px;
 }
@@ -796,6 +806,135 @@ textarea:focus-visible {
 }
 .mm-dialog-field select {
   cursor: pointer;
+}
+.mm-link-picker {
+  position: fixed;
+  z-index: 8;
+  box-sizing: border-box;
+  width: min(560px, calc(100vw - 32px));
+  max-width: calc(100vw - 32px);
+  max-height: calc(100dvh - 16px);
+  overflow: hidden;
+  padding: 14px;
+  border: 1px solid var(--vscode-menu-border, var(--mm-control-border));
+  border-radius: 6px;
+  color: var(--mm-control-foreground);
+  background: var(--vscode-quickInput-background, var(--mm-control-background));
+  box-shadow: 0 14px 32px rgba(0, 0, 0, 0.35);
+}
+.mm-link-picker-field {
+  min-width: 0;
+}
+.mm-link-picker-actions {
+  display: flex;
+  justify-content: flex-end;
+  min-height: 28px;
+  margin-top: 10px;
+}
+.mm-link-picker-remove {
+  min-height: 28px;
+  padding: 5px 10px;
+  color: var(--vscode-button-secondaryForeground, var(--mm-control-foreground));
+  border: 1px solid var(--vscode-button-secondaryBackground, var(--mm-control-border));
+  border-radius: 4px;
+  background: var(--vscode-button-secondaryBackground, var(--mm-control-background));
+}
+.mm-link-picker-remove:hover:not(:disabled) {
+  background: var(
+    --vscode-button-secondaryHoverBackground,
+    var(--mm-control-hover-background)
+  );
+}
+.mm-file-autocomplete {
+  position: static;
+  box-sizing: border-box;
+  width: 100%;
+  height: clamp(96px, 42vh, 320px);
+  max-height: min(48vh, 320px);
+  margin-top: 6px;
+  overflow-y: auto;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+.mm-file-autocomplete[hidden] {
+  display: none;
+}
+.mm-file-autocomplete-loading,
+.mm-file-autocomplete-empty {
+  display: grid;
+  min-height: 100%;
+  place-items: center;
+  padding: 12px;
+  color: var(--vscode-descriptionForeground, var(--mm-control-foreground));
+  text-align: center;
+}
+.mm-file-autocomplete-loading {
+  color: var(--vscode-descriptionForeground, var(--mm-control-foreground));
+}
+.mm-file-autocomplete-footer {
+  min-width: 0;
+  margin-top: 8px;
+  padding: 6px 2px 0;
+  border-top: 1px solid
+    var(--vscode-textSeparator-foreground, var(--mm-control-border));
+  overflow: hidden;
+  color: var(--vscode-descriptionForeground, var(--mm-control-foreground));
+  font-size: 0.85em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mm-file-autocomplete-footer[hidden] {
+  display: none;
+}
+.mm-file-autocomplete-option {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 38%);
+  align-items: center;
+  min-width: 0;
+  width: 100%;
+  min-height: 32px;
+  gap: 10px;
+  padding: 7px 9px;
+  border: 0;
+  color: var(--vscode-quickInput-foreground, var(--mm-control-foreground));
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  outline: none;
+}
+.mm-file-autocomplete-option.is-active {
+  color: var(
+    --vscode-list-activeSelectionForeground,
+    var(--mm-control-foreground)
+  );
+  background: var(
+    --vscode-list-activeSelectionBackground,
+    var(--mm-control-hover-background)
+  );
+  box-shadow: inset 2px 0 0
+    var(--vscode-contrastActiveBorder, var(--vscode-focusBorder, #007fd4));
+  outline: none;
+}
+.mm-file-autocomplete-name {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 0.95em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mm-file-autocomplete-directory {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--vscode-descriptionForeground, var(--mm-control-foreground));
+  font-size: 0.85em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: right;
+}
+.mm-file-autocomplete-option.is-active .mm-file-autocomplete-directory {
+  color: inherit;
+  opacity: 0.85;
 }
 .mm-profile-feature-error {
   margin: 0;
@@ -1332,6 +1471,8 @@ body.vscode-high-contrast .mm-table-toolbar,
 body.vscode-high-contrast .mm-table-grid,
 body.vscode-high-contrast .mm-emoji-grid,
 body.vscode-high-contrast .mm-input-dialog,
+body.vscode-high-contrast .mm-link-picker,
+body.vscode-high-contrast .mm-file-autocomplete,
 body.vscode-high-contrast .mm-popup-panel,
 body.vscode-high-contrast .mm-floating-toolbar,
 body.vscode-high-contrast .mm-empty-line-insert,
@@ -1340,11 +1481,18 @@ body.vscode-high-contrast-light .mm-table-toolbar,
 body.vscode-high-contrast-light .mm-table-grid,
 body.vscode-high-contrast-light .mm-emoji-grid,
 body.vscode-high-contrast-light .mm-input-dialog,
+body.vscode-high-contrast-light .mm-link-picker,
+body.vscode-high-contrast-light .mm-file-autocomplete,
 body.vscode-high-contrast-light .mm-popup-panel,
 body.vscode-high-contrast-light .mm-floating-toolbar,
 body.vscode-high-contrast-light .mm-empty-line-insert,
 body.vscode-high-contrast-light .mm-block-gap-insert {
   border-color: var(--mm-contrast-border);
+}
+body.vscode-high-contrast .mm-file-autocomplete-option.is-active,
+body.vscode-high-contrast-light .mm-file-autocomplete-option.is-active {
+  outline: 1px solid var(--mm-contrast-border);
+  outline-offset: -1px;
 }
 
 @media (forced-colors: active) {
@@ -1354,9 +1502,11 @@ body.vscode-high-contrast-light .mm-block-gap-insert {
   textarea,
   .mm-table-toolbar,
   .mm-table-grid,
-  .mm-emoji-grid,
-  .mm-input-dialog,
-  .mm-popup-panel,
+   .mm-emoji-grid,
+   .mm-input-dialog,
+   .mm-link-picker,
+   .mm-file-autocomplete,
+   .mm-popup-panel,
   .mm-floating-toolbar,
   .mm-empty-line-insert,
   .mm-block-gap-insert {
@@ -1366,6 +1516,10 @@ body.vscode-high-contrast-light .mm-block-gap-insert {
   select:hover:not(:disabled),
   .mm-table-grid-cell.is-preview {
     border-color: Highlight;
+  }
+  .mm-file-autocomplete-option.is-active {
+    outline: 1px solid Highlight;
+    outline-offset: -1px;
   }
   .mm-popup-toggle[aria-expanded="true"],
   .mm-empty-line-insert:hover,

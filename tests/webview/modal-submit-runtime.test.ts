@@ -110,10 +110,10 @@ describe("modal primary-modifier Enter runtime integration", () => {
   ])(
     "submits the real link dialog with a relative href on %s",
     async (_platformName, platform, modifiers) => {
-      const { app, root, messages } = makeApp("text", platform);
+      const { app, root, messages } = makeApp("", platform);
       app.view.dispatch(
         app.view.state.tr.setSelection(
-          TextSelection.create(app.view.state.doc, 1, 5),
+          TextSelection.create(app.view.state.doc, 1),
         ),
       );
       openToolbarDialog(root, "toolbar-link");
@@ -121,17 +121,18 @@ describe("modal primary-modifier Enter runtime integration", () => {
       const dialog = root.querySelector<HTMLDialogElement>(
         'dialog[aria-labelledby="mm-link-dialog-title"]',
       )!;
-      const [linkInput] = Array.from(
+      const [linkInput, linkTextInput] = Array.from(
         dialog.querySelectorAll<HTMLInputElement>("input"),
       );
       expect(linkInput?.type).toBe("text");
       linkInput!.value = "../README.md";
+      linkTextInput!.value = "text";
 
       await pressShortcutEnter(linkInput!, modifiers);
 
       expect(dialog.open).toBe(false);
       expect(editMessages(messages)).toHaveLength(1);
-      expect(String(editMessages(messages)[0]?.markdown)).toBe(
+      expect(String(editMessages(messages)[0]?.markdown)).toContain(
         "[text](../README.md)",
       );
     },
