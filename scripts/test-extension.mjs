@@ -46,7 +46,11 @@ try {
     ...(vscodeExecutablePath ? { vscodeExecutablePath } : {}),
     extensionTestsEnv: {
       MARKDOWN_MINT_TEST_FILE: testFile,
-      MARKDOWN_MINT_FIXTURE_DIR: resolve(extensionDevelopmentPath, "md"),
+      MARKDOWN_MINT_FIXTURE_DIR: resolve(
+        extensionDevelopmentPath,
+        "tests",
+        "md",
+      ),
     },
     launchArgs: [
       `--user-data-dir=${userDataDirectory}`,

@@ -4,7 +4,7 @@
   "description": "A visual WYSIWYG Markdown editor for VS Code with powerful table editing, GitHub/GitLab Markdown, Mermaid, math, and source editing.",
   "version": "0.2.0",
   "publisher": "masa-ryu",
-  "icon": "images/icon.png",
+  "icon": "assets/icon/icon.png",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -157,7 +157,7 @@
     "test:watch": "vitest",
     "test:extension": "npm run compile && npm run build && node scripts/test-extension.mjs",
     "verify:package": "npm run build && node scripts/verify-package.mjs",
-    "package": "npm run build && vsce package --no-dependencies && node scripts/verify-package.mjs",
+    "package": "npm run build && vsce package --no-dependencies && node scripts/verify-package.mjs && node scripts/verify-vsix.mjs",
     "test:browser:blocks": "npm run build:webview && node tests/browser/block-editing.test.mjs"
   },
   "dependencies": {

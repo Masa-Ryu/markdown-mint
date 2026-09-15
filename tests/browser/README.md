@@ -120,7 +120,7 @@ bodies, document edges, navigation, and cancellation emit no host edits or dirty
 state. Synthetic composition events cover event handling only; these checks do
 not exercise an OS IME candidate window or replace Japanese IME testing in VS Code.
 
-The five required `md/*test*.md` files are also rendered in their corresponding
+The five required `tests/md/*test*.md` files are also rendered in their corresponding
 CommonMark, GitHub, or GitLab profile, in Rich, dedicated Preview, and a native
 preview fixture. Native fixtures call the same safe core renderer as the native
 extension contribution and load the installed VS Code stylesheet, shared CSS,
