@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.3.0
+## 0.20.0
 
 - Interpret multi-cell TSV, HTML-table, and Markdown Mint internal clipboard
   payloads pasted outside the Rich Editor's existing tables as a header-first
