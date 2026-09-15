@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CellSelection, TableMap } from "prosemirror-tables";
+import type { Node as PMNode } from "prosemirror-model";
 import { TextSelection } from "prosemirror-state";
 import {
   parseMarkdown,
@@ -69,6 +70,119 @@ function dispatchCellSelection(
         app.view.posAtDOM(headCell, 0) - 1,
       ),
     ),
+  );
+}
+
+interface TestRect {
+  top: number;
+  left: number;
+  bottom: number;
+  right: number;
+}
+
+function setTestRect(element: Element, rect: TestRect): void {
+  const measured = {
+    ...rect,
+    x: rect.left,
+    y: rect.top,
+    width: rect.right - rect.left,
+    height: rect.bottom - rect.top,
+    toJSON: () => measured,
+  } as DOMRect;
+  Object.defineProperty(element, "getBoundingClientRect", {
+    configurable: true,
+    value: () => measured,
+  });
+}
+
+function tableNodeAndStart(app: MarkdownEditorApp): {
+  table: PMNode;
+  tableStart: number;
+} {
+  let table: PMNode | null = null;
+  let tablePosition = -1;
+  app.view.state.doc.descendants((node, position) => {
+    if (node.type.spec.tableRole === "table") {
+      table = node;
+      tablePosition = position;
+      return false;
+    }
+    return true;
+  });
+  if (!table) throw new Error("Missing table node");
+  return { table, tableStart: tablePosition + 1 };
+}
+
+function mockTableGeometry(app: MarkdownEditorApp, root: HTMLElement): void {
+  const { table, tableStart } = tableNodeAndStart(app);
+  const map = TableMap.get(table);
+  const tableElement = root.querySelector<HTMLTableElement>("table");
+  if (!tableElement) throw new Error("Missing table element");
+  const columnBoundaries = Array.from(
+    { length: map.width + 1 },
+    (_, column) => 10 + column * 100,
+  );
+  const rowBoundaries = Array.from(
+    { length: map.height + 1 },
+    (_, row) => 20 + row * 30,
+  );
+  setTestRect(tableElement, {
+    top: rowBoundaries[0]!,
+    left: columnBoundaries[0]!,
+    bottom: rowBoundaries.at(-1)!,
+    right: columnBoundaries.at(-1)!,
+  });
+  setTestRect(root.querySelector<HTMLElement>(".mm-stage")!, {
+    top: 0,
+    left: 0,
+    bottom: 1000,
+    right: 1000,
+  });
+  const rows = tableElement.querySelectorAll<HTMLTableRowElement>("tr");
+  for (let row = 0; row < map.height; row += 1)
+    setTestRect(rows[row]!, {
+      top: rowBoundaries[row]!,
+      left: columnBoundaries[0]!,
+      bottom: rowBoundaries[row + 1]!,
+      right: columnBoundaries.at(-1)!,
+    });
+  for (const cellPosition of new Set(map.map)) {
+    const cell = app.view.nodeDOM(tableStart + cellPosition);
+    if (!(cell instanceof HTMLElement))
+      throw new Error(`Missing DOM cell for position ${cellPosition}`);
+    const rect = map.findCell(cellPosition);
+    setTestRect(cell, {
+      top: rowBoundaries[rect.top]!,
+      left: columnBoundaries[rect.left]!,
+      bottom: rowBoundaries[rect.bottom]!,
+      right: columnBoundaries[rect.right]!,
+    });
+  }
+}
+
+function tableCell(
+  type: "table_cell" | "table_header",
+  text: string,
+  attrs: { colspan?: number; rowspan?: number } = {},
+): PMNode {
+  const cellType = schema.nodes[type];
+  const paragraphType = schema.nodes.paragraph;
+  if (!cellType || !paragraphType) throw new Error("Missing table schema");
+  return cellType.create(
+    {
+      colspan: 1,
+      rowspan: 1,
+      colwidth: null,
+      alignment: null,
+      ...attrs,
+    },
+    paragraphType.create(null, text ? schema.text(text) : null),
+  );
+}
+
+function replaceWithTable(app: MarkdownEditorApp, table: PMNode): void {
+  app.view.dispatch(
+    app.view.state.tr.replaceWith(0, app.view.state.doc.content.size, table),
   );
 }
 
@@ -1062,38 +1176,176 @@ describe("contextual table toolbar", () => {
       '[data-action="table-delete"]',
     )!;
     dispatchCellText(app, rows[1]!.children[1]!);
+    mockTableGeometry(app, root);
     const beforeDoc = app.view.state.doc;
     const beforeSelection = app.view.state.selection;
 
     rowDelete.dispatchEvent(new Event("pointerenter", { bubbles: true }));
-    expect(rows[1]!.querySelectorAll(".mm-table-delete-preview")).toHaveLength(
-      3,
+    const rowPreview = root.querySelector<HTMLElement>(
+      ".mm-table-delete-preview-rect",
     );
-    expect(rows[0]!.querySelector(".mm-table-delete-preview")).toBeNull();
-    expect(rows[2]!.querySelector(".mm-table-delete-preview")).toBeNull();
+    expect(rowPreview).not.toBeNull();
+    expect(rowPreview?.style.cssText).toContain("left: 10px");
+    expect(rowPreview?.style.cssText).toContain("top: 50px");
+    expect(rowPreview?.style.cssText).toContain("width: 300px");
+    expect(rowPreview?.style.cssText).toContain("height: 30px");
     expect(app.view.state.doc).toBe(beforeDoc);
     expect(app.view.state.selection).toBe(beforeSelection);
 
     rowDelete.dispatchEvent(new Event("pointerleave", { bubbles: true }));
-    expect(root.querySelector(".mm-table-delete-preview")).toBeNull();
+    expect(root.querySelector(".mm-table-delete-preview-overlay")).toBeNull();
 
     columnDelete.dispatchEvent(new Event("pointerenter", { bubbles: true }));
-    expect(
-      Array.from(rows, (row) =>
-        row.children[1]?.classList.contains("mm-table-delete-preview"),
-      ),
-    ).toEqual([true, true, true]);
-    expect(
-      Array.from(rows, (row) =>
-        row.children[0]?.classList.contains("mm-table-delete-preview"),
-      ),
-    ).toEqual([false, false, false]);
+    const columnPreview = root.querySelector<HTMLElement>(
+      ".mm-table-delete-preview-rect",
+    );
+    expect(columnPreview).not.toBeNull();
+    expect(columnPreview?.style.cssText).toContain("left: 110px");
+    expect(columnPreview?.style.cssText).toContain("top: 20px");
+    expect(columnPreview?.style.cssText).toContain("width: 100px");
+    expect(columnPreview?.style.cssText).toContain("height: 90px");
+    expect(app.view.state.doc).toBe(beforeDoc);
+    expect(app.view.state.selection).toBe(beforeSelection);
 
     columnDelete.dispatchEvent(new Event("pointerleave", { bubbles: true }));
     tableDelete.dispatchEvent(new Event("pointerenter", { bubbles: true }));
     expect(root.querySelectorAll(".mm-table-delete-preview")).toHaveLength(9);
+    expect(root.querySelector(".mm-table-delete-preview-overlay")).toBeNull();
+    expect(app.view.state.doc).toBe(beforeDoc);
+    expect(app.view.state.selection).toBe(beforeSelection);
     tableDelete.dispatchEvent(new Event("pointerleave", { bubbles: true }));
     expect(root.querySelector(".mm-table-delete-preview")).toBeNull();
+  });
+
+  it("disables row or column deletion for full-axis CellSelections", () => {
+    const { app, root } = makeApp(
+      "| A | B | C |\n| --- | --- | --- |\n| D | E | F |\n| G | H | I |",
+    );
+    const cells = root.querySelectorAll<HTMLTableCellElement>("td, th");
+    const toolbar = root.querySelector<HTMLElement>(".mm-table-toolbar")!;
+    const rowDelete = toolbar.querySelector<HTMLButtonElement>(
+      '[data-action="row-delete"]',
+    )!;
+    const columnDelete = toolbar.querySelector<HTMLButtonElement>(
+      '[data-action="col-delete"]',
+    )!;
+    const tableDelete = toolbar.querySelector<HTMLButtonElement>(
+      '[data-action="table-delete"]',
+    )!;
+
+    dispatchCellSelection(app, cells[0]!, cells[6]!);
+    expect(rowDelete.disabled).toBe(true);
+    expect(columnDelete.disabled).toBe(false);
+    expect(tableDelete.disabled).toBe(false);
+    rowDelete.dispatchEvent(new Event("pointerenter", { bubbles: true }));
+    expect(root.querySelector(".mm-table-delete-preview-overlay")).toBeNull();
+
+    dispatchCellSelection(app, cells[0]!, cells[2]!);
+    expect(rowDelete.disabled).toBe(false);
+    expect(columnDelete.disabled).toBe(true);
+    expect(tableDelete.disabled).toBe(false);
+    columnDelete.dispatchEvent(new Event("pointerenter", { bubbles: true }));
+    expect(root.querySelector(".mm-table-delete-preview-overlay")).toBeNull();
+
+    dispatchCellText(app, cells[4]!);
+    expect(rowDelete.disabled).toBe(false);
+    expect(columnDelete.disabled).toBe(false);
+    expect(tableDelete.disabled).toBe(false);
+  });
+
+  it("previews only the deleted logical row across a rowspan cell", () => {
+    const { app, root } = makeApp();
+    replaceWithTable(
+      app,
+      schema.nodes.table!.create(null, [
+        schema.nodes.table_row!.create(null, [
+          tableCell("table_header", "A", { rowspan: 3 }),
+          tableCell("table_header", "B"),
+          tableCell("table_header", "C"),
+        ]),
+        schema.nodes.table_row!.create(null, [
+          tableCell("table_cell", "D"),
+          tableCell("table_cell", "E"),
+        ]),
+        schema.nodes.table_row!.create(null, [
+          tableCell("table_cell", "F"),
+          tableCell("table_cell", "G"),
+        ]),
+      ]),
+    );
+    const rows = root.querySelectorAll<HTMLTableRowElement>("tr");
+    dispatchCellText(app, rows[1]!.children[0]!);
+    mockTableGeometry(app, root);
+    const beforeDoc = app.view.state.doc;
+    const beforeSelection = app.view.state.selection;
+    const rowDelete = root.querySelector<HTMLButtonElement>(
+      '[data-action="row-delete"]',
+    )!;
+
+    rowDelete.dispatchEvent(new Event("pointerenter", { bubbles: true }));
+    const preview = root.querySelector<HTMLElement>(
+      ".mm-table-delete-preview-rect",
+    );
+    expect(preview?.style.cssText).toContain("top: 50px");
+    expect(preview?.style.cssText).toContain("height: 30px");
+    expect(preview?.style.cssText).toContain("left: 10px");
+    expect(preview?.style.cssText).toContain("width: 300px");
+    expect(root.querySelector(".mm-table-delete-preview")).toBeNull();
+    expect(app.view.state.doc).toBe(beforeDoc);
+    expect(app.view.state.selection).toBe(beforeSelection);
+
+    rowDelete.dispatchEvent(new Event("pointerleave", { bubbles: true }));
+    expect(root.querySelector(".mm-table-delete-preview-overlay")).toBeNull();
+    expect(app.view.state.doc).toBe(beforeDoc);
+    expect(app.view.state.selection).toBe(beforeSelection);
+  });
+
+  it("previews only the deleted logical column across a colspan cell", () => {
+    const { app, root } = makeApp();
+    replaceWithTable(
+      app,
+      schema.nodes.table!.create(null, [
+        schema.nodes.table_row!.create(null, [
+          tableCell("table_header", "A"),
+          tableCell("table_header", "B"),
+          tableCell("table_header", "C"),
+        ]),
+        schema.nodes.table_row!.create(null, [
+          tableCell("table_cell", "AB", { colspan: 2 }),
+          tableCell("table_cell", "C"),
+        ]),
+        schema.nodes.table_row!.create(null, [
+          tableCell("table_cell", "D"),
+          tableCell("table_cell", "E"),
+          tableCell("table_cell", "F"),
+        ]),
+      ]),
+    );
+    const rows = root.querySelectorAll<HTMLTableRowElement>("tr");
+    dispatchCellText(app, rows[2]!.children[1]!);
+    mockTableGeometry(app, root);
+    const beforeDoc = app.view.state.doc;
+    const beforeSelection = app.view.state.selection;
+    const columnDelete = root.querySelector<HTMLButtonElement>(
+      '[data-action="col-delete"]',
+    )!;
+
+    columnDelete.dispatchEvent(new Event("pointerenter", { bubbles: true }));
+    const preview = root.querySelector<HTMLElement>(
+      ".mm-table-delete-preview-rect",
+    );
+    expect(preview?.style.cssText).toContain("left: 110px");
+    expect(preview?.style.cssText).toContain("width: 100px");
+    expect(preview?.style.cssText).toContain("top: 20px");
+    expect(preview?.style.cssText).toContain("height: 90px");
+    expect(root.querySelector(".mm-table-delete-preview")).toBeNull();
+    expect(app.view.state.doc).toBe(beforeDoc);
+    expect(app.view.state.selection).toBe(beforeSelection);
+
+    columnDelete.dispatchEvent(new Event("pointerleave", { bubbles: true }));
+    expect(root.querySelector(".mm-table-delete-preview-overlay")).toBeNull();
+    expect(app.view.state.doc).toBe(beforeDoc);
+    expect(app.view.state.selection).toBe(beforeSelection);
   });
 
   it("updates previews when keyboard focus moves between delete actions", () => {
@@ -1102,6 +1354,7 @@ describe("contextual table toolbar", () => {
     );
     const rows = root.querySelectorAll<HTMLTableRowElement>("tr");
     dispatchCellText(app, rows[1]!.children[1]!);
+    mockTableGeometry(app, root);
     const toolbar = root.querySelector<HTMLElement>(".mm-table-toolbar")!;
     const rowDelete = toolbar.querySelector<HTMLButtonElement>(
       '[data-action="row-delete"]',
@@ -1114,31 +1367,31 @@ describe("contextual table toolbar", () => {
     )!;
 
     rowDelete.focus();
-    expect(rows[1]!.querySelectorAll(".mm-table-delete-preview")).toHaveLength(
-      3,
+    expect(root.querySelectorAll(".mm-table-delete-preview-rect")).toHaveLength(
+      1,
     );
     columnDelete.focus();
-    expect(rows[1]!.querySelectorAll(".mm-table-delete-preview")).toHaveLength(
+    expect(root.querySelectorAll(".mm-table-delete-preview-rect")).toHaveLength(
       1,
     );
     expect(
-      Array.from(rows, (row) =>
-        row.children[1]?.classList.contains("mm-table-delete-preview"),
-      ),
-    ).toEqual([true, true, true]);
+      root.querySelector<HTMLElement>(".mm-table-delete-preview-rect")?.style
+        .left,
+    ).toBe("110px");
     tableDelete.focus();
     expect(root.querySelectorAll(".mm-table-delete-preview")).toHaveLength(9);
     tableDelete.blur();
     expect(root.querySelector(".mm-table-delete-preview")).toBeNull();
+    expect(root.querySelector(".mm-table-delete-preview-overlay")).toBeNull();
   });
 
   it("previews all rows and columns covered by a CellSelection", () => {
     const { app, root } = makeApp(
       "| A | B | C | D |\n| --- | --- | --- | --- |\n| E | F | G | H |\n| I | J | K | L |\n| M | N | O | P |",
     );
-    const rows = root.querySelectorAll<HTMLTableRowElement>("tr");
     const cells = root.querySelectorAll<HTMLTableCellElement>("td, th");
     dispatchCellSelection(app, cells[5]!, cells[10]!);
+    mockTableGeometry(app, root);
     const toolbar = root.querySelector<HTMLElement>(".mm-table-toolbar")!;
     const rowDelete = toolbar.querySelector<HTMLButtonElement>(
       '[data-action="row-delete"]',
@@ -1148,31 +1401,26 @@ describe("contextual table toolbar", () => {
     )!;
 
     rowDelete.dispatchEvent(new Event("pointerenter", { bubbles: true }));
-    expect(rows[1]!.querySelectorAll(".mm-table-delete-preview")).toHaveLength(
-      4,
+    expect(root.querySelectorAll(".mm-table-delete-preview-rect")).toHaveLength(
+      2,
     );
-    expect(rows[2]!.querySelectorAll(".mm-table-delete-preview")).toHaveLength(
-      4,
-    );
-    expect(rows[0]!.querySelector(".mm-table-delete-preview")).toBeNull();
-    expect(rows[3]!.querySelector(".mm-table-delete-preview")).toBeNull();
+    expect(
+      Array.from(
+        root.querySelectorAll<HTMLElement>(".mm-table-delete-preview-rect"),
+        (preview) => preview.style.top,
+      ),
+    ).toEqual(["50px", "80px"]);
 
     columnDelete.dispatchEvent(new Event("pointerenter", { bubbles: true }));
+    expect(root.querySelectorAll(".mm-table-delete-preview-rect")).toHaveLength(
+      2,
+    );
     expect(
-      Array.from(rows, (row) =>
-        row.children[1]?.classList.contains("mm-table-delete-preview"),
+      Array.from(
+        root.querySelectorAll<HTMLElement>(".mm-table-delete-preview-rect"),
+        (preview) => preview.style.left,
       ),
-    ).toEqual([true, true, true, true]);
-    expect(
-      Array.from(rows, (row) =>
-        row.children[2]?.classList.contains("mm-table-delete-preview"),
-      ),
-    ).toEqual([true, true, true, true]);
-    expect(
-      Array.from(rows, (row) =>
-        row.children[0]?.classList.contains("mm-table-delete-preview"),
-      ),
-    ).toEqual([false, false, false, false]);
+    ).toEqual(["110px", "210px"]);
   });
 
   it("clears the preview before deleting a row and leaves no stale class", () => {
@@ -1185,12 +1433,16 @@ describe("contextual table toolbar", () => {
     const rowDelete = toolbar.querySelector<HTMLButtonElement>(
       '[data-action="row-delete"]',
     )!;
+    mockTableGeometry(app, root);
     rowDelete.dispatchEvent(new Event("pointerenter", { bubbles: true }));
-    expect(root.querySelectorAll(".mm-table-delete-preview")).toHaveLength(3);
+    expect(root.querySelectorAll(".mm-table-delete-preview-rect")).toHaveLength(
+      1,
+    );
 
     rowDelete.click();
     expect(app.view.state.doc.firstChild?.childCount).toBe(2);
     expect(root.querySelector(".mm-table-delete-preview")).toBeNull();
+    expect(root.querySelector(".mm-table-delete-preview-overlay")).toBeNull();
     expect(messageType(messages, "edit")).toHaveLength(1);
   });
 
@@ -1250,10 +1502,17 @@ describe("contextual table toolbar", () => {
     dispatchCellSelection(app, cells[0]!, cells[1]!);
     expect(toolbar.hidden).toBe(false);
     expect(
-      Array.from(
-        toolbar.querySelectorAll<HTMLButtonElement>(".mm-table-toolbar-button"),
-      ).every((button) => !button.disabled),
+      toolbar.querySelector<HTMLButtonElement>('[data-action="row-delete"]')!
+        .disabled,
+    ).toBe(false);
+    expect(
+      toolbar.querySelector<HTMLButtonElement>('[data-action="col-delete"]')!
+        .disabled,
     ).toBe(true);
+    expect(
+      toolbar.querySelector<HTMLButtonElement>('[data-action="table-delete"]')!
+        .disabled,
+    ).toBe(false);
 
     app.view.dispatch(
       app.view.state.tr.setSelection(

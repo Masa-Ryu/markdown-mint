@@ -1296,6 +1296,17 @@ textarea:focus-visible {
   border-color: color-mix(in srgb, var(--mm-control-border) 82%, transparent);
 }
 
+.mm-table-delete-preview-overlay {
+  position: fixed;
+  z-index: 1;
+  inset: 0;
+  pointer-events: none;
+}
+.mm-table-delete-preview-rect {
+  position: absolute;
+  box-sizing: border-box;
+}
+.mm-table-delete-preview-rect,
 .mm-document-content .mm-table-delete-preview {
   background: color-mix(
     in srgb,
@@ -1401,6 +1412,10 @@ body.vscode-high-contrast-light .mm-block-gap-insert {
   .mm-table-toolbar-button[data-action="table-delete"]:focus-visible {
     border-color: Highlight;
     background: Canvas;
+  }
+  .mm-table-delete-preview-rect {
+    background: transparent;
+    box-shadow: inset 0 0 0 1px Highlight;
   }
   .mm-document-content .mm-table-delete-preview {
     background: Canvas;

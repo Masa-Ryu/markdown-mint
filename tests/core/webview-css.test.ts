@@ -40,6 +40,8 @@ describe("table delete styles", () => {
     expect(webviewCss).toContain(
       ".mm-document-content .mm-table-delete-preview",
     );
+    expect(webviewCss).toContain(".mm-table-delete-preview-overlay");
+    expect(webviewCss).toContain(".mm-table-delete-preview-rect");
     expect(webviewCss).toContain("--vscode-inputValidation-errorBorder");
   });
 });
