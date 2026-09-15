@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.2
+
+- Improve the table deletion toolbar by disabling Row and Column deletion for
+  full-axis cell selections while keeping Table deletion available.
+- Preview only the deleted logical row or column across rowspan and colspan
+  cells without changing the ProseMirror document, selection, or table layout.
+
 ## 0.3.1
 
 - Collapse a Rich Editor Selection Toolbar text selection to its ProseMirror
