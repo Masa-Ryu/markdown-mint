@@ -1,49 +1,67 @@
 # Markdown Mint
 
-**A visual WYSIWYG Markdown editor for VS Code.**
+## **Write visually. Stay in Markdown.**
 
-Edit Markdown visually with rich table editing, Mermaid, math,
-GitHub/GitLab Markdown support, and full access to the underlying `.md` source.
+A visual WYSIWYG Markdown editor for VS Code.
 
-**Write visually. Stay in Markdown.**
+Edit text, tables, checklists, and technical documentation directly in a visual editor—then switch to the Markdown source whenever you need precise control.
 
-![markdown mint demo](./docs/media/demo1.gif)
+No migration required. Just open the Markdown files you already have and start writing.
 
-## Features
+![overview](./docs/media/overview.gif)
 
-- Visual editing for headings, lists, links, images, code, and text formatting
-- Direct table editing with multi-cell selection and copy & paste
-- GitHub, GitLab, and CommonMark profiles
-- Editable Alerts and collapsible Details
-- Mermaid diagrams and math rendering
-- Syntax-highlighted code blocks
-- Markdown formatting with Prettier
-- Raw source editing whenever you need exact control
+## Focus on writing
 
-## Tables that behave like tables
+Markdown Mint is designed to keep formatting out of your way so you can focus on the content.
 
-Markdown tables no longer need to feel like editing pipes and spaces.
+Use **slash commands** `/` to quickly insert blocks and elements without reaching for Markdown syntax\.
 
-Select multiple cells, copy and paste rectangular ranges, add or remove rows and columns, change alignment, and navigate through cells directly.
+Select text to bring up a contextual toolbar with the formatting options you need, right where you need them.
 
-## Rich technical documentation
+Keyboard navigation is built in too. Use the **Tab key** to move through selectable elements and keep your hands on the keyboard.
 
-Markdown Mint supports richer technical documents while keeping them editable.
+Working with tables is just as simple. Copy and paste table content directly without manually editing Markdown syntax.
 
-Use Mermaid diagrams, math, Alerts, Details, code blocks, task lists, and platform-specific Markdown features directly from the visual editor.
+![focus-on-writing-demo](./docs/media/focus-on-writing-demo.gif)
 
-## GitHub, GitLab, and CommonMark
+## Platform-specific Markdown support
 
-Choose the profile that matches where your Markdown will be used.
+Markdown Mint supports Markdown features provided by platforms such as GitHub and GitLab.
 
-| Profile | Best for |
-| --- | --- |
-| GitHub | GitHub Flavored Markdown and GitHub-specific features |
-| GitLab | GitLab Markdown and GitLab-specific features |
-| CommonMark | Portable Markdown |
+With **GitHub Mode**, you can use GitHub-specific features such as **Alerts** and **Mermaid diagrams** directly in the visual editor.
+
+![platform-specific-demo](./docs/media/platform-specific-demo.gif)
+
+## More built-in features
+
+Markdown Mint includes additional tools for working with real-world Markdown documents:
+
+✅Add automatic numbering to tables\.
+
+✅Copy cells from Excel or Google Sheets and paste them directly into a Markdown table\.
+
+✅Drag and drop images from outside VS Code to insert them into your document\.
+
+✅Quickly create image references, URLs, and internal links with automatic suggestions and search\.
 
 ## Markdown stays Markdown
 
 Markdown Mint does not introduce a proprietary document format.
 
-Your Markdown file remains the source of truth. Edit visually when it is convenient, and switch back to the raw source whenever you need exact control.
+Your `.md` file remains the single source of truth.
+
+Edit visually when it is convenient, then switch to **Source** whenever you want to inspect or edit the underlying Markdown directly.
+
+Everything you create in the visual editor is still Markdown.
+
+![markdown-stays-markdown-demo](./docs/media/markdown-stays-markdown-demo.md.gif)
+
+## Easy to set up
+
+You can start using Markdown Mint with any existing Markdown file.
+
+When a Markdown file is open in the standard VS Code editor, click the **Markdown Mint** button to open it in the visual editor.
+
+If you prefer, you can also set Markdown Mint as the default editor for Markdown files so they automatically open in Mint.
+
+![easy-to-set-up-demo](./docs/media/easy-to-set-up-demo.gif)

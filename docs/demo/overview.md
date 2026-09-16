@@ -1,12 +1,10 @@
-# �Markdown Mint
+# 🌿Markdown Mint
 
 **Write visually. Stay in Markdown.**
 
 Markdown Mint is a visual Markdown editor for VS Code.
 
 Write **bold text**, *emphasize an idea*, ~~remove what you no longer need~~, add `inline code`, create [links](https://example.com), and keep everything as ordinary Markdown.
-
-![Markdown Mint editor](../images/readme/editor.png)
 
 > [!TIP]
 > Markdown Mint lets you work with the document itself instead of constantly editing Markdown syntax.
@@ -40,8 +38,6 @@ Instead of carefully editing pipes and spaces, work directly with cells.
 | GitHub profile | ✅ Ready | Morgan |
 
 Select several cells with the mouse, copy them, click another cell, and paste the whole rectangular range.
-
-![Table copy and paste](images/readme/table-demo.gif)
 
 Rows and columns can be added, removed, aligned, and edited without manually rebuilding the Markdown table.
 
@@ -83,8 +79,6 @@ $$
 \frac{\mathrm{completed}}{\mathrm{planned}}
 \times 100\%
 $$
-
-![Mermaid and math](images/readme/diagrams.png)
 
 ## Code belongs beside the explanation
 
