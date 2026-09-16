@@ -1,117 +1,56 @@
 # 🌿Markdown Mint
 
-**Write visually. Stay in Markdown.**
-
 Markdown Mint is a visual Markdown editor for VS Code.
 
-Write **bold text**, _emphasize an idea_, ~~remove what you no longer need~~, add `inline code`, create [links](https://example.com), and keep everything as ordinary Markdown.
-
-> [!TIP]
-> Markdown Mint lets you work with the document itself instead of constantly editing Markdown syntax.
+Write naturally, use visual controls when you need them, and keep everything as Markdown.
 
 ## Write naturally
 
-Create headings, lists, checklists, quotes, links, images, code blocks, and more from the same editing surface.
+Type Markdown-style shortcuts and Mint turns them into structured content as you write.
 
-A release note can simply look like this:
+Select text and apply **formatting right where you are**.
 
-- Finish the feature
-- Review the documentation
-- Publish the extension
+Use `/` to insert blocks without leaving the document.
 
-And nested content stays readable:
+- [x] Write the content
+- [x] Review the document
+- [ ] Publish
 
-1. Prepare the release
-   - Check the Markdown
-   - Review the preview
-2. Publish
-3. Celebrate 🎉
+## Edit tables visually
 
-## Tables that behave like tables
+Work with cells instead of pipes and spaces.
 
-Instead of carefully editing pipes and spaces, work directly with cells.
+| Feature      | Experience |
+| ------------ | ---------- |
+| Cell editing | Direct     |
+| Navigation   | Tab        |
 
-| Feature        |  Status   |  Owner |
-| :------------- | :-------: | -----: |
-| Visual editing | ✅ Ready  |  Alice |
-| Table controls | 🚧 Review |    Sam |
-| GitHub profile | ✅ Ready  | Morgan |
+Add rows, move between cells, and keep the Markdown table underneath.
 
-Select several cells with the mouse, copy them, click another cell, and paste the whole rectangular range.
+## Use richer Markdown
 
-Rows and columns can be added, removed, aligned, and edited without manually rebuilding the Markdown table.
+GitHub-specific blocks are available from the same editor.
 
-## GitHub, GitLab, or CommonMark
+> [!TIP]
+> Insert Alerts without writing the syntax by hand.
 
-Markdown Mint can adapt the editing experience to where the document will be used.
-
-| Profile        | Typical use                                                |
-| -------------- | ---------------------------------------------------------- |
-| **GitHub**     | GFM tables, task lists, Alerts, Mermaid, math              |
-| **GitLab**     | GitLab Markdown plus TOC, description lists, and diff text |
-| **CommonMark** | Portable Markdown with fewer platform-specific extensions  |
-
-The Markdown file remains the same kind of `.md` file you already use.
-
-## Diagrams inside the document
-
-Documentation does not have to stop at text.
-
-```mermaid
-flowchart LR
-    Draft --> Review
-    Review --> Ready{Ready?}
-    Ready -->|Yes| Release
-    Ready -->|No| Draft
-```
-
-A diagram can live beside the explanation instead of in another tool.
-
-## Math stays readable too
-
-Inline math such as $E = mc^2$ can stay inside a sentence.
-
-Larger equations can stand on their own:
-
-$$
-\mathrm{Progress}
-=
-\frac{\mathrm{completed}}{\mathrm{planned}}
-\times 100\%
-$$
-
-## Code belongs beside the explanation
+Code blocks stay beside the explanation:
 
 ```typescript
-const document = {
-  format: "Markdown",
-  editor: "Markdown Mint",
-  visual: true,
-};
+const editor = "Markdown Mint";
 ```
 
-Choose the language and keep syntax-highlighted code together with the rest of the document.
-
-## Keep advanced content out of the way
+## Keep details tidy
 
 <details>
-<summary>More details</summary>
+<summary>More features</summary>
 
-Collapsible sections can keep long explanations available without making the main document noisy.
-
-The same document can still contain **formatted text**, lists, code, and links.
+Use collapsible sections to keep extra information available without cluttering the document.
 
 </details>
 
 ## Markdown stays Markdown
 
-Markdown Mint does not introduce a proprietary document format.
+Your `.md` file remains the source of truth.
 
-The visual editor works on the same Markdown document, and the raw source is always available when you need exact control.
-
-> [!NOTE]
-> Some platform-specific or advanced syntax may still require source editing.
-
-That is the main idea:
-
-**a richer editing experience without giving up Markdown.**
+Switch to Source whenever you want to inspect the Markdown directly.

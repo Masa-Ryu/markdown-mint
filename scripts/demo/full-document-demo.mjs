@@ -17,11 +17,12 @@ const envNumber = (name, fallback, minimum = 0) => {
 const timing = {
   typeMs: envNumber("MM_DEMO_TYPE_MS", 20),
   stepMs: envNumber("MM_DEMO_STEP_MS", 500),
-  sectionMs: envNumber("MM_DEMO_SECTION_MS", 900),
+  sectionMs: envNumber("MM_DEMO_SECTION_MS", 800),
   featureRevealMs: envNumber("MM_DEMO_FEATURE_REVEAL_MS", 900),
   featureNavigateMs: envNumber("MM_DEMO_FEATURE_NAVIGATE_MS", 300),
-  featureCommitMs: envNumber("MM_DEMO_FEATURE_COMMIT_MS", 700),
-  featureResultMs: envNumber("MM_DEMO_FEATURE_RESULT_MS", 1000),
+  featureCommitMs: envNumber("MM_DEMO_FEATURE_COMMIT_MS", 650),
+  featureResultMs: envNumber("MM_DEMO_FEATURE_RESULT_MS", 900),
+  scrollMs: envNumber("MM_DEMO_SCROLL_MS", 650),
   sourceHoldMs: envNumber("MM_DEMO_SOURCE_HOLD_MS", 1200, 1200),
   finalHoldMs: envNumber("MM_DEMO_FINAL_HOLD_MS", 3000),
   slowMo: envNumber("MM_DEMO_SLOWMO", 40),
@@ -32,6 +33,8 @@ const demoBackground = process.env.MM_DEMO_BACKGROUND ?? "#FCF7E5";
 const demoForeground = process.env.MM_DEMO_FOREGROUND ?? "#3B3A32";
 const unsupportedFeatures = [];
 const bugs = [];
+const centeredFeatures = [];
+const headingConversions = [];
 
 const wait = (ms) => new Promise((resolveWait) => setTimeout(resolveWait, ms));
 
@@ -103,6 +106,42 @@ async function pause(ms = timing.stepMs) {
   await wait(ms);
 }
 
+async function centerOn(page, locator, description) {
+  await waitForVisible(locator, `${description} target`);
+  await locator.evaluate((element, maxDuration) => {
+    element.scrollIntoView({
+      block: "center",
+      inline: "nearest",
+      behavior: "smooth",
+    });
+    return new Promise((resolve) => {
+      const started = performance.now();
+      let previousTop = element.getBoundingClientRect().top;
+      let stableFrames = 0;
+      const settle = () => {
+        const rect = element.getBoundingClientRect();
+        const currentTop = rect.top;
+        const centered =
+          Math.abs((rect.top + rect.bottom) / 2 - innerHeight / 2) < 90;
+        if (Math.abs(currentTop - previousTop) < 0.5) stableFrames += 1;
+        else stableFrames = 0;
+        previousTop = currentTop;
+        if (
+          (centered && stableFrames >= 2) ||
+          performance.now() - started >= maxDuration
+        ) {
+          resolve();
+          return;
+        }
+        requestAnimationFrame(settle);
+      };
+      requestAnimationFrame(settle);
+    });
+  }, timing.scrollMs);
+  centeredFeatures.push(description);
+  await pause();
+}
+
 async function featureReveal() {
   await pause(timing.featureRevealMs);
 }
@@ -163,11 +202,8 @@ async function prepareParagraph(page) {
   const state = await page.evaluate(() => {
     const selection = window.markdownMint?.view?.state.selection;
     return {
-      kind: selection?.constructor?.name,
       parent: selection?.$from?.parent?.type?.name,
       empty: selection?.empty,
-      parentOffset: selection?.$from?.parentOffset,
-      parentSize: selection?.$from?.parent?.content?.size,
     };
   });
   if (state.parent === "code_block") {
@@ -198,9 +234,35 @@ async function newParagraph(page) {
   await prepareParagraph(page);
 }
 
-async function selectHeadingLevel(page, level) {
-  const select = page.locator(".mm-heading-select");
-  await select.selectOption(String(level));
+async function typeHeadingShortcut(
+  page,
+  level,
+  text,
+  { starter = false } = {},
+) {
+  if (starter) {
+    // The empty-document starter is a virtual H1. Materialize one empty
+    // paragraph, remove that untouched virtual heading with the normal
+    // Backspace path, and then use the same input rule as every later
+    // heading.
+    await focusEditor(page);
+    await page.keyboard.press("Enter");
+    await waitForEmptyParagraph(page);
+    await page.keyboard.press("Backspace");
+    await waitForEmptyParagraph(page);
+  } else {
+    await newParagraph(page);
+  }
+  const emptyParagraph = page.locator(".mm-rich-panel .ProseMirror p").last();
+  await centerOn(
+    page,
+    emptyParagraph,
+    starter ? "first heading transformation" : `heading level ${level}`,
+  );
+  await focusEditor(page);
+  for (let index = 0; index < level; index += 1) await page.keyboard.type("#");
+  await pause();
+  await page.keyboard.type(" ");
   await page.waitForFunction((expectedLevel) => {
     const selection = window.markdownMint?.view?.state.selection;
     return (
@@ -208,13 +270,8 @@ async function selectHeadingLevel(page, level) {
       selection.$from.parent.attrs.level === Number(expectedLevel)
     );
   }, level);
-}
-
-async function insertHeading(page, level, text, { starter = false } = {}) {
-  if (!starter) await newParagraph(page);
-  if (starter) await page.locator(".mm-heading-select").selectOption("p");
-  await selectHeadingLevel(page, level);
-  await focusEditor(page);
+  headingConversions.push({ level, text });
+  await pause();
   await typeText(page, text);
   await page.waitForFunction(
     ({ expectedLevel, expectedText }) =>
@@ -224,6 +281,14 @@ async function insertHeading(page, level, text, { starter = false } = {}) {
         ),
       ).some((heading) => heading.textContent === expectedText),
     { expectedLevel: level, expectedText: text },
+  );
+  await centerOn(
+    page,
+    page
+      .locator(`.mm-rich-panel .ProseMirror h${level}`)
+      .filter({ hasText: text })
+      .last(),
+    `heading result: ${text}`,
   );
   await pause();
 }
@@ -257,14 +322,19 @@ async function rangeForText(locator, text) {
   }, text);
 }
 
-async function selectVisibleText(page, text, scope) {
+async function selectVisibleText(
+  page,
+  text,
+  scope,
+  description = `selection: ${text}`,
+) {
   const target =
     scope ??
     page
       .locator(".mm-rich-panel .ProseMirror p")
       .filter({ hasText: text })
       .first();
-  await target.scrollIntoViewIfNeeded();
+  await centerOn(page, target, description);
   const range = await rangeForText(target, text);
   assert.ok(range, `Could not find visible text: ${text}`);
   await page.mouse.move(range.start.x, range.start.y);
@@ -286,9 +356,8 @@ async function selectVisibleText(page, text, scope) {
 }
 
 async function applySelectionToolbar(page, label) {
-  const accessibleLabel = label === "Strikethrough" ? "Strike" : label;
   const button = page.getByRole("button", {
-    name: `${accessibleLabel} selection`,
+    name: `${label} selection`,
     exact: true,
   });
   await waitForVisible(button, `${label} selection button`);
@@ -298,12 +367,17 @@ async function applySelectionToolbar(page, label) {
 }
 
 async function formatRange(page, text, label) {
-  await selectVisibleText(page, text);
+  await selectVisibleText(page, text, undefined, `${label} contextual toolbar`);
   await applySelectionToolbar(page, label);
 }
 
 async function openSlashMenu(page) {
   await prepareParagraph(page);
+  await centerOn(
+    page,
+    page.locator(".mm-rich-panel .ProseMirror p").last(),
+    "slash command",
+  );
   await focusEditor(page);
   await page.keyboard.type("/");
   const menu = page.locator(".mm-empty-line-popup");
@@ -371,10 +445,50 @@ async function chooseInsertCommand(page, label) {
   await featureResult();
 }
 
+async function insertTaskList(page, items) {
+  await chooseInsertCommand(page, "Task list");
+  const checkbox = page.locator(".mm-rich-panel .mm-task-checkbox").first();
+  await checkbox.waitFor({ state: "visible" });
+  await centerOn(page, checkbox, "task list");
+  for (let index = 0; index < items.length; index += 1) {
+    await typeText(page, items[index]);
+    if (index < items.length - 1) await page.keyboard.press("Enter");
+  }
+  await page.keyboard.press("Enter");
+  await page.keyboard.press("Enter");
+  await page.waitForFunction(
+    (expectedItems) =>
+      Array.from(document.querySelectorAll(".mm-rich-panel .mm-task-item"))
+        .map((item) =>
+          item.querySelector(".mm-task-content")?.textContent?.trim(),
+        )
+        .slice(-expectedItems.length)
+        .join("\n") === expectedItems.join("\n"),
+    items,
+  );
+  const checkboxes = page.locator(".mm-rich-panel .mm-task-checkbox");
+  await centerOn(page, checkboxes.first(), "task list checkboxes");
+  await featureReveal();
+  await checkboxes.nth(0).click();
+  await page.waitForFunction(
+    () =>
+      document.querySelectorAll(".mm-rich-panel .mm-task-checkbox")[0]?.checked,
+  );
+  await featureResult();
+  await featureCommit();
+  await checkboxes.nth(1).click();
+  await page.waitForFunction(
+    () =>
+      document.querySelectorAll(".mm-rich-panel .mm-task-checkbox")[1]?.checked,
+  );
+  await featureResult();
+}
+
 async function insertAlert(page, type, body) {
   await chooseInsertCommand(page, "Alert");
   const dialog = page.locator(".mm-profile-feature-dialog[open]");
   await waitForVisible(dialog, "Alert dialog");
+  await centerOn(page, dialog, "Alert");
   await featureReveal();
   await dialog.locator('[data-feature-field="alert-type"]').selectOption(type);
   await featureNavigate();
@@ -389,6 +503,11 @@ async function insertAlert(page, type, body) {
           node.querySelector("textarea")?.value.includes(expectedBody),
       ),
     body,
+  );
+  await centerOn(
+    page,
+    page.locator(".mm-rich-panel .mm-alert-node-view").last(),
+    "Alert result",
   );
   await featureResult();
 }
@@ -421,8 +540,9 @@ async function insertTable(page, rows, columns, values) {
     },
     { expectedRows: rows, expectedColumns: columns },
   );
-  await featureResult();
   const table = page.locator(".mm-rich-panel .ProseMirror table").last();
+  await centerOn(page, table, "table insertion/editing");
+  await featureResult();
   await table.locator("th,td").first().click();
   for (let row = 0; row < values.length; row += 1) {
     for (let column = 0; column < values[row].length; column += 1) {
@@ -444,35 +564,6 @@ async function insertTable(page, rows, columns, values) {
   await featureResult();
 }
 
-async function setTableColumnAlignment(
-  page,
-  columnIndex,
-  action,
-  expectedAlign,
-) {
-  const table = page.locator(".mm-rich-panel .ProseMirror table").last();
-  await table.locator("tr").first().locator("th,td").nth(columnIndex).click();
-  const button = page.locator(`.mm-table-toolbar [data-action="${action}"]`);
-  await waitForVisible(button, `Table ${action} control`);
-  await featureReveal();
-  await button.click();
-  await page.waitForFunction(
-    ({ expectedColumn, expectedValue }) => {
-      const tables = document.querySelectorAll(
-        ".mm-rich-panel .ProseMirror table",
-      );
-      const table = tables[tables.length - 1];
-      const cell = table?.querySelector("tr")?.children[expectedColumn];
-      return (
-        cell instanceof HTMLElement &&
-        getComputedStyle(cell).textAlign === expectedValue
-      );
-    },
-    { expectedColumn: columnIndex, expectedValue: expectedAlign },
-  );
-  await featureResult();
-}
-
 async function exitTable(page) {
   await page.keyboard.press("Escape");
   await page.waitForFunction(() => {
@@ -484,50 +575,11 @@ async function exitTable(page) {
   });
 }
 
-async function insertMermaid(page, source) {
-  await chooseInsertCommand(page, "Mermaid diagram");
-  const dialog = page.locator(".mm-profile-feature-dialog[open]");
-  await waitForVisible(dialog, "Mermaid dialog");
-  await featureReveal();
-  const body = dialog.locator('[data-feature-field="body"]');
-  await body.fill(source);
-  const status = dialog.locator(".mm-mermaid-validation-status");
-  await page.waitForFunction(
-    () =>
-      document.querySelector(".mm-mermaid-validation-status")?.dataset
-        .validationState === "valid",
-  );
-  assert.equal(await status.getAttribute("data-validation-state"), "valid");
-  await featureCommit();
-  await dialog.getByRole("button", { name: "Insert", exact: true }).click();
-  await page.waitForFunction(() =>
-    Array.from(document.querySelectorAll('[data-mm-mermaid="true"]')).some(
-      (node) =>
-        node.getAttribute("data-mm-mermaid-state") === "rendered" &&
-        node.querySelector("svg"),
-    ),
-  );
-  await featureResult();
-}
-
-async function insertMath(page, expression) {
-  await chooseInsertCommand(page, "Math");
-  const dialog = page.locator(".mm-profile-feature-dialog[open]");
-  await waitForVisible(dialog, "Math dialog");
-  await featureReveal();
-  await dialog.locator('[data-feature-field="body"]').fill(expression);
-  await featureCommit();
-  await dialog.getByRole("button", { name: "Insert", exact: true }).click();
-  await page.waitForFunction(() =>
-    Boolean(document.querySelector(".mm-rich-panel .mm-math-block")),
-  );
-  await featureResult();
-}
-
 async function insertCodeBlock(page, language, lines) {
   await chooseInsertCommand(page, "Code block");
   const codeBlock = page.locator(".mm-rich-panel .mm-code-block").last();
   await codeBlock.waitFor({ state: "visible" });
+  await centerOn(page, codeBlock, "Code block");
   await featureReveal();
   const languageTrigger = codeBlock.locator(".mm-code-language-trigger");
   await languageTrigger.click();
@@ -567,6 +619,7 @@ async function insertCodeBlock(page, language, lines) {
     },
     { expectedText: lines.join("\n"), expectedLanguage: language },
   );
+  await centerOn(page, codeBlock, "Code block result");
   await featureResult();
 }
 
@@ -574,6 +627,7 @@ async function insertDetails(page, summary, bodyLines) {
   await chooseInsertCommand(page, "Details");
   const dialog = page.locator(".mm-profile-feature-dialog[open]");
   await waitForVisible(dialog, "Details dialog");
+  await centerOn(page, dialog, "Details");
   await featureReveal();
   await dialog.locator('[data-feature-field="title"]').fill(summary);
   await dialog
@@ -590,6 +644,7 @@ async function insertDetails(page, summary, bodyLines) {
         ?.textContent === expected
     );
   }, summary);
+  await centerOn(page, details, "Details result");
   await featureResult();
   const toggle = details.locator(
     ":scope > .mm-details-header > .mm-details-toggle",
@@ -638,36 +693,6 @@ async function insertDetails(page, summary, bodyLines) {
     if (open === "false") await toggle.click();
   }
   await featureResult();
-
-  const formatted = "formatted text";
-  const bodyParagraph = details
-    .locator(".mm-details-body p")
-    .filter({ hasText: formatted })
-    .first();
-  await selectVisibleText(page, formatted, bodyParagraph);
-  const selectionButton = page.getByRole("button", {
-    name: "Bold selection",
-    exact: true,
-  });
-  if (await selectionButton.isVisible()) {
-    await featureReveal();
-    await selectionButton.click();
-    await page.waitForFunction(
-      (expected) =>
-        Array.from(
-          document.querySelectorAll(".mm-rich-panel .mm-details-body strong"),
-        ).some((node) => node.textContent === expected),
-      formatted,
-    );
-    await featureResult();
-  } else {
-    unsupportedFeatures.push(
-      "Details body contextual formatting: the shared selection toolbar is not exposed for this NodeView selection.",
-    );
-    console.log(
-      "  ! Details body selection toolbar is unavailable; leaving its body text unformatted.",
-    );
-  }
   await page.keyboard.press("Control+e");
   await page.keyboard.press("ArrowDown");
   await page.waitForFunction(() => {
@@ -721,34 +746,25 @@ function canonicalSource(source) {
 async function validateSource(page) {
   const expected = await readFile(expectedPath, "utf8");
   const actual = await generatedSource(page);
-  const expectedWithoutUnsupportedInlineMath = expected.replace(
-    "Inline math such as $E = mc^2$ can stay inside a sentence.",
-    "Inline math such as E = mc^2 can stay inside a sentence.",
-  );
   assert.equal(
     canonicalSource(actual),
-    canonicalSource(expectedWithoutUnsupportedInlineMath),
+    canonicalSource(expected),
     "Generated Markdown differs from the expected semantic document",
   );
   for (const structure of [
     "# 🌿Markdown Mint",
     "## Write naturally",
-    "**bold text**",
-    "_emphasize an idea_",
-    "~~remove what you no longer need~~",
-    "`inline code`",
-    "[links](https://example.com)",
+    "**formatting right where you are**",
+    "- [x] Write the content",
+    "- [x] Review the document",
+    "- [ ] Publish",
+    "|Feature|Experience|",
     "> [!TIP]",
-    "- Finish the feature",
-    "1. Prepare the release",
-    "   - Check the Markdown",
-    "|Feature|Status|Owner|",
-    "```mermaid",
-    "$$",
+    "Insert Alerts without writing the syntax by hand.",
     "```typescript",
+    'const editor = "Markdown Mint";',
     "<details>",
-    "> [!NOTE]",
-    "**a richer editing experience without giving up Markdown.**",
+    "## Markdown stays Markdown",
   ])
     assert.ok(
       canonicalSource(actual).includes(structure),
@@ -773,69 +789,71 @@ async function inspectRichDocument(page) {
         ),
       }),
     );
+    const tasks = Array.from(root?.querySelectorAll(".mm-task-item") ?? []).map(
+      (item) => ({
+        text: item.querySelector(".mm-task-content")?.textContent?.trim(),
+        checked: item.querySelector(".mm-task-checkbox")?.checked,
+      }),
+    );
     return {
       headings: text("h1,h2"),
       strong: text("strong"),
-      emphasis: text("em"),
-      strike: text("s,del"),
-      code: text("code"),
-      links: Array.from(root?.querySelectorAll("a") ?? []).map((link) => ({
-        text: link.textContent,
-        href: link.getAttribute("href"),
-      })),
-      lists: Array.from(root?.querySelectorAll("ul,ol") ?? []).map((list) => ({
-        type: list.tagName,
-        items: list.children.length,
-        nested: Boolean(list.closest("li")),
-      })),
+      tasks,
       tables,
       alerts: Array.from(root?.querySelectorAll(".markdown-alert") ?? []).map(
         (alert) => alert.className,
       ),
-      mermaid: Boolean(root?.querySelector('[data-mm-mermaid="true"] svg')),
-      math: Boolean(root?.querySelector(".mm-math-block")),
       codeBlock: root?.querySelector(".mm-code-block")?.dataset.mmCodeLanguage,
       details: {
         summary: root?.querySelector(".mm-details-summary")?.textContent,
-        body: root?.querySelector(".mm-details-body")?.textContent,
+        body: root
+          ?.querySelector(".mm-details-body")
+          ?.textContent?.replace(/\s+/g, " ")
+          .trim(),
         open: root?.querySelector(".mm-details-node")?.dataset.mmDetailsOpen,
       },
     };
   });
-  assert.equal(report.headings[0], "🌿Markdown Mint");
-  assert.equal(report.tables.length, 2);
+  assert.deepEqual(report.headings, [
+    "🌿Markdown Mint",
+    "Write naturally",
+    "Edit tables visually",
+    "Use richer Markdown",
+    "Keep details tidy",
+    "Markdown stays Markdown",
+  ]);
+  assert.deepEqual(report.strong, ["formatting right where you are"]);
+  assert.deepEqual(report.tasks, [
+    { text: "Write the content", checked: true },
+    { text: "Review the document", checked: true },
+    { text: "Publish", checked: false },
+  ]);
+  assert.equal(report.tables.length, 1);
   assert.deepEqual(report.tables[0], {
-    rows: 4,
-    columns: 3,
+    rows: 3,
+    columns: 2,
     cells: [
       "Feature",
-      "Status",
-      "Owner",
-      "Visual editing",
-      "✅ Ready",
-      "Alice",
-      "Table controls",
-      "🚧 Review",
-      "Sam",
-      "GitHub profile",
-      "✅ Ready",
-      "Morgan",
+      "Experience",
+      "Cell editing",
+      "Direct",
+      "Navigation",
+      "Tab",
     ],
   });
-  assert.deepEqual(report.tables[1].cells.slice(0, 2), [
-    "Profile",
-    "Typical use",
-  ]);
-  assert.equal(report.alerts.length, 2);
-  assert.equal(report.mermaid, true);
-  assert.equal(report.math, true);
+  assert.equal(report.alerts.length, 1);
   assert.equal(report.codeBlock, "TypeScript");
-  assert.equal(report.details.summary, "More details");
+  assert.equal(report.details.summary, "More features");
+  assert.equal(
+    report.details.body,
+    "Use collapsible sections to keep extra information available without cluttering the document.",
+  );
   assert.equal(report.details.open, "true");
   console.log("Rich document inspection:", JSON.stringify(report, null, 2));
 }
 
 async function main() {
+  const startedAt = Date.now();
   const { server, failed } = startServer();
   let browser;
   try {
@@ -947,265 +965,92 @@ async function main() {
     console.log(`Starting empty GitHub document at ${baseUrl}`);
     console.log("Timing:", timing);
 
-    await insertHeading(page, 1, "🌿Markdown Mint", { starter: true });
-    await paragraph(page, "Write visually. Stay in Markdown.");
-    await formatRange(page, "Write visually. Stay in Markdown.", "Bold");
+    await typeHeadingShortcut(page, 1, "🌿Markdown Mint", { starter: true });
     await paragraph(
       page,
       "Markdown Mint is a visual Markdown editor for VS Code.",
     );
     await paragraph(
       page,
-      "Write bold text, emphasize an idea, remove what you no longer need, add inline code, create links, and keep everything as ordinary Markdown.",
+      "Write naturally, use visual controls when you need them, and keep everything as Markdown.",
     );
-    await formatRange(page, "bold text", "Bold");
-    await formatRange(page, "emphasize an idea", "Italic");
-    await formatRange(page, "remove what you no longer need", "Strikethrough");
-    await formatRange(page, "inline code", "Inline code");
-    await selectVisibleText(page, "links");
-    const linkButton = page.getByRole("button", {
-      name: "Link selection",
-      exact: true,
-    });
-    await waitForVisible(linkButton, "Link selection button");
-    await featureReveal();
-    await linkButton.click();
-    const linkPicker = page.locator('.mm-link-picker[aria-hidden="false"]');
-    await waitForVisible(linkPicker, "Link picker");
-    await featureReveal();
-    await linkPicker
-      .locator('[data-testid="link-picker-input"]')
-      .fill("https://example.com");
-    await featureCommit();
-    await linkPicker
-      .locator('[data-testid="link-picker-input"]')
-      .press("Enter");
-    await page.waitForFunction(
-      () =>
-        document.querySelector(
-          '.mm-rich-panel .ProseMirror a[href="https://example.com"]',
-        )?.textContent === "links",
+
+    await typeHeadingShortcut(page, 2, "Write naturally");
+    await paragraph(
+      page,
+      "Type Markdown-style shortcuts and Mint turns them into structured content as you write.",
     );
-    await featureResult();
-    await page.locator(".mm-rich-panel .ProseMirror").focus();
-    await prepareParagraph(page);
+    await paragraph(
+      page,
+      "Select text and apply formatting right where you are.",
+    );
+    await formatRange(page, "formatting right where you are", "Bold");
+    await paragraph(
+      page,
+      "Use `/` to insert blocks without leaving the document.",
+    );
+    await insertTaskList(page, [
+      "Write the content",
+      "Review the document",
+      "Publish",
+    ]);
+
+    await typeHeadingShortcut(page, 2, "Edit tables visually");
+    await paragraph(page, "Work with cells instead of pipes and spaces.");
+    await insertTable(page, 3, 2, [
+      ["Feature", "Experience"],
+      ["Cell editing", "Direct"],
+      ["Navigation", "Tab"],
+    ]);
+    await exitTable(page);
+    await paragraph(
+      page,
+      "Add rows, move between cells, and keep the Markdown table underneath.",
+    );
+
+    await typeHeadingShortcut(page, 2, "Use richer Markdown");
+    await paragraph(
+      page,
+      "GitHub-specific blocks are available from the same editor.",
+    );
     await insertAlert(
       page,
       "TIP",
-      "Markdown Mint lets you work with the document itself instead of constantly editing Markdown syntax.",
+      "Insert Alerts without writing the syntax by hand.",
     );
-    await insertHeading(page, 2, "Write naturally");
-    await paragraph(
-      page,
-      "Create headings, lists, checklists, quotes, links, images, code blocks, and more from the same editing surface.",
-    );
-    await paragraph(page, "A release note can simply look like this:");
-    await chooseInsertCommand(page, "Bullet list");
-    for (const item of [
-      "Finish the feature",
-      "Review the documentation",
-      "Publish the extension",
-    ]) {
-      await typeText(page, item);
-      if (item !== "Publish the extension") await page.keyboard.press("Enter");
-    }
-    await page.keyboard.press("Enter");
-    await page.keyboard.press("Enter");
-    await page.waitForFunction(
-      () =>
-        document.querySelectorAll(".mm-rich-panel .ProseMirror ul").length >= 1,
-    );
-    await paragraph(page, "And nested content stays readable:");
-    await chooseInsertCommand(page, "Ordered list");
-    await typeText(page, "Prepare the release");
-    await page.keyboard.press("Enter");
-    await page.keyboard.press("Tab");
-    await page.waitForFunction(
-      () =>
-        document.querySelectorAll(".mm-rich-panel .ProseMirror ol ol").length >=
-        1,
-    );
-    await page
-      .locator('.mm-toolbar [data-testid="toolbar-bullet-list"]')
-      .click();
-    await typeText(page, "Check the Markdown");
-    await page.keyboard.press("Enter");
-    await typeText(page, "Review the preview");
-    await page.keyboard.press("Enter");
-    await page.keyboard.press("Shift+Tab");
-    await typeText(page, "Publish");
-    await page.keyboard.press("Enter");
-    await typeText(page, "Celebrate 🎉");
-    await page.keyboard.press("Enter");
-    await page.keyboard.press("Enter");
-    await page.waitForFunction(() => {
-      const root = document.querySelector(".mm-rich-panel .ProseMirror");
-      return Boolean(
-        root?.querySelector("ol ul") &&
-        root?.textContent?.includes("Celebrate 🎉"),
-      );
-    });
-    await pause(timing.sectionMs);
-
-    await insertHeading(page, 2, "Tables that behave like tables");
-    await paragraph(
-      page,
-      "Instead of carefully editing pipes and spaces, work directly with cells.",
-    );
-    await insertTable(page, 4, 3, [
-      ["Feature", "Status", "Owner"],
-      ["Visual editing", "✅ Ready", "Alice"],
-      ["Table controls", "🚧 Review", "Sam"],
-      ["GitHub profile", "✅ Ready", "Morgan"],
-    ]);
-    await setTableColumnAlignment(page, 0, "align-left", "left");
-    await setTableColumnAlignment(page, 1, "align-center", "center");
-    await setTableColumnAlignment(page, 2, "align-right", "right");
-    await exitTable(page);
-    await paragraph(
-      page,
-      "Select several cells with the mouse, copy them, click another cell, and paste the whole rectangular range.",
-    );
-    await paragraph(
-      page,
-      "Rows and columns can be added, removed, aligned, and edited without manually rebuilding the Markdown table.",
-    );
-
-    await insertHeading(page, 2, "GitHub, GitLab, or CommonMark");
-    await paragraph(
-      page,
-      "Markdown Mint can adapt the editing experience to where the document will be used.",
-    );
-    await insertTable(page, 4, 2, [
-      ["Profile", "Typical use"],
-      ["GitHub", "GFM tables, task lists, Alerts, Mermaid, math"],
-      ["GitLab", "GitLab Markdown plus TOC, description lists, and diff text"],
-      [
-        "CommonMark",
-        "Portable Markdown with fewer platform-specific extensions",
-      ],
-    ]);
-    for (const profile of ["GitHub", "GitLab", "CommonMark"]) {
-      const cell = page
-        .locator(".mm-rich-panel .ProseMirror table")
-        .last()
-        .locator("td")
-        .filter({ hasText: profile })
-        .first();
-      await selectVisibleText(page, profile, cell.locator("p"));
-      const selectionButton = page.getByRole("button", {
-        name: "Bold selection",
-        exact: true,
-      });
-      if (await selectionButton.isVisible()) {
-        await selectionButton.click();
-      } else {
-        unsupportedFeatures.push(
-          "Table cell contextual formatting: selectionTouchesTable() in src/webview/editor.ts intentionally hides the Selection Toolbar for table selections; the demo uses the main Bold toolbar on the same real selection as a user-facing fallback.",
-        );
-        await page.locator('.mm-toolbar [data-testid="toolbar-bold"]').click();
-      }
-      await page.waitForFunction(
-        (expected) =>
-          Array.from(
-            document.querySelectorAll(
-              ".mm-rich-panel .ProseMirror table:last-of-type strong",
-            ),
-          ).some((node) => node.textContent === expected),
-        profile,
-      );
-    }
-    await exitTable(page);
-    await paragraph(
-      page,
-      "The Markdown file remains the same kind of .md file you already use.",
-    );
-    await formatRange(page, ".md", "Inline code");
-
-    await insertHeading(page, 2, "Diagrams inside the document");
-    await paragraph(page, "Documentation does not have to stop at text.");
-    await insertMermaid(
-      page,
-      [
-        "flowchart LR",
-        "    Draft --> Review",
-        "    Review --> Ready{Ready?}",
-        "    Ready -->|Yes| Release",
-        "    Ready -->|No| Draft",
-      ].join("\n"),
-    );
-    await paragraph(
-      page,
-      "A diagram can live beside the explanation instead of in another tool.",
-    );
-
-    await insertHeading(page, 2, "Math stays readable too");
-    await paragraph(
-      page,
-      "Inline math such as E = mc^2 can stay inside a sentence.",
-    );
-    unsupportedFeatures.push(
-      "Inline Math authoring: src/webview/profileFeatures.ts exposes Math only as a block profile feature; no Rich UI path exists for selecting text and inserting inline Math.",
-    );
-    console.log(
-      "  ! Inline Math is not authored: the inspected Rich UI has no inline Math feature.",
-    );
-    await paragraph(page, "Larger equations can stand on their own:");
-    await insertMath(
-      page,
-      [
-        "\\mathrm{Progress}",
-        "=",
-        "\\frac{\\mathrm{completed}}{\\mathrm{planned}}",
-        "\\times 100\\%",
-      ].join("\n"),
-    );
-
-    await insertHeading(page, 2, "Code belongs beside the explanation");
+    await paragraph(page, "Code blocks stay beside the explanation:");
     await insertCodeBlock(page, "TypeScript", [
-      "const document = {",
-      '  format: "Markdown",',
-      '  editor: "Markdown Mint",',
-      "  visual: true,",
-      "};",
-    ]);
-    await paragraph(
-      page,
-      "Choose the language and keep syntax-highlighted code together with the rest of the document.",
-    );
-
-    await insertHeading(page, 2, "Keep advanced content out of the way");
-    await insertDetails(page, "More details", [
-      "Collapsible sections can keep long explanations available without making the main document noisy.",
-      "",
-      "The same document can still contain formatted text, lists, code, and links.",
+      'const editor = "Markdown Mint";',
     ]);
 
-    await insertHeading(page, 2, "Markdown stays Markdown");
+    await typeHeadingShortcut(page, 2, "Keep details tidy");
+    await insertDetails(page, "More features", [
+      "Use collapsible sections to keep extra information available without cluttering the document.",
+    ]);
+
+    await typeHeadingShortcut(page, 2, "Markdown stays Markdown");
+    await paragraph(page, "Your `.md` file remains the source of truth.");
     await paragraph(
       page,
-      "Markdown Mint does not introduce a proprietary document format.",
+      "Switch to Source whenever you want to inspect the Markdown directly.",
     );
-    await paragraph(
+    await centerOn(
       page,
-      "The visual editor works on the same Markdown document, and the raw source is always available when you need exact control.",
-    );
-    await insertAlert(
-      page,
-      "NOTE",
-      "Some platform-specific or advanced syntax may still require source editing.",
-    );
-    await paragraph(page, "That is the main idea:");
-    await paragraph(
-      page,
-      "a richer editing experience without giving up Markdown.",
-    );
-    await formatRange(
-      page,
-      "a richer editing experience without giving up Markdown.",
-      "Bold",
+      page
+        .locator(".mm-rich-panel .ProseMirror p")
+        .filter({
+          hasText:
+            "Switch to Source whenever you want to inspect the Markdown directly.",
+        })
+        .last(),
+      "final Markdown stays Markdown section",
     );
     await inspectRichDocument(page);
+    assert.deepEqual(
+      headingConversions.map(({ level }) => level),
+      [1, 2, 2, 2, 2, 2],
+      "Every demo heading must be created by its Markdown input rule",
+    );
     await pause(timing.sectionMs);
 
     const sourceButton = page.locator(".mm-source-button");
@@ -1222,7 +1067,7 @@ async function main() {
     const source = await validateSource(page);
     console.log(`Generated source length: ${source.length}`);
     console.log(
-      "  ✓ Source contains headings, marks, link, alerts, lists, tables, Mermaid, Math, TypeScript, Details, and NOTE syntax",
+      "  ✓ Source contains headings, one bold mark, task-list syntax, one table, TIP Alert syntax, TypeScript, Details, and final Source text",
     );
 
     unsupportedFeatures.push(
@@ -1233,11 +1078,9 @@ async function main() {
     );
     await pause(timing.finalHoldMs);
     console.log("\nDemo report");
-    console.log("Created files:");
+    console.log("Files exercised:");
     console.log("  docs/demo/full-document-expected.md");
     console.log("  scripts/demo/full-document-demo.mjs");
-    console.log("Modified files:");
-    console.log("  package.json");
     console.log("Run command: npm run demo:full-document");
     console.log("Viewport: 1440 x 1000, headed Chromium");
     console.log(
@@ -1248,7 +1091,19 @@ async function main() {
     );
     console.log("Timing:", timing);
     console.log(
-      "Features successfully authored through Rich UI: headings, bold/italic/strikethrough/inline code, links, TIP and NOTE Alerts, bullet and ordered/nested lists, two tables with Tab entry and alignment controls, Mermaid, display Math, TypeScript code block/language picker, Details, and final source inspection.",
+      `Approximate run duration: ${((Date.now() - startedAt) / 1000).toFixed(1)}s`,
+    );
+    console.log(
+      `Heading input-rule conversions: ${headingConversions.length} (${headingConversions.map(({ level }) => `H${level}`).join(", ")})`,
+    );
+    console.log(
+      `Every heading used the real # + Space input rule: ${headingConversions.length === 6}`,
+    );
+    console.log(
+      `Centered feature targets: ${[...new Set(centeredFeatures)].join(", ")}`,
+    );
+    console.log(
+      "Features successfully authored through Rich UI: headings, one Bold selection, one slash Task list, one table with Tab entry, one TIP Alert, one TypeScript code block, one Details block, and final Source inspection.",
     );
     console.log("Features that could not be authored through Rich UI:");
     for (const feature of new Set(unsupportedFeatures))
