@@ -80,8 +80,6 @@ $$
 \times 100\%
 $$
 
-![Mermaid and math](images/readme/diagrams.png)
-
 ## Code belongs beside the explanation
 
 ```typescript
