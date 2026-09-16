@@ -167,7 +167,10 @@ export function activate(context: vscode.ExtensionContext): MarkdownMintApi {
   context.subscriptions.push(
     vscode.window.registerCustomEditorProvider(VIEW_TYPE, provider, {
       supportsMultipleEditorsPerDocument: true,
-      webviewOptions: { retainContextWhenHidden: true },
+      webviewOptions: {
+        retainContextWhenHidden: true,
+        enableFindWidget: true,
+      },
     }),
     provider,
     codeLensProvider,

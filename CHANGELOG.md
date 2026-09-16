@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.5
+
+- Enable VS Code's standard Webview Find Widget in the Markdown Mint Custom
+  Editor without changing dedicated preview behavior or adding editor-side
+  search logic.
+
 ## 0.3.4
 
 - Make document containers responsive across the Rich Editor, Dedicated
