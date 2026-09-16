@@ -15,17 +15,17 @@ const envNumber = (name, fallback, minimum = 0) => {
 };
 
 const timing = {
-  typeMs: envNumber("MM_DEMO_TYPE_MS", 20),
-  stepMs: envNumber("MM_DEMO_STEP_MS", 500),
-  sectionMs: envNumber("MM_DEMO_SECTION_MS", 800),
-  featureRevealMs: envNumber("MM_DEMO_FEATURE_REVEAL_MS", 900),
-  featureNavigateMs: envNumber("MM_DEMO_FEATURE_NAVIGATE_MS", 300),
+  typeMs: envNumber("MM_DEMO_TYPE_MS", 10),
+  stepMs: envNumber("MM_DEMO_STEP_MS", 100),
+  sectionMs: envNumber("MM_DEMO_SECTION_MS", 100),
+  featureRevealMs: envNumber("MM_DEMO_FEATURE_REVEAL_MS", 700),
+  featureNavigateMs: envNumber("MM_DEMO_FEATURE_NAVIGATE_MS", 100),
   featureCommitMs: envNumber("MM_DEMO_FEATURE_COMMIT_MS", 650),
   featureResultMs: envNumber("MM_DEMO_FEATURE_RESULT_MS", 900),
   scrollMs: envNumber("MM_DEMO_SCROLL_MS", 650),
   sourceHoldMs: envNumber("MM_DEMO_SOURCE_HOLD_MS", 1200, 1200),
-  finalHoldMs: envNumber("MM_DEMO_FINAL_HOLD_MS", 3000),
-  slowMo: envNumber("MM_DEMO_SLOWMO", 40),
+  finalHoldMs: envNumber("MM_DEMO_FINAL_HOLD_MS", 1000),
+  slowMo: envNumber("MM_DEMO_SLOWMO", 20),
 };
 const port = Math.trunc(envNumber("MM_DEMO_PORT", 4176, 1024));
 const baseUrl = `http://127.0.0.1:${port}`;
