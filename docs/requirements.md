@@ -1470,6 +1470,10 @@ source, and host edit count unchanged.
   CellSelection copy/paste, alignment, and table navigation retain their
   existing behavior. The existing contextual table toolbar remains available,
   with keyboard-accessible handle focus and auxiliary row/column move buttons.
+  The Handles action exposes one roving Tab stop per row and column group;
+  before a structural selection, row ArrowUp/ArrowDown and column
+  ArrowLeft/ArrowRight move focus, while Enter/Space selects the focused
+  handle and Escape clears the selection.
   No Cmd/Ctrl+D duplication path, Alt-drag duplication, or custom context menu
   is added; the browser and VS Code context-menu behavior remains unchanged.
 - The overlay is styled only in `media/webview.css`; `media/document.css` and

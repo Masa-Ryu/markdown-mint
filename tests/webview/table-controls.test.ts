@@ -212,6 +212,48 @@ describe("direct table controls", () => {
     expect(rowHandle.classList.contains("is-selected")).toBe(true);
     expect(editMessages(messages)).toHaveLength(0);
 
+    const toolbar = root.querySelector<HTMLElement>(".mm-table-toolbar")!;
+    const legacyActions = [
+      "row-above",
+      "row-below",
+      "row-delete",
+      "col-left",
+      "col-right",
+      "col-delete",
+      "align-left",
+      "align-center",
+      "align-right",
+      "table-numbering",
+      "table-delete",
+    ];
+    for (const action of legacyActions) {
+      expect(
+        toolbar.querySelector<HTMLButtonElement>(`[data-action="${action}"]`)!
+          .disabled,
+      ).toBe(true);
+    }
+    const beforeLegacyActions = app.view.state.doc;
+    for (const action of legacyActions)
+      toolbar
+        .querySelector<HTMLButtonElement>(`[data-action="${action}"]`)!
+        .dispatchEvent(
+          new MouseEvent("click", { bubbles: true, cancelable: true }),
+        );
+    expect(app.view.state.doc).toBe(beforeLegacyActions);
+    expect(editMessages(messages)).toHaveLength(0);
+
+    rowHandle.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "Escape",
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    expect(
+      toolbar.querySelector<HTMLButtonElement>('[data-action="row-delete"]')!
+        .disabled,
+    ).toBe(false);
+
     rowHandle.dispatchEvent(pointer("pointerdown", 10, 160));
     root
       .querySelector<HTMLElement>(".mm-stage")!
@@ -334,6 +376,43 @@ describe("direct table controls", () => {
     expect(documentTables[0]!.childCount).toBe(2);
     expect(documentTables[1]!.childCount).toBe(3);
     expect(editMessages(messages)).toHaveLength(1);
+  });
+
+  it("cancels an unselected column drag on document Escape without editing", () => {
+    const source = [
+      "| Name | Value | Notes |",
+      "| --- | --- | --- |",
+      "| Alpha | A | First |",
+      "| Beta | B | Second |",
+    ].join("\n");
+    const { app, root, messages } = makeApp(source);
+    mockTableGeometry(app, root);
+    selectText(app, root.querySelector("tbody td")!);
+
+    const controls = root.querySelector<HTMLElement>(".mm-table-controls")!;
+    const columnHandle = controls.querySelector<HTMLButtonElement>(
+      '[data-table-control="column-handle"][data-index="2"]',
+    )!;
+    const stage = root.querySelector<HTMLElement>(".mm-stage")!;
+    const before = app.view.state.doc;
+    columnHandle.dispatchEvent(pointer("pointerdown", 250, 10));
+    stage.dispatchEvent(pointer("pointermove", 80, 40));
+    const escape = new KeyboardEvent("keydown", {
+      key: "Escape",
+      bubbles: true,
+      cancelable: true,
+    });
+    document.dispatchEvent(escape);
+    columnHandle.dispatchEvent(pointer("pointerup", 80, 40));
+
+    expect(escape.defaultPrevented).toBe(true);
+    expect(app.view.state.doc).toBe(before);
+    expect(editMessages(messages)).toHaveLength(0);
+    expect(columnHandle.classList.contains("is-dragging")).toBe(false);
+    expect(
+      controls.querySelector<HTMLElement>(".mm-table-column-insert-line")!
+        .hidden,
+    ).toBe(true);
   });
 
   it("keeps ordinary CellSelection behavior separate from the structural state", () => {

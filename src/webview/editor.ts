@@ -380,6 +380,22 @@ type TableDeletePreviewAction = Extract<
   "row-delete" | "col-delete" | "table-delete"
 >;
 
+function isSelectionBasedTableAction(action: TableToolbarAction): boolean {
+  return (
+    action === "row-above" ||
+    action === "row-below" ||
+    action === "row-delete" ||
+    action === "col-left" ||
+    action === "col-right" ||
+    action === "col-delete" ||
+    action === "align-left" ||
+    action === "align-center" ||
+    action === "align-right" ||
+    action === "table-numbering" ||
+    action === "table-delete"
+  );
+}
+
 const TRANSIENT_BLANK_META = "markdown-mint-transient-blank";
 const SPREADSHEET_TABLE_PASTE_META = "markdown-mint-spreadsheet-table-paste";
 
@@ -4682,7 +4698,10 @@ export class MarkdownEditorApp {
     for (const button of Array.from(
       this.root.querySelectorAll<HTMLButtonElement>(".mm-table-toolbar-button"),
     ))
-      button.disabled = !inTable || this.profile === "commonmark";
+      button.disabled =
+        this.tableStructureSelection !== null ||
+        !inTable ||
+        this.profile === "commonmark";
     if (editingDisabled) {
       this.closeWritingPopups();
       this.closeLinkPicker(false);
@@ -8996,6 +9015,8 @@ export class MarkdownEditorApp {
 
   private runContextualTableAction(action: TableToolbarAction): void {
     this.clearTableDeletePreview();
+    if (this.tableStructureSelection && isSelectionBasedTableAction(action))
+      return;
     if (action === "table-controls") {
       this.focusTableControls();
       return;
@@ -9341,6 +9362,7 @@ export class MarkdownEditorApp {
       documentGeneration: this.documentGeneration,
       returnSelection,
     };
+    this.updateTableToolbar();
     this.updateTableControls();
   }
 
@@ -9349,6 +9371,7 @@ export class MarkdownEditorApp {
     if (!structure) return;
     this.tableStructureSelection = null;
     if (!this.view) return;
+    this.updateTableToolbar();
     this.updateTableControls();
     if (restore && this.canUseTableControls()) this.view.focus();
   }
@@ -9388,6 +9411,7 @@ export class MarkdownEditorApp {
     });
     if (dispatched) {
       this.tableStructureSelection = null;
+      this.updateTableToolbar();
       this.updateTableControls();
       this.view.focus();
     }
@@ -9466,6 +9490,7 @@ export class MarkdownEditorApp {
     const table = explicitTableAt(this.view.state.doc, target.tablePos);
     if (!table || !supportsDirectTableOperations(table)) {
       this.tableStructureSelection = null;
+      this.updateTableToolbar();
       this.updateTableControls();
       return;
     }
@@ -9477,6 +9502,7 @@ export class MarkdownEditorApp {
       documentGeneration: this.documentGeneration,
       returnSelection: this.view.state.selection,
     };
+    this.updateTableToolbar();
     this.updateTableControls();
     this.tableControls?.focusFirst();
   }
@@ -9547,6 +9573,7 @@ export class MarkdownEditorApp {
     );
     if (dispatched) {
       this.tableStructureSelection = null;
+      this.updateTableToolbar();
       this.updateTableControls();
       this.view.focus();
     }
@@ -10277,7 +10304,10 @@ export class MarkdownEditorApp {
           (action === "col-left" &&
             isNumberedTable(context.table) &&
             context.rect.left === 0));
-      button.disabled = !actionsEnabled || deleteDisabled;
+      button.disabled =
+        this.tableStructureSelection !== null ||
+        !actionsEnabled ||
+        deleteDisabled;
     }
 
     this.tableToolbar.hidden = !visible;

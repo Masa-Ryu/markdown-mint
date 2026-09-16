@@ -159,6 +159,11 @@ export class TableControls {
   private drag: DragState | null = null;
   private autoScrollFrame: number | undefined;
   private readonly resizeObserver: ResizeObserver | null;
+  private readonly ownerDocument: Document;
+  private readonly ownerWindow: Window | null;
+  private rowRovingIndex: number | null = null;
+  private columnRovingIndex: number | null = null;
+  private canceledClickSource: HTMLButtonElement | null = null;
   private destroyed = false;
   private focused = false;
 
@@ -207,6 +212,26 @@ export class TableControls {
 
   private readonly windowBlur = (): void => {
     if (this.drag) this.cancelDrag();
+    else this.clearCanceledClickSuppression();
+  };
+
+  private readonly ownerDocumentKeyDown = (event: KeyboardEvent): void => {
+    if (!this.drag || event.key !== "Escape") return;
+    event.preventDefault();
+    event.stopPropagation();
+    this.cancelDrag(false, true);
+    this.callbacks.onEscape();
+  };
+
+  private readonly ownerDocumentPointerUp = (): void => {
+    const source = this.canceledClickSource;
+    if (!source) return;
+    this.canceledClickSource = null;
+    const clear = (): void => {
+      if (source.dataset.suppressClick === "true")
+        delete source.dataset.suppressClick;
+    };
+    this.ownerWindow?.setTimeout(clear, 0) ?? clear();
   };
 
   private readonly focusIn = (): void => {
@@ -224,12 +249,16 @@ export class TableControls {
 
   private readonly keyDown = (event: KeyboardEvent): void => {
     if (!this.target || !this.callbacks.canEdit()) return;
-    const selected = this.target.selection;
-    if (!selected) return;
     if (event.key === "Escape") {
+      if (!this.drag && !this.target.selection) return;
       event.preventDefault();
       this.cancelDrag(false);
       this.callbacks.onEscape();
+      return;
+    }
+    const selected = this.target.selection;
+    if (!selected) {
+      this.moveRovingFocus(event);
       return;
     }
     if (
@@ -262,6 +291,8 @@ export class TableControls {
   constructor(stage: HTMLElement, callbacks: TableControlsCallbacks) {
     this.stage = stage;
     this.callbacks = callbacks;
+    this.ownerDocument = stage.ownerDocument;
+    this.ownerWindow = stage.ownerDocument.defaultView;
     this.element = stage.ownerDocument.createElement("div");
     this.element.className = "mm-table-controls";
     this.element.setAttribute("aria-label", "Table controls");
@@ -277,7 +308,16 @@ export class TableControls {
     stage.addEventListener("pointerleave", this.stagePointerLeave);
     stage.addEventListener("pointercancel", this.stagePointerCancel);
     stage.addEventListener("pointerup", this.stagePointerUp);
-    window.addEventListener("blur", this.windowBlur);
+    this.ownerWindow?.addEventListener("blur", this.windowBlur);
+    this.ownerDocument.addEventListener(
+      "keydown",
+      this.ownerDocumentKeyDown,
+      true,
+    );
+    this.ownerDocument.addEventListener(
+      "pointerup",
+      this.ownerDocumentPointerUp,
+    );
     this.element.addEventListener("focusin", this.focusIn);
     this.element.addEventListener("focusout", this.focusOut);
     this.element.addEventListener("keydown", this.keyDown);
@@ -329,9 +369,10 @@ export class TableControls {
   focusFirst(): void {
     if (!this.target || this.element.hidden) return;
     const selected = this.target.selection;
-    const button = selected
-      ? this.handleForSelection(selected)
-      : (this.rowHandles[0] ?? this.columnHandles[0]);
+    const button =
+      (selected ? this.handleForSelection(selected) : undefined) ??
+      this.rowHandles[0] ??
+      this.columnHandles[0];
     button?.focus();
   }
 
@@ -448,7 +489,17 @@ export class TableControls {
     this.stage.removeEventListener("pointerleave", this.stagePointerLeave);
     this.stage.removeEventListener("pointercancel", this.stagePointerCancel);
     this.stage.removeEventListener("pointerup", this.stagePointerUp);
-    window.removeEventListener("blur", this.windowBlur);
+    this.ownerWindow?.removeEventListener("blur", this.windowBlur);
+    this.ownerDocument.removeEventListener(
+      "keydown",
+      this.ownerDocumentKeyDown,
+      true,
+    );
+    this.ownerDocument.removeEventListener(
+      "pointerup",
+      this.ownerDocumentPointerUp,
+    );
+    this.clearCanceledClickSuppression();
     this.element.removeEventListener("focusin", this.focusIn);
     this.element.removeEventListener("focusout", this.focusOut);
     this.element.removeEventListener("keydown", this.keyDown);
@@ -459,6 +510,8 @@ export class TableControls {
     if (!this.target) return;
     this.rowHandles = [];
     this.columnHandles = [];
+    this.rowRovingIndex = null;
+    this.columnRovingIndex = null;
     this.element.replaceChildren();
     const layer = this.stage.ownerDocument.createElement("div");
     layer.className = "mm-table-controls-layer";
@@ -538,6 +591,11 @@ export class TableControls {
       if (this.target && !button.disabled)
         this.callbacks.onSelect({ axis, index }, this.target);
     });
+    button.addEventListener("focus", () => {
+      if (axis === "row") this.rowRovingIndex = index;
+      else this.columnRovingIndex = index;
+      this.updateSelectionState();
+    });
     return button;
   }
 
@@ -592,26 +650,35 @@ export class TableControls {
 
   private updateSelectionState(): void {
     const selected = this.target?.selection ?? null;
-    for (const button of this.rowHandles) {
-      const active =
-        selected?.axis === "row" &&
-        selected.index === Number(button.dataset.index);
-      button.classList.toggle("is-selected", active);
-      button.setAttribute("aria-pressed", String(active));
-      button.tabIndex = active ? 0 : -1;
-    }
-    for (const button of this.columnHandles) {
-      const active =
-        selected?.axis === "column" &&
-        selected.index === Number(button.dataset.index);
-      button.classList.toggle("is-selected", active);
-      button.setAttribute("aria-pressed", String(active));
-      button.tabIndex = active ? 0 : -1;
-    }
-    if (!selected) {
-      const first = this.rowHandles[0] ?? this.columnHandles[0];
-      if (first) first.tabIndex = 0;
-    }
+    const updateAxis = (
+      axis: TableControlAxis,
+      buttons: HTMLButtonElement[],
+    ): void => {
+      const preferred =
+        selected?.axis === axis
+          ? selected.index
+          : axis === "row"
+            ? this.rowRovingIndex
+            : this.columnRovingIndex;
+      const activeButton =
+        buttons.find((button) => Number(button.dataset.index) === preferred) ??
+        buttons[0];
+      const activeIndex = activeButton
+        ? Number(activeButton.dataset.index)
+        : null;
+      if (axis === "row") this.rowRovingIndex = activeIndex;
+      else this.columnRovingIndex = activeIndex;
+      for (const button of buttons) {
+        const index = Number(button.dataset.index);
+        const selectedForButton =
+          selected?.axis === axis && selected.index === index;
+        button.classList.toggle("is-selected", selectedForButton);
+        button.setAttribute("aria-pressed", String(selectedForButton));
+        button.tabIndex = activeIndex === index ? 0 : -1;
+      }
+    };
+    updateAxis("row", this.rowHandles);
+    updateAxis("column", this.columnHandles);
     const supported = Boolean(
       this.target?.supported && this.callbacks.canEdit(),
     );
@@ -634,6 +701,49 @@ export class TableControls {
     return buttons.find(
       (button) => Number(button.dataset.index) === selection.index,
     );
+  }
+
+  private moveRovingFocus(event: KeyboardEvent): void {
+    if (
+      event.isComposing ||
+      event.keyCode === 229 ||
+      event.ctrlKey ||
+      event.metaKey ||
+      event.altKey ||
+      event.shiftKey
+    )
+      return;
+    const button = event.target;
+    if (!(button instanceof HTMLButtonElement)) return;
+    const axis = button.dataset.axis;
+    const direction =
+      axis === "row"
+        ? event.key === "ArrowUp"
+          ? -1
+          : event.key === "ArrowDown"
+            ? 1
+            : 0
+        : axis === "column"
+          ? event.key === "ArrowLeft"
+            ? -1
+            : event.key === "ArrowRight"
+              ? 1
+              : 0
+          : 0;
+    if (direction === 0) return;
+    const handles = axis === "row" ? this.rowHandles : this.columnHandles;
+    const currentIndex = handles.indexOf(button);
+    if (currentIndex < 0) return;
+    const nextIndex = Math.max(
+      0,
+      Math.min(handles.length - 1, currentIndex + direction),
+    );
+    event.preventDefault();
+    const next = handles[nextIndex];
+    if (!next || next === button) return;
+    if (axis === "row") this.rowRovingIndex = Number(next.dataset.index);
+    else this.columnRovingIndex = Number(next.dataset.index);
+    next.focus();
   }
 
   private startDrag(
@@ -718,7 +828,7 @@ export class TableControls {
     else this.callbacks.onEscape();
   }
 
-  private cancelDrag(notify = true): void {
+  private cancelDrag(notify = true, preserveClickSuppression = false): void {
     const drag = this.drag;
     if (!drag) return;
     this.stopAutoScroll();
@@ -731,8 +841,19 @@ export class TableControls {
     } catch {
       // The capture may have been lost before the cancellation notification.
     }
-    delete drag.source.dataset.suppressClick;
+    if (preserveClickSuppression) {
+      this.canceledClickSource = drag.source;
+    } else {
+      delete drag.source.dataset.suppressClick;
+    }
     if (notify) this.callbacks.onEscape();
+  }
+
+  private clearCanceledClickSuppression(): void {
+    const source = this.canceledClickSource;
+    this.canceledClickSource = null;
+    if (source?.dataset.suppressClick === "true")
+      delete source.dataset.suppressClick;
   }
 
   private clearClickSuppression(source: HTMLButtonElement): void {

@@ -468,6 +468,168 @@ async function testColumnDrag(page) {
   assert.deepEqual(moved.rows[1], ["1", "A", "Alpha"]);
 }
 
+async function testEscapeDuringUnselectedDrag(page) {
+  await load(page, numberedSource(3, 3));
+  const rowTable = await controlTable(page);
+  const rowHandle = page.locator(
+    '[data-table-control="row-handle"][data-index="3"]',
+  );
+  const rowHandleBox = await rowHandle.boundingBox();
+  const firstBodyRow = await rowTable.locator("tr").nth(1).boundingBox();
+  assert.ok(rowHandleBox && firstBodyRow, "row escape geometry is unavailable");
+  const beforeRowDrag = await modelSnapshot(page);
+  await page.mouse.move(
+    rowHandleBox.x + rowHandleBox.width / 2,
+    rowHandleBox.y + rowHandleBox.height / 2,
+  );
+  await page.mouse.down();
+  await page.mouse.move(
+    rowHandleBox.x + rowHandleBox.width / 2,
+    firstBodyRow.y + 1,
+    { steps: 8 },
+  );
+  await page.keyboard.press("Escape");
+  await page.mouse.up();
+  await settle(page);
+  assert.equal(await editCount(page), 0, "row Escape committed an edit");
+  assert.deepEqual(await modelSnapshot(page), beforeRowDrag);
+  assert.equal(
+    await page.locator(".mm-table-row-handle.is-dragging").count(),
+    0,
+    "row Escape left the handle dragging",
+  );
+
+  await load(page, smallSource);
+  const columnTable = await controlTable(page);
+  const columnHandle = page.locator(
+    '[data-table-control="column-handle"][data-index="2"]',
+  );
+  const columnHandleBox = await columnHandle.boundingBox();
+  const firstHeader = await columnTable
+    .locator("tr")
+    .first()
+    .locator("th, td")
+    .first()
+    .boundingBox();
+  assert.ok(
+    columnHandleBox && firstHeader,
+    "column escape geometry is unavailable",
+  );
+  const beforeColumnDrag = await modelSnapshot(page);
+  await page.mouse.move(
+    columnHandleBox.x + columnHandleBox.width / 2,
+    columnHandleBox.y + columnHandleBox.height / 2,
+  );
+  await page.mouse.down();
+  await page.mouse.move(
+    firstHeader.x + firstHeader.width + 1,
+    columnHandleBox.y + columnHandleBox.height / 2,
+    { steps: 8 },
+  );
+  await page.keyboard.press("Escape");
+  await page.mouse.up();
+  await settle(page);
+  assert.equal(await editCount(page), 0, "column Escape committed an edit");
+  assert.deepEqual(await modelSnapshot(page), beforeColumnDrag);
+  assert.equal(
+    await page.locator(".mm-table-column-handle.is-dragging").count(),
+    0,
+    "column Escape left the handle dragging",
+  );
+}
+
+async function testKeyboardHandleNavigation(page) {
+  await load(page, numberedSource(3, 3));
+  const table = await controlTable(page);
+  await table.locator("tbody td").first().click();
+  const handlesButton = page.locator(
+    '.mm-table-toolbar [data-action="table-controls"]',
+  );
+  await handlesButton.waitFor({ state: "visible" });
+  await handlesButton.focus();
+  await page.keyboard.press("Enter");
+  await page.waitForFunction(
+    () => document.activeElement?.dataset.tableControl === "row-handle",
+  );
+
+  await page.keyboard.press("ArrowDown");
+  await page.keyboard.press("ArrowDown");
+  assert.equal(
+    await page.evaluate(() => document.activeElement?.dataset.index),
+    "3",
+    "row arrows did not reach the third row handle",
+  );
+  assert.equal(
+    await editCount(page),
+    0,
+    "row focus navigation edited the document",
+  );
+  await page.keyboard.press("Enter");
+  await page.waitForSelector(
+    '[data-table-control="row-handle"][data-index="3"].is-selected',
+  );
+  assert.equal(
+    await editCount(page),
+    0,
+    "row keyboard selection edited the document",
+  );
+
+  await page.keyboard.press("ArrowUp");
+  await page.waitForFunction(
+    (expected) =>
+      window.__markdownMintHarness.messages.filter(
+        (message) => message.type === "edit",
+      ).length ===
+      expected + 1,
+    0,
+  );
+  assert.equal(
+    await page
+      .locator(".mm-table-row-handle.is-selected")
+      .getAttribute("data-index"),
+    "2",
+    "selected row arrow did not move the row",
+  );
+  await page.keyboard.press("Escape");
+  await page.waitForFunction(() =>
+    document.activeElement?.classList.contains("ProseMirror"),
+  );
+
+  await handlesButton.focus();
+  await page.keyboard.press("Enter");
+  await page.waitForFunction(
+    () => document.activeElement?.dataset.tableControl === "row-handle",
+  );
+  await page.keyboard.press("Tab");
+  assert.equal(
+    await page.evaluate(() => document.activeElement?.dataset.tableControl),
+    "column-handle",
+    "Tab did not enter the column handle group",
+  );
+  await page.keyboard.press("ArrowRight");
+  assert.equal(
+    await page.evaluate(() => document.activeElement?.dataset.index),
+    "2",
+    "column arrows did not reach the second data column handle",
+  );
+  await page.keyboard.press("Enter");
+  await page.waitForSelector(
+    '[data-table-control="column-handle"][data-index="2"].is-selected',
+  );
+  await page.keyboard.press("ArrowLeft");
+  await page.waitForFunction(
+    (expected) =>
+      window.__markdownMintHarness.messages.filter(
+        (message) => message.type === "edit",
+      ).length ===
+      expected + 1,
+    1,
+  );
+  const moved = await modelSnapshot(page);
+  assert.deepEqual(moved.rows[0], ["#", "Value", "Name"]);
+  await page.keyboard.press("Escape");
+}
+
 async function main() {
   const server = spawn(process.execPath, ["tests/browser/server.mjs"], {
     cwd: repository,
@@ -494,9 +656,11 @@ async function main() {
     page.setDefaultTimeout(10000);
     await testNumberedDragAndHistory(page);
     await testColumnDrag(page);
+    await testEscapeDuringUnselectedDrag(page);
+    await testKeyboardHandleNavigation(page);
     await testRailsAndKeyboard(page);
     console.log(
-      "Table controls browser checks passed: real row/column handle click/drag, boundary and append rails, 100x10 scrolling, keyboard cancellation, numbering, and host undo/redo.",
+      "Table controls browser checks passed: real row/column handle click/drag, unselected drag Escape cancellation, keyboard handle navigation, boundary and append rails, 100x10 scrolling, numbering, and host undo/redo.",
     );
   } catch (error) {
     await page
