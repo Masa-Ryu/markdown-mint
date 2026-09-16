@@ -18,11 +18,18 @@ const timing = {
   typeMs: envNumber("MM_DEMO_TYPE_MS", 20),
   stepMs: envNumber("MM_DEMO_STEP_MS", 500),
   sectionMs: envNumber("MM_DEMO_SECTION_MS", 900),
+  featureRevealMs: envNumber("MM_DEMO_FEATURE_REVEAL_MS", 900),
+  featureNavigateMs: envNumber("MM_DEMO_FEATURE_NAVIGATE_MS", 300),
+  featureCommitMs: envNumber("MM_DEMO_FEATURE_COMMIT_MS", 700),
+  featureResultMs: envNumber("MM_DEMO_FEATURE_RESULT_MS", 1000),
+  sourceHoldMs: envNumber("MM_DEMO_SOURCE_HOLD_MS", 1200, 1200),
   finalHoldMs: envNumber("MM_DEMO_FINAL_HOLD_MS", 3000),
   slowMo: envNumber("MM_DEMO_SLOWMO", 40),
 };
 const port = Math.trunc(envNumber("MM_DEMO_PORT", 4176, 1024));
 const baseUrl = `http://127.0.0.1:${port}`;
+const demoBackground = process.env.MM_DEMO_BACKGROUND ?? "#FCF7E5";
+const demoForeground = process.env.MM_DEMO_FOREGROUND ?? "#3B3A32";
 const unsupportedFeatures = [];
 const bugs = [];
 
@@ -94,6 +101,22 @@ async function waitForRich(page) {
 
 async function pause(ms = timing.stepMs) {
   await wait(ms);
+}
+
+async function featureReveal() {
+  await pause(timing.featureRevealMs);
+}
+
+async function featureNavigate() {
+  await pause(timing.featureNavigateMs);
+}
+
+async function featureCommit() {
+  await pause(timing.featureCommitMs);
+}
+
+async function featureResult() {
+  await pause(timing.featureResultMs);
 }
 
 async function typeText(page, text) {
@@ -269,8 +292,9 @@ async function applySelectionToolbar(page, label) {
     exact: true,
   });
   await waitForVisible(button, `${label} selection button`);
+  await featureReveal();
   await button.click();
-  await pause();
+  await featureResult();
 }
 
 async function formatRange(page, text, label) {
@@ -292,6 +316,7 @@ async function chooseInsertCommand(page, label) {
   const items = menu.locator('[role="menuitem"]:not([hidden])');
   const target = menu.getByRole("menuitem", { name: label, exact: true });
   await target.waitFor({ state: "visible" });
+  await featureReveal();
   const targetLabel = await target.getAttribute("aria-label");
   const labels = await items.evaluateAll((elements) =>
     elements
@@ -321,23 +346,40 @@ async function chooseInsertCommand(page, label) {
       document.activeElement?.getAttribute("aria-label") === expected,
     labels[0],
   );
-  for (let index = 0; index < targetIndex; index += 1)
+  for (let index = 0; index < targetIndex; index += 1) {
     await page.keyboard.press("Tab");
+    await featureNavigate();
+  }
   await page.waitForFunction(
     (expected) =>
       document.activeElement?.getAttribute("aria-label") === expected,
     targetLabel,
   );
+  await featureCommit();
   await page.keyboard.press("Enter");
-  await pause();
+  await page.waitForFunction(() => {
+    const currentMenu = document.querySelector(".mm-empty-line-popup");
+    if (!currentMenu) return true;
+    const style = getComputedStyle(currentMenu);
+    return (
+      currentMenu.hidden ||
+      currentMenu.getAttribute("aria-hidden") === "true" ||
+      style.display === "none" ||
+      style.visibility === "hidden"
+    );
+  });
+  await featureResult();
 }
 
 async function insertAlert(page, type, body) {
   await chooseInsertCommand(page, "Alert");
   const dialog = page.locator(".mm-profile-feature-dialog[open]");
   await waitForVisible(dialog, "Alert dialog");
+  await featureReveal();
   await dialog.locator('[data-feature-field="alert-type"]').selectOption(type);
+  await featureNavigate();
   await dialog.locator('[data-feature-field="body"]').fill(body);
+  await featureCommit();
   await dialog.getByRole("button", { name: "Insert", exact: true }).click();
   await page.waitForFunction(
     (expectedBody) =>
@@ -348,18 +390,21 @@ async function insertAlert(page, type, body) {
       ),
     body,
   );
-  await pause();
+  await featureResult();
 }
 
 async function insertTable(page, rows, columns, values) {
   await chooseInsertCommand(page, "Insert table");
   const dialog = page.locator(".mm-table-dialog[open]");
   await waitForVisible(dialog, "Table dialog");
+  await featureReveal();
   const cell = dialog.getByRole("gridcell", {
     name: `${columns} columns by ${rows} rows`,
     exact: true,
   });
   await cell.click();
+  await featureNavigate();
+  await featureCommit();
   await dialog
     .getByRole("button", { name: "Insert table", exact: true })
     .click();
@@ -376,6 +421,7 @@ async function insertTable(page, rows, columns, values) {
     },
     { expectedRows: rows, expectedColumns: columns },
   );
+  await featureResult();
   const table = page.locator(".mm-rich-panel .ProseMirror table").last();
   await table.locator("th,td").first().click();
   for (let row = 0; row < values.length; row += 1) {
@@ -395,7 +441,7 @@ async function insertTable(page, rows, columns, values) {
     );
     return JSON.stringify(cells) === JSON.stringify(expectedValues.flat());
   }, values);
-  await pause();
+  await featureResult();
 }
 
 async function setTableColumnAlignment(
@@ -408,6 +454,7 @@ async function setTableColumnAlignment(
   await table.locator("tr").first().locator("th,td").nth(columnIndex).click();
   const button = page.locator(`.mm-table-toolbar [data-action="${action}"]`);
   await waitForVisible(button, `Table ${action} control`);
+  await featureReveal();
   await button.click();
   await page.waitForFunction(
     ({ expectedColumn, expectedValue }) => {
@@ -423,7 +470,7 @@ async function setTableColumnAlignment(
     },
     { expectedColumn: columnIndex, expectedValue: expectedAlign },
   );
-  await pause();
+  await featureResult();
 }
 
 async function exitTable(page) {
@@ -441,6 +488,7 @@ async function insertMermaid(page, source) {
   await chooseInsertCommand(page, "Mermaid diagram");
   const dialog = page.locator(".mm-profile-feature-dialog[open]");
   await waitForVisible(dialog, "Mermaid dialog");
+  await featureReveal();
   const body = dialog.locator('[data-feature-field="body"]');
   await body.fill(source);
   const status = dialog.locator(".mm-mermaid-validation-status");
@@ -450,6 +498,7 @@ async function insertMermaid(page, source) {
         .validationState === "valid",
   );
   assert.equal(await status.getAttribute("data-validation-state"), "valid");
+  await featureCommit();
   await dialog.getByRole("button", { name: "Insert", exact: true }).click();
   await page.waitForFunction(() =>
     Array.from(document.querySelectorAll('[data-mm-mermaid="true"]')).some(
@@ -458,31 +507,37 @@ async function insertMermaid(page, source) {
         node.querySelector("svg"),
     ),
   );
-  await pause();
+  await featureResult();
 }
 
 async function insertMath(page, expression) {
   await chooseInsertCommand(page, "Math");
   const dialog = page.locator(".mm-profile-feature-dialog[open]");
   await waitForVisible(dialog, "Math dialog");
+  await featureReveal();
   await dialog.locator('[data-feature-field="body"]').fill(expression);
+  await featureCommit();
   await dialog.getByRole("button", { name: "Insert", exact: true }).click();
   await page.waitForFunction(() =>
     Boolean(document.querySelector(".mm-rich-panel .mm-math-block")),
   );
-  await pause();
+  await featureResult();
 }
 
 async function insertCodeBlock(page, language, lines) {
   await chooseInsertCommand(page, "Code block");
   const codeBlock = page.locator(".mm-rich-panel .mm-code-block").last();
   await codeBlock.waitFor({ state: "visible" });
+  await featureReveal();
   const languageTrigger = codeBlock.locator(".mm-code-language-trigger");
   await languageTrigger.click();
   const input = codeBlock.locator(".mm-code-language-inline");
+  await input.waitFor({ state: "visible" });
+  await featureReveal();
   await input.fill(language);
   const option = codeBlock.locator('[data-mm-language-option="typescript"]');
   await option.waitFor({ state: "visible" });
+  await featureCommit();
   await input.press("Enter");
   await page.waitForFunction(
     ({ expectedLanguage }) => {
@@ -493,6 +548,7 @@ async function insertCodeBlock(page, language, lines) {
     },
     { expectedLanguage: language },
   );
+  await featureResult();
   await codeBlock.locator(".mm-code-block-pre code").click();
   for (let index = 0; index < lines.length; index += 1) {
     await typeText(page, lines[index]);
@@ -511,17 +567,19 @@ async function insertCodeBlock(page, language, lines) {
     },
     { expectedText: lines.join("\n"), expectedLanguage: language },
   );
-  await pause();
+  await featureResult();
 }
 
 async function insertDetails(page, summary, bodyLines) {
   await chooseInsertCommand(page, "Details");
   const dialog = page.locator(".mm-profile-feature-dialog[open]");
   await waitForVisible(dialog, "Details dialog");
+  await featureReveal();
   await dialog.locator('[data-feature-field="title"]').fill(summary);
   await dialog
     .locator('[data-feature-field="body"]')
     .fill(bodyLines.join("\n"));
+  await featureCommit();
   await dialog.getByRole("button", { name: "Insert", exact: true }).click();
   const details = page.locator(".mm-rich-panel .mm-details-node").last();
   await details.waitFor({ state: "visible" });
@@ -532,11 +590,13 @@ async function insertDetails(page, summary, bodyLines) {
         ?.textContent === expected
     );
   }, summary);
+  await featureResult();
   const toggle = details.locator(
     ":scope > .mm-details-header > .mm-details-toggle",
   );
   let detailsToggleVerified = false;
   try {
+    await featureCommit();
     await toggle.click();
     await page.waitForFunction(
       () => {
@@ -549,6 +609,8 @@ async function insertDetails(page, summary, bodyLines) {
       { timeout: 5000 },
     );
     assert.equal(await details.locator(".mm-details-body").isVisible(), false);
+    await featureResult();
+    await featureCommit();
     await toggle.click();
     await page.waitForFunction(
       () => {
@@ -561,6 +623,7 @@ async function insertDetails(page, summary, bodyLines) {
       { timeout: 5000 },
     );
     assert.equal(await details.locator(".mm-details-body").isVisible(), true);
+    await featureResult();
     detailsToggleVerified = true;
   } catch (error) {
     bugs.push(
@@ -574,7 +637,7 @@ async function insertDetails(page, summary, bodyLines) {
     const open = await details.getAttribute("data-mm-details-open");
     if (open === "false") await toggle.click();
   }
-  await pause();
+  await featureResult();
 
   const formatted = "formatted text";
   const bodyParagraph = details
@@ -587,6 +650,7 @@ async function insertDetails(page, summary, bodyLines) {
     exact: true,
   });
   if (await selectionButton.isVisible()) {
+    await featureReveal();
     await selectionButton.click();
     await page.waitForFunction(
       (expected) =>
@@ -595,6 +659,7 @@ async function insertDetails(page, summary, bodyLines) {
         ).some((node) => node.textContent === expected),
       formatted,
     );
+    await featureResult();
   } else {
     unsupportedFeatures.push(
       "Details body contextual formatting: the shared selection toolbar is not exposed for this NodeView selection.",
@@ -790,10 +855,79 @@ async function main() {
       });
     });
     await page.goto(`${baseUrl}/?profile=github`);
+    const backgroundInspection = await page.evaluate(
+      ({ background, foreground }) => {
+        const root = document.documentElement;
+        root.style.setProperty("--vscode-editor-background", background);
+        const parseRgb = (color) => {
+          const match = color.match(/rgba?\(([^)]+)\)/);
+          if (!match) return null;
+          const channels = match[1]
+            .split(",")
+            .slice(0, 3)
+            .map((channel) => Number.parseFloat(channel.trim()));
+          return channels.length === 3 && channels.every(Number.isFinite)
+            ? channels
+            : null;
+        };
+        const luminance = (color) => {
+          const channels = parseRgb(color);
+          if (!channels) return null;
+          return channels.reduce((total, channel, index) => {
+            const normalized = channel / 255;
+            const linear =
+              normalized <= 0.03928
+                ? normalized / 12.92
+                : ((normalized + 0.055) / 1.055) ** 2.4;
+            return total + [0.2126, 0.7152, 0.0722][index] * linear;
+          }, 0);
+        };
+        const initialForeground = getComputedStyle(document.body).color;
+        const initialBackground = getComputedStyle(
+          document.body,
+        ).backgroundColor;
+        const foregroundLuminance = luminance(initialForeground);
+        const backgroundLuminance = luminance(initialBackground);
+        const contrastRatio =
+          foregroundLuminance === null || backgroundLuminance === null
+            ? null
+            : (Math.max(foregroundLuminance, backgroundLuminance) + 0.05) /
+              (Math.min(foregroundLuminance, backgroundLuminance) + 0.05);
+        const foregroundFallback =
+          contrastRatio !== null && contrastRatio < 4.5;
+        if (foregroundFallback) {
+          for (const [name, value] of Object.entries({
+            "--vscode-editor-foreground": foreground,
+            "--vscode-foreground": foreground,
+            "--vscode-editorWidget-foreground": foreground,
+            "--vscode-input-foreground": foreground,
+            "--vscode-dropdown-foreground": foreground,
+            "--vscode-descriptionForeground": foreground,
+            "--vscode-disabledForeground": foreground,
+          }))
+            root.style.setProperty(name, value);
+        }
+        return {
+          foregroundFallback,
+          contrastRatio,
+          variable: root.style.getPropertyValue("--vscode-editor-background"),
+          body: getComputedStyle(document.body).backgroundColor,
+          foreground: getComputedStyle(document.body).color,
+        };
+      },
+      { background: demoBackground, foreground: demoForeground },
+    );
     await page.waitForFunction(() => Boolean(window.markdownMint?.view));
     await page.locator(".mm-rich-panel .ProseMirror").waitFor({
       state: "attached",
     });
+    const toolbarBackground = await page.evaluate(() => {
+      const toolbar = document.querySelector(".mm-toolbar");
+      return toolbar ? getComputedStyle(toolbar).backgroundColor : "";
+    });
+    assert.equal(backgroundInspection.variable, demoBackground);
+    assert.notEqual(backgroundInspection.body, "rgba(0, 0, 0, 0)");
+    assert.ok(toolbarBackground);
     // This is the only harness setup call: it establishes an empty starting
     // document before the first visible authoring action. It is not a source
     // load and is never used again to modify the document.
@@ -829,14 +963,20 @@ async function main() {
     await formatRange(page, "remove what you no longer need", "Strikethrough");
     await formatRange(page, "inline code", "Inline code");
     await selectVisibleText(page, "links");
-    await page
-      .getByRole("button", { name: "Link selection", exact: true })
-      .click();
+    const linkButton = page.getByRole("button", {
+      name: "Link selection",
+      exact: true,
+    });
+    await waitForVisible(linkButton, "Link selection button");
+    await featureReveal();
+    await linkButton.click();
     const linkPicker = page.locator('.mm-link-picker[aria-hidden="false"]');
     await waitForVisible(linkPicker, "Link picker");
+    await featureReveal();
     await linkPicker
       .locator('[data-testid="link-picker-input"]')
       .fill("https://example.com");
+    await featureCommit();
     await linkPicker
       .locator('[data-testid="link-picker-input"]')
       .press("Enter");
@@ -846,7 +986,7 @@ async function main() {
           '.mm-rich-panel .ProseMirror a[href="https://example.com"]',
         )?.textContent === "links",
     );
-    await pause();
+    await featureResult();
     await page.locator(".mm-rich-panel .ProseMirror").focus();
     await prepareParagraph(page);
     await insertAlert(
@@ -1078,7 +1218,7 @@ async function main() {
         document.querySelector(".mm-source-textarea")?.hidden === false,
     );
     await page.locator(".mm-source-textarea").waitFor({ state: "visible" });
-    await pause(timing.stepMs);
+    await pause(timing.sourceHoldMs);
     const source = await validateSource(page);
     console.log(`Generated source length: ${source.length}`);
     console.log(
@@ -1100,6 +1240,12 @@ async function main() {
     console.log("  package.json");
     console.log("Run command: npm run demo:full-document");
     console.log("Viewport: 1440 x 1000, headed Chromium");
+    console.log(
+      `Background: ${demoBackground} via demo-only --vscode-editor-background override`,
+    );
+    console.log(
+      `Foreground fallback: ${backgroundInspection.foregroundFallback ? `applied ${demoForeground}` : "not needed"}`,
+    );
     console.log("Timing:", timing);
     console.log(
       "Features successfully authored through Rich UI: headings, bold/italic/strikethrough/inline code, links, TIP and NOTE Alerts, bullet and ordered/nested lists, two tables with Tab entry and alignment controls, Mermaid, display Math, TypeScript code block/language picker, Details, and final source inspection.",
