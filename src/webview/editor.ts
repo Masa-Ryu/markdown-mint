@@ -762,6 +762,22 @@ function selectionTouchesTable(selection: Selection): boolean {
   return touches;
 }
 
+function tableCellPosition($pos: ResolvedPos): number | null {
+  for (let depth = $pos.depth; depth > 0; depth -= 1) {
+    const role = $pos.node(depth).type.spec.tableRole;
+    if (role === "cell" || role === "header_cell") return $pos.before(depth);
+  }
+  return null;
+}
+
+function selectionSpansTableCells(selection: Selection): boolean {
+  const fromCell = tableCellPosition(selection.$from);
+  const toCell = tableCellPosition(selection.$to);
+  if (fromCell === null && toCell === null)
+    return selectionTouchesTable(selection);
+  return fromCell === null || toCell === null || fromCell !== toCell;
+}
+
 function selectionForDocument(selection: Selection, doc: PMNode): Selection {
   if (selection instanceof BlockBoundarySelection) {
     const position = Math.max(0, Math.min(selection.head, doc.content.size));
@@ -6585,7 +6601,7 @@ export class MarkdownEditorApp {
       !(selection instanceof TextSelection) ||
       selection.empty ||
       selection.from >= selection.to ||
-      selectionTouchesTable(selection)
+      selectionSpansTableCells(selection)
     )
       return false;
     if (selection.$from.parent.type.name === "code_block") return false;
