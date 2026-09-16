@@ -54,6 +54,26 @@ Its `window.__markdownMintNative.metrics().mermaid` result reports node anchors,
 viewport-coordinate center deltas, edge labels, sequence messages, and source
 preservation.
 
+## Direct table-controls regression suite
+
+Run the real-browser table interaction checks with:
+
+```sh
+npm run test:browser:tables
+```
+
+The suite uses Chromium pointer events and keyboard focus against the bundled
+Rich Editor. It checks row and column handle selection and dragging, boundary
+and append controls, numbered-row renumbering, source/host edit delivery,
+Undo/Redo, Delete/Backspace structural selection, Escape cancellation of
+unselected row/column drags, and vertical/horizontal scrolling on a 100-row by
+10-column table. Keyboard checks also cover the row/column roving handle groups,
+arbitrary handle focus, selection, and post-selection movement. It also captures
+light/dark/high-contrast diagnostic screenshots under
+`output/playwright/table-controls/`. Pointer movement during a drag is checked
+for zero host edits; actual VS Code focus, native IME candidate windows, and
+screen-reader announcements remain manual/native acceptance checks.
+
 The server maps `/__vscode__/markdown.css` to the installed VS Code Markdown
 stylesheet before `media/document.css` is loaded. Set `VSCODE_MARKDOWN_CSS` on
 another machine to the matching installed stylesheet. This makes the rich and

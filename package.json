@@ -154,6 +154,7 @@
     "lint": "eslint \"src/**/*.ts\" \"tests/**/*.ts\"",
     "test": "vitest run",
     "test:browser:spacing": "npm run build:webview && node tests/browser/spacing.test.mjs",
+    "test:browser:tables": "npm run build:webview && node tests/browser/table-controls.test.mjs",
     "demo:full-document": "npm run build:webview && node scripts/demo/full-document-demo.mjs",
     "benchmark:file-search": "node scripts/benchmark-workspace-file-search.mjs",
     "benchmark:file-search:browser": "npm run build:webview && node scripts/benchmark-file-search-browser.mjs",
