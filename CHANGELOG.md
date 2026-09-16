@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.4
+
+- Make document containers responsive across the Rich Editor, Dedicated
+  Preview, and native Markdown preview, using approximately 85% of the
+  available width with a 640px minimum and 1800px maximum while preserving
+  narrow viewport behavior.
+
 ## 0.3.3
 
 - Fix modal keyboard activation so synthesized button clicks continue to run
