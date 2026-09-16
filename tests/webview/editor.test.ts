@@ -2055,6 +2055,13 @@ describe("rich editor rendering", () => {
     linkInput.dispatchEvent(linkEscape);
 
     expect(linkEscape.defaultPrevented).toBe(true);
+    expect(linkDialog.hasAttribute("open")).toBe(true);
+    expect(root.querySelector(".mm-discard-changes-dialog")).not.toBeNull();
+    root
+      .querySelector<HTMLButtonElement>(
+        ".mm-discard-changes-dialog button[type=submit]",
+      )!
+      .click();
     expect(linkDialog.hasAttribute("open")).toBe(false);
     expect(document.activeElement).toBe(linkButton);
     expect(app.view.state.doc.textContent).toBe(source);
@@ -2077,6 +2084,13 @@ describe("rich editor rendering", () => {
     imageInput.dispatchEvent(imageEscape);
 
     expect(imageEscape.defaultPrevented).toBe(true);
+    expect(imageDialog.hasAttribute("open")).toBe(true);
+    expect(root.querySelector(".mm-discard-changes-dialog")).not.toBeNull();
+    root
+      .querySelector<HTMLButtonElement>(
+        ".mm-discard-changes-dialog button[type=submit]",
+      )!
+      .click();
     expect(imageDialog.hasAttribute("open")).toBe(false);
     expect(document.activeElement).toBe(imageButton);
     expect(app.view.state.doc.textContent).toBe(source);
