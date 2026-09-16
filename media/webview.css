@@ -700,6 +700,13 @@ textarea:focus-visible {
 .mm-code-language-confirm-dialog {
   width: min(460px, calc(100vw - 30px));
 }
+.mm-discard-changes-dialog {
+  width: min(420px, calc(100vw - 30px));
+}
+.mm-discard-changes-help {
+  margin: -4px 0 0;
+  color: var(--vscode-descriptionForeground, var(--mm-control-foreground));
+}
 .mm-code-language-confirm-help {
   margin: -4px 0 0;
   color: var(--vscode-descriptionForeground, var(--mm-control-foreground));

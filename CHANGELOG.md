@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.3
+
+- Fix modal keyboard activation so synthesized button clicks continue to run
+  their intended actions instead of being mistaken for backdrop cancellation.
+- Keep dirty-dialog discard confirmation and focus restoration intact while
+  closing the clean Emoji picker and code-language removal confirmation from a
+  safe backdrop click without adding dirty confirmation.
+
 ## 0.3.2
 
 - Improve the table deletion toolbar by disabling Row and Column deletion for
