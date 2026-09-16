@@ -1601,7 +1601,11 @@ body.vscode-high-contrast-light .mm-file-autocomplete-option.is-active {
 }
 .mm-source-textarea {
   display: block;
-  width: min(100%, var(--mm-document-width));
+  width: min(
+    100%,
+    max(var(--mm-document-width), var(--mm-document-min-width)),
+    var(--mm-document-max-width)
+  );
   min-height: 100%;
   margin: 0 auto;
   padding: 18px;

@@ -8,6 +8,37 @@ const documentCss = readFileSync(
 );
 
 describe("shared document styles", () => {
+  it("uses one bounded responsive width for shared document surfaces", () => {
+    expect(documentCss).not.toContain("--mm-document-width: 800px");
+    expect(documentCss).toMatch(
+      /:root\s*\{[\s\S]*?--mm-document-width:\s*85%;[\s\S]*?--mm-document-min-width:\s*640px;[\s\S]*?--mm-document-max-width:\s*1800px;/,
+    );
+
+    const sharedDocumentRule = documentCss.match(
+      /\.markdown-body,\s*\.mm-document-content\s*\{([\s\S]*?)\n\}/,
+    )?.[1];
+    expect(sharedDocumentRule).toBeDefined();
+    expect(sharedDocumentRule).toContain(
+      `width: min(
+    100%,
+    max(var(--mm-document-width), var(--mm-document-min-width)),
+    var(--mm-document-max-width)
+  );`,
+    );
+
+    const responsiveWidth = (viewport: number) =>
+      Math.min(viewport, Math.max(viewport * 0.85, 640), 1800);
+    for (const viewport of [360, 500, 640, 800, 960, 1440, 2560, 6016]) {
+      expect(responsiveWidth(viewport)).toBeLessThanOrEqual(viewport);
+      expect(responsiveWidth(viewport)).toBeLessThanOrEqual(1800);
+    }
+    expect(responsiveWidth(500)).toBe(500);
+    expect(responsiveWidth(960)).toBe(816);
+    expect(responsiveWidth(1440)).toBe(1224);
+    expect(responsiveWidth(2560)).toBe(1800);
+    expect(responsiveWidth(6016)).toBe(1800);
+  });
+
   it("centers only flowchart-v2 node labels for Mermaid diagrams", () => {
     expect(documentCss).toContain(
       `.markdown-body
