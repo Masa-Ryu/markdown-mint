@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { Node as PMNode } from "prosemirror-model";
+import { CellSelection } from "prosemirror-tables";
 import { NodeSelection, TextSelection } from "prosemirror-state";
 import {
   parseMarkdown,
@@ -1200,6 +1201,160 @@ describe("bounded writing controls", () => {
     ).toContain("**hello**");
     expect(app.view.state.selection.from).toBe(selection.from);
     expect(app.view.state.selection.to).toBe(selection.to);
+  });
+
+  it("shows the Selection Toolbar for text selected within one table cell", () => {
+    const { app, root } = makeApp(
+      "| A | B |\n| --- | --- |\n| hello world | value |",
+    );
+    setSelectionGeometry(app);
+    const range = firstTextRange(
+      app.view.state.doc,
+      (node) => node.text === "hello world",
+    );
+    app.view.dispatch(
+      app.view.state.tr.setSelection(
+        TextSelection.create(app.view.state.doc, range.from, range.from + 5),
+      ),
+    );
+
+    const floating = root.querySelector<HTMLElement>(".mm-selection-toolbar")!;
+    expect(floating.hidden).toBe(false);
+    expect(floating.getAttribute("aria-hidden")).toBe("false");
+  });
+
+  it("applies Bold to text selected within one table cell", () => {
+    const { app, root, messages } = makeApp(
+      "| A | B |\n| --- | --- |\n| hello world | value |",
+    );
+    setSelectionGeometry(app);
+    const range = firstTextRange(
+      app.view.state.doc,
+      (node) => node.text === "hello world",
+    );
+    const selection = TextSelection.create(
+      app.view.state.doc,
+      range.from,
+      range.from + 5,
+    );
+    app.view.dispatch(app.view.state.tr.setSelection(selection));
+
+    clickToolbarButton(
+      root.querySelector<HTMLButtonElement>('[data-testid="selection-bold"]')!,
+    );
+
+    let selectedText = "";
+    let selectedTextIsStrong = false;
+    let unselectedTextIsStrong = false;
+    let otherCellText = "";
+    let otherCellIsStrong = false;
+    app.view.state.doc.descendants((node) => {
+      if (!node.isText) return;
+      if (node.text?.includes("hello")) {
+        selectedText += node.text;
+        selectedTextIsStrong ||= node.marks.some(
+          (mark) => mark.type.name === "strong",
+        );
+      }
+      if (node.text?.includes("world"))
+        unselectedTextIsStrong ||= node.marks.some(
+          (mark) => mark.type.name === "strong",
+        );
+      if (node.text === "value") {
+        otherCellText = node.text;
+        otherCellIsStrong = node.marks.some(
+          (mark) => mark.type.name === "strong",
+        );
+      }
+    });
+
+    expect(selectedText).toContain("hello");
+    expect(selectedTextIsStrong).toBe(true);
+    expect(unselectedTextIsStrong).toBe(false);
+    expect(otherCellText).toBe("value");
+    expect(otherCellIsStrong).toBe(false);
+    expect(editMessages(messages)).toHaveLength(1);
+  });
+
+  it("opens the Link picker for text selected within one table cell", () => {
+    const { app, root } = makeApp(
+      "| A | B |\n| --- | --- |\n| hello world | value |",
+    );
+    setSelectionGeometry(app);
+    const range = firstTextRange(
+      app.view.state.doc,
+      (node) => node.text === "hello world",
+    );
+    app.view.dispatch(
+      app.view.state.tr.setSelection(
+        TextSelection.create(app.view.state.doc, range.from, range.from + 5),
+      ),
+    );
+
+    clickToolbarButton(
+      root.querySelector<HTMLButtonElement>('[data-testid="selection-link"]')!,
+    );
+
+    const picker = root.querySelector<HTMLElement>(
+      '[data-testid="link-selection-picker"]',
+    )!;
+    expect(picker.hidden).toBe(false);
+    expect(picker.getAttribute("aria-hidden")).toBe("false");
+  });
+
+  it("hides the Selection Toolbar for table-spanning and CellSelection states", () => {
+    const { app, root } = makeApp(
+      "| A | B |\n| --- | --- |\n| hello world | value |",
+    );
+    setSelectionGeometry(app);
+    const cells = root.querySelectorAll<HTMLTableCellElement>("tbody td");
+    const hello = firstTextRange(
+      app.view.state.doc,
+      (node) => node.text === "hello world",
+    );
+    const value = firstTextRange(
+      app.view.state.doc,
+      (node) => node.text === "value",
+    );
+    const floating = root.querySelector<HTMLElement>(".mm-selection-toolbar")!;
+
+    app.view.dispatch(
+      app.view.state.tr.setSelection(
+        TextSelection.create(app.view.state.doc, hello.from, value.to),
+      ),
+    );
+    expect(floating.hidden).toBe(true);
+    expect(floating.getAttribute("aria-hidden")).toBe("true");
+
+    app.view.dispatch(
+      app.view.state.tr.setSelection(
+        CellSelection.create(
+          app.view.state.doc,
+          app.view.posAtDOM(cells[0]!, 0) - 1,
+          app.view.posAtDOM(cells[1]!, 0) - 1,
+        ),
+      ),
+    );
+    expect(floating.hidden).toBe(true);
+    expect(floating.getAttribute("aria-hidden")).toBe("true");
+  });
+
+  it("hides the Selection Toolbar for a collapsed cursor within a table cell", () => {
+    const { app, root } = makeApp(
+      "| A | B |\n| --- | --- |\n| hello world | value |",
+    );
+    const cell = root.querySelector<HTMLTableCellElement>("tbody td")!;
+    const cellPosition = app.view.posAtDOM(cell, 0);
+    app.view.dispatch(
+      app.view.state.tr.setSelection(
+        TextSelection.near(app.view.state.doc.resolve(cellPosition + 1)),
+      ),
+    );
+
+    const floating = root.querySelector<HTMLElement>(".mm-selection-toolbar")!;
+    expect(app.view.state.selection.empty).toBe(true);
+    expect(floating.hidden).toBe(true);
+    expect(floating.getAttribute("aria-hidden")).toBe("true");
   });
 
   it("does not reshow a collapsed Selection Toolbar after an Enter ACK", () => {

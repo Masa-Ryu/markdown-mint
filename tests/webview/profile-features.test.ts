@@ -602,6 +602,29 @@ describe("profile feature toolbar", () => {
       .click();
 
     expect(currentSource(app)).toBe(source);
+    expect(dialog.hasAttribute("open")).toBe(true);
+    expect(root.querySelector(".mm-discard-changes-dialog")).not.toBeNull();
+    root
+      .querySelector<HTMLButtonElement>(
+        ".mm-discard-changes-dialog button:not([type='submit'])",
+      )!
+      .click();
+    expect(dialog.hasAttribute("open")).toBe(true);
+    expect(
+      dialog.querySelector<HTMLTextAreaElement>('[data-feature-field="body"]')!
+        .value,
+    ).toBe("Changed");
+    dialog
+      .querySelector<HTMLButtonElement>("button:not([type='submit'])")!
+      .click();
+    expect(root.querySelector(".mm-discard-changes-dialog")).not.toBeNull();
+    root
+      .querySelector<HTMLButtonElement>(
+        ".mm-discard-changes-dialog button[type='submit']",
+      )!
+      .click();
+
+    expect(dialog.hasAttribute("open")).toBe(false);
     expect(document.activeElement).toBe(bodyEditor);
     expect(bodyEditor.selectionStart).toBe(2);
     expect(bodyEditor.selectionEnd).toBe(5);
