@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.6
+
+- Show the Rich Editor Selection Toolbar for non-empty text selections within
+  a single table cell while keeping CellSelection, cross-cell selections,
+  collapsed cursors, and table-boundary selections excluded.
+- Preserve the existing table toolbar, Tab navigation, profile restrictions,
+  and inline formatting actions.
+
 ## 0.3.5
 
 - Enable VS Code's standard Webview Find Widget in the Markdown Mint Custom
