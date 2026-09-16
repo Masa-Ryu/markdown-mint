@@ -98,8 +98,32 @@ import {
 import {
   createTableNumberingCommand,
   createTableNumberingPlugin,
+  isNumberedTable,
   isTableNumbered,
 } from "./tableNumbering";
+import {
+  canDeleteTableColumnAt,
+  canDeleteTableRowAt,
+  canInsertTableColumnAt,
+  canInsertTableRowAt,
+  canMoveTableColumnToBoundary,
+  canMoveTableRowToBoundary,
+  deleteTableColumnAt,
+  deleteTableRowAt,
+  insertTableColumnAt,
+  insertTableRowAt,
+  moveTableColumnToBoundary,
+  moveTableRowToBoundary,
+  supportsDirectTableOperations,
+  tableAt as explicitTableAt,
+  tableOperationMetaKey,
+  type TableOperationAxis,
+} from "./tableCommands";
+import {
+  TableControls,
+  type TableControlSelection,
+  type TableControlTarget,
+} from "./tableControls";
 import {
   PROFILE_FEATURES,
   createProfileFeatureCommand,
@@ -344,7 +368,12 @@ type TableToolbarAction =
   | "align-center"
   | "align-right"
   | "table-numbering"
-  | "table-delete";
+  | "table-delete"
+  | "table-controls"
+  | "row-move-up"
+  | "row-move-down"
+  | "col-move-left"
+  | "col-move-right";
 
 type TableDeletePreviewAction = Extract<
   TableToolbarAction,
@@ -353,6 +382,15 @@ type TableDeletePreviewAction = Extract<
 
 const TRANSIENT_BLANK_META = "markdown-mint-transient-blank";
 const SPREADSHEET_TABLE_PASTE_META = "markdown-mint-spreadsheet-table-paste";
+
+interface TableStructureSelectionState {
+  selection: TableControlSelection;
+  tablePos: number;
+  table: PMNode;
+  document: PMNode;
+  documentGeneration: number;
+  returnSelection: Selection;
+}
 
 const COMMON_EMOJI: ReadonlyArray<{
   emoji: string;
@@ -499,6 +537,76 @@ type TableSelectionBookmark =
       headOffset: number;
     };
 
+function movedTableIndex(
+  index: number,
+  source: number,
+  boundary: number,
+): number {
+  const destination = boundary > source ? boundary - 1 : boundary;
+  if (index === source) return destination;
+  if (source < destination && index > source && index <= destination)
+    return index - 1;
+  if (destination < source && index >= destination && index < source)
+    return index + 1;
+  return index;
+}
+
+function mapMovedTableSelection(
+  bookmark: TableSelectionBookmark,
+  axis: TableOperationAxis,
+  source: number,
+  boundary: number,
+): TableSelectionBookmark {
+  const mapPoint = (point: { row: number; column: number }) =>
+    axis === "row"
+      ? { ...point, row: movedTableIndex(point.row, source, boundary) }
+      : { ...point, column: movedTableIndex(point.column, source, boundary) };
+  if (bookmark.kind === "cells")
+    return {
+      kind: "cells",
+      anchor: mapPoint(bookmark.anchor),
+      head: mapPoint(bookmark.head),
+    };
+  const point = mapPoint({ row: bookmark.row, column: bookmark.column });
+  return { ...bookmark, row: point.row, column: point.column };
+}
+
+function deletedTableIndex(
+  index: number,
+  deleted: number,
+  limit: number,
+): number {
+  if (index > deleted) return index - 1;
+  if (index === deleted) return Math.min(deleted, Math.max(0, limit - 1));
+  return index;
+}
+
+function mapDeletedTableSelection(
+  bookmark: TableSelectionBookmark,
+  axis: TableOperationAxis,
+  deleted: number,
+  limit: number,
+): TableSelectionBookmark {
+  const mapPoint = (point: { row: number; column: number }) =>
+    axis === "row"
+      ? {
+          ...point,
+          row: deletedTableIndex(point.row, deleted, limit),
+        }
+      : {
+          ...point,
+          column: deletedTableIndex(point.column, deleted, limit),
+        };
+  if (bookmark.kind === "cells")
+    return {
+      kind: "cells",
+      anchor: mapPoint(bookmark.anchor),
+      head: mapPoint(bookmark.head),
+    };
+  const point = mapPoint({ row: bookmark.row, column: bookmark.column });
+  return { ...bookmark, row: point.row, column: point.column };
+}
+
 /** Resolve both a CellSelection and an ordinary text cursor inside a cell. */
 function tableContext(selection: Selection): TableContext | null {
   if (selection instanceof CellSelection) {
@@ -569,8 +677,13 @@ function tableDeleteActionDisabled(
 ): boolean {
   if (action === "row-delete")
     return context.rect.top === 0 && context.rect.bottom === context.map.height;
-  if (action === "col-delete")
-    return context.rect.left === 0 && context.rect.right === context.map.width;
+  if (action === "col-delete") {
+    const selectedWidth = context.rect.right - context.rect.left;
+    const remainingWidth = context.map.width - selectedWidth;
+    if (isNumberedTable(context.table))
+      return context.rect.left === 0 || remainingWidth < 2;
+    return remainingWidth < 1;
+  }
   return false;
 }
 
@@ -2471,6 +2584,9 @@ export class MarkdownEditorApp {
   private tableToolbarRevealed = false;
   private tableToolbarRevealRequested = false;
   private tableToolbarRevealTimer: ReturnType<typeof setTimeout> | undefined;
+  private tableControls: TableControls | undefined;
+  private tableControlHoveredTable: HTMLTableElement | null = null;
+  private tableStructureSelection: TableStructureSelectionState | null = null;
   private tableDeletePreviewAction: TableDeletePreviewAction | null = null;
   private tableDeletePreviewDecorations: DecorationSet | null = null;
   private tableDeletePreviewOverlay: HTMLElement | null = null;
@@ -2616,10 +2732,14 @@ export class MarkdownEditorApp {
   };
   private readonly tableSelectionChangeHandler = (): void =>
     this.scheduleWritingToolbarUpdate();
-  private readonly writingToolbarResizeHandler = (): void =>
+  private readonly writingToolbarResizeHandler = (): void => {
     this.updateWritingToolbarState();
-  private readonly writingToolbarScrollHandler = (): void =>
+    this.tableControls?.updateLayout();
+  };
+  private readonly writingToolbarScrollHandler = (): void => {
     this.updateWritingToolbarState();
+    this.tableControls?.updateLayout();
+  };
   private readonly tableDeletePreviewResizeHandler = (): void =>
     this.updateTableDeletePreviewGeometry();
   private readonly tableDeletePreviewScrollHandler = (): void =>
@@ -2638,6 +2758,8 @@ export class MarkdownEditorApp {
   };
   private readonly writingPointerDownHandler = (event: PointerEvent): void => {
     this.requestTableToolbarReveal(event.target);
+    if (!this.isTableStructureInteraction(event.target))
+      this.clearTableStructureSelection(false);
     if (this.linkPickerOpen) {
       const target = event.target;
       if (target instanceof Node && this.linkPicker.contains(target)) return;
@@ -2656,6 +2778,8 @@ export class MarkdownEditorApp {
   };
   private readonly writingFocusInHandler = (event: FocusEvent): void => {
     if (this.materializingSlash) return;
+    if (!this.isTableStructureInteraction(event.target))
+      this.clearTableStructureSelection(false);
     if (this.linkPickerOpen) {
       const target = event.target;
       if (target instanceof Node && this.linkPicker.contains(target)) return;
@@ -2686,6 +2810,11 @@ export class MarkdownEditorApp {
   };
   private readonly writingKeyDownHandler = (event: KeyboardEvent): void => {
     if (event.key !== "Escape") return;
+    if (this.tableStructureSelection) {
+      event.preventDefault();
+      this.clearTableStructureSelection(true);
+      return;
+    }
     if (this.linkPickerOpen) {
       event.preventDefault();
       this.closeLinkPicker(true);
@@ -2900,6 +3029,7 @@ export class MarkdownEditorApp {
               keyboardEvent.keyCode === 229)
           )
             return true;
+          if (this.handleTableStructureKeyDown(keyboardEvent)) return true;
           // ProseMirror deliberately ignores the first key near compositionend
           // on some browsers. Handle a genuine post-composition table Enter
           // here so it still performs the requested navigation immediately.
@@ -2942,6 +3072,7 @@ export class MarkdownEditorApp {
           return false;
         },
         mousedown: (_view, event) => {
+          this.clearTableStructureSelection(false);
           this.requestTableToolbarReveal(event.target);
           return false;
         },
@@ -2951,6 +3082,20 @@ export class MarkdownEditorApp {
         drop: (view, event) =>
           this.imageImport.handleDrop(view, event as DragEvent),
       },
+    });
+    this.tableControls = new TableControls(this.stage, {
+      canEdit: () => this.canUseTableControls(),
+      onHoverTable: (table) => this.handleTableControlHover(table),
+      onSelect: (selection, target) =>
+        this.handleTableControlSelect(selection, target),
+      onInsert: (axis, boundary, target) =>
+        this.handleTableControlInsert(axis, boundary, target),
+      onAppend: (axis, target) => this.handleTableControlAppend(axis, target),
+      onMove: (selection, boundary, target) =>
+        this.handleTableControlMove(selection, boundary, target),
+      onDelete: (selection, target) =>
+        this.handleTableControlDelete(selection, target),
+      onEscape: () => this.clearTableStructureSelection(true),
     });
     // The initial document came from the host, so it is already the current
     // serialized snapshot even when the starter plugin adds a virtual node.
@@ -3024,6 +3169,9 @@ export class MarkdownEditorApp {
 
   destroy(): void {
     this.clearTableDeletePreview();
+    this.clearTableStructureSelection(false);
+    this.tableControls?.destroy();
+    this.tableControls = undefined;
     this.destroyed = true;
     this.derivedViewsRevision += 1;
     this.pendingRejectedEdit = null;
@@ -3864,6 +4012,11 @@ export class MarkdownEditorApp {
     const storedMarksSet = transactions.some(
       (transaction) => transaction.storedMarksSet,
     );
+    const keepsTableStructureSelection = transactions.some(
+      (transaction) => transaction.getMeta(tableOperationMetaKey) !== undefined,
+    );
+    if ((docChanged || selectionSet) && !keepsTableStructureSelection)
+      this.clearTableStructureSelection(false);
     if (docChanged && !transientOnly) {
       this.closeWritingPopups();
       this.dirty = true;
@@ -4548,6 +4701,7 @@ export class MarkdownEditorApp {
       this.emptyLineButton.hidden = true;
     if (editingDisabled && this.blockGapButton) this.clearBlockGapInsert();
     this.updateTableToolbar();
+    this.updateTableControls();
     this.updateToolbarActiveState(selection);
   }
 
@@ -7572,6 +7726,46 @@ export class MarkdownEditorApp {
     addGroup("Table", [
       ["table-delete", "Delete table", "Delete table", "table-delete"],
     ]);
+    const directGroup = makeElement("div", {
+      class: "mm-table-controls-toolbar-group",
+      role: "group",
+      "aria-label": "Direct table controls",
+    });
+    const directHeading = makeElement("span", {
+      class: "mm-table-controls-toolbar-label",
+      "aria-hidden": "true",
+    });
+    directHeading.textContent = "Direct";
+    const directActions = makeElement("div", {
+      class: "mm-table-toolbar-actions",
+    });
+    const addDirectButton = (
+      action: TableToolbarAction,
+      label: string,
+      title: string,
+    ): void => {
+      const button = makeElement("button", {
+        type: "button",
+        class: "mm-table-controls-toolbar-button",
+        "data-action": action,
+        "data-table-direct-control": "true",
+        "data-tooltip": title,
+        "aria-label": title,
+      }) as HTMLButtonElement;
+      button.textContent = label;
+      button.addEventListener("mousedown", (event) => event.preventDefault());
+      button.addEventListener("click", () =>
+        this.runContextualTableAction(action),
+      );
+      directActions.append(button);
+    };
+    addDirectButton("table-controls", "Handles", "Focus table handles");
+    addDirectButton("row-move-up", "↑", "Move selected row up");
+    addDirectButton("row-move-down", "↓", "Move selected row down");
+    addDirectButton("col-move-left", "←", "Move selected column left");
+    addDirectButton("col-move-right", "→", "Move selected column right");
+    directGroup.append(directHeading, directActions);
+    toolbar.append(directGroup);
     return toolbar;
   }
 
@@ -8802,6 +8996,18 @@ export class MarkdownEditorApp {
 
   private runContextualTableAction(action: TableToolbarAction): void {
     this.clearTableDeletePreview();
+    if (action === "table-controls") {
+      this.focusTableControls();
+      return;
+    }
+    if (action === "row-move-up" || action === "row-move-down") {
+      this.runAuxiliaryTableMove("row", action === "row-move-up" ? -1 : 1);
+      return;
+    }
+    if (action === "col-move-left" || action === "col-move-right") {
+      this.runAuxiliaryTableMove("column", action === "col-move-left" ? -1 : 1);
+      return;
+    }
     if (action === "align-left") {
       this.runAlignment("left");
       return;
@@ -8822,9 +9028,30 @@ export class MarkdownEditorApp {
       this.deleteTable();
       return;
     }
+    if (action === "col-left" || action === "col-delete") {
+      const context = tableContext(this.view.state.selection);
+      if (
+        context &&
+        ((action === "col-left" &&
+          isNumberedTable(context.table) &&
+          context.rect.left === 0) ||
+          (action === "col-delete" &&
+            tableDeleteActionDisabled(context, action)))
+      )
+        return;
+    }
     const commands: Partial<
       Record<
-        Exclude<TableToolbarAction, "table-delete" | `align-${string}`>,
+        Exclude<
+          TableToolbarAction,
+          | "table-delete"
+          | `align-${string}`
+          | "table-controls"
+          | "row-move-up"
+          | "row-move-down"
+          | "col-move-left"
+          | "col-move-right"
+        >,
         (state: EditorState, dispatch?: (tr: Transaction) => void) => boolean
       >
     > = {
@@ -8837,6 +9064,558 @@ export class MarkdownEditorApp {
     };
     const command = commands[action as keyof typeof commands];
     if (command) this.runTableCommand(command);
+  }
+
+  private canUseTableControls(): boolean {
+    return (
+      this.canEditBlock() && !this.composing && this.profile !== "commonmark"
+    );
+  }
+
+  private tableTargetAtElement(
+    tableElement: HTMLTableElement,
+  ): TableControlTarget | null {
+    if (!this.view) return null;
+    const document = this.view.state.doc;
+    let tablePos: number;
+    try {
+      // `posAtDOM(table, 0)` is the position inside the table before its first
+      // row. Resolve the containing node directly instead of walking every
+      // document node on each pointermove.
+      tablePos = this.view.posAtDOM(tableElement, 0) - 1;
+    } catch {
+      return null;
+    }
+    const table = explicitTableAt(document, tablePos);
+    if (!table || this.view.nodeDOM(tablePos) !== tableElement) return null;
+    if (!supportsDirectTableOperations(table)) return null;
+    const structure = this.tableStructureSelection;
+    const selected =
+      structure &&
+      structure.document === document &&
+      structure.documentGeneration === this.documentGeneration &&
+      structure.tablePos === tablePos &&
+      structure.table === table
+        ? structure.selection
+        : null;
+    return {
+      tablePos,
+      table,
+      tableElement,
+      document,
+      documentGeneration: this.documentGeneration,
+      numbered: isNumberedTable(table),
+      supported: true,
+      selection: selected,
+    };
+  }
+
+  private tableTargetForSelection(
+    selection: Selection = this.view.state.selection,
+  ): TableControlTarget | null {
+    const context = tableContext(selection);
+    if (!context) return null;
+    const element = this.view.nodeDOM(context.tableStart - 1);
+    if (!(element instanceof HTMLTableElement)) return null;
+    return this.tableTargetAtElement(element);
+  }
+
+  private tableTargetForStructureSelection(): TableControlTarget | null {
+    const structure = this.tableStructureSelection;
+    if (!structure || !this.view) return null;
+    const element = this.view.nodeDOM(structure.tablePos);
+    if (!(element instanceof HTMLTableElement)) return null;
+    return this.tableTargetAtElement(element);
+  }
+
+  private updateTableAuxiliaryState(target: TableControlTarget | null): void {
+    if (!this.tableToolbar) return;
+    const selection = target?.selection ?? null;
+    for (const button of this.tableToolbar.querySelectorAll<HTMLButtonElement>(
+      ".mm-table-controls-toolbar-button",
+    )) {
+      const action = button.dataset.action;
+      let enabled = Boolean(
+        target && target.supported && this.canUseTableControls(),
+      );
+      if (enabled && action === "table-controls") {
+        enabled = true;
+      } else if (enabled && selection && target) {
+        if (action === "row-move-up" || action === "row-move-down") {
+          if (selection.axis !== "row") enabled = false;
+          else {
+            const boundary =
+              selection.index + (action === "row-move-down" ? 2 : -1);
+            enabled = canMoveTableRowToBoundary(
+              target.table,
+              selection.index,
+              boundary,
+            );
+          }
+        } else if (action === "col-move-left" || action === "col-move-right") {
+          if (selection.axis !== "column") enabled = false;
+          else {
+            const boundary =
+              selection.index + (action === "col-move-right" ? 2 : -1);
+            enabled = canMoveTableColumnToBoundary(
+              target.table,
+              selection.index,
+              boundary,
+            );
+          }
+        } else {
+          enabled = false;
+        }
+      } else if (action !== "table-controls") {
+        enabled = false;
+      }
+      button.disabled = !enabled;
+    }
+  }
+
+  private updateTableControls(): void {
+    if (!this.tableControls) return;
+    if (!this.canUseTableControls()) {
+      this.tableStructureSelection = null;
+      this.tableControlHoveredTable = null;
+      this.tableControls.clear();
+      this.updateTableAuxiliaryState(null);
+      return;
+    }
+    const hovered = this.tableControlHoveredTable;
+    let target = hovered
+      ? this.tableTargetAtElement(hovered)
+      : this.tableTargetForSelection();
+    if (!hovered) target ??= this.tableTargetForStructureSelection();
+    this.tableControls.update(target);
+    this.updateTableAuxiliaryState(target);
+  }
+
+  private handleTableControlHover(table: HTMLTableElement | null): void {
+    if (this.tableControlHoveredTable === table) return;
+    this.tableControlHoveredTable = table;
+    this.updateTableControls();
+  }
+
+  private isTableStructureInteraction(target: EventTarget | null): boolean {
+    if (!(target instanceof Node)) return false;
+    return Boolean(
+      this.tableControls?.element.contains(target) ||
+      (target instanceof Element &&
+        target.closest('[data-table-direct-control="true"]')),
+    );
+  }
+
+  private isCurrentTableControlTarget(target: TableControlTarget): boolean {
+    if (!this.canUseTableControls() || !target.supported) return false;
+    return (
+      target.document === this.view.state.doc &&
+      target.documentGeneration === this.documentGeneration &&
+      explicitTableAt(this.view.state.doc, target.tablePos) === target.table &&
+      this.view.nodeDOM(target.tablePos) === target.tableElement
+    );
+  }
+
+  private directCellPosition(
+    document: PMNode,
+    tablePos: number,
+    row: number,
+    column: number,
+  ): number | null {
+    const table = explicitTableAt(document, tablePos);
+    if (!table) return null;
+    try {
+      const map = TableMap.get(table);
+      if (row < 0 || row >= map.height || column < 0 || column >= map.width)
+        return null;
+      return tablePos + 1 + map.positionAt(row, column, table);
+    } catch {
+      return null;
+    }
+  }
+
+  private setDirectCaret(
+    transaction: Transaction,
+    tablePos: number,
+    row: number,
+    column: number,
+  ): boolean {
+    const cellPos = this.directCellPosition(
+      transaction.doc,
+      tablePos,
+      row,
+      column,
+    );
+    if (cellPos === null) return false;
+    try {
+      transaction.setSelection(
+        TextSelection.near(transaction.doc.resolve(cellPos + 1), 1),
+      );
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private captureDirectTableSelection(
+    target: TableControlTarget,
+  ): TableSelectionBookmark | null {
+    const context = tableContext(this.view.state.selection);
+    if (
+      !context ||
+      context.table !== target.table ||
+      context.tableStart - 1 !== target.tablePos
+    )
+      return null;
+    return this.captureTableSelection(context, this.view.state.selection);
+  }
+
+  private restoreDirectTableSelection(
+    transaction: Transaction,
+    tablePos: number,
+    bookmark: TableSelectionBookmark,
+  ): boolean {
+    const table = explicitTableAt(transaction.doc, tablePos);
+    if (!table) return false;
+    try {
+      const map = TableMap.get(table);
+      const cellPosition = (row: number, column: number): number => {
+        const safeRow = Math.max(0, Math.min(map.height - 1, row));
+        const safeColumn = Math.max(0, Math.min(map.width - 1, column));
+        return tablePos + 1 + map.positionAt(safeRow, safeColumn, table);
+      };
+      if (bookmark.kind === "cells") {
+        transaction.setSelection(
+          CellSelection.create(
+            transaction.doc,
+            cellPosition(bookmark.anchor.row, bookmark.anchor.column),
+            cellPosition(bookmark.head.row, bookmark.head.column),
+          ),
+        );
+      } else {
+        const row = Math.max(0, Math.min(map.height - 1, bookmark.row));
+        const column = Math.max(0, Math.min(map.width - 1, bookmark.column));
+        const cellPos = cellPosition(row, column);
+        const cell = table.nodeAt(map.positionAt(row, column, table));
+        const contentSize = cell?.content.size ?? 0;
+        const anchor = Math.min(
+          Math.max(1, bookmark.anchorOffset),
+          Math.max(1, contentSize),
+        );
+        const head = Math.min(
+          Math.max(1, bookmark.headOffset),
+          Math.max(1, contentSize),
+        );
+        transaction.setSelection(
+          TextSelection.create(
+            transaction.doc,
+            cellPos + anchor,
+            cellPos + head,
+          ),
+        );
+      }
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private handleTableControlSelect(
+    selection: TableControlSelection,
+    target: TableControlTarget,
+  ): void {
+    if (!this.isCurrentTableControlTarget(target)) return;
+    const existing = this.tableStructureSelection;
+    const returnSelection =
+      existing &&
+      existing.document === this.view.state.doc &&
+      existing.tablePos === target.tablePos &&
+      existing.table === target.table
+        ? existing.returnSelection
+        : this.view.state.selection;
+    this.tableStructureSelection = {
+      selection,
+      tablePos: target.tablePos,
+      table: target.table,
+      document: this.view.state.doc,
+      documentGeneration: this.documentGeneration,
+      returnSelection,
+    };
+    this.updateTableControls();
+  }
+
+  private clearTableStructureSelection(restore: boolean): void {
+    const structure = this.tableStructureSelection;
+    if (!structure) return;
+    this.tableStructureSelection = null;
+    if (!this.view) return;
+    this.updateTableControls();
+    if (restore && this.canUseTableControls()) this.view.focus();
+  }
+
+  private handleTableControlInsert(
+    axis: TableOperationAxis,
+    boundary: number,
+    target: TableControlTarget,
+  ): void {
+    if (!this.isCurrentTableControlTarget(target)) {
+      this.clearTableStructureSelection(true);
+      return;
+    }
+    const allowed =
+      axis === "row"
+        ? canInsertTableRowAt(target.table, boundary)
+        : canInsertTableColumnAt(target.table, boundary);
+    if (!allowed) return;
+    let dispatched = false;
+    const command = axis === "row" ? insertTableRowAt : insertTableColumnAt;
+    command(this.view.state, target.tablePos, boundary, (transaction) => {
+      const table = explicitTableAt(transaction.doc, target.tablePos);
+      if (table) {
+        if (axis === "row") {
+          this.setDirectCaret(
+            transaction,
+            target.tablePos,
+            boundary,
+            isNumberedTable(table) ? 1 : 0,
+          );
+        } else {
+          this.setDirectCaret(transaction, target.tablePos, 0, boundary);
+        }
+      }
+      dispatched = true;
+      this.dispatchTransaction(transaction);
+    });
+    if (dispatched) {
+      this.tableStructureSelection = null;
+      this.updateTableControls();
+      this.view.focus();
+    }
+  }
+
+  private handleTableControlAppend(
+    axis: TableOperationAxis,
+    target: TableControlTarget,
+  ): void {
+    const boundary =
+      axis === "row"
+        ? target.table.childCount
+        : (target.table.firstChild?.childCount ?? 0);
+    this.handleTableControlInsert(axis, boundary, target);
+  }
+
+  private handleTableControlMove(
+    selection: TableControlSelection,
+    boundary: number,
+    target: TableControlTarget,
+  ): void {
+    if (!this.isCurrentTableControlTarget(target)) {
+      this.clearTableStructureSelection(true);
+      return;
+    }
+    const allowed =
+      selection.axis === "row"
+        ? canMoveTableRowToBoundary(target.table, selection.index, boundary)
+        : canMoveTableColumnToBoundary(target.table, selection.index, boundary);
+    if (!allowed) return;
+    const nextIndex = boundary > selection.index ? boundary - 1 : boundary;
+    const bookmark = this.captureDirectTableSelection(target);
+    const movedBookmark = bookmark
+      ? mapMovedTableSelection(
+          bookmark,
+          selection.axis,
+          selection.index,
+          boundary,
+        )
+      : null;
+    let dispatched = false;
+    const command =
+      selection.axis === "row"
+        ? moveTableRowToBoundary
+        : moveTableColumnToBoundary;
+    command(
+      this.view.state,
+      target.tablePos,
+      selection.index,
+      boundary,
+      (transaction) => {
+        if (movedBookmark)
+          this.restoreDirectTableSelection(
+            transaction,
+            target.tablePos,
+            movedBookmark,
+          );
+        else
+          this.setDirectCaret(
+            transaction,
+            target.tablePos,
+            selection.axis === "row"
+              ? nextIndex
+              : Math.min(1, target.table.childCount - 1),
+            selection.axis === "column"
+              ? nextIndex
+              : isNumberedTable(target.table)
+                ? 1
+                : 0,
+          );
+        dispatched = true;
+        this.dispatchTransaction(transaction);
+      },
+    );
+    if (!dispatched) return;
+    const table = explicitTableAt(this.view.state.doc, target.tablePos);
+    if (!table || !supportsDirectTableOperations(table)) {
+      this.tableStructureSelection = null;
+      this.updateTableControls();
+      return;
+    }
+    this.tableStructureSelection = {
+      selection: { axis: selection.axis, index: nextIndex },
+      tablePos: target.tablePos,
+      table,
+      document: this.view.state.doc,
+      documentGeneration: this.documentGeneration,
+      returnSelection: this.view.state.selection,
+    };
+    this.updateTableControls();
+    this.tableControls?.focusFirst();
+  }
+
+  private handleTableControlDelete(
+    selection: TableControlSelection,
+    target: TableControlTarget,
+  ): void {
+    if (!this.isCurrentTableControlTarget(target)) {
+      this.clearTableStructureSelection(true);
+      return;
+    }
+    const allowed =
+      selection.axis === "row"
+        ? canDeleteTableRowAt(target.table, selection.index)
+        : canDeleteTableColumnAt(target.table, selection.index);
+    if (!allowed) return;
+    const bookmark = this.captureDirectTableSelection(target);
+    let dispatched = false;
+    const command =
+      selection.axis === "row" ? deleteTableRowAt : deleteTableColumnAt;
+    command(
+      this.view.state,
+      target.tablePos,
+      selection.index,
+      (transaction) => {
+        const table = explicitTableAt(transaction.doc, target.tablePos);
+        if (table) {
+          const limit =
+            selection.axis === "row"
+              ? table.childCount
+              : (table.firstChild?.childCount ?? 0);
+          const restored = bookmark
+            ? this.restoreDirectTableSelection(
+                transaction,
+                target.tablePos,
+                mapDeletedTableSelection(
+                  bookmark,
+                  selection.axis,
+                  selection.index,
+                  limit,
+                ),
+              )
+            : false;
+          if (restored) {
+            dispatched = true;
+            this.dispatchTransaction(transaction);
+            return;
+          }
+          const row =
+            selection.axis === "row"
+              ? Math.min(selection.index, Math.max(0, table.childCount - 1))
+              : Math.min(1, Math.max(0, table.childCount - 1));
+          const column =
+            selection.axis === "column"
+              ? Math.min(
+                  selection.index,
+                  Math.max(0, (table.firstChild?.childCount ?? 1) - 1),
+                )
+              : isNumberedTable(table)
+                ? 1
+                : 0;
+          this.setDirectCaret(transaction, target.tablePos, row, column);
+        }
+        dispatched = true;
+        this.dispatchTransaction(transaction);
+      },
+    );
+    if (dispatched) {
+      this.tableStructureSelection = null;
+      this.updateTableControls();
+      this.view.focus();
+    }
+  }
+
+  private handleTableStructureKeyDown(event: KeyboardEvent): boolean {
+    const structure = this.tableStructureSelection;
+    if (!structure || event.isComposing || event.keyCode === 229) return false;
+    if (event.key === "Escape") {
+      event.preventDefault();
+      this.clearTableStructureSelection(true);
+      return true;
+    }
+    if (event.ctrlKey || event.metaKey || event.altKey || event.shiftKey)
+      return false;
+    const target = this.tableTargetForStructureSelection();
+    if (!target) {
+      this.clearTableStructureSelection(false);
+      return false;
+    }
+    if (event.key === "Delete" || event.key === "Backspace") {
+      event.preventDefault();
+      this.handleTableControlDelete(structure.selection, target);
+      return true;
+    }
+    let direction = 0;
+    if (structure.selection.axis === "row") {
+      if (event.key === "ArrowUp") direction = -1;
+      if (event.key === "ArrowDown") direction = 1;
+    } else {
+      if (event.key === "ArrowLeft") direction = -1;
+      if (event.key === "ArrowRight") direction = 1;
+    }
+    if (direction === 0) return false;
+    event.preventDefault();
+    this.handleTableControlMove(
+      structure.selection,
+      structure.selection.index + (direction > 0 ? 2 : -1),
+      target,
+    );
+    return true;
+  }
+
+  private runAuxiliaryTableMove(
+    axis: TableOperationAxis,
+    direction: -1 | 1,
+  ): void {
+    const structure = this.tableStructureSelection;
+    const target = this.tableTargetForStructureSelection();
+    if (!structure || !target || structure.selection.axis !== axis) return;
+    this.handleTableControlMove(
+      structure.selection,
+      structure.selection.index + (direction > 0 ? 2 : -1),
+      target,
+    );
+  }
+
+  private focusTableControls(): void {
+    if (!this.canUseTableControls()) return;
+    const target =
+      (this.tableControlHoveredTable
+        ? this.tableTargetAtElement(this.tableControlHoveredTable)
+        : null) ??
+      this.tableTargetForSelection() ??
+      this.tableTargetForStructureSelection();
+    if (!target) return;
+    this.tableControlHoveredTable = target.tableElement;
+    this.updateTableControls();
+    this.tableControls?.focusFirst();
   }
 
   private deleteTable(): boolean {
@@ -9264,6 +10043,7 @@ export class MarkdownEditorApp {
     if (this.previewOnly && mode !== "preview" && mode !== "source") return;
     if (mode !== this.mode) this.closeDiscardChangesConfirmation(true);
     this.clearTableDeletePreview();
+    this.clearTableStructureSelection(false);
     if (mode !== this.mode) {
       this.closeWritingPopups();
       this.closeEmojiPicker();
@@ -9493,7 +10273,10 @@ export class MarkdownEditorApp {
         ((action === "row-delete" &&
           tableDeleteActionDisabled(context, action)) ||
           (action === "col-delete" &&
-            tableDeleteActionDisabled(context, action)));
+            tableDeleteActionDisabled(context, action)) ||
+          (action === "col-left" &&
+            isNumberedTable(context.table) &&
+            context.rect.left === 0));
       button.disabled = !actionsEnabled || deleteDisabled;
     }
 
@@ -10307,6 +11090,9 @@ export class MarkdownEditorApp {
   ): void {
     this.closeDiscardChangesConfirmation(true);
     this.clearTableDeletePreview();
+    this.clearTableStructureSelection(false);
+    this.tableControlHoveredTable = null;
+    this.tableControls?.clear();
     if (this.composing) {
       this.pendingExternal = message;
       return;

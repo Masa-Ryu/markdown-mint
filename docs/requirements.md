@@ -1436,6 +1436,49 @@ without pressing Enter first. Dialog generation/profile and stale-document
 guards remain in force; Cancel leaves the boundary, ProseMirror document,
 source, and host edit count unchanged.
 
+## Current direct table manipulation invariant
+
+- In Rich GitHub and GitLab editing, a supported rectangular, unmerged table
+  exposes one editor-only overlay with body-row handles on the left and
+  column handles on the top. Clicking a handle records transient structural
+  state without creating a ProseMirror `CellSelection`, changing the caret,
+  or sending a host edit. A roughly 6px pointer threshold distinguishes a
+  click from a drag; pointer movement only updates the drop preview.
+- A row or column can be moved within its current table by a real pointer drag.
+  The overlay uses the explicit table document position and measured row or
+  column boundaries, cancels on an invalid/outside drop, document replacement,
+  mode change, pointer cancellation, window blur, or destroy, and never moves
+  between tables. Boundary `+` controls insert before an indicated body row or
+  data column; the bottom and right `+` controls append one row or column and
+  place the caret in the new cells. New rows retain existing per-column
+  alignment attributes; moved, deleted, and untouched cells retain their
+  ProseMirror content and marks.
+- Direct transformations live in `src/webview/tableCommands.ts` and validate
+  the supplied table position, rectangular unit-cell shape, and no-op
+  boundary. Existing merged or otherwise unsupported tables continue to use
+  the existing table commands. The ordinary table minimum is one column.
+  Numbered tables protect the first `#` column, prohibit left insertion, and
+  retain at least one data column. The existing strict `isNumberedTable()`
+  predicate is the only automatic-numbering gate; a manually edited number or
+  custom first-column value is not auto-renumbered.
+- A valid numbered row move, insertion, or deletion and its sequential
+  renumbering are one ProseMirror transaction, so Markdown/source sync, dirty
+  state, and Undo/Redo see one structural edit. Structural selection is
+  cleared by ordinary text or CellSelection interaction, outside focus/click,
+  Escape, mode changes, external updates, and destroy. Delete/Backspace acts
+  structurally only while a handle is selected; normal text selection,
+  CellSelection copy/paste, alignment, and table navigation retain their
+  existing behavior. The existing contextual table toolbar remains available,
+  with keyboard-accessible handle focus and auxiliary row/column move buttons.
+  No Cmd/Ctrl+D duplication path, Alt-drag duplication, or custom context menu
+  is added; the browser and VS Code context-menu behavior remains unchanged.
+- The overlay is styled only in `media/webview.css`; `media/document.css` and
+  the five required Markdown fixtures (`common-test.md`, `github-test.md`,
+  `github-test-class-B.md`, `gitlab-test.md`, and `gitlab-test-class-B.md`) are
+  unchanged. `npm run test:browser:tables` covers real Chromium pointer,
+  keyboard, scrolling, numbering, source-sync, and host-history paths. Native
+  VS Code focus/IME behavior remains a separate acceptance/manual check.
+
 ## Explicit limits
 
 Paste/drop image asset copying is optional follow-up work. Native IME and visual
