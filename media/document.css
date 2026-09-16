@@ -2,7 +2,9 @@
  * preview. Keep paragraph, list, code and table metrics in one place so
  * switching surfaces does not move the document on screen. */
 :root {
-  --mm-document-width: 800px;
+  --mm-document-width: 85%;
+  --mm-document-min-width: 640px;
+  --mm-document-max-width: 1800px;
   --mm-border: var(--vscode-textSeparator-foreground, rgba(127, 127, 127, 0.3));
   --mm-muted: var(--vscode-descriptionForeground, #7f8792);
   --mm-code-background: var(
@@ -63,7 +65,11 @@ body {
   --mm-task-checkbox-gap: calc(var(--mm-document-size) * 0.45);
   --mm-task-checkbox-offset: calc(var(--mm-document-size) * 0.22);
   box-sizing: border-box;
-  width: min(100%, var(--mm-document-width));
+  width: min(
+    100%,
+    max(var(--mm-document-width), var(--mm-document-min-width)),
+    var(--mm-document-max-width)
+  );
   margin: 0 auto;
   padding: 48px 44px 80px;
   color: var(--vscode-foreground, #d4d4d4);

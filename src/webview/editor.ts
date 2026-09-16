@@ -155,6 +155,10 @@ import {
   ImageImportController,
   type ImageImportControllerOptions,
 } from "./imageImport";
+import {
+  ModalCancelBehavior,
+  type DialogCancelReason,
+} from "./modalCancelBehavior";
 
 export type DocumentProfile = "github" | "gitlab" | "commonmark";
 export type EditorMode = "rich" | "preview" | "source";
@@ -1175,6 +1179,8 @@ class CodeBlockNodeView {
   private readonly lineNumbers: HTMLDivElement;
   private readonly controls: CodeBlockControlBinding;
   private languageRemovalDialog: HTMLDialogElement | null = null;
+  private languageRemovalBehavior: ModalCancelBehavior | null = null;
+  private languageRemovalFallbackInstalled = false;
   private languagePickerOpen = false;
   private languageActiveIndex = -1;
   private languageInputModality: LanguageInputModality = "pointer";
@@ -1185,6 +1191,28 @@ class CodeBlockNodeView {
   private languageComposing = false;
   private languageCompositionEndedAt = -Infinity;
   private readonly canEdit: () => boolean;
+  private readonly languageRemovalFallbackHandler = (
+    event: KeyboardEvent,
+  ): void => {
+    const dialog = this.languageRemovalDialog;
+    if (
+      !dialog ||
+      event.key !== "Escape" ||
+      event.isComposing ||
+      event.keyCode === 229 ||
+      !dialog.hasAttribute("open")
+    )
+      return;
+    event.preventDefault();
+    event.stopPropagation();
+    const cancelEvent = new Event("cancel", { cancelable: true });
+    const canceled = !dialog.dispatchEvent(cancelEvent);
+    if (!dialog.hasAttribute("open")) {
+      this.removeLanguageRemovalFallback(dialog);
+      return;
+    }
+    if (!canceled) this.closeLanguageRemovalConfirmation(true);
+  };
   private readonly handleBlockClick = (event: MouseEvent): void => {
     const target = event.target;
     if (!(target instanceof Element)) return;
@@ -1837,19 +1865,29 @@ class CodeBlockNodeView {
         return;
       this.applyCodeLanguage(position, current, "");
     });
-    dialog.addEventListener("cancel", (event) => {
-      event.preventDefault();
-      this.closeLanguageRemovalConfirmation(true);
-    });
     form.append(title, help, info, warning, actions);
     dialog.append(form);
     this.dom.append(dialog);
     this.languageRemovalDialog = dialog;
+    this.languageRemovalBehavior = new ModalCancelBehavior({
+      dialog,
+      getSnapshot: () => null,
+      onCancelRequest: () => this.closeLanguageRemovalConfirmation(true),
+      isActive: () => !this.destroyed && this.languageRemovalDialog === dialog,
+    });
+    this.languageRemovalBehavior.install();
+    let nativeOpen = false;
     try {
-      if (typeof dialog.showModal === "function") dialog.showModal();
-      else dialog.setAttribute("open", "true");
+      if (typeof dialog.showModal === "function") {
+        dialog.showModal();
+        nativeOpen = true;
+      }
     } catch {
+      // Fall through to the non-modal open attribute for limited hosts.
+    }
+    if (!nativeOpen) {
       dialog.setAttribute("open", "true");
+      this.installLanguageRemovalFallback(dialog);
     }
     cancel.focus();
   }
@@ -1858,10 +1896,25 @@ class CodeBlockNodeView {
     const dialog = this.languageRemovalDialog;
     if (!dialog) return;
     this.languageRemovalDialog = null;
+    this.languageRemovalBehavior?.dispose();
+    this.languageRemovalBehavior = null;
+    this.removeLanguageRemovalFallback(dialog);
     if (typeof dialog.close === "function" && dialog.open) dialog.close();
     else dialog.removeAttribute("open");
     dialog.remove();
     if (restoreFocus && !this.destroyed) this.languageTrigger.focus();
+  }
+
+  private installLanguageRemovalFallback(dialog: HTMLDialogElement): void {
+    if (this.languageRemovalFallbackInstalled) return;
+    this.languageRemovalFallbackInstalled = true;
+    dialog.addEventListener("keydown", this.languageRemovalFallbackHandler);
+  }
+
+  private removeLanguageRemovalFallback(dialog: HTMLDialogElement): void {
+    if (!this.languageRemovalFallbackInstalled) return;
+    this.languageRemovalFallbackInstalled = false;
+    dialog.removeEventListener("keydown", this.languageRemovalFallbackHandler);
   }
 
   update(node: PMNode): boolean {
@@ -2460,6 +2513,16 @@ export class MarkdownEditorApp {
     HTMLDialogElement,
     (event: KeyboardEvent) => void
   >();
+  private readonly modalCancelBehaviors = new Map<
+    HTMLDialogElement,
+    ModalCancelBehavior
+  >();
+  private discardChangesConfirmation: {
+    dialog: HTMLDialogElement;
+    target: HTMLDialogElement;
+    behavior: ModalCancelBehavior;
+    returnFocus: HTMLElement | null;
+  } | null = null;
   private tableDialogColumns = 3;
   private tableDialogRows = 3;
   private tableDialogPreviewColumns = 3;
@@ -3028,8 +3091,12 @@ export class MarkdownEditorApp {
     this.linkAutocomplete?.dispose();
     this.linkPickerAutocomplete?.dispose();
     this.imageAutocomplete?.dispose();
+    this.closeDiscardChangesConfirmation(false);
     for (const dialog of this.fallbackDialogCancelHandlers.keys())
       this.removeFallbackDialogCancel(dialog);
+    for (const behavior of this.modalCancelBehaviors.values())
+      behavior.dispose();
+    this.modalCancelBehaviors.clear();
     this.clearBlockGapInsert();
     this.closeEmojiPicker();
     this.closeProfileFeatureDialog();
@@ -4485,6 +4552,7 @@ export class MarkdownEditorApp {
   }
 
   private setConflict(message: string): void {
+    this.closeDiscardChangesConfirmation(true);
     this.conflict = true;
     this.syncPaused = true;
     if (this.tableDialogOpen) this.closeTableDialog(message);
@@ -5043,7 +5111,7 @@ export class MarkdownEditorApp {
         if (!this.linkTextInput.value.trim())
           this.linkTextInput.value = candidate.fileName;
       },
-      onEscape: () => this.closeDialog(link),
+      onEscape: () => this.requestDialogCancel(link, "escape"),
     });
     this.linkTextInput = makeField("Link text", "text", "Selected text");
     const linkActions = document.createElement("div");
@@ -5051,7 +5119,9 @@ export class MarkdownEditorApp {
     const linkCancel = document.createElement("button");
     linkCancel.type = "button";
     linkCancel.textContent = "Cancel";
-    linkCancel.addEventListener("click", () => this.closeDialog(link));
+    linkCancel.addEventListener("click", () =>
+      this.requestDialogCancel(link, "cancel-button"),
+    );
     const unlink = document.createElement("button");
     unlink.type = "button";
     unlink.textContent = "Unlink";
@@ -5082,13 +5152,13 @@ export class MarkdownEditorApp {
       this.applyLink(this.linkUrlInput.value.trim(), this.linkTextInput.value);
       this.closeDialog(link);
     });
-    link.addEventListener("cancel", (event) => {
-      event.preventDefault();
-      this.closeDialog(link);
-    });
     link.append(linkForm);
     toolbar.append(link);
     this.linkDialog = link;
+    this.registerModalCancelBehavior(link, () => [
+      this.linkUrlInput.value,
+      this.linkTextInput.value,
+    ]);
 
     const image = document.createElement("dialog");
     image.className = "mm-input-dialog mm-image-dialog";
@@ -5106,7 +5176,7 @@ export class MarkdownEditorApp {
     this.imageAutocomplete = new FileAutocomplete({
       input: this.imageUrlInput,
       onQuery: (query) => this.requestWorkspaceFileSearch("image-modal", query),
-      onEscape: () => this.closeDialog(image),
+      onEscape: () => this.requestDialogCancel(image, "escape"),
     });
     this.imageAltInput = makeField("Alt text", "text", "Description");
     const imageActions = document.createElement("div");
@@ -5114,7 +5184,9 @@ export class MarkdownEditorApp {
     const imageCancel = document.createElement("button");
     imageCancel.type = "button";
     imageCancel.textContent = "Cancel";
-    imageCancel.addEventListener("click", () => this.closeDialog(image));
+    imageCancel.addEventListener("click", () =>
+      this.requestDialogCancel(image, "cancel-button"),
+    );
     const imageApply = document.createElement("button");
     imageApply.type = "submit";
     imageApply.textContent = "Insert image";
@@ -5135,13 +5207,13 @@ export class MarkdownEditorApp {
       );
       this.closeDialog(image);
     });
-    image.addEventListener("cancel", (event) => {
-      event.preventDefault();
-      this.closeDialog(image);
-    });
     image.append(imageForm);
     toolbar.append(image);
     this.imageDialog = image;
+    this.registerModalCancelBehavior(image, () => [
+      this.imageUrlInput.value,
+      this.imageAltInput.value,
+    ]);
 
     this.buildTableDialog(toolbar);
     this.tableToolbar = this.buildTableToolbar();
@@ -5304,7 +5376,9 @@ export class MarkdownEditorApp {
     const cancel = document.createElement("button");
     cancel.type = "button";
     cancel.textContent = "Cancel";
-    cancel.addEventListener("click", () => this.closeProfileFeatureDialog());
+    cancel.addEventListener("click", () =>
+      this.requestDialogCancel(dialog, "cancel-button"),
+    );
     const apply = document.createElement("button");
     apply.type = "submit";
     apply.textContent = "Insert";
@@ -5323,10 +5397,6 @@ export class MarkdownEditorApp {
       event.preventDefault();
       this.commitProfileFeatureDialog();
     });
-    dialog.addEventListener("cancel", (event) => {
-      event.preventDefault();
-      this.closeProfileFeatureDialog();
-    });
     dialog.addEventListener("close", () => {
       if (this.profileFeatureDialogOpen)
         this.closeProfileFeatureDialog(undefined, false);
@@ -5334,6 +5404,11 @@ export class MarkdownEditorApp {
     dialog.append(form);
     container.append(dialog);
     this.profileFeatureDialog = dialog;
+    this.registerModalCancelBehavior(dialog, () => ({
+      feature: this.profileFeatureId,
+      mode: dialog.dataset.profileFeatureMode ?? "",
+      values: this.profileFeatureValues(),
+    }));
   }
 
   private canUseProfileFeature(
@@ -5550,6 +5625,7 @@ export class MarkdownEditorApp {
     else if (id === "gitlab-description-list")
       this.profileFeatureTermInput.focus();
     else this.profileFeatureBodyInput.focus();
+    this.captureModalCancelSnapshot(this.profileFeatureDialog);
   }
 
   private openProfileFeatureAlertEditor(
@@ -5628,6 +5704,7 @@ export class MarkdownEditorApp {
     this.profileFeatureError.textContent = "";
     this.openDialog(this.profileFeatureDialog);
     this.profileFeatureBodyInput.focus();
+    this.captureModalCancelSnapshot(this.profileFeatureDialog);
   }
 
   private openRenderedBlockEditor(
@@ -5658,6 +5735,7 @@ export class MarkdownEditorApp {
     this.profileFeatureBodyInput.value = sourceEditor.body;
     if (sourceEditor.kind === "mermaid") this.scheduleMermaidValidation();
     this.profileFeatureBodyInput.focus();
+    this.captureModalCancelSnapshot(this.profileFeatureDialog);
   }
 
   private profileFeatureValues(): ProfileFeatureValues {
@@ -5681,6 +5759,7 @@ export class MarkdownEditorApp {
   }
 
   private invalidateProfileFeatureDialog(): void {
+    this.closeDiscardChangesConfirmation(true);
     if (!this.profileFeatureEditTarget) {
       this.closeProfileFeatureDialog();
       return;
@@ -5997,10 +6076,6 @@ export class MarkdownEditorApp {
     cancel.addEventListener("click", () => this.closeEmojiPicker());
     actions.append(cancel);
     form.addEventListener("submit", (event) => event.preventDefault());
-    dialog.addEventListener("cancel", (event) => {
-      event.preventDefault();
-      this.closeEmojiPicker();
-    });
     dialog.addEventListener("close", () => {
       if (this.emojiDialogOpen) this.closeEmojiPicker(false);
     });
@@ -6009,6 +6084,9 @@ export class MarkdownEditorApp {
     container.append(dialog);
     this.emojiDialog = dialog;
     this.emojiInvokingButton = invokingButton;
+    this.registerCleanModalCancelBehavior(dialog, () =>
+      this.closeEmojiPicker(),
+    );
     this.renderEmojiGrid();
   }
 
@@ -7812,7 +7890,9 @@ export class MarkdownEditorApp {
     const cancel = document.createElement("button");
     cancel.type = "button";
     cancel.textContent = "Cancel";
-    cancel.addEventListener("click", () => this.closeTableDialog());
+    cancel.addEventListener("click", () =>
+      this.requestDialogCancel(dialog, "cancel-button"),
+    );
     const insert = document.createElement("button");
     insert.type = "submit";
     insert.className = "mm-dialog-primary";
@@ -7831,14 +7911,11 @@ export class MarkdownEditorApp {
     this.tableRowsInput.addEventListener("input", updateFromInput);
     this.tableColumnsInput.addEventListener("change", updateFromInput);
     this.tableRowsInput.addEventListener("change", updateFromInput);
-    dialog.addEventListener("cancel", (event) => {
-      event.preventDefault();
-      this.closeTableDialog();
-    });
     form.append(title, help, gridWrap, fields, this.tableDialogError, actions);
     dialog.append(form);
     container.append(dialog);
     this.tableDialog = dialog;
+    this.registerModalCancelBehavior(dialog, () => this.tableDialogSnapshot());
     this.renderTableGrid();
   }
 
@@ -8037,6 +8114,7 @@ export class MarkdownEditorApp {
     this.selectTableDialogDimensions(3, 3);
     this.openDialog(this.tableDialog);
     this.tableGrid.focus({ preventScroll: true });
+    this.captureModalCancelSnapshot(this.tableDialog);
   }
 
   private closeTableDialog(message?: string, restoreFocus = true): void {
@@ -8084,6 +8162,172 @@ export class MarkdownEditorApp {
     if (inserted) this.closeTableDialog(undefined, false);
   }
 
+  private tableDialogSnapshot(): unknown {
+    const columns = Number(this.tableColumnsInput.value);
+    const rows = Number(this.tableRowsInput.value);
+    const valid =
+      Number.isInteger(columns) &&
+      columns >= 1 &&
+      columns <= 20 &&
+      Number.isInteger(rows) &&
+      rows >= 1 &&
+      rows <= 50;
+    if (valid) return [columns, rows];
+    // Invalid text has no semantic dimensions, but it is still an unsaved
+    // draft that must not disappear without a confirmation.
+    return {
+      dimensions: [this.tableDialogColumns, this.tableDialogRows],
+      invalidInput: [this.tableColumnsInput.value, this.tableRowsInput.value],
+    };
+  }
+
+  private registerModalCancelBehavior(
+    dialog: HTMLDialogElement,
+    getSnapshot: () => unknown,
+  ): void {
+    const behavior = new ModalCancelBehavior({
+      dialog,
+      getSnapshot,
+      onCancelRequest: (reason) => this.requestDialogCancel(dialog, reason),
+      isActive: () => this.discardChangesConfirmation === null,
+    });
+    behavior.install();
+    this.modalCancelBehaviors.set(dialog, behavior);
+  }
+
+  private registerCleanModalCancelBehavior(
+    dialog: HTMLDialogElement,
+    onCancelRequest: () => void,
+  ): void {
+    const behavior = new ModalCancelBehavior({
+      dialog,
+      getSnapshot: () => null,
+      onCancelRequest,
+      isActive: () => this.discardChangesConfirmation === null,
+    });
+    behavior.install();
+    this.modalCancelBehaviors.set(dialog, behavior);
+  }
+
+  private captureModalCancelSnapshot(dialog: HTMLDialogElement): void {
+    this.modalCancelBehaviors.get(dialog)?.captureSnapshot();
+  }
+
+  private requestDialogCancel(
+    dialog: HTMLDialogElement,
+    _reason: DialogCancelReason,
+  ): void {
+    const behavior = this.modalCancelBehaviors.get(dialog);
+    if (!behavior || !dialog.open || this.discardChangesConfirmation !== null)
+      return;
+    if (!behavior.isDirty()) {
+      this.closeDialogAfterCancel(dialog);
+      return;
+    }
+    this.openDiscardChangesConfirmation(
+      dialog,
+      behavior.getLastFocusedElement(),
+    );
+  }
+
+  private closeDialogAfterCancel(dialog: HTMLDialogElement): void {
+    if (dialog === this.profileFeatureDialog) {
+      this.closeProfileFeatureDialog();
+      return;
+    }
+    if (dialog === this.tableDialog) {
+      this.closeTableDialog();
+      return;
+    }
+    this.closeDialog(dialog);
+  }
+
+  private openDiscardChangesConfirmation(
+    target: HTMLDialogElement,
+    returnFocus: HTMLElement | null,
+  ): void {
+    if (this.discardChangesConfirmation) return;
+    const ownerDocument = target.ownerDocument;
+    const dialog = ownerDocument.createElement("dialog");
+    dialog.className = "mm-input-dialog mm-discard-changes-dialog";
+    dialog.setAttribute("aria-labelledby", "mm-discard-changes-title");
+    const form = ownerDocument.createElement("form");
+    form.className = "mm-dialog-form";
+    const title = ownerDocument.createElement("h2");
+    title.id = "mm-discard-changes-title";
+    title.textContent = "Discard changes?";
+    const help = ownerDocument.createElement("p");
+    help.className = "mm-discard-changes-help";
+    help.textContent = "Your changes will be lost.";
+    const actions = ownerDocument.createElement("div");
+    actions.className = "mm-dialog-actions";
+    const keep = ownerDocument.createElement("button");
+    keep.type = "button";
+    keep.textContent = "Keep editing";
+    keep.addEventListener("click", () =>
+      this.closeDiscardChangesConfirmation(true),
+    );
+    const discard = ownerDocument.createElement("button");
+    discard.type = "submit";
+    discard.className = "mm-dialog-primary";
+    discard.textContent = "Discard";
+    actions.append(keep, discard);
+    form.addEventListener("submit", (event) => {
+      event.preventDefault();
+      this.discardDialogChanges();
+    });
+    form.append(title, help, actions);
+    dialog.append(form);
+    this.root.append(dialog);
+    const behavior = new ModalCancelBehavior({
+      dialog,
+      getSnapshot: () => null,
+      onCancelRequest: () => this.closeDiscardChangesConfirmation(true),
+      isActive: () => this.discardChangesConfirmation?.dialog === dialog,
+    });
+    behavior.install();
+    this.discardChangesConfirmation = {
+      dialog,
+      target,
+      behavior,
+      returnFocus,
+    };
+    this.openDialog(dialog);
+    keep.focus({ preventScroll: true });
+  }
+
+  private closeDiscardChangesConfirmation(keepEditing: boolean): void {
+    const confirmation = this.discardChangesConfirmation;
+    if (!confirmation) return;
+    this.discardChangesConfirmation = null;
+    confirmation.behavior.dispose();
+    this.closeDialog(confirmation.dialog);
+    confirmation.dialog.remove();
+    if (
+      keepEditing &&
+      confirmation.target.isConnected &&
+      confirmation.target.open
+    ) {
+      const focus = confirmation.returnFocus;
+      if (focus?.isConnected && confirmation.target.contains(focus))
+        focus.focus({ preventScroll: true });
+      else
+        confirmation.target
+          .querySelector<HTMLElement>(
+            "input, textarea, select, [role='grid'], [contenteditable='true']",
+          )
+          ?.focus({ preventScroll: true });
+    }
+  }
+
+  private discardDialogChanges(): void {
+    const confirmation = this.discardChangesConfirmation;
+    if (!confirmation) return;
+    this.closeDiscardChangesConfirmation(false);
+    if (confirmation.target.isConnected && confirmation.target.open)
+      this.closeDialogAfterCancel(confirmation.target);
+  }
+
   private openDialog(dialog: HTMLDialogElement): void {
     this.removeFallbackDialogCancel(dialog);
     try {
@@ -8103,6 +8347,8 @@ export class MarkdownEditorApp {
   }
 
   private closeDialog(dialog: HTMLDialogElement): void {
+    if (this.discardChangesConfirmation?.target === dialog)
+      this.closeDiscardChangesConfirmation(false);
     let invokingButton: HTMLButtonElement | null = null;
     let restoreFocus = false;
     if (dialog === this.linkDialog) this.linkAutocomplete.close();
@@ -8119,6 +8365,7 @@ export class MarkdownEditorApp {
       this.savedSelection = null;
       restoreFocus = true;
     }
+    this.modalCancelBehaviors.get(dialog)?.clearSnapshot();
     this.removeFallbackDialogCancel(dialog);
     if (typeof dialog.close === "function") dialog.close();
     else dialog.removeAttribute("open");
@@ -8452,6 +8699,7 @@ export class MarkdownEditorApp {
     this.openDialog(this.linkDialog);
     this.linkAutocomplete.open();
     this.linkUrlInput.focus();
+    this.captureModalCancelSnapshot(this.linkDialog);
   }
 
   private applyLink(href: string, text: string): void {
@@ -8485,6 +8733,7 @@ export class MarkdownEditorApp {
     this.openDialog(this.imageDialog);
     this.imageAutocomplete.open();
     this.imageUrlInput.focus();
+    this.captureModalCancelSnapshot(this.imageDialog);
   }
 
   private applyImage(src: string, alt: string): void {
@@ -9013,6 +9262,7 @@ export class MarkdownEditorApp {
     options: { refreshPreview?: boolean } = {},
   ): void {
     if (this.previewOnly && mode !== "preview" && mode !== "source") return;
+    if (mode !== this.mode) this.closeDiscardChangesConfirmation(true);
     this.clearTableDeletePreview();
     if (mode !== this.mode) {
       this.closeWritingPopups();
@@ -9337,6 +9587,7 @@ export class MarkdownEditorApp {
       this.updateProfileSelect();
       return;
     }
+    this.closeDiscardChangesConfirmation(true);
     if (this.pendingProfile?.operationId) {
       this.updateProfileSelect();
       this.setNotice("Waiting for the current profile change to finish.");
@@ -9835,6 +10086,11 @@ export class MarkdownEditorApp {
 
   private receiveSaveSnapshot(message: DocumentMessage): void {
     if (message.version < this.authoritativeVersion) return;
+    if (
+      message.profile !== this.profile ||
+      message.markdown !== this.authoritativeMarkdown
+    )
+      this.closeDiscardChangesConfirmation(true);
     const localMarkdown = this.currentMarkdown();
     const keepLocalDraft =
       this.composing ||
@@ -9869,6 +10125,7 @@ export class MarkdownEditorApp {
   }
 
   private reconcileExternalDocument(message: DocumentMessage): void {
+    this.closeDiscardChangesConfirmation(true);
     if (this.composing || this.blockCompositionTimer !== undefined) {
       this.rememberPendingExternal(message);
       return;
@@ -10048,6 +10305,7 @@ export class MarkdownEditorApp {
     message: DocumentMessage,
     options: { force?: boolean } = {},
   ): void {
+    this.closeDiscardChangesConfirmation(true);
     this.clearTableDeletePreview();
     if (this.composing) {
       this.pendingExternal = message;

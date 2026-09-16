@@ -26,6 +26,13 @@ const math = "$$\nx^2\n$$";
 const visual = fence("geojson", '{"type":"Point","coordinates":[0,0]}');
 const toc = (last) => blocks("# Heading", "[[_TOC_]]", last);
 const description = blocks("Term\n: Definition", "After");
+const responsiveDocument = blocks(
+  "# Responsive document width",
+  "Technical content should use the available document area.",
+  table,
+  code,
+);
+const responsiveViewports = [500, 960, 1440, 2560, 6016];
 
 const spacingCases = [
   {
@@ -592,6 +599,124 @@ async function loadPreview(page) {
   );
 }
 
+async function readResponsiveGeometry(page, rootSelector) {
+  return page.evaluate((selector) => {
+    const root = document.querySelector(selector);
+    const parent = root?.parentElement;
+    const rootRect = root?.getBoundingClientRect();
+    const parentRect = parent?.getBoundingClientRect();
+    return {
+      width: rootRect?.width ?? 0,
+      left: rootRect?.left ?? 0,
+      parentLeft: parentRect?.left ?? 0,
+      parentWidth: parentRect?.width ?? 0,
+      viewportWidth: innerWidth,
+      clientWidth: document.documentElement.clientWidth,
+      scrollWidth: document.documentElement.scrollWidth,
+    };
+  }, rootSelector);
+}
+
+function expectedResponsiveWidth(availableWidth) {
+  return Math.min(availableWidth, Math.max(availableWidth * 0.85, 640), 1800);
+}
+
+function assertResponsiveGeometry(metrics, surface) {
+  const expected = expectedResponsiveWidth(metrics.parentWidth);
+  assertClose(metrics.width, expected, `${surface} responsive document width`);
+  assertClose(
+    metrics.left,
+    metrics.parentLeft + (metrics.parentWidth - metrics.width) / 2,
+    `${surface} document centering`,
+  );
+  assert.ok(
+    metrics.width <= metrics.parentWidth + tolerance,
+    `${surface} document is wider than its containing viewport: ${metrics.width}px > ${metrics.parentWidth}px`,
+  );
+  assert.ok(
+    metrics.width <= 1800 + tolerance,
+    `${surface} document exceeds the 1800px maximum: ${metrics.width}px`,
+  );
+  assert.ok(
+    metrics.scrollWidth <= metrics.clientWidth + 1,
+    `${surface} page overflow: ${metrics.scrollWidth}px > ${metrics.clientWidth}px`,
+  );
+}
+
+async function testResponsiveDocumentWidth(page) {
+  const surfaces = [
+    { name: "rich", selector: ".mm-rich-panel .ProseMirror" },
+    { name: "dedicated preview", selector: ".mm-preview-panel .markdown-body" },
+  ];
+  const measurements = new Map();
+
+  await loadRich(page);
+  await deliver(page, responsiveDocument, "github");
+  for (const surface of surfaces) {
+    if (surface.name === "dedicated preview") continue;
+    const values = [];
+    for (const width of responsiveViewports) {
+      await page.setViewportSize({ width, height: 900 });
+      await settle(page);
+      const metrics = await readResponsiveGeometry(page, surface.selector);
+      assertResponsiveGeometry(metrics, surface.name);
+      values.push(metrics);
+    }
+    measurements.set(surface.name, values);
+  }
+
+  await loadPreview(page);
+  await deliver(page, responsiveDocument, "github");
+  const previewValues = [];
+  for (const width of responsiveViewports) {
+    await page.setViewportSize({ width, height: 900 });
+    await settle(page);
+    const metrics = await readResponsiveGeometry(page, surfaces[1].selector);
+    assertResponsiveGeometry(metrics, surfaces[1].name);
+    previewValues.push(metrics);
+  }
+  measurements.set(surfaces[1].name, previewValues);
+
+  const richValues = measurements.get("rich");
+  for (let index = 0; index < responsiveViewports.length; index += 1) {
+    assertClose(
+      previewValues[index].width,
+      richValues[index].width,
+      `${responsiveViewports[index]}px rich/preview width parity`,
+    );
+  }
+
+  const nativeValues = [];
+  for (const width of responsiveViewports) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto(`${baseUrl}/native.html?fixture=spacing&case=table-code`, {
+      waitUntil: "domcontentloaded",
+    });
+    await page.waitForSelector('[data-testid="native-content"]');
+    await settle(page);
+    const metrics = await readResponsiveGeometry(
+      page,
+      '[data-testid="native-content"]',
+    );
+    assertResponsiveGeometry(metrics, "native preview");
+    nativeValues.push(metrics);
+  }
+  for (let index = 0; index < responsiveViewports.length; index += 1) {
+    assertClose(
+      nativeValues[index].width,
+      richValues[index].width,
+      `${responsiveViewports[index]}px native/rich width parity`,
+    );
+  }
+  console.log(
+    `Responsive document widths (CSS px): ${responsiveViewports
+      .map(
+        (width, index) => `${width} -> ${richValues[index].width.toFixed(2)}`,
+      )
+      .join(", ")}`,
+  );
+}
+
 async function readParagraphGeometry(page, rootSelector) {
   return page.evaluate((selector) => {
     const root = document.querySelector(selector);
@@ -990,6 +1115,7 @@ async function main() {
     await testCodeControls(page);
     await testMermaidAndTypography(page);
     await testFallbackAndPreservedInlineContent(page);
+    await testResponsiveDocumentWidth(page);
     await loadRich(page);
     await testScreenshots(page);
 

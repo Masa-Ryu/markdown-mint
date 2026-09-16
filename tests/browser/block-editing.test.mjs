@@ -247,6 +247,31 @@ async function testCodeHeader(page) {
   );
   await noEdits(page, before, "cancel code language removal confirmation");
   await page.locator(".mm-code-language-trigger").click();
+  await page
+    .locator(
+      '.mm-code-language-menu:not([hidden]) [data-mm-language-option=""]',
+    )
+    .click();
+  const languageRemoval = page.locator(
+    ".mm-code-language-confirm-dialog[open]",
+  );
+  await languageRemoval.waitFor({ state: "visible" });
+  const languageRemovalBox = await languageRemoval.boundingBox();
+  assert.ok(languageRemovalBox, "language removal dialog has no geometry");
+  await page.mouse.click(
+    Math.max(5, languageRemovalBox.x - 20),
+    languageRemovalBox.y + 20,
+  );
+  await languageRemoval.waitFor({ state: "detached" });
+  assert.equal(
+    await page
+      .locator(".mm-code-language-trigger")
+      .evaluate((element) => document.activeElement === element),
+    true,
+    "language removal backdrop did not restore focus",
+  );
+  await noEdits(page, before, "backdrop code language removal confirmation");
+  await page.locator(".mm-code-language-trigger").click();
   await input.fill("custom-language");
   await page.keyboard.press("Enter");
   await expectSource(
@@ -2305,6 +2330,12 @@ async function testRichEditorLinks(page) {
 }
 
 async function testModalEscapeCancellation(page) {
+  const discardChanges = async () => {
+    const confirmation = page.locator(".mm-discard-changes-dialog[open]");
+    await confirmation.waitFor({ state: "visible" });
+    await confirmation.locator("button", { hasText: "Discard" }).click();
+    await confirmation.waitFor({ state: "detached" });
+  };
   const expectEditorContinuation = async (expected, label) => {
     await caret(page, `${rich} > p:first-child`, -1);
     await page.keyboard.type("X");
@@ -2327,6 +2358,15 @@ async function testModalEscapeCancellation(page) {
   await linkDialog.waitFor({ state: "visible" });
   await linkDialog.locator("input").first().fill("./changed.md");
   await page.keyboard.press("Escape");
+  await page.locator(".mm-discard-changes-dialog[open]").waitFor({
+    state: "visible",
+  });
+  assert.equal(
+    await linkDialog.getAttribute("open"),
+    "",
+    "Link Escape closed the editor before discard was confirmed",
+  );
+  await discardChanges();
   assert.equal(
     await page.locator("dialog[open]").count(),
     0,
@@ -2351,6 +2391,10 @@ async function testModalEscapeCancellation(page) {
   await imageDialog.waitFor({ state: "visible" });
   await imageDialog.locator("input").first().fill("./changed.png");
   await page.keyboard.press("Escape");
+  await page.locator(".mm-discard-changes-dialog[open]").waitFor({
+    state: "visible",
+  });
+  await discardChanges();
   assert.equal(
     await page.locator("dialog[open]").count(),
     0,
@@ -2389,6 +2433,21 @@ async function testModalEscapeCancellation(page) {
     0,
     "Emoji Escape left an open dialog",
   );
+  assert.equal(
+    await emojiButton.evaluate((element) => document.activeElement === element),
+    true,
+    "Emoji Escape did not restore focus to its invoker",
+  );
+  await emojiButton.click();
+  const emojiCancelDialog = page.locator(".mm-emoji-dialog[open]");
+  await emojiCancelDialog.waitFor({ state: "visible" });
+  await emojiCancelDialog.getByRole("button", { name: "Cancel" }).click();
+  await emojiCancelDialog.waitFor({ state: "hidden" });
+  assert.equal(
+    await emojiButton.evaluate((element) => document.activeElement === element),
+    true,
+    "Emoji Cancel did not restore focus to its invoker",
+  );
   await noEdits(page, emojiBefore, "Emoji modal Escape cancellation");
   await expectEditorContinuation("BeforeX", "Emoji modal Escape");
 
@@ -2402,6 +2461,10 @@ async function testModalEscapeCancellation(page) {
     .locator('[data-feature-field="body"]')
     .fill("flowchart TD\n    A --> B");
   await page.keyboard.press("Escape");
+  await page.locator(".mm-discard-changes-dialog[open]").waitFor({
+    state: "visible",
+  });
+  await discardChanges();
   assert.equal(
     await page.locator("dialog[open]").count(),
     0,
@@ -2413,6 +2476,223 @@ async function testModalEscapeCancellation(page) {
     "ProfileFeature modal Escape cancellation",
   );
   await expectEditorContinuation("BeforeX", "ProfileFeature modal Escape");
+}
+
+async function testModalBackdropCancellation(page) {
+  await load(page, "Before");
+  await caret(page, `${rich} > p:first-child`, -1);
+  const linkButton = page.locator('[data-testid="toolbar-link"]');
+  await linkButton.click();
+  const dialog = page.locator('dialog[aria-labelledby="mm-link-dialog-title"]');
+  await dialog.waitFor({ state: "visible" });
+  const box = await dialog.boundingBox();
+  assert.ok(box, "Link dialog has no browser geometry");
+
+  await page.mouse.click(box.x + 20, box.y + 20);
+  assert.equal(
+    await dialog.getAttribute("open"),
+    "",
+    "dialog-internal click was treated as backdrop",
+  );
+  await page.keyboard.press("Escape");
+  await dialog.waitFor({ state: "hidden" });
+
+  await linkButton.click();
+  const dragDialog = page.locator(
+    'dialog[aria-labelledby="mm-link-dialog-title"]',
+  );
+  await dragDialog.waitFor({ state: "visible" });
+  const dragBox = await dragDialog.boundingBox();
+  assert.ok(dragBox, "Link dialog has no geometry for drag regression");
+  await page.mouse.move(dragBox.x + 20, dragBox.y + 20);
+  await page.mouse.down();
+  await page.mouse.move(Math.max(5, dragBox.x - 20), dragBox.y + 20);
+  await page.mouse.up();
+  assert.equal(
+    await dragDialog.getAttribute("open"),
+    "",
+    "inside-to-outside drag was treated as backdrop cancel",
+  );
+  await page.keyboard.press("Escape");
+  await dragDialog.waitFor({ state: "hidden" });
+
+  await linkButton.click();
+  const cleanDialog = page.locator(
+    'dialog[aria-labelledby="mm-link-dialog-title"]',
+  );
+  await cleanDialog.waitFor({ state: "visible" });
+  const cleanBox = await cleanDialog.boundingBox();
+  assert.ok(cleanBox, "Link dialog has no geometry for clean backdrop test");
+  await page.mouse.click(Math.max(5, cleanBox.x - 20), cleanBox.y + 20);
+  await cleanDialog.waitFor({ state: "hidden" });
+  assert.equal(
+    await page.locator(".mm-discard-changes-dialog[open]").count(),
+    0,
+    "clean backdrop cancel opened discard confirmation",
+  );
+
+  await linkButton.click();
+  const dirtyDialog = page.locator(
+    'dialog[aria-labelledby="mm-link-dialog-title"]',
+  );
+  await dirtyDialog.waitFor({ state: "visible" });
+  await dirtyDialog.locator("input").first().fill("./changed.md");
+  const dirtyBox = await dirtyDialog.boundingBox();
+  assert.ok(dirtyBox, "Link dialog has no geometry for dirty backdrop test");
+  await page.mouse.click(Math.max(5, dirtyBox.x - 20), dirtyBox.y + 20);
+  const confirmation = page.locator(".mm-discard-changes-dialog[open]");
+  await confirmation.waitFor({ state: "visible" });
+  assert.equal(
+    await dirtyDialog.getAttribute("open"),
+    "",
+    "dirty backdrop closed Link before confirmation",
+  );
+  await confirmation.locator("button", { hasText: "Keep editing" }).click();
+  assert.equal(
+    await dirtyDialog.locator("input").first().inputValue(),
+    "./changed.md",
+    "Keep editing lost the Link draft",
+  );
+  await dirtyDialog
+    .locator(".mm-dialog-actions button", { hasText: "Cancel" })
+    .click();
+  await page
+    .locator(".mm-discard-changes-dialog[open]")
+    .locator("button", { hasText: "Discard" })
+    .click();
+  await dirtyDialog.waitFor({ state: "hidden" });
+
+  await load(page, "Before");
+  const emojiButton = page.locator('[data-testid="toolbar-emoji"]');
+  await emojiButton.click();
+  const emojiDialog = page.locator(".mm-emoji-dialog[open]");
+  await emojiDialog.waitFor({ state: "visible" });
+  await emojiDialog.locator(".mm-emoji-search").fill("rocket");
+  const emojiBox = await emojiDialog.boundingBox();
+  assert.ok(emojiBox, "Emoji dialog has no browser geometry");
+  await page.mouse.click(Math.max(5, emojiBox.x - 20), emojiBox.y + 20);
+  await emojiDialog.waitFor({ state: "hidden" });
+  assert.equal(
+    await page.locator(".mm-discard-changes-dialog[open]").count(),
+    0,
+    "Emoji backdrop opened discard confirmation",
+  );
+  assert.equal(
+    await emojiButton.evaluate((element) => document.activeElement === element),
+    true,
+    "Emoji backdrop did not restore focus to its invoker",
+  );
+}
+
+async function testModalKeyboardActivation(page) {
+  await load(page, "Before");
+  await caret(page, `${rich} > p:first-child`, -1);
+  const linkButton = page.locator('[data-testid="toolbar-link"]');
+  await linkButton.click();
+  const linkDialog = page.locator(
+    'dialog[aria-labelledby="mm-link-dialog-title"]',
+  );
+  await linkDialog.waitFor({ state: "visible" });
+  const linkUrl = linkDialog.locator("input").first();
+  const linkText = linkDialog.locator('input[placeholder="Selected text"]');
+  await linkUrl.fill("https://example.com");
+  await linkText.fill("Keyboard link");
+  await linkText.focus();
+  for (let index = 0; index < 3; index += 1) await page.keyboard.press("Tab");
+  const insertLink = linkDialog.getByRole("button", { name: "Insert link" });
+  assert.equal(
+    await insertLink.evaluate((element) => document.activeElement === element),
+    true,
+    "Tab did not focus Insert link",
+  );
+  await page.keyboard.press("Enter");
+  await linkDialog.waitFor({ state: "hidden" });
+  assert.equal(
+    await page.locator(".mm-discard-changes-dialog[open]").count(),
+    0,
+    "keyboard Insert link opened discard confirmation",
+  );
+  await expectSource(page, "Before[Keyboard link](https://example.com)");
+
+  await load(page, "Before");
+  await caret(page, `${rich} > p:first-child`, -1);
+  await linkButton.click();
+  await linkDialog.waitFor({ state: "visible" });
+  await linkDialog.locator("input").first().fill("./discarded.md");
+  await linkDialog.getByRole("button", { name: "Cancel" }).click();
+  const discardConfirmation = page.locator(".mm-discard-changes-dialog[open]");
+  await discardConfirmation.waitFor({ state: "visible" });
+  const discardButton = discardConfirmation.getByRole("button", {
+    name: "Discard",
+  });
+  await page.keyboard.press("Tab");
+  assert.equal(
+    await discardButton.evaluate(
+      (element) => document.activeElement === element,
+    ),
+    true,
+    "Tab did not focus Discard",
+  );
+  await page.keyboard.press("Enter");
+  await discardConfirmation.waitFor({ state: "detached" });
+  await linkDialog.waitFor({ state: "hidden" });
+  assert.equal(
+    await page.locator("dialog[open]").count(),
+    0,
+    "keyboard Discard left an open dialog",
+  );
+
+  await load(page, "Before");
+  await caret(page, `${rich} > p:first-child`, -1);
+  await linkButton.click();
+  await linkDialog.waitFor({ state: "visible" });
+  const keptUrl = linkDialog.locator("input").first();
+  await keptUrl.fill("./kept.md");
+  await linkDialog.getByRole("button", { name: "Cancel" }).click();
+  const keepConfirmation = page.locator(".mm-discard-changes-dialog[open]");
+  await keepConfirmation.waitFor({ state: "visible" });
+  const keepButton = keepConfirmation.getByRole("button", {
+    name: "Keep editing",
+  });
+  assert.equal(
+    await keepButton.evaluate((element) => document.activeElement === element),
+    true,
+    "Keep editing was not focused in the discard confirmation",
+  );
+  await page.keyboard.press("Enter");
+  await keepConfirmation.waitFor({ state: "detached" });
+  assert.equal(await linkDialog.isVisible(), true, "Keep editing closed Link");
+  assert.equal(await keptUrl.inputValue(), "./kept.md");
+  assert.equal(
+    await keptUrl.evaluate((element) => document.activeElement === element),
+    true,
+    "Keep editing did not restore Link focus",
+  );
+  await linkDialog.getByRole("button", { name: "Cancel" }).click();
+  await keepConfirmation.waitFor({ state: "visible" });
+  await keepConfirmation.getByRole("button", { name: "Discard" }).click();
+  await keepConfirmation.waitFor({ state: "detached" });
+
+  await load(page, "Before");
+  const tableButton = page.locator('[data-testid="toolbar-table"]');
+  await tableButton.click();
+  const tableDialog = page.locator(".mm-table-dialog[open]");
+  await tableDialog.waitFor({ state: "visible" });
+  await tableDialog.locator('input[type="number"]').first().fill("4");
+  const insertTable = tableDialog.getByRole("button", { name: "Insert table" });
+  await insertTable.focus();
+  await page.keyboard.press("Enter");
+  await tableDialog.waitFor({ state: "hidden" });
+  assert.equal(
+    await page.locator(".mm-discard-changes-dialog[open]").count(),
+    0,
+    "keyboard Insert table opened discard confirmation",
+  );
+  await page.waitForFunction(
+    () =>
+      !window.markdownMint.sync.hasPending &&
+      window.__markdownMintHarness.document.markdown.includes("|"),
+  );
 }
 
 async function testWorkspaceFileAutocomplete(page) {
@@ -2801,6 +3081,12 @@ async function testWorkspaceFileAutocompleteLoading(page) {
     });
     await noEdits(page, before, `${label} delayed result`);
     await page.keyboard.press("Escape");
+    const discardConfirmation = page.locator(
+      ".mm-discard-changes-dialog[open]",
+    );
+    await discardConfirmation.waitFor({ state: "visible" });
+    await discardConfirmation.locator("button", { hasText: "Discard" }).click();
+    await discardConfirmation.waitFor({ state: "detached" });
     assert.equal(
       await page.locator("dialog[open]").count(),
       0,
@@ -4149,6 +4435,8 @@ async function main() {
       testSelectionAndModifiers,
       testRichEditorLinks,
       testModalEscapeCancellation,
+      testModalBackdropCancellation,
+      testModalKeyboardActivation,
       testWorkspaceFileAutocomplete,
       testWorkspaceFileAutocompleteLoading,
       testVerticalGoalAndEmptyEdges,

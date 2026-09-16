@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.3.5
+
+- Enable VS Code's standard Webview Find Widget in the Markdown Mint Custom
+  Editor without changing dedicated preview behavior or adding editor-side
+  search logic.
+
+## 0.3.4
+
+- Make document containers responsive across the Rich Editor, Dedicated
+  Preview, and native Markdown preview, using approximately 85% of the
+  available width with a 640px minimum and 1800px maximum while preserving
+  narrow viewport behavior.
+
+## 0.3.3
+
+- Fix modal keyboard activation so synthesized button clicks continue to run
+  their intended actions instead of being mistaken for backdrop cancellation.
+- Keep dirty-dialog discard confirmation and focus restoration intact while
+  closing the clean Emoji picker and code-language removal confirmation from a
+  safe backdrop click without adding dirty confirmation.
+
 ## 0.3.2
 
 - Improve the table deletion toolbar by disabling Row and Column deletion for

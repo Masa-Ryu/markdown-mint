@@ -397,6 +397,14 @@ describe("table insertion dialog", () => {
     Array.from(dialog.querySelectorAll<HTMLButtonElement>("button"))
       .find((candidate) => candidate.textContent === "Cancel")!
       .click();
+    expect(
+      root.querySelector<HTMLDialogElement>(".mm-discard-changes-dialog[open]"),
+    ).not.toBeNull();
+    root
+      .querySelector<HTMLButtonElement>(
+        ".mm-discard-changes-dialog button[type=submit]",
+      )!
+      .click();
     expect(messageType(messages, "edit")).toHaveLength(0);
     expect(app.view.state.doc.toJSON()).toEqual(original);
     expect(document.activeElement).toBe(button);
