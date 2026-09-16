@@ -51,7 +51,6 @@ export class ModalCancelBehavior {
   private initialSnapshot: string | null = null;
   private hasSnapshot = false;
   private pointerSequence: PointerSequence | null = null;
-  private suppressNextOutsideClick = false;
   private suppressNextNativeCancel = false;
   private lastFocusedElement: HTMLElement | null = null;
   private installed = false;
@@ -84,7 +83,6 @@ export class ModalCancelBehavior {
 
   private readonly pointerDownHandler = (event: PointerEvent): void => {
     if (!this.canHandlePointer(event)) return;
-    this.suppressNextOutsideClick = false;
     this.pointerSequence = {
       pointerId: this.pointerId(event),
       downOutside: isPointerOutsideDialog(this.dialog, event),
@@ -97,7 +95,6 @@ export class ModalCancelBehavior {
     const currentPointerId = this.pointerId(event);
     if (!sequence || sequence.pointerId !== currentPointerId) return;
     this.pointerSequence = null;
-    this.suppressNextOutsideClick = true;
     const upOutside = isPointerOutsideDialog(this.dialog, event);
     if (!sequence.downOutside || !upOutside) return;
     event.preventDefault();
@@ -107,24 +104,6 @@ export class ModalCancelBehavior {
   private readonly pointerCancelHandler = (event: PointerEvent): void => {
     if (this.pointerSequence?.pointerId === this.pointerId(event))
       this.pointerSequence = null;
-    this.suppressNextOutsideClick = false;
-  };
-
-  private readonly clickHandler = (event: MouseEvent): void => {
-    if (!this.canHandlePointer(event)) return;
-    const outside = isPointerOutsideDialog(this.dialog, event);
-    if (!outside) {
-      this.suppressNextOutsideClick = false;
-      return;
-    }
-    // A real pointer sequence was already evaluated on pointerup. A click
-    // after an inside-to-outside drag must not become a second cancel path.
-    if (this.suppressNextOutsideClick) {
-      this.suppressNextOutsideClick = false;
-      return;
-    }
-    event.preventDefault();
-    this.requestCancel("backdrop");
   };
 
   private readonly focusInHandler = (event: FocusEvent): void => {
@@ -163,7 +142,6 @@ export class ModalCancelBehavior {
       this.pointerCancelHandler,
       true,
     );
-    ownerDocument.addEventListener("click", this.clickHandler, true);
     this.dialog.addEventListener("cancel", this.cancelHandler);
     this.dialog.addEventListener("keydown", this.keydownHandler, true);
     this.dialog.addEventListener("focusin", this.focusInHandler);
@@ -185,7 +163,6 @@ export class ModalCancelBehavior {
       this.pointerCancelHandler,
       true,
     );
-    ownerDocument.removeEventListener("click", this.clickHandler, true);
     this.dialog.removeEventListener("cancel", this.cancelHandler);
     this.dialog.removeEventListener("keydown", this.keydownHandler, true);
     this.dialog.removeEventListener("focusin", this.focusInHandler);
@@ -197,7 +174,6 @@ export class ModalCancelBehavior {
     this.initialSnapshot = this.readSnapshot();
     this.hasSnapshot = true;
     this.pointerSequence = null;
-    this.suppressNextOutsideClick = false;
     this.suppressNextNativeCancel = false;
     this.lastFocusedElement = null;
     this.rememberActiveElement();
@@ -207,14 +183,8 @@ export class ModalCancelBehavior {
     this.initialSnapshot = null;
     this.hasSnapshot = false;
     this.pointerSequence = null;
-    this.suppressNextOutsideClick = false;
     this.suppressNextNativeCancel = false;
     this.lastFocusedElement = null;
-  }
-
-  /** Ignore the click that may follow a pointerup which opened another dialog. */
-  public suppressNextOutsideClickEvent(): void {
-    this.suppressNextOutsideClick = true;
   }
 
   public isDirty(): boolean {

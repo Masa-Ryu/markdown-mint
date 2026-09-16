@@ -148,6 +148,36 @@ describe("ModalCancelBehavior", () => {
     );
   });
 
+  it("ignores a synthesized button click without a pointer sequence", () => {
+    const dialog = document.createElement("dialog");
+    const button = document.createElement("button");
+    button.type = "button";
+    dialog.append(button);
+    dialog.setAttribute("open", "");
+    document.body.append(dialog);
+    setDialogRect(dialog);
+    const requests: string[] = [];
+    const behavior = new ModalCancelBehavior({
+      dialog,
+      getSnapshot: () => null,
+      onCancelRequest: (reason) => requests.push(reason),
+    });
+    behavior.install();
+
+    button.dispatchEvent(
+      new MouseEvent("click", {
+        bubbles: true,
+        cancelable: true,
+        clientX: 0,
+        clientY: 0,
+      }),
+    );
+
+    expect(requests).toEqual([]);
+    expect(dialog.open).toBe(true);
+    behavior.dispose();
+  });
+
   it("does not turn composing Escape into a dialog cancellation", async () => {
     const dialog = document.createElement("dialog");
     const input = document.createElement("input");
@@ -368,20 +398,21 @@ describe("input dialog cancellation", () => {
     discard(root);
   });
 
-  it("does not add backdrop cancellation to the Emoji picker", () => {
+  it("closes the clean Emoji picker from a backdrop without confirmation", () => {
     const { root } = makeApp();
-    root
-      .querySelector<HTMLButtonElement>('[data-testid="toolbar-emoji"]')!
-      .click();
+    const button = root.querySelector<HTMLButtonElement>(
+      '[data-testid="toolbar-emoji"]',
+    )!;
+    button.click();
     const dialog = root.querySelector<HTMLDialogElement>(".mm-emoji-dialog")!;
     setDialogRect(dialog);
+    changeInput(
+      dialog.querySelector<HTMLInputElement>(".mm-emoji-search")!,
+      "rocket",
+    );
     clickBackdrop();
-    expect(dialog.open).toBe(true);
+    expect(dialog.open).toBe(false);
     expect(confirmation(root)).toBeNull();
-    dialog
-      .querySelector<HTMLButtonElement>(
-        ".mm-dialog-actions button:not([type=submit])",
-      )
-      ?.click();
+    expect(document.activeElement).toBe(button);
   });
 });

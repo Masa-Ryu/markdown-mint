@@ -1163,6 +1163,8 @@ class CodeBlockNodeView {
   private readonly lineNumbers: HTMLDivElement;
   private readonly controls: CodeBlockControlBinding;
   private languageRemovalDialog: HTMLDialogElement | null = null;
+  private languageRemovalBehavior: ModalCancelBehavior | null = null;
+  private languageRemovalFallbackInstalled = false;
   private languagePickerOpen = false;
   private languageActiveIndex = -1;
   private languageInputModality: LanguageInputModality = "pointer";
@@ -1173,6 +1175,28 @@ class CodeBlockNodeView {
   private languageComposing = false;
   private languageCompositionEndedAt = -Infinity;
   private readonly canEdit: () => boolean;
+  private readonly languageRemovalFallbackHandler = (
+    event: KeyboardEvent,
+  ): void => {
+    const dialog = this.languageRemovalDialog;
+    if (
+      !dialog ||
+      event.key !== "Escape" ||
+      event.isComposing ||
+      event.keyCode === 229 ||
+      !dialog.hasAttribute("open")
+    )
+      return;
+    event.preventDefault();
+    event.stopPropagation();
+    const cancelEvent = new Event("cancel", { cancelable: true });
+    const canceled = !dialog.dispatchEvent(cancelEvent);
+    if (!dialog.hasAttribute("open")) {
+      this.removeLanguageRemovalFallback(dialog);
+      return;
+    }
+    if (!canceled) this.closeLanguageRemovalConfirmation(true);
+  };
   private readonly handleBlockClick = (event: MouseEvent): void => {
     const target = event.target;
     if (!(target instanceof Element)) return;
@@ -1825,19 +1849,29 @@ class CodeBlockNodeView {
         return;
       this.applyCodeLanguage(position, current, "");
     });
-    dialog.addEventListener("cancel", (event) => {
-      event.preventDefault();
-      this.closeLanguageRemovalConfirmation(true);
-    });
     form.append(title, help, info, warning, actions);
     dialog.append(form);
     this.dom.append(dialog);
     this.languageRemovalDialog = dialog;
+    this.languageRemovalBehavior = new ModalCancelBehavior({
+      dialog,
+      getSnapshot: () => null,
+      onCancelRequest: () => this.closeLanguageRemovalConfirmation(true),
+      isActive: () => !this.destroyed && this.languageRemovalDialog === dialog,
+    });
+    this.languageRemovalBehavior.install();
+    let nativeOpen = false;
     try {
-      if (typeof dialog.showModal === "function") dialog.showModal();
-      else dialog.setAttribute("open", "true");
+      if (typeof dialog.showModal === "function") {
+        dialog.showModal();
+        nativeOpen = true;
+      }
     } catch {
+      // Fall through to the non-modal open attribute for limited hosts.
+    }
+    if (!nativeOpen) {
       dialog.setAttribute("open", "true");
+      this.installLanguageRemovalFallback(dialog);
     }
     cancel.focus();
   }
@@ -1846,10 +1880,25 @@ class CodeBlockNodeView {
     const dialog = this.languageRemovalDialog;
     if (!dialog) return;
     this.languageRemovalDialog = null;
+    this.languageRemovalBehavior?.dispose();
+    this.languageRemovalBehavior = null;
+    this.removeLanguageRemovalFallback(dialog);
     if (typeof dialog.close === "function" && dialog.open) dialog.close();
     else dialog.removeAttribute("open");
     dialog.remove();
     if (restoreFocus && !this.destroyed) this.languageTrigger.focus();
+  }
+
+  private installLanguageRemovalFallback(dialog: HTMLDialogElement): void {
+    if (this.languageRemovalFallbackInstalled) return;
+    this.languageRemovalFallbackInstalled = true;
+    dialog.addEventListener("keydown", this.languageRemovalFallbackHandler);
+  }
+
+  private removeLanguageRemovalFallback(dialog: HTMLDialogElement): void {
+    if (!this.languageRemovalFallbackInstalled) return;
+    this.languageRemovalFallbackInstalled = false;
+    dialog.removeEventListener("keydown", this.languageRemovalFallbackHandler);
   }
 
   update(node: PMNode): boolean {
@@ -6011,10 +6060,6 @@ export class MarkdownEditorApp {
     cancel.addEventListener("click", () => this.closeEmojiPicker());
     actions.append(cancel);
     form.addEventListener("submit", (event) => event.preventDefault());
-    dialog.addEventListener("cancel", (event) => {
-      event.preventDefault();
-      this.closeEmojiPicker();
-    });
     dialog.addEventListener("close", () => {
       if (this.emojiDialogOpen) this.closeEmojiPicker(false);
     });
@@ -6023,6 +6068,9 @@ export class MarkdownEditorApp {
     container.append(dialog);
     this.emojiDialog = dialog;
     this.emojiInvokingButton = invokingButton;
+    this.registerCleanModalCancelBehavior(dialog, () =>
+      this.closeEmojiPicker(),
+    );
     this.renderEmojiGrid();
   }
 
@@ -8131,13 +8179,27 @@ export class MarkdownEditorApp {
     this.modalCancelBehaviors.set(dialog, behavior);
   }
 
+  private registerCleanModalCancelBehavior(
+    dialog: HTMLDialogElement,
+    onCancelRequest: () => void,
+  ): void {
+    const behavior = new ModalCancelBehavior({
+      dialog,
+      getSnapshot: () => null,
+      onCancelRequest,
+      isActive: () => this.discardChangesConfirmation === null,
+    });
+    behavior.install();
+    this.modalCancelBehaviors.set(dialog, behavior);
+  }
+
   private captureModalCancelSnapshot(dialog: HTMLDialogElement): void {
     this.modalCancelBehaviors.get(dialog)?.captureSnapshot();
   }
 
   private requestDialogCancel(
     dialog: HTMLDialogElement,
-    reason: DialogCancelReason,
+    _reason: DialogCancelReason,
   ): void {
     const behavior = this.modalCancelBehaviors.get(dialog);
     if (!behavior || !dialog.open || this.discardChangesConfirmation !== null)
@@ -8149,7 +8211,6 @@ export class MarkdownEditorApp {
     this.openDiscardChangesConfirmation(
       dialog,
       behavior.getLastFocusedElement(),
-      reason === "backdrop",
     );
   }
 
@@ -8168,7 +8229,6 @@ export class MarkdownEditorApp {
   private openDiscardChangesConfirmation(
     target: HTMLDialogElement,
     returnFocus: HTMLElement | null,
-    suppressInitialOutsideClick: boolean,
   ): void {
     if (this.discardChangesConfirmation) return;
     const ownerDocument = target.ownerDocument;
@@ -8210,7 +8270,6 @@ export class MarkdownEditorApp {
       isActive: () => this.discardChangesConfirmation?.dialog === dialog,
     });
     behavior.install();
-    if (suppressInitialOutsideClick) behavior.suppressNextOutsideClickEvent();
     this.discardChangesConfirmation = {
       dialog,
       target,
