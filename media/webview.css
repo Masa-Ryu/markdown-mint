@@ -517,86 +517,141 @@ textarea:focus-visible {
   outline: none;
 }
 
-/* Table rails are an editor-only overlay. They are positioned from measured
- * DOM geometry and never reserve space or alter the table's source layout. */
-.mm-table-controls {
-  position: absolute;
-  z-index: 5;
-  inset: 0;
-  pointer-events: none;
-}
+/* Table controls are an editor-only overlay. Geometry is measured from the
+ * actual cell grid; these layers never reserve space or alter source layout. */
+.mm-table-controls,
+.mm-table-controls-highlights,
+.mm-table-controls-presentation,
 .mm-table-controls-layer {
   position: absolute;
   inset: 0;
+}
+.mm-table-controls {
+  z-index: 5;
   pointer-events: none;
+}
+.mm-table-controls-highlights,
+.mm-table-controls-presentation,
+.mm-table-controls-layer {
+  pointer-events: none;
+}
+.mm-table-controls [hidden] {
+  display: none !important;
+}
+.mm-table-control-highlight {
+  position: absolute;
+  box-sizing: border-box;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  pointer-events: none;
+  background: rgba(0, 127, 212, 0.08);
+}
+.mm-table-control-highlight[data-state="hover"],
+.mm-table-control-highlight[data-state="focus"] {
+  border-color: rgba(0, 127, 212, 0.42);
+  background: rgba(0, 127, 212, 0.1);
+}
+.mm-table-control-highlight[data-state="selected"] {
+  border-color: var(--vscode-focusBorder, #007fd4);
+  background: rgba(0, 127, 212, 0.18);
+}
+.mm-table-control-highlight[data-state="drop-flash"] {
+  border-color: var(--vscode-focusBorder, #007fd4);
+  background: rgba(0, 127, 212, 0.2);
+  animation: mm-table-drop-flash 520ms ease-out both;
+}
+.mm-table-control-highlight[data-state="drag-origin"] {
+  border: 1px dashed var(--vscode-descriptionForeground, #6a737d);
+  background: rgba(127, 127, 127, 0.08);
+  opacity: 0.7;
 }
 .mm-table-controls button {
   position: absolute;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 24px;
   width: 24px;
   height: 24px;
   padding: 0;
-  border: 1px solid var(--mm-control-border);
+  border: 0;
   border-radius: 4px;
   color: var(--mm-control-foreground);
-  background: var(--mm-control-background);
+  background: transparent;
   line-height: 1;
   cursor: pointer;
   touch-action: none;
   pointer-events: auto;
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.18);
+  box-shadow: none;
+  transition:
+    background-color 90ms ease,
+    color 90ms ease,
+    outline 90ms ease;
 }
 .mm-table-controls button:hover:not(:disabled),
 .mm-table-controls button:focus-visible,
-.mm-table-controls button.is-selected {
-  border-color: var(--mm-contrast-active-border);
-  background: var(--mm-control-active-background);
+.mm-table-controls button.is-selected,
+.mm-table-controls button.is-hovered {
+  background: var(--mm-control-hover-background);
+  color: var(--vscode-focusBorder, var(--mm-control-foreground));
+}
+.mm-table-controls button:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder, #007fd4);
+  outline-offset: 1px;
 }
 .mm-table-controls button:disabled {
   color: var(--mm-disabled-foreground);
   cursor: not-allowed;
   opacity: 0.72;
 }
-.mm-table-row-handle,
-.mm-table-column-handle {
-  font-size: 15px;
-  font-weight: 700;
-  user-select: none;
+.mm-table-control-icon {
+  display: block;
+  width: 14px;
+  height: 14px;
+  color: currentColor;
+}
+.mm-table-column-handle .mm-table-control-icon {
+  transform: rotate(90deg);
 }
 .mm-table-row-handle,
 .mm-table-column-handle {
+  user-select: none;
   cursor: grab !important;
 }
 .mm-table-row-handle:active,
-.mm-table-column-handle:active {
+.mm-table-column-handle:active,
+.mm-table-row-handle.is-dragging,
+.mm-table-column-handle.is-dragging {
   cursor: grabbing !important;
 }
 .mm-table-row-insert,
 .mm-table-column-insert,
 .mm-table-row-append,
 .mm-table-column-append {
-  border-radius: 50% !important;
-  font-size: 18px;
+  width: 24px !important;
+  height: 24px !important;
+  border-radius: 4px !important;
+  border: 1px solid transparent !important;
+  font-size: 16px;
   font-weight: 500;
+  color: var(--mm-control-foreground);
 }
-.mm-table-row-append,
-.mm-table-column-append {
-  border-style: dashed !important;
-  opacity: 0.78;
-}
+.mm-table-row-insert:hover:not(:disabled),
+.mm-table-column-insert:hover:not(:disabled),
 .mm-table-row-append:hover:not(:disabled),
-.mm-table-column-append:hover:not(:disabled) {
-  opacity: 1;
+.mm-table-column-append:hover:not(:disabled),
+.mm-table-row-insert:focus-visible,
+.mm-table-column-insert:focus-visible,
+.mm-table-row-append:focus-visible,
+.mm-table-column-append:focus-visible {
+  border-color: var(--vscode-focusBorder, #007fd4) !important;
+  background: var(--mm-control-hover-background);
 }
 .mm-table-row-insert-line,
 .mm-table-column-insert-line {
   position: absolute;
   display: block;
   border: 0;
-  background: var(--mm-focus-border);
+  background: var(--vscode-focusBorder, #007fd4);
   pointer-events: none;
 }
 .mm-table-row-insert-line {
@@ -604,6 +659,109 @@ textarea:focus-visible {
 }
 .mm-table-column-insert-line {
   width: 2px !important;
+}
+.mm-table-move-indicator {
+  position: absolute;
+  z-index: 2;
+  display: block;
+  background: var(--vscode-focusBorder, #007fd4);
+  pointer-events: none;
+}
+.mm-table-move-indicator[data-axis="row"] {
+  height: 2px !important;
+}
+.mm-table-move-indicator[data-axis="column"] {
+  width: 2px !important;
+}
+.mm-table-move-indicator::before,
+.mm-table-move-indicator::after {
+  position: absolute;
+  content: "";
+  display: block;
+  background: inherit;
+}
+.mm-table-move-indicator[data-axis="row"]::before,
+.mm-table-move-indicator[data-axis="row"]::after {
+  width: 7px;
+  height: 2px;
+  top: 0;
+}
+.mm-table-move-indicator[data-axis="row"]::before {
+  left: 0;
+}
+.mm-table-move-indicator[data-axis="row"]::after {
+  right: 0;
+}
+.mm-table-move-indicator[data-axis="column"]::before,
+.mm-table-move-indicator[data-axis="column"]::after {
+  width: 2px;
+  height: 7px;
+  left: 0;
+}
+.mm-table-move-indicator[data-axis="column"]::before {
+  top: 0;
+}
+.mm-table-move-indicator[data-axis="column"]::after {
+  bottom: 0;
+}
+.mm-table-move-label {
+  position: absolute;
+  z-index: 3;
+  max-width: 220px;
+  padding: 2px 6px;
+  overflow: hidden;
+  border: 1px solid var(--vscode-focusBorder, #007fd4);
+  border-radius: 3px;
+  color: var(--vscode-editor-foreground, #1f2328);
+  background: var(--vscode-editor-background, #ffffff);
+  font-size: 11px;
+  line-height: 16px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  pointer-events: none;
+}
+.mm-table-drag-preview {
+  position: absolute;
+  z-index: 4;
+  min-width: 116px;
+  max-width: 180px;
+  padding: 6px 8px;
+  overflow: hidden;
+  border: 1px solid var(--vscode-focusBorder, #007fd4);
+  border-radius: 4px;
+  color: var(--vscode-editor-foreground, #1f2328);
+  background: var(--vscode-editor-background, #ffffff);
+  box-shadow: 0 5px 14px rgba(0, 0, 0, 0.22);
+  font-size: 11px;
+  line-height: 15px;
+  pointer-events: none;
+}
+.mm-table-drag-preview-title {
+  margin-bottom: 3px;
+  color: var(--vscode-descriptionForeground, #6a737d);
+  font-weight: 600;
+}
+.mm-table-drag-preview-values {
+  display: grid;
+  gap: 1px;
+}
+.mm-table-drag-preview-item {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+@keyframes mm-table-drop-flash {
+  from {
+    opacity: 0.95;
+  }
+  to {
+    opacity: 0.1;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .mm-table-control-highlight[data-state="drop-flash"] {
+    animation: none;
+  }
 }
 .mm-rich-panel .ProseMirror-selectednode {
   outline: 2px solid var(--vscode-focusBorder, #007fd4);
@@ -719,7 +877,9 @@ textarea:focus-visible {
   gap: 10px 16px;
   overflow: hidden;
 }
-.mm-profile-feature-dialog[data-profile-feature="mermaid"] .mm-dialog-form > h2 {
+.mm-profile-feature-dialog[data-profile-feature="mermaid"]
+  .mm-dialog-form
+  > h2 {
   grid-area: title;
   align-self: center;
   margin: 0;
@@ -931,9 +1091,13 @@ textarea:focus-visible {
   min-height: 28px;
   padding: 5px 10px;
   color: var(--vscode-button-secondaryForeground, var(--mm-control-foreground));
-  border: 1px solid var(--vscode-button-secondaryBackground, var(--mm-control-border));
+  border: 1px solid
+    var(--vscode-button-secondaryBackground, var(--mm-control-border));
   border-radius: 4px;
-  background: var(--vscode-button-secondaryBackground, var(--mm-control-background));
+  background: var(
+    --vscode-button-secondaryBackground,
+    var(--mm-control-background)
+  );
 }
 .mm-link-picker-remove:hover:not(:disabled) {
   background: var(
@@ -1134,7 +1298,10 @@ textarea:focus-visible {
 .mm-code-block-view .mm-code-language-trigger:hover,
 .mm-code-block-view .mm-code-language-trigger:focus-visible {
   border-color: var(--vscode-focusBorder, var(--mm-focus-border));
-  background: var(--vscode-toolbar-hoverBackground, var(--mm-control-hover-background));
+  background: var(
+    --vscode-toolbar-hoverBackground,
+    var(--mm-control-hover-background)
+  );
   outline: 0;
 }
 .mm-code-block-view .mm-code-language-trigger .mm-code-language-label {
@@ -1161,7 +1328,10 @@ textarea:focus-visible {
   padding: 6px;
   border: 1px solid var(--vscode-widget-border, var(--mm-control-border));
   border-radius: 6px;
-  background: var(--vscode-quickInput-background, var(--vscode-editorWidget-background, var(--mm-control-background)));
+  background: var(
+    --vscode-quickInput-background,
+    var(--vscode-editorWidget-background, var(--mm-control-background))
+  );
   box-shadow: 0 10px 32px rgba(0, 0, 0, 0.3);
 }
 .mm-code-block-view .mm-code-language-menu.mm-code-language-menu-up {
@@ -1206,12 +1376,21 @@ textarea:focus-visible {
   .mm-code-language-menu[data-input-modality="keyboard"]
   .mm-code-language-option.is-active {
   border-color: var(--vscode-focusBorder, var(--mm-focus-border));
-  background: var(--vscode-list-hoverBackground, var(--mm-control-hover-background));
+  background: var(
+    --vscode-list-hoverBackground,
+    var(--mm-control-hover-background)
+  );
   outline: 0;
 }
 .mm-code-block-view .mm-code-language-option[aria-selected="true"] {
-  color: var(--vscode-list-activeSelectionForeground, var(--mm-control-foreground));
-  background: var(--vscode-list-activeSelectionBackground, var(--mm-control-hover-background));
+  color: var(
+    --vscode-list-activeSelectionForeground,
+    var(--mm-control-foreground)
+  );
+  background: var(
+    --vscode-list-activeSelectionBackground,
+    var(--mm-control-hover-background)
+  );
 }
 .mm-code-block-view .mm-code-language-option-text {
   min-width: 0;
@@ -1660,11 +1839,11 @@ body.vscode-high-contrast-light .mm-file-autocomplete-option.is-active {
   textarea,
   .mm-table-toolbar,
   .mm-table-grid,
-   .mm-emoji-grid,
-   .mm-input-dialog,
-   .mm-link-picker,
-   .mm-file-autocomplete,
-   .mm-popup-panel,
+  .mm-emoji-grid,
+  .mm-input-dialog,
+  .mm-link-picker,
+  .mm-file-autocomplete,
+  .mm-popup-panel,
   .mm-floating-toolbar,
   .mm-table-controls button,
   .mm-empty-line-insert,

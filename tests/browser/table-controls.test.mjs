@@ -46,6 +46,14 @@ const smallSource = [
   "| 2 | Beta | B |",
 ].join("\n");
 
+const emptyHeaderSource = [
+  "|   |   |   |   |   |",
+  "| --- | --- | --- | --- | --- |",
+  "| a | b | c | d | e |",
+  "| f | g | h | i | j |",
+  "| k | l | m | n | o |",
+].join("\n");
+
 async function waitForServer(url, server) {
   let output = "";
   server.stdout.on("data", (chunk) => {
@@ -72,6 +80,50 @@ async function settle(page) {
         requestAnimationFrame(() => requestAnimationFrame(done)),
       ),
   );
+}
+
+async function setTheme(page, theme) {
+  const themes = {
+    light: {
+      "--vscode-editor-background": "#ffffff",
+      "--vscode-foreground": "#1f2328",
+      "--vscode-editor-foreground": "#1f2328",
+      "--vscode-descriptionForeground": "#59636e",
+      "--vscode-widget-border": "rgba(31,35,40,.25)",
+      "--vscode-focusBorder": "#0969da",
+    },
+    dark: {
+      "--vscode-editor-background": "#1e1e1e",
+      "--vscode-foreground": "#d4d4d4",
+      "--vscode-editor-foreground": "#d4d4d4",
+      "--vscode-descriptionForeground": "#9d9d9d",
+      "--vscode-widget-border": "rgba(127,127,127,.45)",
+      "--vscode-focusBorder": "#3794ff",
+    },
+    contrast: {
+      "--vscode-editor-background": "#000000",
+      "--vscode-foreground": "#ffffff",
+      "--vscode-editor-foreground": "#ffffff",
+      "--vscode-descriptionForeground": "#ffffff",
+      "--vscode-widget-border": "#ffffff",
+      "--vscode-focusBorder": "#00ffff",
+    },
+  };
+  await page.emulateMedia({
+    colorScheme: theme === "light" ? "light" : "dark",
+    forcedColors: theme === "contrast" ? "active" : "none",
+  });
+  await page.evaluate((variables) => {
+    for (const [name, value] of Object.entries(variables))
+      document.documentElement.style.setProperty(name, value);
+    const contrast = variables["--vscode-editor-background"] === "#000000";
+    document.documentElement.classList.toggle("vscode-high-contrast", contrast);
+    document.body.classList.toggle("vscode-high-contrast", contrast);
+    document.body.style.backgroundColor =
+      variables["--vscode-editor-background"];
+    document.body.style.color = variables["--vscode-foreground"];
+  }, themes[theme]);
+  await settle(page);
 }
 
 async function load(page, source) {
@@ -122,16 +174,272 @@ async function controlTable(page) {
   return table;
 }
 
+async function revealRowHandle(page, table, rowIndex) {
+  const tableBox = await table.boundingBox();
+  const rowBox = await table.locator("tr").nth(rowIndex).boundingBox();
+  assert.ok(tableBox && rowBox, `row ${rowIndex} has no geometry`);
+  await page.mouse.move(
+    Math.max(8, tableBox.x - 18),
+    rowBox.y + rowBox.height / 2,
+  );
+  const handle = page.locator(
+    `[data-table-control="row-handle"][data-index="${rowIndex}"]`,
+  );
+  await handle.waitFor({ state: "visible" });
+  return handle;
+}
+
+async function revealColumnHandle(page, table, columnIndex) {
+  const header = table.locator("tr").first().locator("th, td").nth(columnIndex);
+  const headerBox = await header.boundingBox();
+  assert.ok(headerBox, `column ${columnIndex} has no geometry`);
+  await page.mouse.move(
+    headerBox.x + headerBox.width / 2,
+    Math.max(8, headerBox.y - 18),
+  );
+  const handle = page.locator(
+    `[data-table-control="column-handle"][data-index="${columnIndex}"]`,
+  );
+  await handle.waitFor({ state: "visible" });
+  return handle;
+}
+
+async function testTablePresentation(page) {
+  await page.setViewportSize({ width: 960, height: 720 });
+  await load(page, emptyHeaderSource);
+  await setTheme(page, "light");
+  let table = await controlTable(page);
+  const idleGeometry = await page.evaluate(() => {
+    const table = document.querySelector(".mm-rich-panel .ProseMirror table");
+    const cells = table
+      ? Array.from(table.rows).flatMap((row) => Array.from(row.cells))
+      : [];
+    const rects = cells.map((cell) => cell.getBoundingClientRect());
+    const grid = {
+      left: Math.min(...rects.map((rect) => rect.left)),
+      right: Math.max(...rects.map((rect) => rect.right)),
+      top: Math.min(...rects.map((rect) => rect.top)),
+      bottom: Math.max(...rects.map((rect) => rect.bottom)),
+    };
+    const outer = table?.getBoundingClientRect();
+    return { outer, grid };
+  });
+  assert.ok(
+    idleGeometry.outer && idleGeometry.grid,
+    "idle table geometry is unavailable",
+  );
+  assert.ok(
+    idleGeometry.outer.right - idleGeometry.grid.right > 24,
+    "the fixture must retain visible whitespace after the actual cell grid",
+  );
+  await page.mouse.move(
+    (idleGeometry.grid.left + idleGeometry.grid.right) / 2,
+    (idleGeometry.grid.top + idleGeometry.grid.bottom) / 2,
+  );
+  await settle(page);
+  assert.equal(
+    await page.locator(".mm-table-row-handle:visible").count(),
+    0,
+    "idle presentation exposed every row handle",
+  );
+  assert.equal(
+    await page.locator(".mm-table-column-handle:visible").count(),
+    0,
+    "idle presentation exposed every column handle",
+  );
+  await page.screenshot({
+    path: resolve(output, "table-controls-idle-light.png"),
+    fullPage: false,
+  });
+
+  const fifthHeader = table.locator("tr").first().locator("th, td").nth(4);
+  const fifthHeaderBox = await fifthHeader.boundingBox();
+  assert.ok(fifthHeaderBox, "fifth column geometry is unavailable");
+  const fifthHandle = await revealColumnHandle(page, table, 4);
+  assert.equal(
+    await page.locator(".mm-table-column-handle:visible").count(),
+    1,
+    "column rail did not expose one matching candidate",
+  );
+  const hoverHighlights = await page
+    .locator(".mm-table-column-highlight:not([hidden])")
+    .count();
+  assert.equal(
+    hoverHighlights,
+    1,
+    "column hover did not highlight the full grid range",
+  );
+  await page.screenshot({
+    path: resolve(output, "table-controls-column-hover.png"),
+    fullPage: false,
+  });
+
+  const secondHeader = table.locator("tr").first().locator("th, td").nth(1);
+  const secondHeaderBox = await secondHeader.boundingBox();
+  assert.ok(secondHeaderBox, "column two geometry is unavailable");
+  const handleBox = await fifthHandle.boundingBox();
+  assert.ok(handleBox, "fifth column handle geometry is unavailable");
+  const beforeDragEdits = await editCount(page);
+  await page.mouse.move(
+    handleBox.x + handleBox.width / 2,
+    handleBox.y + handleBox.height / 2,
+  );
+  await page.mouse.down();
+  await page.mouse.move(
+    secondHeaderBox.x + secondHeaderBox.width,
+    fifthHeaderBox.y + fifthHeaderBox.height / 2,
+    { steps: 12 },
+  );
+  await page.waitForSelector(".mm-table-drag-preview:visible");
+  const previewText = await page
+    .locator(".mm-table-drag-preview")
+    .textContent();
+  assert.match(previewText ?? "", /e/);
+  assert.match(previewText ?? "", /j/);
+  assert.match(previewText ?? "", /o/);
+  assert.equal(
+    await page.locator(".mm-table-move-label:visible").textContent(),
+    "Move column 5 to position 3",
+    "column drag label did not use the final post-removal position",
+  );
+  assert.equal(
+    await page
+      .locator(
+        ".mm-table-row-insert:visible, .mm-table-column-insert:visible, .mm-table-row-append:visible, .mm-table-column-append:visible",
+      )
+      .count(),
+    0,
+    "drag presentation exposed an insertion or append control",
+  );
+  const dragGeometry = await page.evaluate(() => {
+    const table = document.querySelector(".mm-rich-panel .ProseMirror table");
+    const cells = table
+      ? Array.from(table.rows).flatMap((row) => Array.from(row.cells))
+      : [];
+    const rects = cells.map((cell) => cell.getBoundingClientRect());
+    const line = document
+      .querySelector(".mm-table-move-indicator")
+      ?.getBoundingClientRect();
+    return {
+      gridRight: Math.max(...rects.map((rect) => rect.right)),
+      gridTop: Math.min(...rects.map((rect) => rect.top)),
+      gridBottom: Math.max(...rects.map((rect) => rect.bottom)),
+      line,
+    };
+  });
+  assert.ok(dragGeometry.line, "valid column drag did not show a move line");
+  assert.ok(
+    dragGeometry.line.height >=
+      dragGeometry.gridBottom - dragGeometry.gridTop - 3,
+  );
+  assert.ok(dragGeometry.line.x < dragGeometry.gridRight);
+  assert.equal(
+    await editCount(page),
+    beforeDragEdits,
+    "column preview edited the document",
+  );
+  await page.screenshot({
+    path: resolve(output, "table-controls-column-drag.png"),
+    fullPage: false,
+  });
+  await page.mouse.up();
+  await page.waitForFunction(
+    (expected) =>
+      window.__markdownMintHarness.messages.filter(
+        (message) => message.type === "edit",
+      ).length ===
+      expected + 1,
+    beforeDragEdits,
+  );
+  const moved = await modelSnapshot(page);
+  assert.deepEqual(moved.rows[1], ["a", "b", "e", "c", "d"]);
+  assert.deepEqual(moved.rows[2], ["f", "g", "j", "h", "i"]);
+  assert.deepEqual(moved.rows[3], ["k", "l", "o", "m", "n"]);
+  await page.screenshot({
+    path: resolve(output, "table-controls-column-drop.png"),
+    fullPage: false,
+  });
+
+  await load(page, emptyHeaderSource);
+  await setTheme(page, "light");
+  table = await controlTable(page);
+  const rowHandle = await revealRowHandle(page, table, 3);
+  const rowHandleBox = await rowHandle.boundingBox();
+  const firstBodyRow = await table.locator("tr").nth(1).boundingBox();
+  assert.ok(rowHandleBox && firstBodyRow, "row drag geometry is unavailable");
+  await page.mouse.move(
+    rowHandleBox.x + rowHandleBox.width / 2,
+    rowHandleBox.y + rowHandleBox.height / 2,
+  );
+  await page.mouse.down();
+  await page.mouse.move(
+    rowHandleBox.x + rowHandleBox.width / 2,
+    firstBodyRow.y + firstBodyRow.height,
+    { steps: 10 },
+  );
+  await page.waitForSelector(".mm-table-drag-preview:visible");
+  await page.screenshot({
+    path: resolve(output, "table-controls-row-drag.png"),
+    fullPage: false,
+  });
+  await page.mouse.up();
+  await page.waitForFunction(
+    (expected) =>
+      window.__markdownMintHarness.messages.filter(
+        (message) => message.type === "edit",
+      ).length ===
+      expected + 1,
+    0,
+  );
+
+  await page.setViewportSize({ width: 640, height: 720 });
+  await load(page, numberedSource(3, 10));
+  await setTheme(page, "light");
+  table = await controlTable(page);
+  const tableOverflow = await table.evaluate((element) => ({
+    scrollWidth: element.scrollWidth,
+    clientWidth: element.clientWidth,
+  }));
+  assert.ok(
+    tableOverflow.scrollWidth > tableOverflow.clientWidth,
+    "wide fixture did not create an actual horizontal scroll area",
+  );
+  const tableBox = await table.boundingBox();
+  assert.ok(tableBox, "wide table geometry is unavailable");
+  await page.mouse.move(tableBox.x + tableBox.width / 2, tableBox.y + 40);
+  await page.mouse.wheel(10000, 0);
+  await page.waitForFunction(
+    () => document.querySelector(".mm-rich-panel table")?.scrollLeft > 0,
+  );
+  await revealRowHandle(page, table, 1);
+  await page.screenshot({
+    path: resolve(output, "table-controls-wide-horizontal-scroll.png"),
+    fullPage: false,
+  });
+  await setTheme(page, "dark");
+  await revealRowHandle(page, table, 1);
+  await page.screenshot({
+    path: resolve(output, "table-controls-dark.png"),
+    fullPage: false,
+  });
+  await setTheme(page, "contrast");
+  await revealRowHandle(page, table, 1);
+  await page.screenshot({
+    path: resolve(output, "table-controls-high-contrast.png"),
+    fullPage: false,
+  });
+  await page.setViewportSize({ width: 960, height: 720 });
+}
+
 async function testNumberedDragAndHistory(page) {
+  await page.setViewportSize({ width: 960, height: 720 });
   const source = numberedSource();
   await load(page, source);
   const table = await controlTable(page);
   const tableBefore = await table.boundingBox();
   assert.ok(tableBefore, "numbered table has no geometry");
 
-  const handle = page.locator(
-    '[data-table-control="row-handle"][data-index="3"]',
-  );
+  const handle = await revealRowHandle(page, table, 3);
   await handle.click();
   await page.waitForSelector(
     '[data-table-control="row-handle"][data-index="3"].is-selected',
@@ -153,6 +461,11 @@ async function testNumberedDragAndHistory(page) {
   await page.mouse.down();
   await page.mouse.move(handleBox.x + handleBox.width / 2, firstBodyRow.y + 1, {
     steps: 12,
+  });
+  await page.waitForSelector(".mm-table-drag-preview:visible");
+  await page.screenshot({
+    path: resolve(output, "table-controls-numbered-row-drag.png"),
+    fullPage: false,
   });
   assert.equal(
     await editCount(page),
@@ -222,10 +535,9 @@ async function testNumberedDragAndHistory(page) {
   await page.waitForFunction(
     () => document.querySelector(".mm-stage").scrollTop > 0,
   );
-  const lastHandle = page.locator(
-    '[data-table-control="row-handle"][data-index="100"]',
-  );
   const lastRow = table.locator("tr").last();
+  await lastRow.scrollIntoViewIfNeeded();
+  const lastHandle = await revealRowHandle(page, table, 100);
   const lastHandleBox = await lastHandle.boundingBox();
   const lastRowBox = await lastRow.boundingBox();
   assert.ok(
@@ -328,7 +640,28 @@ async function testRailsAndKeyboard(page) {
 
   await controlTable(page);
   const rowAppend = page.locator('[data-table-control="row-append"]');
-  await rowAppend.scrollIntoViewIfNeeded();
+  const appendLastRow = await table.locator("tr").last().boundingBox();
+  const appendFirstCell = await table
+    .locator("tr")
+    .last()
+    .locator("th, td")
+    .first()
+    .boundingBox();
+  const appendLastCell = await table
+    .locator("tr")
+    .last()
+    .locator("th, td")
+    .last()
+    .boundingBox();
+  assert.ok(
+    appendFirstCell && appendLastCell && appendLastRow,
+    "row append geometry is unavailable",
+  );
+  await page.mouse.move(
+    (appendFirstCell.x + appendLastCell.x + appendLastCell.width) / 2,
+    appendLastRow.y + appendLastRow.height + 12,
+  );
+  await rowAppend.waitFor({ state: "visible" });
   await rowAppend.click();
   await page.waitForFunction(
     (expected) =>
@@ -352,7 +685,22 @@ async function testRailsAndKeyboard(page) {
 
   await controlTable(page);
   const columnAppend = page.locator('[data-table-control="column-append"]');
-  await columnAppend.scrollIntoViewIfNeeded();
+  const appendHeader = await table
+    .locator("tr")
+    .first()
+    .locator("th, td")
+    .last()
+    .boundingBox();
+  const appendTableAfter = await table.boundingBox();
+  assert.ok(
+    appendHeader && appendTableAfter,
+    "column append geometry is unavailable",
+  );
+  await page.mouse.move(
+    appendHeader.x + appendHeader.width + 12,
+    appendHeader.y + appendHeader.height / 2,
+  );
+  await columnAppend.waitFor({ state: "visible" });
   await columnAppend.click();
   await page.waitForFunction(
     (expected) =>
@@ -375,9 +723,7 @@ async function testRailsAndKeyboard(page) {
   );
 
   await controlTable(page);
-  const rowHandle = page.locator(
-    '[data-table-control="row-handle"][data-index="1"]',
-  );
+  const rowHandle = await revealRowHandle(page, table, 1);
   await rowHandle.click();
   await page.keyboard.press("ArrowDown");
   await page.waitForFunction(
@@ -412,6 +758,7 @@ async function testRailsAndKeyboard(page) {
     document.body.classList.add("vscode-high-contrast"),
   );
   await controlTable(page);
+  await revealRowHandle(page, table, 1);
   assert.equal(
     await page.locator(".mm-table-controls button").first().isVisible(),
     true,
@@ -426,9 +773,7 @@ async function testRailsAndKeyboard(page) {
 async function testColumnDrag(page) {
   await load(page, smallSource);
   const table = await controlTable(page);
-  const handle = page.locator(
-    '[data-table-control="column-handle"][data-index="2"]',
-  );
+  const handle = await revealColumnHandle(page, table, 2);
   await handle.click();
   const handleBox = await handle.boundingBox();
   const firstHeader = await table
@@ -471,9 +816,7 @@ async function testColumnDrag(page) {
 async function testEscapeDuringUnselectedDrag(page) {
   await load(page, numberedSource(3, 3));
   const rowTable = await controlTable(page);
-  const rowHandle = page.locator(
-    '[data-table-control="row-handle"][data-index="3"]',
-  );
+  const rowHandle = await revealRowHandle(page, rowTable, 3);
   const rowHandleBox = await rowHandle.boundingBox();
   const firstBodyRow = await rowTable.locator("tr").nth(1).boundingBox();
   assert.ok(rowHandleBox && firstBodyRow, "row escape geometry is unavailable");
@@ -501,9 +844,7 @@ async function testEscapeDuringUnselectedDrag(page) {
 
   await load(page, smallSource);
   const columnTable = await controlTable(page);
-  const columnHandle = page.locator(
-    '[data-table-control="column-handle"][data-index="2"]',
-  );
+  const columnHandle = await revealColumnHandle(page, columnTable, 2);
   const columnHandleBox = await columnHandle.boundingBox();
   const firstHeader = await columnTable
     .locator("tr")
@@ -654,6 +995,7 @@ async function main() {
       deviceScaleFactor: 1,
     });
     page.setDefaultTimeout(10000);
+    await testTablePresentation(page);
     await testNumberedDragAndHistory(page);
     await testColumnDrag(page);
     await testEscapeDuringUnselectedDrag(page);

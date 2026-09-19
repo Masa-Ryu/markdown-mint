@@ -74,26 +74,37 @@ function tableInfo(app: MarkdownEditorApp): {
   return { table, tablePos };
 }
 
-function mockTableGeometry(app: MarkdownEditorApp, root: HTMLElement): void {
+function mockTableGeometry(
+  app: MarkdownEditorApp,
+  root: HTMLElement,
+  options: {
+    outerRight?: number;
+    outerBottom?: number;
+    columnWidths?: number[];
+    rowHeights?: number[];
+  } = {},
+): void {
   const { table, tablePos } = tableInfo(app);
   const map = TableMap.get(table);
   const tableElement = root.querySelector<HTMLTableElement>("table");
   const stage = root.querySelector<HTMLElement>(".mm-stage");
   if (!tableElement || !stage) throw new Error("Missing table DOM");
-  const rowBoundaries = Array.from(
-    { length: map.height + 1 },
-    (_, index) => 20 + index * 40,
-  );
-  const columnBoundaries = Array.from(
-    { length: map.width + 1 },
-    (_, index) => 30 + index * 110,
-  );
+  const rowHeights = options.rowHeights ?? Array(map.height).fill(40);
+  const rowBoundaries = [20];
+  for (let index = 0; index < map.height; index += 1)
+    rowBoundaries.push(rowBoundaries[index]! + (rowHeights[index] ?? 40));
+  const columnWidths = options.columnWidths ?? Array(map.width).fill(110);
+  const columnBoundaries = [30];
+  for (let index = 0; index < map.width; index += 1)
+    columnBoundaries.push(
+      columnBoundaries[index]! + (columnWidths[index] ?? 110),
+    );
   setRect(
     tableElement,
     rowBoundaries[0]!,
     columnBoundaries[0]!,
-    rowBoundaries.at(-1)!,
-    columnBoundaries.at(-1)!,
+    options.outerBottom ?? rowBoundaries.at(-1)!,
+    options.outerRight ?? columnBoundaries.at(-1)!,
   );
   setRect(stage, 0, 0, 800, 1000);
   const rows = tableElement.querySelectorAll<HTMLTableRowElement>("tr");
@@ -180,6 +191,70 @@ afterEach(() => {
 });
 
 describe("direct table controls", () => {
+  it("uses the direct cell grid instead of a wide table outer box", () => {
+    const source = [
+      "|   |   |   |   |   |",
+      "| --- | --- | --- | --- | --- |",
+      "| a | b | c | d | e |",
+      "| f | g | h | i | j |",
+      "| k | l | m | n | o |",
+    ].join("\n");
+    const { app, root, messages } = makeApp(source);
+    mockTableGeometry(app, root, {
+      outerRight: 1000,
+      outerBottom: 300,
+      columnWidths: [70, 160, 90, 120, 55],
+    });
+    selectText(app, root.querySelector("tbody td")!);
+
+    const controls = root.querySelector<HTMLElement>(".mm-table-controls")!;
+    const stage = root.querySelector<HTMLElement>(".mm-stage")!;
+    const table = root.querySelector<HTMLTableElement>("table")!;
+    const beforeTableRect = table.getBoundingClientRect();
+
+    stage.dispatchEvent(pointer("pointermove", 305, 2));
+    const columnHighlight = controls.querySelector<HTMLElement>(
+      ".mm-table-column-highlight",
+    )!;
+    expect(columnHighlight.hidden).toBe(false);
+    expect(columnHighlight.style.left).toBe("260px");
+    expect(columnHighlight.style.width).toBe("90px");
+
+    stage.dispatchEvent(pointer("pointermove", 260, 2));
+    const columnInsertLine = controls.querySelector<HTMLElement>(
+      ".mm-table-column-insert-line",
+    )!;
+    expect(columnInsertLine.hidden).toBe(false);
+    expect(columnInsertLine.style.height).toBe("160px");
+
+    stage.dispatchEvent(pointer("pointermove", 533, 80));
+    const columnAppend = controls.querySelector<HTMLButtonElement>(
+      '[data-table-control="column-append"]',
+    )!;
+    expect(columnAppend.hidden).toBe(false);
+    expect(columnAppend.style.left).toBe("528px");
+    expect(table.getBoundingClientRect()).toEqual(beforeTableRect);
+
+    const columnHandle = controls.querySelector<HTMLButtonElement>(
+      '[data-table-control="column-handle"][data-index="4"]',
+    )!;
+    const before = app.view.state.doc;
+    columnHandle.dispatchEvent(pointer("pointerdown", 470, 10));
+    stage.dispatchEvent(pointer("pointermove", 260, 80));
+    expect(
+      controls.querySelector<HTMLElement>(".mm-table-drag-preview")
+        ?.textContent,
+    ).toContain("e");
+    expect(
+      controls.querySelector<HTMLElement>(".mm-table-move-indicator")!.hidden,
+    ).toBe(false);
+    expect(columnInsertLine.hidden).toBe(true);
+    expect(columnAppend.hidden).toBe(true);
+    expect(app.view.state.doc).toBe(before);
+    columnHandle.dispatchEvent(pointer("pointerup", 260, 80));
+    expect(editMessages(messages)).toHaveLength(1);
+  });
+
   it("selects a row without editing and moves it through a real pointer path", () => {
     const source = [
       "| # | Name | Value |",

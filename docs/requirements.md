@@ -1444,6 +1444,21 @@ source, and host edit count unchanged.
   state without creating a ProseMirror `CellSelection`, changing the caret,
   or sending a host edit. A roughly 6px pointer threshold distinguishes a
   click from a drag; pointer movement only updates the drop preview.
+- The control geometry distinguishes the table element's outer/scroll viewport
+  from the union of its direct `th`/`td` cell rectangles. Row and column rails,
+  highlights, insertion lines, move indicators, and append buttons use the
+  actual cell-grid rectangle and its visible intersection with the table and
+  stage clips; external handles remain independently positioned beside the
+  visible grid. Resizing, stage scrolling, and the table's own horizontal
+  scrolling remeasure the same direct-cell geometry, and an off-screen append
+  control is never relocated into a visible middle position.
+- Normal presentation is quiet: handles are small six-dot grips and only the
+  matching hovered/focused/selected candidate is visible for each axis. A
+  hover or focus highlights the complete target row or column; a structural
+  click leaves a stronger translucent range and outline until Escape or an
+  ordinary cell interaction. Boundary insertion uses one small rounded `+`
+  control at a valid boundary, while append controls stay small and near the
+  actual grid end without an oversized transparent hit rail.
 - A row or column can be moved within its current table by a real pointer drag.
   The overlay uses the explicit table document position and measured row or
   column boundaries, cancels on an invalid/outside drop, document replacement,
@@ -1453,6 +1468,15 @@ source, and host edit count unchanged.
   place the caret in the new cells. New rows retain existing per-column
   alignment attributes; moved, deleted, and untouched cells retain their
   ProseMirror content and marks.
+- During a drag, the original range remains lightly muted, a pointer-following
+  preview is built from bounded `textContent` only, and a separate move-only
+  line/label marks a valid insertion boundary. The preview is pointer-inert,
+  aria-hidden, clamped to the control viewport, and limited to the header/row
+  label plus at most three column values or four row values. Invalid and no-op
+  destinations show no move line; Escape clears the preview, origin, line,
+  pointer capture, and auto-scroll before a later pointerup can commit. A
+  successful drop briefly flashes the final structural range and then keeps
+  the normal structural selection.
 - Direct transformations live in `src/webview/tableCommands.ts` and validate
   the supplied table position, rectangular unit-cell shape, and no-op
   boundary. Existing merged or otherwise unsupported tables continue to use
@@ -1482,6 +1506,10 @@ source, and host edit count unchanged.
   unchanged. `npm run test:browser:tables` covers real Chromium pointer,
   keyboard, scrolling, numbering, source-sync, and host-history paths. Native
   VS Code focus/IME behavior remains a separate acceptance/manual check.
+- The browser presentation regression also records idle, hover, drag, drop,
+  row-drag, numbered-row-drag, wide-scroll, light, dark, and high-contrast
+  screenshots under `output/playwright/table-controls/`; the five required
+  Markdown acceptance fixtures remain unchanged.
 
 ## Explicit limits
 

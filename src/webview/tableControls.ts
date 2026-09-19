@@ -1,4 +1,5 @@
 import type { Node as PMNode } from "prosemirror-model";
+import { appendToolbarIcon } from "./icons";
 
 export type TableControlAxis = "row" | "column";
 
@@ -36,6 +37,16 @@ export interface TableControlsCallbacks {
     boundary: number,
     target: TableControlTarget,
   ) => void;
+  canMove: (
+    selection: TableControlSelection,
+    boundary: number,
+    target: TableControlTarget,
+  ) => boolean;
+  canInsert: (
+    axis: TableControlAxis,
+    boundary: number,
+    target: TableControlTarget,
+  ) => boolean;
   onDelete: (
     selection: TableControlSelection,
     target: TableControlTarget,
@@ -45,12 +56,24 @@ export interface TableControlsCallbacks {
 
 interface Layout {
   tableRect: DOMRect;
+  gridRect: RectLike;
+  visibleGridRect: RectLike;
+  controlClipRect: RectLike;
   stageRect: DOMRect;
   rowBoundaries: number[];
   columnBoundaries: number[];
   scrollLeft: number;
   scrollTop: number;
 }
+
+interface RectLike {
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+}
+
+type DragDropState = "invalid" | "no-change" | "valid";
 
 interface DragState {
   pointerId: number;
@@ -63,11 +86,16 @@ interface DragState {
   lastY: number;
   moved: boolean;
   boundary: number | null;
+  dropState: DragDropState;
 }
 
 const DRAG_THRESHOLD = 6;
 const EDGE_SCROLL_DISTANCE = 42;
 const EDGE_SCROLL_STEP = 22;
+const INSERT_BOUNDARY_DISTANCE = 12;
+const PREVIEW_OFFSET = 14;
+const PREVIEW_MAX_TEXT_LENGTH = 42;
+const DROP_FLASH_DURATION = 520;
 
 function finite(value: number): boolean {
   return Number.isFinite(value);
@@ -75,6 +103,80 @@ function finite(value: number): boolean {
 
 function clientRect(element: Element): DOMRect {
   return element.getBoundingClientRect();
+}
+
+function rectLike(value: DOMRect | RectLike): RectLike {
+  return {
+    left: value.left,
+    top: value.top,
+    right: value.right,
+    bottom: value.bottom,
+  };
+}
+
+function rectWidth(value: RectLike): number {
+  return Math.max(0, value.right - value.left);
+}
+
+function rectHeight(value: RectLike): number {
+  return Math.max(0, value.bottom - value.top);
+}
+
+function hasRectArea(value: RectLike): boolean {
+  return rectWidth(value) > 0 && rectHeight(value) > 0;
+}
+
+function unionRect(rects: RectLike[]): RectLike | null {
+  const measured = rects.filter(
+    (rect) =>
+      finite(rect.left) &&
+      finite(rect.top) &&
+      finite(rect.right) &&
+      finite(rect.bottom) &&
+      rect.right >= rect.left &&
+      rect.bottom >= rect.top,
+  );
+  if (measured.length === 0) return null;
+  return {
+    left: Math.min(...measured.map((rect) => rect.left)),
+    top: Math.min(...measured.map((rect) => rect.top)),
+    right: Math.max(...measured.map((rect) => rect.right)),
+    bottom: Math.max(...measured.map((rect) => rect.bottom)),
+  };
+}
+
+function intersectRect(first: RectLike, second: RectLike): RectLike | null {
+  const left = Math.max(first.left, second.left);
+  const top = Math.max(first.top, second.top);
+  const right = Math.min(first.right, second.right);
+  const bottom = Math.min(first.bottom, second.bottom);
+  if (right < left || bottom < top) return null;
+  return { left, top, right, bottom };
+}
+
+function nearestBoundaryWithin(
+  boundaries: number[],
+  value: number,
+  distance: number,
+): number | null {
+  const boundary = nearestBoundary(boundaries, value);
+  if (boundary === null || Math.abs(boundaries[boundary]! - value) > distance)
+    return null;
+  return boundary;
+}
+
+function intervalAt(boundaries: number[], value: number): number | null {
+  for (let index = 0; index < boundaries.length - 1; index += 1) {
+    const start = boundaries[index];
+    const end = boundaries[index + 1];
+    if (start === undefined || end === undefined) continue;
+    if (value >= start && value <= end) return index;
+  }
+  return null;
+}
+
+function selectionKey(selection: TableControlSelection): string {
+  return `${selection.axis}:${selection.index}`;
 }
 
 function setBox(
@@ -164,8 +266,29 @@ export class TableControls {
   private rowRovingIndex: number | null = null;
   private columnRovingIndex: number | null = null;
   private canceledClickSource: HTMLButtonElement | null = null;
+  private highlightLayer!: HTMLElement;
+  private presentationLayer!: HTMLElement;
+  private handleLayer!: HTMLElement;
+  private rowHighlight!: HTMLElement;
+  private columnHighlight!: HTMLElement;
+  private dragOriginHighlight!: HTMLElement;
+  private moveIndicator!: HTMLElement;
+  private moveLabel!: HTMLElement;
+  private dragPreview: HTMLElement | null = null;
+  private hoveredSelection: TableControlSelection | null = null;
+  private focusedSelection: TableControlSelection | null = null;
+  private flashedSelection: TableControlSelection | null = null;
+  private flashTimer: number | undefined;
+  private scrollContainers: HTMLElement[] = [];
   private destroyed = false;
   private focused = false;
+
+  private readonly scroll = (): void => {
+    if (this.destroyed) return;
+    this.updateLayout();
+    if (this.drag) this.updateDragPresentation();
+    else this.updatePointerPresentationFromStoredPointer();
+  };
 
   private readonly stagePointerMove = (event: PointerEvent): void => {
     if (this.destroyed) return;
@@ -176,6 +299,22 @@ export class TableControls {
     this.storedPointerX = event.clientX;
     this.storedPointerY = event.clientY;
     const target = event.target;
+    const handleTarget =
+      target instanceof Element
+        ? target.closest<HTMLButtonElement>('[data-table-control$="-handle"]')
+        : null;
+    if (
+      handleTarget &&
+      this.element.contains(handleTarget) &&
+      handleTarget.dataset.axis &&
+      handleTarget.dataset.index
+    ) {
+      this.setHoveredSelection({
+        axis: handleTarget.dataset.axis as TableControlAxis,
+        index: Number(handleTarget.dataset.index),
+      });
+      return;
+    }
     if (target instanceof Node && this.element.contains(target)) return;
     const tableFromEvent =
       target instanceof Element
@@ -190,15 +329,18 @@ export class TableControls {
         : null);
     this.callbacks.onHoverTable(table);
     if (table && this.target?.tableElement === table) {
-      this.updateInsertHover(event.clientX, event.clientY);
+      this.updatePointerPresentation(event.clientX, event.clientY);
     } else {
       this.hideInsertButtons();
+      this.clearTransientPresentation();
     }
   };
 
   private readonly stagePointerLeave = (): void => {
     if (this.drag || this.focused) return;
     this.hideInsertButtons();
+    this.hoveredSelection = null;
+    this.clearTransientPresentation();
     this.callbacks.onHoverTable(null);
   };
 
@@ -236,6 +378,7 @@ export class TableControls {
 
   private readonly focusIn = (): void => {
     this.focused = true;
+    this.updatePresentation();
   };
 
   private readonly focusOut = (event: FocusEvent): void => {
@@ -243,6 +386,8 @@ export class TableControls {
     this.focused = next instanceof Node && this.element.contains(next);
     if (!this.focused && !this.drag) {
       this.hideInsertButtons();
+      this.focusedSelection = null;
+      this.updatePresentation();
       this.callbacks.onHoverTable(null);
     }
   };
@@ -349,6 +494,7 @@ export class TableControls {
       this.resizeObserver?.disconnect();
       this.resizeObserver?.observe(this.stage);
       this.resizeObserver?.observe(target.tableElement);
+      this.refreshScrollContainers();
     }
     this.element.hidden = false;
     this.element.setAttribute("aria-hidden", "false");
@@ -361,7 +507,12 @@ export class TableControls {
     this.target = null;
     this.layout = null;
     this.resizeObserver?.disconnect();
+    this.removeScrollListeners();
     this.hideInsertButtons();
+    this.clearTransientPresentation();
+    this.hoveredSelection = null;
+    this.focusedSelection = null;
+    this.flashedSelection = null;
     this.element.hidden = true;
     this.element.setAttribute("aria-hidden", "true");
   }
@@ -373,53 +524,78 @@ export class TableControls {
       (selected ? this.handleForSelection(selected) : undefined) ??
       this.rowHandles[0] ??
       this.columnHandles[0];
-    button?.focus();
+    if (button) {
+      button.hidden = false;
+      button.focus();
+    }
   }
 
   updateLayout(): void {
     if (!this.target || this.element.hidden) return;
     const tableRect = clientRect(this.target.tableElement);
     const stageRect = clientRect(this.stage);
-    const rows = Array.from(
-      this.target.tableElement.querySelectorAll<HTMLTableRowElement>("tr"),
-    );
+    const rows = Array.from(this.target.tableElement.rows);
     const height = this.target.table.childCount;
     const width = this.target.table.firstChild?.childCount ?? 0;
+    const columnRects: Array<RectLike[]> = Array.from(
+      { length: width },
+      () => [],
+    );
+    const cellRects: RectLike[] = [];
     const rowMeasured: Array<number | undefined> = Array.from(
       { length: height + 1 },
       () => undefined,
     );
-    rows.slice(0, height).forEach((row, index) => {
-      const rect = clientRect(row);
-      if (finite(rect.top)) rowMeasured[index] = rect.top;
-      if (finite(rect.bottom)) rowMeasured[index + 1] = rect.bottom;
+    rows.slice(0, height).forEach((row, rowIndex) => {
+      const cells = Array.from(row.cells).slice(0, width);
+      const measuredCells = cells.map((cell) => rectLike(clientRect(cell)));
+      const rowRect = unionRect(measuredCells) ?? rectLike(clientRect(row));
+      if (rowRect) {
+        rowMeasured[rowIndex] = rowRect.top;
+        rowMeasured[rowIndex + 1] = rowRect.bottom;
+        cellRects.push(...measuredCells);
+      }
+      cells.forEach((cell, columnIndex) => {
+        const rect = rectLike(clientRect(cell));
+        if (columnRects[columnIndex]) columnRects[columnIndex]!.push(rect);
+      });
     });
-    const firstRowCells = rows[0]
-      ? Array.from(
-          rows[0].querySelectorAll<HTMLElement>(":scope > th, :scope > td"),
-        )
-      : [];
     const columnMeasured: Array<number | undefined> = Array.from(
       { length: width + 1 },
       () => undefined,
     );
-    firstRowCells.slice(0, width).forEach((cell, index) => {
-      const rect = clientRect(cell);
-      if (finite(rect.left)) columnMeasured[index] = rect.left;
-      if (finite(rect.right)) columnMeasured[index + 1] = rect.right;
+    columnRects.forEach((rects, index) => {
+      const rect = unionRect(rects);
+      if (!rect) return;
+      columnMeasured[index] = rect.left;
+      columnMeasured[index + 1] = rect.right;
     });
+    const gridRect = unionRect(cellRects) ?? rectLike(tableRect);
+    const controlClipRect = this.measureControlClip(stageRect);
+    const visibleGridRect = intersectRect(
+      intersectRect(gridRect, rectLike(tableRect)) ?? gridRect,
+      controlClipRect,
+    ) ?? {
+      left: gridRect.left,
+      top: gridRect.top,
+      right: gridRect.left,
+      bottom: gridRect.top,
+    };
     const rowBoundaries = completeBoundaries(
       rowMeasured,
-      tableRect.top,
-      tableRect.bottom,
+      gridRect.top,
+      gridRect.bottom,
     );
     const columnBoundaries = completeBoundaries(
       columnMeasured,
-      tableRect.left,
-      tableRect.right,
+      gridRect.left,
+      gridRect.right,
     );
     this.layout = {
       tableRect,
+      gridRect,
+      visibleGridRect,
+      controlClipRect,
       stageRect,
       rowBoundaries,
       columnBoundaries,
@@ -430,53 +606,61 @@ export class TableControls {
       client - stageRect.left + this.stage.scrollLeft;
     const localY = (client: number): number =>
       client - stageRect.top + this.stage.scrollTop;
+    const localRect = (rect: RectLike): RectLike => ({
+      left: localX(rect.left),
+      top: localY(rect.top),
+      right: localX(rect.right),
+      bottom: localY(rect.bottom),
+    });
+    const grid = localRect(gridRect);
+    const visibleGrid = localRect(visibleGridRect);
     const tableLeft = localX(tableRect.left);
     const tableTop = localY(tableRect.top);
-    const tableRight = localX(tableRect.right);
-    const tableBottom = localY(tableRect.bottom);
     this.rowHandles.forEach((button) => {
       const index = Number(button.dataset.index);
-      const top = localY(rowBoundaries[index] ?? tableRect.top);
-      const bottom = localY(rowBoundaries[index + 1] ?? tableRect.bottom);
+      const top = localY(rowBoundaries[index] ?? gridRect.top);
+      const bottom = localY(rowBoundaries[index + 1] ?? gridRect.bottom);
       setBox(button, tableLeft - 30, (top + bottom) / 2 - 12, 24, 24);
     });
     this.columnHandles.forEach((button) => {
       const index = Number(button.dataset.index);
-      const left = localX(columnBoundaries[index] ?? tableRect.left);
-      const right = localX(columnBoundaries[index + 1] ?? tableRect.right);
+      const left = localX(columnBoundaries[index] ?? gridRect.left);
+      const right = localX(columnBoundaries[index + 1] ?? gridRect.right);
       setBox(button, (left + right) / 2 - 12, tableTop - 30, 24, 24);
     });
-    setBox(this.rowInsert, tableLeft - 30, tableTop - 12, 24, 24);
-    setBox(this.columnInsert, tableLeft - 12, tableTop - 30, 24, 24);
+    setBox(
+      this.rowInsert,
+      localX(visibleGridRect.left) - 30,
+      localY(visibleGridRect.top) - 12,
+      24,
+      24,
+    );
+    setBox(
+      this.columnInsert,
+      localX(visibleGridRect.left) - 12,
+      localY(visibleGridRect.top) - 30,
+      24,
+      24,
+    );
     setBox(
       this.rowInsertLine,
-      tableLeft,
-      tableTop,
-      Math.max(0, tableRight - tableLeft),
+      visibleGrid.left,
+      visibleGrid.top,
+      rectWidth(visibleGrid),
       2,
     );
     setBox(
       this.columnInsertLine,
-      tableLeft,
-      tableTop,
+      visibleGrid.left,
+      visibleGrid.top,
       2,
-      Math.max(0, tableBottom - tableTop),
+      rectHeight(visibleGrid),
     );
-    setBox(
-      this.rowAppend,
-      tableLeft,
-      tableBottom,
-      Math.max(24, tableRight - tableLeft - 32),
-      30,
-    );
-    setBox(
-      this.columnAppend,
-      tableRight,
-      tableTop,
-      30,
-      Math.max(24, tableBottom - tableTop - 32),
-    );
-    if (!this.drag) this.updateInsertHoverFromStoredPointer();
+    setBox(this.rowAppend, grid.left, grid.bottom + 3, 24, 24);
+    setBox(this.columnAppend, grid.right + 3, grid.top, 24, 24);
+    if (!this.drag) this.updatePointerPresentationFromStoredPointer();
+    else this.updateDragPresentation();
+    this.updatePresentation();
   }
 
   destroy(): void {
@@ -503,6 +687,12 @@ export class TableControls {
     this.element.removeEventListener("focusin", this.focusIn);
     this.element.removeEventListener("focusout", this.focusOut);
     this.element.removeEventListener("keydown", this.keyDown);
+    this.removeScrollListeners();
+    if (this.flashTimer !== undefined) {
+      this.ownerWindow?.clearTimeout(this.flashTimer);
+      this.flashTimer = undefined;
+    }
+    this.removeDragPreview();
     this.element.remove();
   }
 
@@ -512,17 +702,44 @@ export class TableControls {
     this.columnHandles = [];
     this.rowRovingIndex = null;
     this.columnRovingIndex = null;
+    this.hoveredSelection = null;
+    this.focusedSelection = null;
     this.element.replaceChildren();
-    const layer = this.stage.ownerDocument.createElement("div");
-    layer.className = "mm-table-controls-layer";
-    this.element.append(layer);
+    this.highlightLayer = this.makeLayer("mm-table-controls-highlights");
+    this.presentationLayer = this.makeLayer("mm-table-controls-presentation");
+    this.handleLayer = this.makeLayer("mm-table-controls-layer");
+    this.element.append(
+      this.highlightLayer,
+      this.presentationLayer,
+      this.handleLayer,
+    );
+    this.rowHighlight = this.makeHighlight("row");
+    this.columnHighlight = this.makeHighlight("column");
+    this.dragOriginHighlight = this.makeHighlight("drag-origin");
+    this.rowHighlight.hidden = true;
+    this.columnHighlight.hidden = true;
+    this.dragOriginHighlight.hidden = true;
+    this.highlightLayer.append(
+      this.rowHighlight,
+      this.columnHighlight,
+      this.dragOriginHighlight,
+    );
+    this.moveIndicator = this.stage.ownerDocument.createElement("div");
+    this.moveIndicator.className = "mm-table-move-indicator";
+    this.moveIndicator.hidden = true;
+    this.moveIndicator.setAttribute("aria-hidden", "true");
+    this.moveLabel = this.stage.ownerDocument.createElement("div");
+    this.moveLabel.className = "mm-table-move-label";
+    this.moveLabel.hidden = true;
+    this.moveLabel.setAttribute("aria-hidden", "true");
+    this.presentationLayer.append(this.moveIndicator, this.moveLabel);
 
     const height = this.target.table.childCount;
     const width = this.target.table.firstChild?.childCount ?? 0;
     for (let row = 1; row < height; row += 1) {
       const handle = this.makeHandle("row", row, `Select row ${row}`);
       this.rowHandles.push(handle);
-      layer.append(handle);
+      this.handleLayer.append(handle);
     }
     for (
       let column = this.target.numbered ? 1 : 0;
@@ -535,7 +752,7 @@ export class TableControls {
         `Select column ${column + 1}`,
       );
       this.columnHandles.push(handle);
-      layer.append(handle);
+      this.handleLayer.append(handle);
     }
 
     this.rowInsert = this.makeInsertButton("row", "Insert row at boundary");
@@ -547,7 +764,7 @@ export class TableControls {
     this.columnInsertLine = this.makeLine("column");
     this.rowAppend = this.makeAppendButton("row", "Add row at end");
     this.columnAppend = this.makeAppendButton("column", "Add column at end");
-    layer.append(
+    this.handleLayer.append(
       this.rowInsertLine,
       this.columnInsertLine,
       this.rowInsert,
@@ -556,6 +773,20 @@ export class TableControls {
       this.columnAppend,
     );
     this.updateSelectionState();
+  }
+
+  private makeLayer(className: string): HTMLElement {
+    const layer = this.stage.ownerDocument.createElement("div");
+    layer.className = className;
+    return layer;
+  }
+
+  private makeHighlight(axis: TableControlAxis | "drag-origin"): HTMLElement {
+    const highlight = this.stage.ownerDocument.createElement("div");
+    highlight.className = `mm-table-control-highlight mm-table-${axis}-highlight`;
+    highlight.dataset.axis = axis;
+    highlight.setAttribute("aria-hidden", "true");
+    return highlight;
   }
 
   private makeHandle(
@@ -572,9 +803,12 @@ export class TableControls {
     button.setAttribute("aria-label", label);
     button.setAttribute("aria-pressed", "false");
     button.tabIndex = -1;
+    button.hidden = true;
     button.disabled = !this.target?.supported || !this.callbacks.canEdit();
-    button.textContent = "⋮";
-    if (axis === "column") button.textContent = "⋯";
+    appendToolbarIcon(button, "table-grip", undefined, {
+      className: "mm-table-control-icon",
+      size: 14,
+    });
     button.addEventListener("pointerdown", (event) =>
       this.startDrag(event, button, { axis, index }),
     );
@@ -594,7 +828,9 @@ export class TableControls {
     button.addEventListener("focus", () => {
       if (axis === "row") this.rowRovingIndex = index;
       else this.columnRovingIndex = index;
+      this.focusedSelection = { axis, index };
       this.updateSelectionState();
+      this.updatePresentation();
     });
     return button;
   }
@@ -638,6 +874,7 @@ export class TableControls {
     button.dataset.tableControl = `${axis}-append`;
     button.setAttribute("aria-label", label);
     button.textContent = "+";
+    button.hidden = true;
     button.tabIndex = -1;
     button.disabled = !this.target?.supported || !this.callbacks.canEdit();
     button.addEventListener("pointerdown", (event) => event.preventDefault());
@@ -691,6 +928,7 @@ export class TableControls {
       if (button) button.disabled = !supported;
     if (this.rowInsert) this.rowInsert.disabled = !supported;
     if (this.columnInsert) this.columnInsert.disabled = !supported;
+    this.updatePresentation();
   }
 
   private handleForSelection(
@@ -743,6 +981,7 @@ export class TableControls {
     if (!next || next === button) return;
     if (axis === "row") this.rowRovingIndex = Number(next.dataset.index);
     else this.columnRovingIndex = Number(next.dataset.index);
+    next.hidden = false;
     next.focus();
   }
 
@@ -765,7 +1004,9 @@ export class TableControls {
       lastY: event.clientY,
       moved: false,
       boundary: null,
+      dropState: "invalid",
     };
+    source.hidden = false;
     source.dataset.suppressClick = "true";
     try {
       source.setPointerCapture(event.pointerId);
@@ -788,23 +1029,22 @@ export class TableControls {
     if (!drag.moved) {
       drag.moved = true;
       drag.source.classList.add("is-dragging");
+      this.createDragPreview(drag);
     }
-    const overTable = this.pointNearTargetTable(
-      drag.selection.axis,
-      event.clientX,
-      event.clientY,
-    );
-    drag.boundary = overTable
-      ? this.boundaryAt(drag.selection.axis, event.clientX, event.clientY)
-      : null;
-    this.showDropLine(drag.selection.axis, drag.boundary);
+    this.updateDragPresentation();
     this.scheduleAutoScroll();
   }
 
   private finishDrag(event: PointerEvent): void {
     const drag = this.drag;
     if (!drag || event.pointerId !== drag.pointerId) return;
+    drag.lastX = event.clientX;
+    drag.lastY = event.clientY;
     this.stopAutoScroll();
+    if (drag.moved) {
+      this.updateLayout();
+      this.updateDragPresentation();
+    }
     this.drag = null;
     drag.source.classList.remove("is-dragging");
     try {
@@ -813,6 +1053,11 @@ export class TableControls {
     } catch {
       // Releasing an already-lost capture is harmless.
     }
+    const canCommit =
+      drag.moved &&
+      drag.dropState === "valid" &&
+      drag.boundary !== null &&
+      this.callbacks.canMove(drag.selection, drag.boundary, drag.target);
     this.hideDropLine();
     if (!drag.moved) {
       if (!drag.source.disabled) {
@@ -823,7 +1068,7 @@ export class TableControls {
       return;
     }
     this.clearClickSuppression(drag.source);
-    if (drag.boundary !== null && this.callbacks.canEdit())
+    if (canCommit && drag.boundary !== null && this.callbacks.canEdit())
       this.callbacks.onMove(drag.selection, drag.boundary, drag.target);
     else this.callbacks.onEscape();
   }
@@ -870,20 +1115,20 @@ export class TableControls {
     clientX: number,
     clientY: number,
   ): boolean {
-    const rect = this.layout?.tableRect;
+    const rect = this.layout?.visibleGridRect;
     if (!rect || !this.target) return false;
     if (axis === "row")
       return (
-        clientX >= rect.left - 46 &&
-        clientX <= rect.right + 12 &&
+        clientX >= this.layout!.tableRect.left - 46 &&
+        clientX <= this.layout!.tableRect.right + 12 &&
         clientY >= rect.top - 12 &&
         clientY <= rect.bottom + 12
       );
     return (
       clientX >= rect.left - 12 &&
       clientX <= rect.right + 12 &&
-      clientY >= rect.top - 46 &&
-      clientY <= rect.bottom + 12
+      clientY >= this.layout!.tableRect.top - 46 &&
+      clientY <= this.layout!.tableRect.bottom + 12
     );
   }
 
@@ -893,13 +1138,14 @@ export class TableControls {
     clientY: number,
   ): number | null {
     if (!this.layout || !this.target) return null;
-    const { tableRect, rowBoundaries, columnBoundaries } = this.layout;
+    const { tableRect, visibleGridRect, rowBoundaries, columnBoundaries } =
+      this.layout;
     if (axis === "row") {
       if (
         clientX < tableRect.left - 46 ||
         clientX > tableRect.right + 12 ||
-        clientY < tableRect.top - 12 ||
-        clientY > tableRect.bottom + 12
+        clientY < visibleGridRect.top - 12 ||
+        clientY > visibleGridRect.bottom + 12
       )
         return null;
       const boundary = nearestBoundary(rowBoundaries, clientY);
@@ -910,8 +1156,8 @@ export class TableControls {
         : null;
     }
     if (
-      clientX < tableRect.left - 12 ||
-      clientX > tableRect.right + 12 ||
+      clientX < visibleGridRect.left - 12 ||
+      clientX > visibleGridRect.right + 12 ||
       clientY < tableRect.top - 46 ||
       clientY > tableRect.bottom + 12
     )
@@ -925,44 +1171,75 @@ export class TableControls {
       : null;
   }
 
-  private updateInsertHover(clientX: number, clientY: number): void {
+  private updatePointerPresentation(clientX: number, clientY: number): void {
     if (!this.layout || !this.target || !this.target.supported) {
       this.hideInsertButtons();
       return;
     }
-    const { tableRect } = this.layout;
-    const nearRows =
-      clientX >= tableRect.left - 46 && clientX <= tableRect.left + 16;
-    const nearColumns =
-      clientY >= tableRect.top - 46 && clientY <= tableRect.top + 16;
-    if (
-      nearRows &&
-      clientY >= tableRect.top - 8 &&
-      clientY <= tableRect.bottom + 8
-    ) {
-      const boundary = this.boundaryAt("row", clientX, clientY);
-      this.showInsertButton("row", boundary);
-    } else {
-      this.hideInsertButton("row");
+    const { tableRect, visibleGridRect, rowBoundaries, columnBoundaries } =
+      this.layout;
+    const nearLeftRail =
+      clientX >= tableRect.left - 38 && clientX <= visibleGridRect.left + 10;
+    const nearTopRail =
+      clientY >= tableRect.top - 38 && clientY <= visibleGridRect.top + 10;
+    const inGridX =
+      clientX >= visibleGridRect.left - 4 &&
+      clientX <= visibleGridRect.right + 4;
+    const inGridY =
+      clientY >= visibleGridRect.top - 4 &&
+      clientY <= visibleGridRect.bottom + 4;
+
+    this.hideInsertButtons(false);
+    this.hoveredSelection = null;
+    if (nearLeftRail && nearTopRail) {
+      this.updatePresentation();
+      return;
     }
-    if (
-      nearColumns &&
-      clientX >= tableRect.left - 8 &&
-      clientX <= tableRect.right + 8
-    ) {
-      const boundary = this.boundaryAt("column", clientX, clientY);
-      this.showInsertButton("column", boundary);
+    if (nearLeftRail && inGridY) {
+      const rowBoundary = nearestBoundaryWithin(
+        rowBoundaries,
+        clientY,
+        INSERT_BOUNDARY_DISTANCE,
+      );
+      if (
+        rowBoundary !== null &&
+        this.callbacks.canInsert("row", rowBoundary, this.target)
+      ) {
+        this.showInsertButton("row", rowBoundary);
+      } else {
+        const row = intervalAt(rowBoundaries, clientY);
+        if (row !== null && row >= 1)
+          this.hoveredSelection = { axis: "row", index: row };
+      }
+    } else if (nearTopRail && inGridX) {
+      const columnBoundary = nearestBoundaryWithin(
+        columnBoundaries,
+        clientX,
+        INSERT_BOUNDARY_DISTANCE,
+      );
+      if (
+        columnBoundary !== null &&
+        this.callbacks.canInsert("column", columnBoundary, this.target)
+      ) {
+        this.showInsertButton("column", columnBoundary);
+      } else {
+        const column = intervalAt(columnBoundaries, clientX);
+        const minimum = this.target.numbered ? 1 : 0;
+        if (column !== null && column >= minimum)
+          this.hoveredSelection = { axis: "column", index: column };
+      }
     } else {
-      this.hideInsertButton("column");
+      this.showAppendHover(clientX, clientY);
     }
+    this.updatePresentation();
   }
 
   private storedPointerX: number | null = null;
   private storedPointerY: number | null = null;
 
-  private updateInsertHoverFromStoredPointer(): void {
+  private updatePointerPresentationFromStoredPointer(): void {
     if (this.storedPointerX === null || this.storedPointerY === null) return;
-    this.updateInsertHover(this.storedPointerX, this.storedPointerY);
+    this.updatePointerPresentation(this.storedPointerX, this.storedPointerY);
   }
 
   private showInsertButton(
@@ -971,7 +1248,12 @@ export class TableControls {
   ): void {
     const button = axis === "row" ? this.rowInsert : this.columnInsert;
     const line = axis === "row" ? this.rowInsertLine : this.columnInsertLine;
-    if (boundary === null) {
+    if (
+      boundary === null ||
+      !this.layout ||
+      !this.target ||
+      !this.callbacks.canInsert(axis, boundary, this.target)
+    ) {
       button.hidden = true;
       line.hidden = true;
       return;
@@ -986,28 +1268,32 @@ export class TableControls {
     button.hidden = false;
     line.hidden = false;
     if (this.layout) {
-      const { tableRect, stageRect, rowBoundaries, columnBoundaries } =
+      const { stageRect, visibleGridRect, rowBoundaries, columnBoundaries } =
         this.layout;
       const localX = (client: number): number =>
         client - stageRect.left + this.stage.scrollLeft;
       const localY = (client: number): number =>
         client - stageRect.top + this.stage.scrollTop;
       if (axis === "row") {
-        const y = localY(rowBoundaries[boundary] ?? tableRect.top);
+        const y = localY(rowBoundaries[boundary] ?? visibleGridRect.top);
         line.style.top = `${Math.round(y - 1)}px`;
-        line.style.left = `${Math.round(localX(tableRect.left))}px`;
-        line.style.width = `${Math.round(tableRect.width)}px`;
+        line.style.left = `${Math.round(localX(visibleGridRect.left))}px`;
+        line.style.width = `${Math.round(rectWidth(visibleGridRect))}px`;
         line.style.height = "2px";
+        button.style.left = `${Math.round(localX(visibleGridRect.left) - 30)}px`;
         button.style.top = `${Math.round(y - 12)}px`;
       } else {
-        const x = localX(columnBoundaries[boundary] ?? tableRect.left);
+        const x = localX(columnBoundaries[boundary] ?? visibleGridRect.left);
         line.style.left = `${Math.round(x - 1)}px`;
-        line.style.top = `${Math.round(localY(tableRect.top))}px`;
+        line.style.top = `${Math.round(localY(visibleGridRect.top))}px`;
         line.style.width = "2px";
-        line.style.height = `${Math.round(tableRect.height)}px`;
+        line.style.height = `${Math.round(rectHeight(visibleGridRect))}px`;
         button.style.left = `${Math.round(x - 12)}px`;
+        button.style.top = `${Math.round(localY(visibleGridRect.top) - 30)}px`;
       }
     }
+    this.rowAppend.hidden = true;
+    this.columnAppend.hidden = true;
   }
 
   private hideInsertButton(axis: TableControlAxis): void {
@@ -1015,21 +1301,450 @@ export class TableControls {
     (axis === "row" ? this.rowInsertLine : this.columnInsertLine).hidden = true;
   }
 
-  private hideInsertButtons(): void {
+  private hideInsertButtons(clearPointer = true): void {
     if (this.rowInsert) this.hideInsertButton("row");
     if (this.columnInsert) this.hideInsertButton("column");
-    this.storedPointerX = null;
-    this.storedPointerY = null;
+    if (this.rowAppend) this.rowAppend.hidden = true;
+    if (this.columnAppend) this.columnAppend.hidden = true;
+    if (clearPointer) {
+      this.storedPointerX = null;
+      this.storedPointerY = null;
+    }
   }
 
-  private showDropLine(axis: TableControlAxis, boundary: number | null): void {
-    this.showInsertButton(axis, boundary);
-    const other = axis === "row" ? "column" : "row";
-    this.hideInsertButton(other);
+  private showAppendHover(clientX: number, clientY: number): void {
+    if (!this.layout || !this.target) return;
+    const { gridRect, visibleGridRect } = this.layout;
+    const nearBottom =
+      clientY >= gridRect.bottom - 10 && clientY <= gridRect.bottom + 32;
+    const nearRight =
+      clientX >= gridRect.right - 10 && clientX <= gridRect.right + 32;
+    if (
+      nearBottom &&
+      clientX >= visibleGridRect.left &&
+      clientX <= visibleGridRect.right &&
+      gridRect.bottom <= visibleGridRect.bottom + 1
+    )
+      this.rowAppend.hidden = false;
+    if (
+      nearRight &&
+      clientY >= visibleGridRect.top &&
+      clientY <= visibleGridRect.bottom &&
+      gridRect.right <= visibleGridRect.right + 1
+    )
+      this.columnAppend.hidden = false;
+  }
+
+  private setHoveredSelection(selection: TableControlSelection | null): void {
+    this.hoveredSelection = selection;
+    this.hideInsertButtons(false);
+    this.updatePresentation();
+  }
+
+  private selectionRect(selection: TableControlSelection): RectLike | null {
+    if (!this.layout) return null;
+    const { visibleGridRect } = this.layout;
+    const rows = this.target ? Array.from(this.target.tableElement.rows) : [];
+    const cells =
+      selection.axis === "row"
+        ? Array.from(rows[selection.index]?.cells ?? [])
+        : rows
+            .map((row) => row.cells[selection.index])
+            .filter((cell): cell is HTMLTableCellElement => Boolean(cell));
+    const raw = unionRect(cells.map((cell) => rectLike(clientRect(cell))));
+    if (!raw) return null;
+    return intersectRect(raw, visibleGridRect);
+  }
+
+  private setHighlight(
+    element: HTMLElement,
+    selection: TableControlSelection,
+    state: string,
+  ): void {
+    const rect = this.selectionRect(selection);
+    if (!rect || !this.layout || !hasRectArea(rect)) {
+      element.hidden = true;
+      return;
+    }
+    const local = {
+      left: rect.left - this.layout.stageRect.left + this.stage.scrollLeft,
+      top: rect.top - this.layout.stageRect.top + this.stage.scrollTop,
+      right: rect.right - this.layout.stageRect.left + this.stage.scrollLeft,
+      bottom: rect.bottom - this.layout.stageRect.top + this.stage.scrollTop,
+    };
+    setBox(element, local.left, local.top, rectWidth(local), rectHeight(local));
+    element.dataset.state = state;
+    element.dataset.axis = selection.axis;
+    element.dataset.index = String(selection.index);
+    element.hidden = false;
+  }
+
+  private updatePresentation(): void {
+    if (!this.target || !this.layout || !this.handleLayer) return;
+    const selected = this.target.selection ?? null;
+    const active =
+      selected ??
+      this.flashedSelection ??
+      this.focusedSelection ??
+      this.hoveredSelection;
+    const visibleSelections = new Set(
+      [
+        selected,
+        this.flashedSelection,
+        this.focusedSelection,
+        this.hoveredSelection,
+      ]
+        .filter((selection): selection is TableControlSelection =>
+          Boolean(selection),
+        )
+        .map(selectionKey),
+    );
+    if (this.focused) {
+      if (this.rowRovingIndex !== null)
+        visibleSelections.add(
+          selectionKey({ axis: "row", index: this.rowRovingIndex }),
+        );
+      if (this.columnRovingIndex !== null)
+        visibleSelections.add(
+          selectionKey({ axis: "column", index: this.columnRovingIndex }),
+        );
+    }
+    const updateHandles = (
+      axis: TableControlAxis,
+      handles: HTMLButtonElement[],
+    ): void => {
+      for (const handle of handles) {
+        const selection = {
+          axis,
+          index: Number(handle.dataset.index),
+        } satisfies TableControlSelection;
+        const key = selectionKey(selection);
+        const isSource = this.drag?.source === handle;
+        const shouldShow = Boolean(
+          this.drag ? isSource : visibleSelections.has(key),
+        );
+        handle.hidden = !shouldShow;
+        handle.classList.toggle(
+          "is-hovered",
+          this.hoveredSelection?.axis === axis &&
+            this.hoveredSelection.index === selection.index,
+        );
+        handle.classList.toggle(
+          "is-focused",
+          this.focusedSelection?.axis === axis &&
+            this.focusedSelection.index === selection.index,
+        );
+        if (this.drag && isSource) handle.dataset.state = "dragging";
+        else if (selected && selectionKey(selected) === key)
+          handle.dataset.state = "selected";
+        else if (
+          this.focusedSelection &&
+          selectionKey(this.focusedSelection) === key
+        )
+          handle.dataset.state = "focus";
+        else if (
+          this.hoveredSelection &&
+          selectionKey(this.hoveredSelection) === key
+        )
+          handle.dataset.state = "hover";
+        else handle.dataset.state = "normal";
+      }
+    };
+    updateHandles("row", this.rowHandles);
+    updateHandles("column", this.columnHandles);
+
+    this.rowHighlight.hidden = true;
+    this.columnHighlight.hidden = true;
+    if (this.drag) {
+      this.setHighlight(
+        this.dragOriginHighlight,
+        this.drag.selection,
+        "drag-origin",
+      );
+    } else {
+      this.dragOriginHighlight.hidden = true;
+      if (active) {
+        const state = selected
+          ? "selected"
+          : this.flashedSelection
+            ? "drop-flash"
+            : this.focusedSelection
+              ? "focus"
+              : "hover";
+        this.setHighlight(
+          active.axis === "row" ? this.rowHighlight : this.columnHighlight,
+          active,
+          state,
+        );
+      }
+    }
+  }
+
+  private updateDragPresentation(): void {
+    const drag = this.drag;
+    if (!drag || !this.layout || !this.target) return;
+    this.hideInsertButtons(false);
+    const overTable = this.pointNearTargetTable(
+      drag.selection.axis,
+      drag.lastX,
+      drag.lastY,
+    );
+    drag.boundary = overTable
+      ? this.boundaryAt(drag.selection.axis, drag.lastX, drag.lastY)
+      : null;
+    if (drag.boundary === null) drag.dropState = "invalid";
+    else if (
+      drag.boundary === drag.selection.index ||
+      drag.boundary === drag.selection.index + 1
+    )
+      drag.dropState = "no-change";
+    else if (this.callbacks.canMove(drag.selection, drag.boundary, drag.target))
+      drag.dropState = "valid";
+    else drag.dropState = "invalid";
+    this.updatePresentation();
+    this.updateMoveIndicator();
+    this.updateDragPreview();
+  }
+
+  private updateMoveIndicator(): void {
+    const drag = this.drag;
+    if (
+      !drag ||
+      !this.layout ||
+      !drag.moved ||
+      drag.dropState !== "valid" ||
+      drag.boundary === null
+    ) {
+      this.moveIndicator.hidden = true;
+      this.moveLabel.hidden = true;
+      return;
+    }
+    const { stageRect, visibleGridRect, rowBoundaries, columnBoundaries } =
+      this.layout;
+    const localX = (value: number): number =>
+      value - stageRect.left + this.stage.scrollLeft;
+    const localY = (value: number): number =>
+      value - stageRect.top + this.stage.scrollTop;
+    const boundary =
+      drag.selection.axis === "row"
+        ? rowBoundaries[drag.boundary]
+        : columnBoundaries[drag.boundary];
+    if (boundary === undefined) {
+      this.moveIndicator.hidden = true;
+      this.moveLabel.hidden = true;
+      return;
+    }
+    this.moveIndicator.dataset.axis = drag.selection.axis;
+    this.moveLabel.dataset.axis = drag.selection.axis;
+    const finalIndex =
+      drag.boundary > drag.selection.index ? drag.boundary - 1 : drag.boundary;
+    const sourceLabel =
+      drag.selection.axis === "row"
+        ? `Row ${drag.selection.index}`
+        : `Column ${drag.selection.index + 1}`;
+    this.moveLabel.textContent = `Move ${sourceLabel.toLowerCase()} to position ${finalIndex + 1}`;
+    if (drag.selection.axis === "row") {
+      if (boundary < visibleGridRect.top || boundary > visibleGridRect.bottom) {
+        this.moveIndicator.hidden = true;
+        this.moveLabel.hidden = true;
+        return;
+      }
+      setBox(
+        this.moveIndicator,
+        localX(visibleGridRect.left),
+        localY(boundary - 1),
+        rectWidth(visibleGridRect),
+        2,
+      );
+      this.moveLabel.style.left = `${Math.round(localX(visibleGridRect.left) + 8)}px`;
+      this.moveLabel.style.top = `${Math.round(localY(boundary) - 28)}px`;
+    } else {
+      if (boundary < visibleGridRect.left || boundary > visibleGridRect.right) {
+        this.moveIndicator.hidden = true;
+        this.moveLabel.hidden = true;
+        return;
+      }
+      setBox(
+        this.moveIndicator,
+        localX(boundary - 1),
+        localY(visibleGridRect.top),
+        2,
+        rectHeight(visibleGridRect),
+      );
+      this.moveLabel.style.left = `${Math.round(localX(boundary) + 8)}px`;
+      this.moveLabel.style.top = `${Math.round(localY(visibleGridRect.top) + 8)}px`;
+    }
+    this.moveIndicator.hidden = false;
+    this.moveLabel.hidden = false;
+  }
+
+  private createDragPreview(drag: DragState): void {
+    this.removeDragPreview();
+    const preview = this.stage.ownerDocument.createElement("div");
+    preview.className = "mm-table-drag-preview";
+    preview.dataset.axis = drag.selection.axis;
+    preview.setAttribute("aria-hidden", "true");
+    const title = this.stage.ownerDocument.createElement("div");
+    title.className = "mm-table-drag-preview-title";
+    title.textContent =
+      drag.selection.axis === "row"
+        ? `Row ${drag.selection.index}`
+        : `Column ${drag.selection.index + 1}`;
+    preview.append(title);
+    const values = this.stage.ownerDocument.createElement("div");
+    values.className = "mm-table-drag-preview-values";
+    const rows = Array.from(drag.target.tableElement.rows);
+    const rawValues: string[] = [];
+    if (drag.selection.axis === "row") {
+      const row = rows[drag.selection.index];
+      if (row) {
+        for (const cell of Array.from(row.cells).slice(0, 4))
+          rawValues.push(cell.textContent ?? "");
+      }
+    } else {
+      for (const row of rows.slice(0, 4))
+        rawValues.push(row.cells[drag.selection.index]?.textContent ?? "");
+    }
+    for (const value of rawValues) {
+      const item = this.stage.ownerDocument.createElement("div");
+      item.className = "mm-table-drag-preview-item";
+      const text = value.trim().replace(/\s+/g, " ");
+      item.textContent =
+        text.length > PREVIEW_MAX_TEXT_LENGTH
+          ? `${text.slice(0, PREVIEW_MAX_TEXT_LENGTH - 1)}…`
+          : text || "(empty)";
+      values.append(item);
+    }
+    preview.append(values);
+    this.presentationLayer.append(preview);
+    this.dragPreview = preview;
+  }
+
+  private updateDragPreview(): void {
+    if (!this.dragPreview || !this.layout || !this.drag) return;
+    const { stageRect, controlClipRect } = this.layout;
+    const localX = (value: number): number =>
+      value - stageRect.left + this.stage.scrollLeft;
+    const localY = (value: number): number =>
+      value - stageRect.top + this.stage.scrollTop;
+    const clip = {
+      left: localX(controlClipRect.left),
+      top: localY(controlClipRect.top),
+      right: localX(controlClipRect.right),
+      bottom: localY(controlClipRect.bottom),
+    };
+    const width = this.dragPreview.offsetWidth || 180;
+    const height = this.dragPreview.offsetHeight || 96;
+    const desiredLeft = localX(this.drag.lastX) + PREVIEW_OFFSET;
+    const desiredTop = localY(this.drag.lastY) + PREVIEW_OFFSET;
+    const left = Math.max(
+      clip.left + 4,
+      Math.min(desiredLeft, Math.max(clip.left + 4, clip.right - width - 4)),
+    );
+    const top = Math.max(
+      clip.top + 4,
+      Math.min(desiredTop, Math.max(clip.top + 4, clip.bottom - height - 4)),
+    );
+    this.dragPreview.style.left = `${Math.round(left)}px`;
+    this.dragPreview.style.top = `${Math.round(top)}px`;
+  }
+
+  private removeDragPreview(): void {
+    this.dragPreview?.remove();
+    this.dragPreview = null;
+  }
+
+  private clearTransientPresentation(): void {
+    if (this.rowInsert) this.hideInsertButton("row");
+    if (this.columnInsert) this.hideInsertButton("column");
+    if (this.rowAppend) this.rowAppend.hidden = true;
+    if (this.columnAppend) this.columnAppend.hidden = true;
+    if (this.moveIndicator) this.moveIndicator.hidden = true;
+    if (this.moveLabel) this.moveLabel.hidden = true;
+    if (this.dragOriginHighlight) this.dragOriginHighlight.hidden = true;
+    this.removeDragPreview();
+    this.updatePresentation();
+  }
+
+  flashSelection(selection: TableControlSelection): void {
+    if (this.destroyed) return;
+    this.flashedSelection = selection;
+    this.updatePresentation();
+    if (this.flashTimer !== undefined)
+      this.ownerWindow?.clearTimeout(this.flashTimer);
+    const clear = (): void => {
+      this.flashTimer = undefined;
+      this.flashedSelection = null;
+      this.updatePresentation();
+    };
+    if (this.ownerWindow)
+      this.flashTimer = this.ownerWindow.setTimeout(clear, DROP_FLASH_DURATION);
+    else clear();
+  }
+
+  private measureControlClip(stageRect: DOMRect): RectLike {
+    let clip = rectLike(stageRect);
+    let ancestor = this.stage.parentElement;
+    const getStyle = this.ownerWindow?.getComputedStyle.bind(this.ownerWindow);
+    while (ancestor) {
+      const style = getStyle?.(ancestor);
+      const overflow = `${style?.overflow ?? ""} ${style?.overflowX ?? ""} ${style?.overflowY ?? ""}`;
+      if (
+        overflow.includes("hidden") ||
+        overflow.includes("clip") ||
+        overflow.includes("scroll") ||
+        overflow.includes("auto")
+      ) {
+        const next = intersectRect(clip, rectLike(clientRect(ancestor)));
+        if (next) clip = next;
+      }
+      ancestor = ancestor.parentElement;
+    }
+    return clip;
+  }
+
+  private refreshScrollContainers(): void {
+    this.removeScrollListeners();
+    if (!this.target) return;
+    const candidates: HTMLElement[] = [];
+    const add = (element: HTMLElement | null): void => {
+      if (element && !candidates.includes(element)) candidates.push(element);
+    };
+    add(this.stage);
+    add(this.target.tableElement);
+    let ancestor = this.target.tableElement.parentElement;
+    while (ancestor) {
+      add(ancestor);
+      ancestor = ancestor.parentElement;
+    }
+    for (const element of candidates) {
+      const style = this.ownerWindow?.getComputedStyle(element);
+      const overflow = `${style?.overflow ?? ""} ${style?.overflowX ?? ""} ${style?.overflowY ?? ""}`;
+      const scrollable =
+        element === this.stage ||
+        element === this.target.tableElement ||
+        overflow.includes("auto") ||
+        overflow.includes("scroll") ||
+        overflow.includes("hidden");
+      if (!scrollable) continue;
+      element.addEventListener("scroll", this.scroll, { passive: true });
+      this.scrollContainers.push(element);
+    }
+  }
+
+  private removeScrollListeners(): void {
+    for (const element of this.scrollContainers)
+      element.removeEventListener("scroll", this.scroll);
+    this.scrollContainers = [];
   }
 
   private hideDropLine(): void {
+    this.moveIndicator.hidden = true;
+    this.moveLabel.hidden = true;
+    this.removeDragPreview();
+    this.dragOriginHighlight.hidden = true;
     this.hideInsertButtons();
+    this.updatePresentation();
   }
 
   private scheduleAutoScroll(): void {
@@ -1038,55 +1753,62 @@ export class TableControls {
       this.autoScrollFrame = undefined;
       const drag = this.drag;
       if (!drag || this.destroyed) return;
-      const rect = this.stage.getBoundingClientRect();
       let changed = false;
-      if (drag.lastY < rect.top + EDGE_SCROLL_DISTANCE) {
-        this.stage.scrollTop = Math.max(
-          0,
-          this.stage.scrollTop - EDGE_SCROLL_STEP,
-        );
-        changed = true;
-      } else if (drag.lastY > rect.bottom - EDGE_SCROLL_DISTANCE) {
-        this.stage.scrollTop += EDGE_SCROLL_STEP;
-        changed = true;
-      }
-      if (drag.lastX < rect.left + EDGE_SCROLL_DISTANCE) {
-        this.stage.scrollLeft = Math.max(
-          0,
-          this.stage.scrollLeft - EDGE_SCROLL_STEP,
-        );
-        changed = true;
-      } else if (drag.lastX > rect.right - EDGE_SCROLL_DISTANCE) {
-        this.stage.scrollLeft += EDGE_SCROLL_STEP;
-        changed = true;
+      let nearScrollableEdge = false;
+      for (const container of this.scrollContainers) {
+        const rect = clientRect(container);
+        const canScrollY =
+          container.scrollHeight > container.clientHeight ||
+          container === this.stage;
+        const canScrollX =
+          container.scrollWidth > container.clientWidth ||
+          container === this.stage ||
+          container === this.target?.tableElement;
+        const insideY = drag.lastY >= rect.top && drag.lastY <= rect.bottom;
+        const insideX = drag.lastX >= rect.left && drag.lastX <= rect.right;
+        if (insideY && canScrollY) {
+          if (drag.lastY < rect.top + EDGE_SCROLL_DISTANCE) {
+            const before = container.scrollTop;
+            container.scrollTop = Math.max(0, before - EDGE_SCROLL_STEP);
+            changed ||= container.scrollTop !== before;
+            nearScrollableEdge = true;
+          } else if (drag.lastY > rect.bottom - EDGE_SCROLL_DISTANCE) {
+            const before = container.scrollTop;
+            container.scrollTop = before + EDGE_SCROLL_STEP;
+            changed ||= container.scrollTop !== before;
+            nearScrollableEdge = true;
+          }
+        }
+        if (insideX && canScrollX) {
+          if (drag.lastX < rect.left + EDGE_SCROLL_DISTANCE) {
+            const before = container.scrollLeft;
+            container.scrollLeft = Math.max(0, before - EDGE_SCROLL_STEP);
+            changed ||= container.scrollLeft !== before;
+            nearScrollableEdge = true;
+          } else if (drag.lastX > rect.right - EDGE_SCROLL_DISTANCE) {
+            const before = container.scrollLeft;
+            container.scrollLeft = before + EDGE_SCROLL_STEP;
+            changed ||= container.scrollLeft !== before;
+            nearScrollableEdge = true;
+          }
+        }
       }
       if (changed) {
         this.updateLayout();
-        drag.boundary = this.boundaryAt(
-          drag.selection.axis,
-          drag.lastX,
-          drag.lastY,
-        );
-        this.showDropLine(drag.selection.axis, drag.boundary);
+        this.updateDragPresentation();
       }
-      if (
-        drag.lastY < rect.top + EDGE_SCROLL_DISTANCE ||
-        drag.lastY > rect.bottom - EDGE_SCROLL_DISTANCE ||
-        drag.lastX < rect.left + EDGE_SCROLL_DISTANCE ||
-        drag.lastX > rect.right - EDGE_SCROLL_DISTANCE
-      )
-        this.scheduleAutoScroll();
+      if (nearScrollableEdge) this.scheduleAutoScroll();
     };
-    if (typeof requestAnimationFrame === "function")
-      this.autoScrollFrame = requestAnimationFrame(tick);
-    else this.autoScrollFrame = window.setTimeout(tick, 16);
+    if (this.ownerWindow?.requestAnimationFrame)
+      this.autoScrollFrame = this.ownerWindow.requestAnimationFrame(tick);
+    else this.autoScrollFrame = this.ownerWindow?.setTimeout(tick, 16) ?? 0;
   }
 
   private stopAutoScroll(): void {
     if (this.autoScrollFrame === undefined) return;
-    if (typeof cancelAnimationFrame === "function")
-      cancelAnimationFrame(this.autoScrollFrame);
-    else window.clearTimeout(this.autoScrollFrame);
+    if (this.ownerWindow?.cancelAnimationFrame)
+      this.ownerWindow.cancelAnimationFrame(this.autoScrollFrame);
+    else this.ownerWindow?.clearTimeout(this.autoScrollFrame);
     this.autoScrollFrame = undefined;
   }
 }

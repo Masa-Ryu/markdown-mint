@@ -3109,6 +3109,18 @@ export class MarkdownEditorApp {
       onAppend: (axis, target) => this.handleTableControlAppend(axis, target),
       onMove: (selection, boundary, target) =>
         this.handleTableControlMove(selection, boundary, target),
+      canMove: (selection, boundary, target) =>
+        selection.axis === "row"
+          ? canMoveTableRowToBoundary(target.table, selection.index, boundary)
+          : canMoveTableColumnToBoundary(
+              target.table,
+              selection.index,
+              boundary,
+            ),
+      canInsert: (axis, boundary, target) =>
+        axis === "row"
+          ? canInsertTableRowAt(target.table, boundary)
+          : canInsertTableColumnAt(target.table, boundary),
       onDelete: (selection, target) =>
         this.handleTableControlDelete(selection, target),
       onEscape: () => this.clearTableStructureSelection(true),
@@ -9204,15 +9216,20 @@ export class MarkdownEditorApp {
       return;
     }
     const hovered = this.tableControlHoveredTable;
-    let target = hovered
-      ? this.tableTargetAtElement(hovered)
-      : this.tableTargetForSelection();
-    if (!hovered) target ??= this.tableTargetForStructureSelection();
+    const structured = this.tableTargetForStructureSelection();
+    const target =
+      structured ??
+      (hovered
+        ? this.tableTargetAtElement(hovered)
+        : this.tableTargetForSelection());
     this.tableControls.update(target);
     this.updateTableAuxiliaryState(target);
   }
 
   private handleTableControlHover(table: HTMLTableElement | null): void {
+    const structured = this.tableTargetForStructureSelection();
+    if (structured && table && table !== structured.tableElement) return;
+    if (structured && !table) return;
     if (this.tableControlHoveredTable === table) return;
     this.tableControlHoveredTable = table;
     this.updateTableControls();
@@ -9504,6 +9521,10 @@ export class MarkdownEditorApp {
     };
     this.updateTableToolbar();
     this.updateTableControls();
+    this.tableControls?.flashSelection({
+      axis: selection.axis,
+      index: nextIndex,
+    });
     this.tableControls?.focusFirst();
   }
 
@@ -9634,11 +9655,12 @@ export class MarkdownEditorApp {
   private focusTableControls(): void {
     if (!this.canUseTableControls()) return;
     const target =
+      this.tableTargetForStructureSelection() ??
       (this.tableControlHoveredTable
         ? this.tableTargetAtElement(this.tableControlHoveredTable)
         : null) ??
       this.tableTargetForSelection() ??
-      this.tableTargetForStructureSelection();
+      null;
     if (!target) return;
     this.tableControlHoveredTable = target.tableElement;
     this.updateTableControls();

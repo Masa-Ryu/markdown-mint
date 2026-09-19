@@ -70,9 +70,17 @@ unselected row/column drags, and vertical/horizontal scrolling on a 100-row by
 10-column table. Keyboard checks also cover the row/column roving handle groups,
 arbitrary handle focus, selection, and post-selection movement. It also captures
 light/dark/high-contrast diagnostic screenshots under
-`output/playwright/table-controls/`. Pointer movement during a drag is checked
-for zero host edits; actual VS Code focus, native IME candidate windows, and
-screen-reader announcements remain manual/native acceptance checks.
+`output/playwright/table-controls/`. The presentation case uses an empty-header
+five-column table and verifies that a wide table outer box does not move the
+actual cell-grid line, highlight, or append control. It drags the fifth column
+between columns two and three and asserts the exact result (`a b e c d`,
+`f g j h i`, `k l o m n`), while checking the text-only preview, final-position
+label, muted origin, and no-edit-before-drop invariant. Captured states include
+idle, fifth-column hover, column drag, column drop, row drag, numbered-row drag,
+wide horizontal scroll, light, dark, and high contrast. Pointer movement during
+a drag is checked for zero host edits; actual VS Code focus, native IME
+candidate windows, and screen-reader announcements remain manual/native
+acceptance checks.
 
 The server maps `/__vscode__/markdown.css` to the installed VS Code Markdown
 stylesheet before `media/document.css` is loaded. Set `VSCODE_MARKDOWN_CSS` on

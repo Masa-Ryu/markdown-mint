@@ -23,6 +23,7 @@ import tableAlignCenterAsset from "../../assets/menu/common/table-align-center.s
 import tableAlignRightAsset from "../../assets/menu/common/table-align-right.svg?raw";
 import tableNumberingAsset from "../../assets/menu/common/table-numbering.svg?raw";
 import tableDeleteAsset from "../../assets/menu/common/table-delete.svg?raw";
+import tableGripAsset from "../../assets/menu/common/table-grip.svg?raw";
 import dividerAsset from "../../assets/menu/common/divider.svg?raw";
 import formatAsset from "../../assets/menu/common/format.svg?raw";
 import undoAsset from "../../assets/menu/common/undo.svg?raw";
@@ -52,6 +53,7 @@ export type ToolbarIconName =
   | "table-align-right"
   | "table-numbering"
   | "table-delete"
+  | "table-grip"
   | "divider"
   | "format"
   | "undo"
@@ -84,6 +86,7 @@ const ICON_SOURCES: Readonly<Record<ToolbarIconName, string>> = {
   "table-align-right": tableAlignRightAsset,
   "table-numbering": tableNumberingAsset,
   "table-delete": tableDeleteAsset,
+  "table-grip": tableGripAsset,
   divider: dividerAsset,
   format: formatAsset,
   undo: undoAsset,
