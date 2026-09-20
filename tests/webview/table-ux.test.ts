@@ -1105,6 +1105,28 @@ describe("contextual table toolbar", () => {
       expect(icon?.getAttribute("aria-hidden")).toBe("true");
       expect(icon?.getAttribute("focusable")).toBe("false");
     }
+    const movementIcons = {
+      "row-move-up": "table-move-up",
+      "row-move-down": "table-move-down",
+      "col-move-left": "table-move-left",
+      "col-move-right": "table-move-right",
+    } as const;
+    for (const [action, iconName] of Object.entries(movementIcons)) {
+      const icon = toolbar.querySelector<SVGSVGElement>(
+        `[data-action="${action}"] .mm-table-toolbar-icon`,
+      );
+      expect(icon).not.toBeNull();
+      expect(icon?.dataset.icon).toBe(iconName);
+      expect(icon?.dataset.icon).not.toBe(
+        action === "row-move-up"
+          ? tableIcons["row-above"]
+          : action === "row-move-down"
+            ? tableIcons["row-below"]
+            : action === "col-move-left"
+              ? tableIcons["col-left"]
+              : tableIcons["col-right"],
+      );
+    }
     expect(
       Array.from(
         toolbar.querySelectorAll<HTMLElement>(".mm-table-toolbar-group-label"),

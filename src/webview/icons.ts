@@ -14,9 +14,13 @@ import codeBlockAsset from "../../assets/menu/common/code-block.svg?raw";
 import tableAsset from "../../assets/menu/common/table.svg?raw";
 import tableRowAboveAsset from "../../assets/menu/common/table-row-above.svg?raw";
 import tableRowBelowAsset from "../../assets/menu/common/table-row-below.svg?raw";
+import tableMoveUpAsset from "../../assets/menu/common/table-move-up.svg?raw";
+import tableMoveDownAsset from "../../assets/menu/common/table-move-down.svg?raw";
 import tableRowDeleteAsset from "../../assets/menu/common/table-row-delete.svg?raw";
 import tableColumnLeftAsset from "../../assets/menu/common/table-column-left.svg?raw";
 import tableColumnRightAsset from "../../assets/menu/common/table-column-right.svg?raw";
+import tableMoveLeftAsset from "../../assets/menu/common/table-move-left.svg?raw";
+import tableMoveRightAsset from "../../assets/menu/common/table-move-right.svg?raw";
 import tableColumnDeleteAsset from "../../assets/menu/common/table-column-delete.svg?raw";
 import tableAlignLeftAsset from "../../assets/menu/common/table-align-left.svg?raw";
 import tableAlignCenterAsset from "../../assets/menu/common/table-align-center.svg?raw";
@@ -44,9 +48,13 @@ export type ToolbarIconName =
   | "table"
   | "table-row-above"
   | "table-row-below"
+  | "table-move-up"
+  | "table-move-down"
   | "table-row-delete"
   | "table-column-left"
   | "table-column-right"
+  | "table-move-left"
+  | "table-move-right"
   | "table-column-delete"
   | "table-align-left"
   | "table-align-center"
@@ -77,9 +85,13 @@ const ICON_SOURCES: Readonly<Record<ToolbarIconName, string>> = {
   table: tableAsset,
   "table-row-above": tableRowAboveAsset,
   "table-row-below": tableRowBelowAsset,
+  "table-move-up": tableMoveUpAsset,
+  "table-move-down": tableMoveDownAsset,
   "table-row-delete": tableRowDeleteAsset,
   "table-column-left": tableColumnLeftAsset,
   "table-column-right": tableColumnRightAsset,
+  "table-move-left": tableMoveLeftAsset,
+  "table-move-right": tableMoveRightAsset,
   "table-column-delete": tableColumnDeleteAsset,
   "table-align-left": tableAlignLeftAsset,
   "table-align-center": tableAlignCenterAsset,

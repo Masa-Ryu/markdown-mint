@@ -1513,7 +1513,8 @@ source, and host edit count unchanged.
   No Cmd/Ctrl+D duplication path, Alt-drag duplication, or custom context menu
   is added; the browser and VS Code context-menu behavior remains unchanged.
 - The overlay and direct Table Toolbar are styled only in `media/webview.css`;
-  the toolbar reuses the existing table SVG assets and has no separate dashed
+  the toolbar uses the existing table SVG assets for additions and separate
+  arrow-only table-move SVG assets for movement; it has no separate dashed
   Direct/Handles group or Unicode arrow controls. `media/document.css` and
   the five required Markdown fixtures (`common-test.md`, `github-test.md`,
   `github-test-class-B.md`, `gitlab-test.md`, and `gitlab-test-class-B.md`) are

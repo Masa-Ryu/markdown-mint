@@ -86,6 +86,9 @@ acceptance checks. The integrated Table Toolbar also captures
 `table-toolbar-high-contrast.png`, checking axis-specific visibility,
 numbering-column protection, disabled boundary moves, icon labels, hidden
 button Tab order, and stable toolbar/table geometry.
+The add controls keep the table/grid icons while the four movement controls
+use separate arrow-only SVGs, and the browser assertions verify that those
+icon identities do not overlap.
 
 The server maps `/__vscode__/markdown.css` to the installed VS Code Markdown
 stylesheet before `media/document.css` is loaded. Set `VSCODE_MARKDOWN_CSS` on

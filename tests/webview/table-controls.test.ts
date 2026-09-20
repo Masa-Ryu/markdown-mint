@@ -315,6 +315,16 @@ describe("direct table controls", () => {
     expect(rowDown.disabled).toBe(false);
     expect(rowUp.tabIndex).toBe(0);
     expect(columnLeft.tabIndex).toBe(-1);
+    expect(
+      rowUp.querySelector('svg[data-icon="table-move-up"]'),
+    ).not.toBeNull();
+    expect(rowUp.querySelector('svg[data-icon="table-row-above"]')).toBeNull();
+    expect(
+      rowDown.querySelector('svg[data-icon="table-move-down"]'),
+    ).not.toBeNull();
+    expect(
+      rowDown.querySelector('svg[data-icon="table-row-below"]'),
+    ).toBeNull();
 
     const lastRowHandle = root.querySelector<HTMLButtonElement>(
       '[data-table-control="row-handle"][data-index="2"]',
@@ -335,6 +345,18 @@ describe("direct table controls", () => {
     expect(columnRight.disabled).toBe(false);
     expect(rowUp.tabIndex).toBe(-1);
     expect(columnLeft.tabIndex).toBe(0);
+    expect(
+      columnLeft.querySelector('svg[data-icon="table-move-left"]'),
+    ).not.toBeNull();
+    expect(
+      columnLeft.querySelector('svg[data-icon="table-column-left"]'),
+    ).toBeNull();
+    expect(
+      columnRight.querySelector('svg[data-icon="table-move-right"]'),
+    ).not.toBeNull();
+    expect(
+      columnRight.querySelector('svg[data-icon="table-column-right"]'),
+    ).toBeNull();
 
     const lastColumnHandle = root.querySelector<HTMLButtonElement>(
       '[data-table-control="column-handle"][data-index="1"]',

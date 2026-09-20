@@ -722,7 +722,7 @@ async function testToolbarPresentation(page) {
       up: rowState.actions["row-move-up"].icon,
       down: rowState.actions["row-move-down"].icon,
     },
-    { grip: "table-grip", up: "table-row-above", down: "table-row-below" },
+    { grip: "table-grip", up: "table-move-up", down: "table-move-down" },
   );
   assert.deepEqual(
     {
@@ -785,7 +785,7 @@ async function testToolbarPresentation(page) {
       left: columnState.actions["col-move-left"].icon,
       right: columnState.actions["col-move-right"].icon,
     },
-    { left: "table-column-left", right: "table-column-right" },
+    { left: "table-move-left", right: "table-move-right" },
   );
   assert.deepEqual(
     {

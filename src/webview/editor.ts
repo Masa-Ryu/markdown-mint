@@ -7767,15 +7767,10 @@ export class MarkdownEditorApp {
     ]);
     addGroup("Table movement", [
       ["table-controls", "", "Table controls", "table-grip"],
-      ["row-move-up", "", "Move selected row up", "table-row-above"],
-      ["row-move-down", "", "Move selected row down", "table-row-below"],
-      ["col-move-left", "", "Move selected column left", "table-column-left"],
-      [
-        "col-move-right",
-        "",
-        "Move selected column right",
-        "table-column-right",
-      ],
+      ["row-move-up", "", "Move selected row up", "table-move-up"],
+      ["row-move-down", "", "Move selected row down", "table-move-down"],
+      ["col-move-left", "", "Move selected column left", "table-move-left"],
+      ["col-move-right", "", "Move selected column right", "table-move-right"],
     ]);
     return toolbar;
   }

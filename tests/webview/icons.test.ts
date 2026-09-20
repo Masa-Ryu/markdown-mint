@@ -52,4 +52,21 @@ describe("toolbar icons", () => {
     expect(defaults.getAttribute("width")).toBe("20");
     expect(defaults.getAttribute("height")).toBe("20");
   });
+
+  it("registers movement-only table icons separately from add icons", () => {
+    const pairs = [
+      ["table-row-above", "table-move-up"],
+      ["table-row-below", "table-move-down"],
+      ["table-column-left", "table-move-left"],
+      ["table-column-right", "table-move-right"],
+    ] as const;
+    for (const [addName, moveName] of pairs) {
+      const addIcon = createToolbarIcon(addName);
+      const moveIcon = createToolbarIcon(moveName);
+      expect(addIcon.dataset.icon).toBe(addName);
+      expect(moveIcon.dataset.icon).toBe(moveName);
+      expect(moveIcon.outerHTML).not.toContain("#111827");
+      expect(moveIcon.outerHTML).not.toBe(addIcon.outerHTML);
+    }
+  });
 });
