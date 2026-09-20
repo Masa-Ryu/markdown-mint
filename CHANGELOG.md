@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.4.0
+
+- Add direct row and column table controls based on the visible cell grid,
+  including structural selection, drag previews, boundary insertion, append
+  controls, keyboard movement, numbering protection, source synchronization,
+  and Undo/Redo-safe transactions.
+- Keep drag previews bounded and readable by combining destination text with
+  the preview, using horizontal row and vertical column excerpts, and
+  supporting light, dark, and forced-color themes with visible move indicators
+  and drop feedback.
+- Integrate table movement actions into the existing Table Toolbar with
+  separate arrow-only movement icons, while retaining the existing table/grid
+  icons for row and column additions.
+
 ## 0.3.6
 
 - Show the Rich Editor Selection Toolbar for non-empty text selections within

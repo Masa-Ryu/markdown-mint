@@ -2,7 +2,7 @@
   "name": "markdown-mint",
   "displayName": "Markdown Mint — Visual Markdown Editor",
   "description": "A visual WYSIWYG Markdown editor for VS Code with powerful table editing, GitHub/GitLab Markdown, Mermaid, math, and source editing.",
-  "version": "0.3.6",
+  "version": "0.4.0",
   "publisher": "masa-ryu",
   "icon": "assets/icon/icon.png",
   "license": "MIT",
