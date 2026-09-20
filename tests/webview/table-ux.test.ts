@@ -1109,10 +1109,10 @@ describe("contextual table toolbar", () => {
       Array.from(
         toolbar.querySelectorAll<HTMLElement>(".mm-table-toolbar-group-label"),
       ).map((label) => label.textContent),
-    ).toEqual(["Row", "Column", "Align", "Rows", "Table"]);
-    expect(toolbar.querySelectorAll(".mm-table-toolbar-group")).toHaveLength(5);
+    ).toEqual(["Row", "Column", "Align", "Rows", "Table", "Table movement"]);
+    expect(toolbar.querySelectorAll(".mm-table-toolbar-group")).toHaveLength(6);
     expect(toolbar.querySelectorAll(".mm-table-toolbar-button")).toHaveLength(
-      11,
+      16,
     );
     expect(toolbar.closest(".mm-toolbar")).toBeTruthy();
     expect(toolbar.closest(".mm-stage")).toBeNull();
@@ -1473,7 +1473,7 @@ describe("contextual table toolbar", () => {
     expect(tableToolbar.hidden).toBe(false);
     expect(
       tableToolbar.querySelectorAll(".mm-table-toolbar-button"),
-    ).toHaveLength(11);
+    ).toHaveLength(16);
     expect(
       tableToolbar.querySelector('[data-action="table-numbering"]'),
     ).toBeTruthy();

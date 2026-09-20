@@ -7662,6 +7662,14 @@ export class MarkdownEditorApp {
           "data-tooltip": title,
           "aria-label": title,
         }) as HTMLButtonElement;
+        if (
+          action === "table-controls" ||
+          action === "row-move-up" ||
+          action === "row-move-down" ||
+          action === "col-move-left" ||
+          action === "col-move-right"
+        )
+          button.dataset.tableDirectControl = "true";
         if (action.startsWith("align-") || action === "table-numbering")
           button.setAttribute("aria-pressed", "false");
         const labelElement = makeElement("span", {
@@ -7757,46 +7765,18 @@ export class MarkdownEditorApp {
     addGroup("Table", [
       ["table-delete", "Delete table", "Delete table", "table-delete"],
     ]);
-    const directGroup = makeElement("div", {
-      class: "mm-table-controls-toolbar-group",
-      role: "group",
-      "aria-label": "Direct table controls",
-    });
-    const directHeading = makeElement("span", {
-      class: "mm-table-controls-toolbar-label",
-      "aria-hidden": "true",
-    });
-    directHeading.textContent = "Direct";
-    const directActions = makeElement("div", {
-      class: "mm-table-toolbar-actions",
-    });
-    const addDirectButton = (
-      action: TableToolbarAction,
-      label: string,
-      title: string,
-    ): void => {
-      const button = makeElement("button", {
-        type: "button",
-        class: "mm-table-controls-toolbar-button",
-        "data-action": action,
-        "data-table-direct-control": "true",
-        "data-tooltip": title,
-        "aria-label": title,
-      }) as HTMLButtonElement;
-      button.textContent = label;
-      button.addEventListener("mousedown", (event) => event.preventDefault());
-      button.addEventListener("click", () =>
-        this.runContextualTableAction(action),
-      );
-      directActions.append(button);
-    };
-    addDirectButton("table-controls", "Handles", "Focus table handles");
-    addDirectButton("row-move-up", "↑", "Move selected row up");
-    addDirectButton("row-move-down", "↓", "Move selected row down");
-    addDirectButton("col-move-left", "←", "Move selected column left");
-    addDirectButton("col-move-right", "→", "Move selected column right");
-    directGroup.append(directHeading, directActions);
-    toolbar.append(directGroup);
+    addGroup("Table movement", [
+      ["table-controls", "", "Table controls", "table-grip"],
+      ["row-move-up", "", "Move selected row up", "table-row-above"],
+      ["row-move-down", "", "Move selected row down", "table-row-below"],
+      ["col-move-left", "", "Move selected column left", "table-column-left"],
+      [
+        "col-move-right",
+        "",
+        "Move selected column right",
+        "table-column-right",
+      ],
+    ]);
     return toolbar;
   }
 
@@ -9165,44 +9145,54 @@ export class MarkdownEditorApp {
     if (!this.tableToolbar) return;
     const selection = target?.selection ?? null;
     for (const button of this.tableToolbar.querySelectorAll<HTMLButtonElement>(
-      ".mm-table-controls-toolbar-button",
+      '[data-table-direct-control="true"]',
     )) {
       const action = button.dataset.action;
-      let enabled = Boolean(
+      const canShow = Boolean(
         target && target.supported && this.canUseTableControls(),
       );
-      if (enabled && action === "table-controls") {
-        enabled = true;
-      } else if (enabled && selection && target) {
-        if (action === "row-move-up" || action === "row-move-down") {
-          if (selection.axis !== "row") enabled = false;
-          else {
-            const boundary =
-              selection.index + (action === "row-move-down" ? 2 : -1);
-            enabled = canMoveTableRowToBoundary(
-              target.table,
-              selection.index,
-              boundary,
-            );
-          }
-        } else if (action === "col-move-left" || action === "col-move-right") {
-          if (selection.axis !== "column") enabled = false;
-          else {
-            const boundary =
-              selection.index + (action === "col-move-right" ? 2 : -1);
-            enabled = canMoveTableColumnToBoundary(
-              target.table,
-              selection.index,
-              boundary,
-            );
-          }
-        } else {
-          enabled = false;
-        }
-      } else if (action !== "table-controls") {
-        enabled = false;
+      const isRowMove = action === "row-move-up" || action === "row-move-down";
+      const isColumnMove =
+        action === "col-move-left" || action === "col-move-right";
+      const visible =
+        canShow &&
+        (action === "table-controls" ||
+          (Boolean(selection) &&
+            ((isRowMove && selection?.axis === "row") ||
+              (isColumnMove && selection?.axis === "column"))));
+      let enabled = visible;
+      if (enabled && selection && target && isRowMove) {
+        const boundary =
+          selection.index + (action === "row-move-down" ? 2 : -1);
+        enabled = canMoveTableRowToBoundary(
+          target.table,
+          selection.index,
+          boundary,
+        );
+      } else if (enabled && selection && target && isColumnMove) {
+        const boundary =
+          selection.index + (action === "col-move-right" ? 2 : -1);
+        enabled = canMoveTableColumnToBoundary(
+          target.table,
+          selection.index,
+          boundary,
+        );
       }
+      button.hidden = !visible;
+      button.tabIndex = visible ? 0 : -1;
       button.disabled = !enabled;
+    }
+    const active = this.tableToolbar.ownerDocument.activeElement;
+    if (
+      active instanceof HTMLButtonElement &&
+      active.dataset.tableDirectControl === "true" &&
+      active.hidden
+    ) {
+      const controlsButton = this.tableToolbar.querySelector<HTMLButtonElement>(
+        '[data-action="table-controls"]:not([hidden])',
+      );
+      if (controlsButton && !controlsButton.disabled) controlsButton.focus();
+      else this.view.focus();
     }
   }
 

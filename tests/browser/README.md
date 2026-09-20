@@ -80,7 +80,12 @@ idle, fifth-column hover, column drag, column drop, row drag, numbered-row drag,
 wide horizontal scroll, light, dark, and high contrast. Pointer movement during
 a drag is checked for zero host edits; actual VS Code focus, native IME
 candidate windows, and screen-reader announcements remain manual/native
-acceptance checks.
+acceptance checks. The integrated Table Toolbar also captures
+`table-toolbar-default.png`, `table-toolbar-row-selected.png`,
+`table-toolbar-column-selected.png`, `table-toolbar-dark.png`, and
+`table-toolbar-high-contrast.png`, checking axis-specific visibility,
+numbering-column protection, disabled boundary moves, icon labels, hidden
+button Tab order, and stable toolbar/table geometry.
 
 The server maps `/__vscode__/markdown.css` to the installed VS Code Markdown
 stylesheet before `media/document.css` is loaded. Set `VSCODE_MARKDOWN_CSS` on

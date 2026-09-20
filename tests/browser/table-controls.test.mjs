@@ -593,6 +593,263 @@ async function testTablePresentation(page) {
   await page.setViewportSize({ width: 960, height: 720 });
 }
 
+async function testToolbarPresentation(page) {
+  const toolbarState = async (page) =>
+    page.evaluate(() => {
+      const toolbar = document.querySelector(".mm-table-toolbar");
+      if (!toolbar) return null;
+      const actions = [
+        "table-controls",
+        "row-move-up",
+        "row-move-down",
+        "col-move-left",
+        "col-move-right",
+      ];
+      return {
+        toolbarHidden: toolbar.hidden,
+        toolbarText: toolbar.textContent ?? "",
+        movementGroup: toolbar.querySelector(
+          '[role="group"][aria-label="Table movement"]',
+        )
+          ? getComputedStyle(
+              toolbar.querySelector(
+                '[role="group"][aria-label="Table movement"]',
+              ),
+            ).borderStyle
+          : null,
+        actions: Object.fromEntries(
+          actions.map((action) => {
+            const button = toolbar.querySelector(`[data-action="${action}"]`);
+            return [
+              action,
+              button
+                ? {
+                    hidden: button.hidden,
+                    disabled: button.disabled,
+                    tabIndex: button.tabIndex,
+                    icon: button.querySelector("svg")?.dataset.icon ?? null,
+                    text: button.textContent ?? "",
+                    ariaLabel: button.getAttribute("aria-label"),
+                  }
+                : null,
+            ];
+          }),
+        ),
+      };
+    });
+
+  const setup = async (theme = "light") => {
+    await page.setViewportSize({ width: 960, height: 720 });
+    await load(page, numberedSource(3, 3));
+    await setTheme(page, theme);
+    const table = await controlTable(page);
+    await table.locator("tbody td").first().click();
+    await page.waitForSelector(
+      '.mm-table-toolbar [data-action="table-controls"]:visible',
+    );
+    return {
+      table,
+      toolbar: page.locator(".mm-table-toolbar"),
+      state: await toolbarState(page),
+    };
+  };
+
+  const defaultPresentation = await setup();
+  assert.ok(defaultPresentation.state, "default toolbar state is missing");
+  assert.equal(
+    defaultPresentation.state.toolbarHidden,
+    false,
+    "default table toolbar was hidden",
+  );
+  assert.equal(
+    defaultPresentation.state.actions["table-controls"].hidden,
+    false,
+  );
+  for (const action of [
+    "row-move-up",
+    "row-move-down",
+    "col-move-left",
+    "col-move-right",
+  ]) {
+    assert.equal(
+      defaultPresentation.state.actions[action].hidden,
+      true,
+      `${action} was visible without a structural selection`,
+    );
+    assert.equal(
+      defaultPresentation.state.actions[action].tabIndex,
+      -1,
+      `${action} remained in the Tab order while hidden`,
+    );
+  }
+  assert.equal(
+    defaultPresentation.state.actions["table-controls"].icon,
+    "table-grip",
+  );
+  assert.doesNotMatch(
+    defaultPresentation.state.toolbarText,
+    /Direct|Handles|[↑↓←→]/,
+  );
+  assert.equal(defaultPresentation.state.movementGroup, "solid");
+  const defaultToolbarBox = await defaultPresentation.toolbar.boundingBox();
+  const defaultTableBox = await defaultPresentation.table.boundingBox();
+  assert.ok(
+    defaultToolbarBox && defaultTableBox,
+    "default toolbar geometry is unavailable",
+  );
+  await page.screenshot({
+    path: resolve(output, "table-toolbar-default.png"),
+    fullPage: false,
+  });
+
+  const rowHandle = await revealRowHandle(page, defaultPresentation.table, 1);
+  await rowHandle.click();
+  await page.waitForSelector(
+    '[data-table-control="row-handle"][data-index="1"].is-selected',
+  );
+  const rowState = await toolbarState(page);
+  assert.ok(rowState, "row toolbar state is missing");
+  assert.equal(rowState.actions["table-controls"].hidden, false);
+  assert.equal(rowState.actions["row-move-up"].hidden, false);
+  assert.equal(rowState.actions["row-move-down"].hidden, false);
+  assert.equal(rowState.actions["col-move-left"].hidden, true);
+  assert.equal(rowState.actions["col-move-right"].hidden, true);
+  assert.equal(rowState.actions["row-move-up"].disabled, true);
+  assert.equal(rowState.actions["row-move-down"].disabled, false);
+  assert.deepEqual(
+    {
+      grip: rowState.actions["table-controls"].icon,
+      up: rowState.actions["row-move-up"].icon,
+      down: rowState.actions["row-move-down"].icon,
+    },
+    { grip: "table-grip", up: "table-row-above", down: "table-row-below" },
+  );
+  assert.deepEqual(
+    {
+      grip: rowState.actions["table-controls"].ariaLabel,
+      up: rowState.actions["row-move-up"].ariaLabel,
+      down: rowState.actions["row-move-down"].ariaLabel,
+    },
+    {
+      grip: "Table controls",
+      up: "Move selected row up",
+      down: "Move selected row down",
+    },
+  );
+  const lastRowHandle = await revealRowHandle(
+    page,
+    defaultPresentation.table,
+    3,
+  );
+  await lastRowHandle.click();
+  await page.waitForSelector(
+    '[data-table-control="row-handle"][data-index="3"].is-selected',
+  );
+  const lastRowState = await toolbarState(page);
+  assert.ok(lastRowState, "last-row toolbar state is missing");
+  assert.equal(lastRowState.actions["row-move-up"].disabled, false);
+  assert.equal(lastRowState.actions["row-move-down"].disabled, true);
+  const rowToolbarBox = await defaultPresentation.toolbar.boundingBox();
+  const rowTableBox = await defaultPresentation.table.boundingBox();
+  assert.ok(
+    rowToolbarBox && rowTableBox,
+    "row toolbar geometry is unavailable",
+  );
+  assert.ok(Math.abs(rowToolbarBox.height - defaultToolbarBox.height) < 1);
+  assert.ok(Math.abs(rowTableBox.y - defaultTableBox.y) < 1);
+  await page.screenshot({
+    path: resolve(output, "table-toolbar-row-selected.png"),
+    fullPage: false,
+  });
+
+  const columnPresentation = await setup();
+  const columnHandle = await revealColumnHandle(
+    page,
+    columnPresentation.table,
+    1,
+  );
+  await columnHandle.click();
+  await page.waitForSelector(
+    '[data-table-control="column-handle"][data-index="1"].is-selected',
+  );
+  const columnState = await toolbarState(page);
+  assert.ok(columnState, "column toolbar state is missing");
+  assert.equal(columnState.actions["row-move-up"].hidden, true);
+  assert.equal(columnState.actions["row-move-down"].hidden, true);
+  assert.equal(columnState.actions["col-move-left"].hidden, false);
+  assert.equal(columnState.actions["col-move-right"].hidden, false);
+  assert.equal(columnState.actions["col-move-left"].disabled, true);
+  assert.equal(columnState.actions["col-move-right"].disabled, false);
+  assert.deepEqual(
+    {
+      left: columnState.actions["col-move-left"].icon,
+      right: columnState.actions["col-move-right"].icon,
+    },
+    { left: "table-column-left", right: "table-column-right" },
+  );
+  assert.deepEqual(
+    {
+      left: columnState.actions["col-move-left"].ariaLabel,
+      right: columnState.actions["col-move-right"].ariaLabel,
+    },
+    {
+      left: "Move selected column left",
+      right: "Move selected column right",
+    },
+  );
+  const lastColumnHandle = await revealColumnHandle(
+    page,
+    columnPresentation.table,
+    2,
+  );
+  await lastColumnHandle.click();
+  await page.waitForSelector(
+    '[data-table-control="column-handle"][data-index="2"].is-selected',
+  );
+  const lastColumnState = await toolbarState(page);
+  assert.ok(lastColumnState, "last-column toolbar state is missing");
+  assert.equal(lastColumnState.actions["col-move-left"].disabled, false);
+  assert.equal(lastColumnState.actions["col-move-right"].disabled, true);
+  const columnToolbarBox = await columnPresentation.toolbar.boundingBox();
+  const columnTableBox = await columnPresentation.table.boundingBox();
+  assert.ok(
+    columnToolbarBox && columnTableBox,
+    "column toolbar geometry is unavailable",
+  );
+  assert.ok(Math.abs(columnToolbarBox.height - defaultToolbarBox.height) < 1);
+  assert.ok(Math.abs(columnTableBox.y - defaultTableBox.y) < 1);
+  await page.screenshot({
+    path: resolve(output, "table-toolbar-column-selected.png"),
+    fullPage: false,
+  });
+
+  const darkPresentation = await setup("dark");
+  const darkRowHandle = await revealRowHandle(page, darkPresentation.table, 2);
+  await darkRowHandle.click();
+  await page.waitForSelector(
+    '[data-table-control="row-handle"][data-index="2"].is-selected',
+  );
+  await page.screenshot({
+    path: resolve(output, "table-toolbar-dark.png"),
+    fullPage: false,
+  });
+
+  const contrastPresentation = await setup("contrast");
+  const contrastColumnHandle = await revealColumnHandle(
+    page,
+    contrastPresentation.table,
+    1,
+  );
+  await contrastColumnHandle.click();
+  await page.waitForSelector(
+    '[data-table-control="column-handle"][data-index="1"].is-selected',
+  );
+  await page.screenshot({
+    path: resolve(output, "table-toolbar-high-contrast.png"),
+    fullPage: false,
+  });
+}
+
 async function testDestinationPositionLabels(page) {
   const check = async (axis, sourceIndex, destinationFor, expected) => {
     await page.setViewportSize({ width: 960, height: 720 });
@@ -1257,6 +1514,7 @@ async function main() {
     });
     page.setDefaultTimeout(10000);
     await testTablePresentation(page);
+    await testToolbarPresentation(page);
     await testDestinationPositionLabels(page);
     await testNumberedDragAndHistory(page);
     await testColumnDrag(page);

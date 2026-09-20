@@ -259,6 +259,111 @@ describe("direct table controls", () => {
     expect(editMessages(messages)).toHaveLength(1);
   });
 
+  it("integrates toolbar controls by axis and keeps hidden moves out of Tab order", () => {
+    const source = [
+      "| Name | Value |",
+      "| - | - |",
+      "| Alpha | A |",
+      "| Beta | B |",
+    ].join("\n");
+    const { app, root } = makeApp(source);
+    mockTableGeometry(app, root);
+    selectText(app, root.querySelector("tbody td")!);
+
+    const toolbar = root.querySelector<HTMLElement>(".mm-table-toolbar")!;
+    const grip = toolbar.querySelector<HTMLButtonElement>(
+      '[data-action="table-controls"]',
+    )!;
+    const rowUp = toolbar.querySelector<HTMLButtonElement>(
+      '[data-action="row-move-up"]',
+    )!;
+    const rowDown = toolbar.querySelector<HTMLButtonElement>(
+      '[data-action="row-move-down"]',
+    )!;
+    const columnLeft = toolbar.querySelector<HTMLButtonElement>(
+      '[data-action="col-move-left"]',
+    )!;
+    const columnRight = toolbar.querySelector<HTMLButtonElement>(
+      '[data-action="col-move-right"]',
+    )!;
+    expect(
+      toolbar.querySelector(".mm-table-controls-toolbar-group"),
+    ).toBeNull();
+    expect(toolbar.textContent).not.toContain("Direct");
+    expect(toolbar.textContent).not.toContain("Handles");
+    expect(grip.querySelector('svg[data-icon="table-grip"]')).not.toBeNull();
+    expect(grip.textContent).toBe("");
+    expect(grip.hidden).toBe(false);
+    expect(grip.getAttribute("aria-label")).toBe("Table controls");
+    expect(rowUp.hidden).toBe(true);
+    expect(rowDown.hidden).toBe(true);
+    expect(columnLeft.hidden).toBe(true);
+    expect(columnRight.hidden).toBe(true);
+    expect(rowUp.tabIndex).toBe(-1);
+    expect(columnLeft.tabIndex).toBe(-1);
+
+    const rowHandle = root.querySelector<HTMLButtonElement>(
+      '[data-table-control="row-handle"][data-index="1"]',
+    )!;
+    rowHandle.click();
+    expect(grip.hidden).toBe(false);
+    expect(rowUp.hidden).toBe(false);
+    expect(rowDown.hidden).toBe(false);
+    expect(columnLeft.hidden).toBe(true);
+    expect(columnRight.hidden).toBe(true);
+    expect(rowUp.disabled).toBe(true);
+    expect(rowDown.disabled).toBe(false);
+    expect(rowUp.tabIndex).toBe(0);
+    expect(columnLeft.tabIndex).toBe(-1);
+
+    const lastRowHandle = root.querySelector<HTMLButtonElement>(
+      '[data-table-control="row-handle"][data-index="2"]',
+    )!;
+    lastRowHandle.click();
+    expect(rowUp.disabled).toBe(false);
+    expect(rowDown.disabled).toBe(true);
+
+    const columnHandle = root.querySelector<HTMLButtonElement>(
+      '[data-table-control="column-handle"][data-index="0"]',
+    )!;
+    columnHandle.click();
+    expect(rowUp.hidden).toBe(true);
+    expect(rowDown.hidden).toBe(true);
+    expect(columnLeft.hidden).toBe(false);
+    expect(columnRight.hidden).toBe(false);
+    expect(columnLeft.disabled).toBe(true);
+    expect(columnRight.disabled).toBe(false);
+    expect(rowUp.tabIndex).toBe(-1);
+    expect(columnLeft.tabIndex).toBe(0);
+
+    const lastColumnHandle = root.querySelector<HTMLButtonElement>(
+      '[data-table-control="column-handle"][data-index="1"]',
+    )!;
+    lastColumnHandle.click();
+    expect(columnLeft.disabled).toBe(false);
+    expect(columnRight.disabled).toBe(true);
+
+    lastColumnHandle.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "Escape",
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    expect(columnLeft.hidden).toBe(true);
+    expect(columnRight.hidden).toBe(true);
+    expect(columnLeft.tabIndex).toBe(-1);
+    expect(columnRight.tabIndex).toBe(-1);
+    expect(grip.hidden).toBe(false);
+
+    columnHandle.click();
+    columnLeft.focus();
+    expect(document.activeElement).toBe(columnLeft);
+    selectText(app, root.querySelector("tbody td")!);
+    expect(columnLeft.hidden).toBe(true);
+    expect(document.activeElement).toBe(grip);
+  });
+
   it("shows the row destination as a body-row number and flashes the drop before selected", () => {
     vi.useFakeTimers();
     try {

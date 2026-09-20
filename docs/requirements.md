@@ -1458,7 +1458,13 @@ source, and host edit count unchanged.
   click leaves a stronger translucent range and outline until Escape or an
   ordinary cell interaction. Boundary insertion uses one small rounded `+`
   control at a valid boundary, while append controls stay small and near the
-  actual grid end without an oversized transparent hit rail.
+  actual grid end without an oversized transparent hit rail. The existing
+  Table Toolbar uses the same group/button styling and icon path: normal cells
+  show only the six-dot grip, row selection shows grip plus up/down moves, and
+  column selection shows grip plus left/right moves. Unrelated move buttons are
+  hidden and removed from the Tab order; boundary moves remain visible but are
+  disabled, and switching states does not change toolbar height or document
+  position.
 - A row or column can be moved within its current table by a real pointer drag.
   The overlay uses the explicit table document position and measured row or
   column boundaries, cancels on an invalid/outside drop, document replacement,
@@ -1506,7 +1512,9 @@ source, and host edit count unchanged.
   handle and Escape clears the selection.
   No Cmd/Ctrl+D duplication path, Alt-drag duplication, or custom context menu
   is added; the browser and VS Code context-menu behavior remains unchanged.
-- The overlay is styled only in `media/webview.css`; `media/document.css` and
+- The overlay and direct Table Toolbar are styled only in `media/webview.css`;
+  the toolbar reuses the existing table SVG assets and has no separate dashed
+  Direct/Handles group or Unicode arrow controls. `media/document.css` and
   the five required Markdown fixtures (`common-test.md`, `github-test.md`,
   `github-test-class-B.md`, `gitlab-test.md`, and `gitlab-test-class-B.md`) are
   unchanged. Theme variables provide normal highlight colors, and forced-color
@@ -1519,8 +1527,11 @@ source, and host edit count unchanged.
 - The browser presentation regression also records idle, hover, drag, drop,
   row-drag, row-drop-flash, forced-color row-drag, numbered-row-drag,
   wide-scroll, light, dark, and high-contrast screenshots under
-  `output/playwright/table-controls/`; the five required Markdown acceptance
-  fixtures remain unchanged.
+  `output/playwright/table-controls/`. It also records
+  `table-toolbar-default.png`, `table-toolbar-row-selected.png`,
+  `table-toolbar-column-selected.png`, `table-toolbar-dark.png`, and
+  `table-toolbar-high-contrast.png` for the integrated toolbar states; the five
+  required Markdown acceptance fixtures remain unchanged.
 
 ## Explicit limits
 
