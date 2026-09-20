@@ -2307,10 +2307,37 @@ function escapeLinkDestination(value: unknown, table = false): string {
     String(value ?? "").replace(/\r\n|\r|\n/g, " "),
   );
   const compact = destination;
-  if (/\s|[()<>]/.test(compact)) return `<${compact.replace(/[<>]/g, "")}>`;
+  if (/\s|[()<>]/.test(compact)) {
+    let angle = compact.replace(/[<>]/g, "");
+    if (table) {
+      angle = angle.replace(/\\/g, "\\\\").replace(/\|/g, "\\|");
+    }
+    return `<${angle}>`;
+  }
   let escaped = compact.replace(/[\\()]/g, "\\$&");
   if (table) escaped = escaped.replace(/\|/g, "\\|");
   return escaped;
+}
+
+function serializeImageAlt(value: unknown, table = false): string {
+  const source = String(value ?? "");
+  if (!table) return source.replace(/[[\]]/g, "\\$&");
+  // Image token content retains literal backslashes. Keep them byte-stable
+  // and add one table escape to every pipe, including one after a backslash.
+  const normalized = source.replace(/\r\n|\r|\n/g, " ");
+  return normalized.replace(/[[\]]/g, "\\$&").replace(/\|/g, "\\|");
+}
+
+function serializeInlineTitle(value: unknown, table = false): string {
+  const source = String(value ?? "");
+  if (!table) return source.replace(/"/g, '\\"');
+  // Titles are semantic attributes, so escape their backslashes before
+  // protecting table pipes rather than treating existing escapes as source.
+  return source
+    .replace(/\r\n|\r|\n/g, " ")
+    .replace(/\\/g, "\\\\")
+    .replace(/"/g, '\\"')
+    .replace(/\|/g, "\\|");
 }
 
 function serializeInlineMarked(
@@ -2392,7 +2419,7 @@ function serializeInlineMarked(
         lineStart,
       );
       const title = childLink.attrs.title
-        ? ` "${String(childLink.attrs.title).replace(/"/g, '\\"')}"`
+        ? ` "${serializeInlineTitle(childLink.attrs.title, table)}"`
         : "";
       output += `[${inner}](${escapeLinkDestination(childLink.attrs.href, table)}${title})`;
       lineStart = false;
@@ -2430,7 +2457,7 @@ function serializeInlineMarked(
       );
       if (link) {
         const title = link.attrs.title
-          ? ` "${String(link.attrs.title).replace(/"/g, '\\"')}"`
+          ? ` "${serializeInlineTitle(link.attrs.title, table)}"`
           : "";
         text = `[${text}](${escapeLinkDestination(link.attrs.href, table)}${title})`;
       }
@@ -2443,9 +2470,9 @@ function serializeInlineMarked(
         lineStart = false;
       } else if (child.type.name === "image") {
         closeTo(regularMarks(child));
-        const alt = String(child.attrs.alt ?? "").replace(/[[\]]/g, "\\$&");
+        const alt = serializeImageAlt(child.attrs.alt, table);
         const title = child.attrs.title
-          ? ` "${String(child.attrs.title).replace(/"/g, '\\"')}"`
+          ? ` "${serializeInlineTitle(child.attrs.title, table)}"`
           : "";
         const width = safeImageDimension(child.attrs.width);
         const height = safeImageDimension(child.attrs.height);
@@ -2458,7 +2485,7 @@ function serializeInlineMarked(
           (mark) => mark.type.name === "link" && !ignoredLink?.eq(mark),
         );
         output += link
-          ? `[${image}](${escapeLinkDestination(link.attrs.href, table)}${link.attrs.title ? ` "${String(link.attrs.title).replace(/"/g, '\\"')}"` : ""})`
+          ? `[${image}](${escapeLinkDestination(link.attrs.href, table)}${link.attrs.title ? ` "${serializeInlineTitle(link.attrs.title, table)}"` : ""})`
           : image;
         lineStart = false;
       } else if (child.type.name === "raw_inline") {
@@ -2472,7 +2499,7 @@ function serializeInlineMarked(
         closeTo(regular);
         if (link) {
           const title = link.attrs.title
-            ? ` "${String(link.attrs.title).replace(/"/g, '\\"')}"`
+            ? ` "${serializeInlineTitle(link.attrs.title, table)}"`
             : "";
           raw = `[${raw}](${escapeLinkDestination(link.attrs.href, table)}${title})`;
         }
@@ -2493,6 +2520,29 @@ function serializeInline(node: PMNode, table = false): string {
   return serializeInlineMarked(node, table);
 }
 
+/**
+ * Escape table delimiters after serializing one cell, where generated pipes
+ * cannot be confused with the row's column separators.  Inline syntax such
+ * as image alt text, link titles, and raw inline source does not share the
+ * normal text escaping path, so protecting the completed cell keeps those
+ * contexts consistent.  A pipe already protected by a backslash must not be
+ * escaped a second time.
+ */
+function escapeTableCellPipes(value: string): string {
+  let output = "";
+  let previousWasBackslash = false;
+  for (const character of value) {
+    if (character === "|") {
+      output += previousWasBackslash ? "|" : "\\|";
+      previousWasBackslash = false;
+      continue;
+    }
+    output += character;
+    previousWasBackslash = character === "\\";
+  }
+  return output;
+}
+
 function serializeTableCell(node: PMNode): string {
   // The shared schema restricts cells to one paragraph, but clipboard or
   // host integrations can still hand us a structurally malformed node.  Walk
@@ -2502,8 +2552,8 @@ function serializeTableCell(node: PMNode): string {
     .join("<br>");
   // GFM table cells cannot contain a literal newline. Preserve a newline
   // introduced through editing as the safe, portable hard-break spelling.
-  value = value.replace(/\r?\n/g, "<br>").trim();
-  return value || " ";
+  value = value.replace(/\r\n|\r|\n/g, "<br>").trim();
+  return escapeTableCellPipes(value) || " ";
 }
 
 // Details keep a nested snapshot so an edited paragraph does not regenerate
