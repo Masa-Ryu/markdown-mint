@@ -544,25 +544,42 @@ textarea:focus-visible {
   border: 1px solid transparent;
   border-radius: 3px;
   pointer-events: none;
-  background: rgba(0, 127, 212, 0.08);
+  border-color: color-mix(in srgb, var(--mm-control-border) 68%, transparent);
+  background: color-mix(
+    in srgb,
+    var(--mm-control-hover-background) 55%,
+    transparent
+  );
 }
 .mm-table-control-highlight[data-state="hover"],
 .mm-table-control-highlight[data-state="focus"] {
-  border-color: rgba(0, 127, 212, 0.42);
-  background: rgba(0, 127, 212, 0.1);
+  border-color: color-mix(in srgb, var(--mm-focus-border) 58%, transparent);
+  background: color-mix(
+    in srgb,
+    var(--mm-control-hover-background) 78%,
+    transparent
+  );
 }
 .mm-table-control-highlight[data-state="selected"] {
-  border-color: var(--vscode-focusBorder, #007fd4);
-  background: rgba(0, 127, 212, 0.18);
+  border-color: var(--mm-focus-border);
+  background: color-mix(
+    in srgb,
+    var(--mm-control-active-background) 84%,
+    transparent
+  );
 }
 .mm-table-control-highlight[data-state="drop-flash"] {
-  border-color: var(--vscode-focusBorder, #007fd4);
-  background: rgba(0, 127, 212, 0.2);
+  border-color: var(--mm-focus-border);
+  background: color-mix(
+    in srgb,
+    var(--mm-control-active-background) 92%,
+    transparent
+  );
   animation: mm-table-drop-flash 520ms ease-out both;
 }
 .mm-table-control-highlight[data-state="drag-origin"] {
   border: 1px dashed var(--vscode-descriptionForeground, #6a737d);
-  background: rgba(127, 127, 127, 0.08);
+  background: color-mix(in srgb, var(--mm-control-background) 82%, transparent);
   opacity: 0.7;
 }
 .mm-table-controls button {
@@ -682,49 +699,36 @@ textarea:focus-visible {
 }
 .mm-table-move-indicator[data-axis="row"]::before,
 .mm-table-move-indicator[data-axis="row"]::after {
-  width: 7px;
-  height: 2px;
-  top: 0;
+  width: 10px;
+  height: 4px;
+  top: -1px;
+  border-radius: 2px;
 }
 .mm-table-move-indicator[data-axis="row"]::before {
-  left: 0;
+  left: -4px;
 }
 .mm-table-move-indicator[data-axis="row"]::after {
-  right: 0;
+  right: -4px;
 }
 .mm-table-move-indicator[data-axis="column"]::before,
 .mm-table-move-indicator[data-axis="column"]::after {
-  width: 2px;
-  height: 7px;
-  left: 0;
+  width: 4px;
+  height: 10px;
+  left: -1px;
+  border-radius: 2px;
 }
 .mm-table-move-indicator[data-axis="column"]::before {
-  top: 0;
+  top: -4px;
 }
 .mm-table-move-indicator[data-axis="column"]::after {
-  bottom: 0;
-}
-.mm-table-move-label {
-  position: absolute;
-  z-index: 3;
-  max-width: 220px;
-  padding: 2px 6px;
-  overflow: hidden;
-  border: 1px solid var(--vscode-focusBorder, #007fd4);
-  border-radius: 3px;
-  color: var(--vscode-editor-foreground, #1f2328);
-  background: var(--vscode-editor-background, #ffffff);
-  font-size: 11px;
-  line-height: 16px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  pointer-events: none;
+  bottom: -4px;
 }
 .mm-table-drag-preview {
   position: absolute;
   z-index: 4;
   min-width: 116px;
-  max-width: 180px;
+  max-width: min(280px, calc(100vw - 16px));
+  max-height: min(220px, calc(100vh - 16px));
   padding: 6px 8px;
   overflow: hidden;
   border: 1px solid var(--vscode-focusBorder, #007fd4);
@@ -745,8 +749,47 @@ textarea:focus-visible {
   display: grid;
   gap: 1px;
 }
+.mm-table-drag-preview[data-axis="row"] {
+  min-width: 0;
+}
+.mm-table-drag-preview[data-axis="row"] .mm-table-drag-preview-values {
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+  max-width: 100%;
+}
 .mm-table-drag-preview-item {
   overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mm-table-drag-preview[data-axis="row"] .mm-table-drag-preview-item {
+  min-width: 0;
+  padding: 0 6px;
+  border-inline-start: 1px solid var(--mm-control-border);
+}
+.mm-table-drag-preview[data-axis="row"]
+  .mm-table-drag-preview-item:first-child {
+  padding-inline-start: 0;
+  border-inline-start: 0;
+}
+.mm-table-drag-preview-item.is-empty {
+  color: var(--vscode-descriptionForeground, var(--mm-control-foreground));
+  font-style: italic;
+  opacity: 0.72;
+}
+.mm-table-drag-preview-item-excerpt {
+  flex: 0 0 auto;
+  color: var(--vscode-descriptionForeground, var(--mm-control-foreground));
+  font-weight: 600;
+}
+.mm-table-drag-preview-destination {
+  margin-top: 5px;
+  padding-top: 5px;
+  overflow: hidden;
+  border-top: 1px solid var(--mm-control-border);
+  color: var(--mm-control-foreground);
+  font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1858,6 +1901,39 @@ body.vscode-high-contrast-light .mm-file-autocomplete-option.is-active {
   .mm-file-autocomplete-option.is-active {
     outline: 1px solid Highlight;
     outline-offset: -1px;
+  }
+  .mm-table-control-highlight {
+    border-color: CanvasText;
+    background: transparent;
+  }
+  .mm-table-control-highlight[data-state="hover"],
+  .mm-table-control-highlight[data-state="focus"],
+  .mm-table-control-highlight[data-state="selected"],
+  .mm-table-control-highlight[data-state="drop-flash"] {
+    border-color: Highlight;
+    background: transparent;
+  }
+  .mm-table-control-highlight[data-state="drag-origin"] {
+    border-color: CanvasText;
+    background: transparent;
+  }
+  .mm-table-move-indicator {
+    background: CanvasText;
+    outline: 1px solid CanvasText;
+    outline-offset: 0;
+  }
+  .mm-table-move-indicator::before,
+  .mm-table-move-indicator::after {
+    background: Highlight;
+  }
+  .mm-table-drag-preview {
+    border-color: Highlight;
+    color: CanvasText;
+    background: Canvas;
+    box-shadow: 0 0 0 1px CanvasText;
+  }
+  .mm-table-drag-preview-destination {
+    border-color: Highlight;
   }
   .mm-popup-toggle[aria-expanded="true"],
   .mm-table-controls button:hover:not(:disabled),

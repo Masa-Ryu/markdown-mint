@@ -1469,14 +1469,20 @@ source, and host edit count unchanged.
   alignment attributes; moved, deleted, and untouched cells retain their
   ProseMirror content and marks.
 - During a drag, the original range remains lightly muted, a pointer-following
-  preview is built from bounded `textContent` only, and a separate move-only
-  line/label marks a valid insertion boundary. The preview is pointer-inert,
-  aria-hidden, clamped to the control viewport, and limited to the header/row
-  label plus at most three column values or four row values. Invalid and no-op
-  destinations show no move line; Escape clears the preview, origin, line,
-  pointer capture, and auto-scroll before a later pointerup can commit. A
-  successful drop briefly flashes the final structural range and then keeps
-  the normal structural selection.
+  preview is built from bounded `textContent` only, and a valid insertion
+  boundary keeps only its line on the table. The preview card includes the
+  source label, bounded cell values, and the `Move to position N` explanation;
+  there is no separate destination label. Column values are vertical and row
+  values are horizontal with restrained separators; empty headers remain
+  identifiable as `Column N`, numbered rows retain their number and body
+  identifiers, and an ellipsis marks omitted values. The preview is
+  pointer-inert, aria-hidden, and placed from candidates that account for the
+  pointer, visible grid, and move line while staying inside the viewport clip.
+  Invalid and no-op destinations show no move line or destination explanation;
+  Escape clears the preview, origin, line, pointer capture, and auto-scroll
+  before a later pointerup can commit. A successful drop briefly gives the
+  final structural range a targeted drop flash and then keeps the normal
+  structural selection; stale table targets and timers are discarded.
 - Direct transformations live in `src/webview/tableCommands.ts` and validate
   the supplied table position, rectangular unit-cell shape, and no-op
   boundary. Existing merged or otherwise unsupported tables continue to use
@@ -1503,13 +1509,18 @@ source, and host edit count unchanged.
 - The overlay is styled only in `media/webview.css`; `media/document.css` and
   the five required Markdown fixtures (`common-test.md`, `github-test.md`,
   `github-test-class-B.md`, `gitlab-test.md`, and `gitlab-test-class-B.md`) are
-  unchanged. `npm run test:browser:tables` covers real Chromium pointer,
-  keyboard, scrolling, numbering, source-sync, and host-history paths. Native
-  VS Code focus/IME behavior remains a separate acceptance/manual check.
+  unchanged. Theme variables provide normal highlight colors, and forced-color
+  mode uses system-color borders and visible line caps rather than relying on
+  background alone. `npm run test:browser:tables` covers real Chromium
+  pointer, keyboard, scrolling, numbering, source-sync, history, preview
+  clipping, rectangle overlap, light/dark/forced-color presentation, and the
+  drop-flash path. Native VS Code focus/IME behavior remains a separate
+  acceptance/manual check.
 - The browser presentation regression also records idle, hover, drag, drop,
-  row-drag, numbered-row-drag, wide-scroll, light, dark, and high-contrast
-  screenshots under `output/playwright/table-controls/`; the five required
-  Markdown acceptance fixtures remain unchanged.
+  row-drag, row-drop-flash, forced-color row-drag, numbered-row-drag,
+  wide-scroll, light, dark, and high-contrast screenshots under
+  `output/playwright/table-controls/`; the five required Markdown acceptance
+  fixtures remain unchanged.
 
 ## Explicit limits
 

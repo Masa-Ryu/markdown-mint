@@ -48,7 +48,7 @@ const smallSource = [
 
 const emptyHeaderSource = [
   "|   |   |   |   |   |",
-  "| --- | --- | --- | --- | --- |",
+  "| - | - | - | - | - |",
   "| a | b | c | d | e |",
   "| f | g | h | i | j |",
   "| k | l | m | n | o |",
@@ -204,6 +204,49 @@ async function revealColumnHandle(page, table, columnIndex) {
   return handle;
 }
 
+async function dragPresentationGeometry(page, pointerX, pointerY) {
+  return page.evaluate(
+    ({ pointerX, pointerY }) => {
+      const toRect = (element) => {
+        if (!element || element.hidden) return null;
+        const rect = element.getBoundingClientRect();
+        return {
+          left: rect.left,
+          top: rect.top,
+          right: rect.right,
+          bottom: rect.bottom,
+        };
+      };
+      const overlaps = (first, second) =>
+        Boolean(
+          first &&
+          second &&
+          first.right > second.left &&
+          first.left < second.right &&
+          first.bottom > second.top &&
+          first.top < second.bottom,
+        );
+      const contains = (pointX, pointY, rect) =>
+        Boolean(
+          rect &&
+          pointX >= rect.left &&
+          pointX <= rect.right &&
+          pointY >= rect.top &&
+          pointY <= rect.bottom,
+        );
+      const preview = toRect(document.querySelector(".mm-table-drag-preview"));
+      const line = toRect(document.querySelector(".mm-table-move-indicator"));
+      return {
+        preview,
+        line,
+        previewLineOverlap: overlaps(preview, line),
+        pointerInsidePreview: contains(pointerX, pointerY, preview),
+      };
+    },
+    { pointerX, pointerY },
+  );
+}
+
 async function testTablePresentation(page) {
   await page.setViewportSize({ width: 960, height: 720 });
   await load(page, emptyHeaderSource);
@@ -280,16 +323,12 @@ async function testTablePresentation(page) {
   const handleBox = await fifthHandle.boundingBox();
   assert.ok(handleBox, "fifth column handle geometry is unavailable");
   const beforeDragEdits = await editCount(page);
-  await page.mouse.move(
-    handleBox.x + handleBox.width / 2,
-    handleBox.y + handleBox.height / 2,
-  );
+  const dragY = handleBox.y + handleBox.height / 2;
+  await page.mouse.move(handleBox.x + handleBox.width / 2, dragY);
   await page.mouse.down();
-  await page.mouse.move(
-    secondHeaderBox.x + secondHeaderBox.width,
-    fifthHeaderBox.y + fifthHeaderBox.height / 2,
-    { steps: 12 },
-  );
+  await page.mouse.move(secondHeaderBox.x + secondHeaderBox.width, dragY, {
+    steps: 12,
+  });
   await page.waitForSelector(".mm-table-drag-preview:visible");
   const previewText = await page
     .locator(".mm-table-drag-preview")
@@ -297,10 +336,11 @@ async function testTablePresentation(page) {
   assert.match(previewText ?? "", /e/);
   assert.match(previewText ?? "", /j/);
   assert.match(previewText ?? "", /o/);
+  assert.match(previewText ?? "", /Move to position 3/);
   assert.equal(
-    await page.locator(".mm-table-move-label:visible").textContent(),
-    "Move column 5 to position 3",
-    "column drag label did not use the final post-removal position",
+    await page.locator(".mm-table-move-label").count(),
+    0,
+    "column drag retained the independent move label",
   );
   assert.equal(
     await page
@@ -333,6 +373,22 @@ async function testTablePresentation(page) {
       dragGeometry.gridBottom - dragGeometry.gridTop - 3,
   );
   assert.ok(dragGeometry.line.x < dragGeometry.gridRight);
+  const columnPresentation = await dragPresentationGeometry(
+    page,
+    secondHeaderBox.x + secondHeaderBox.width,
+    dragY,
+  );
+  assert.ok(columnPresentation.preview, "column drag preview has no rectangle");
+  assert.equal(
+    columnPresentation.previewLineOverlap,
+    false,
+    "column drag preview covered the move line",
+  );
+  assert.equal(
+    columnPresentation.pointerInsidePreview,
+    false,
+    "column drag preview covered the pointer",
+  );
   assert.equal(
     await editCount(page),
     beforeDragEdits,
@@ -367,21 +423,103 @@ async function testTablePresentation(page) {
   const rowHandleBox = await rowHandle.boundingBox();
   const firstBodyRow = await table.locator("tr").nth(1).boundingBox();
   assert.ok(rowHandleBox && firstBodyRow, "row drag geometry is unavailable");
-  await page.mouse.move(
-    rowHandleBox.x + rowHandleBox.width / 2,
-    rowHandleBox.y + rowHandleBox.height / 2,
-  );
+  const rowDragX = rowHandleBox.x + rowHandleBox.width / 2;
+  const rowDragStartY = rowHandleBox.y + rowHandleBox.height / 2;
+  const rowDropY = firstBodyRow.y;
+  const beforeRowDragEdits = await editCount(page);
+  await page.mouse.move(rowDragX, rowDragStartY);
   await page.mouse.down();
-  await page.mouse.move(
-    rowHandleBox.x + rowHandleBox.width / 2,
-    firstBodyRow.y + firstBodyRow.height,
-    { steps: 10 },
-  );
+  await page.mouse.move(rowDragX, rowDropY, { steps: 10 });
   await page.waitForSelector(".mm-table-drag-preview:visible");
+  const rowPreviewText = await page
+    .locator(".mm-table-drag-preview")
+    .textContent();
+  assert.match(rowPreviewText ?? "", /Move to position 1/);
+  assert.equal(
+    await page.locator(".mm-table-drag-preview").evaluate((element) => {
+      const values = element.querySelector(".mm-table-drag-preview-values");
+      return values ? getComputedStyle(values).display : "";
+    }),
+    "flex",
+    "row drag preview was not laid out horizontally",
+  );
+  assert.equal(
+    await page.locator(".mm-table-move-label").count(),
+    0,
+    "row drag retained the independent move label",
+  );
+  const rowPresentation = await dragPresentationGeometry(
+    page,
+    rowDragX,
+    rowDropY,
+  );
+  assert.equal(
+    rowPresentation.previewLineOverlap,
+    false,
+    "row drag preview covered the move line",
+  );
+  assert.equal(
+    rowPresentation.pointerInsidePreview,
+    false,
+    "row drag preview covered the pointer",
+  );
+  assert.equal(
+    await page
+      .locator(
+        ".mm-table-row-insert:visible, .mm-table-column-insert:visible, .mm-table-row-append:visible, .mm-table-column-append:visible",
+      )
+      .count(),
+    0,
+    "row drag presentation exposed an insertion or append control",
+  );
+  assert.equal(
+    await editCount(page),
+    beforeRowDragEdits,
+    "row preview edited the document",
+  );
   await page.screenshot({
     path: resolve(output, "table-controls-row-drag.png"),
     fullPage: false,
   });
+  await setTheme(page, "contrast");
+  await page.screenshot({
+    path: resolve(output, "table-controls-row-drag-forced-colors.png"),
+    fullPage: false,
+  });
+  const forcedRowPresentation = await page.evaluate(() => {
+    const indicator = document.querySelector(".mm-table-move-indicator");
+    const highlight = document.querySelector(
+      ".mm-table-drag-origin-highlight:not([hidden])",
+    );
+    if (!indicator || !highlight) return null;
+    const indicatorStyle = getComputedStyle(indicator);
+    const highlightStyle = getComputedStyle(highlight);
+    return {
+      indicatorBackground: indicatorStyle.backgroundColor,
+      indicatorBorder: indicatorStyle.borderColor,
+      highlightBorder: highlightStyle.borderColor,
+      highlightBackground: highlightStyle.backgroundColor,
+    };
+  });
+  assert.ok(
+    forcedRowPresentation,
+    "forced-colors drag presentation is missing",
+  );
+  assert.notEqual(
+    forcedRowPresentation.indicatorBackground,
+    "rgba(0, 0, 0, 0)",
+    "forced-colors move line had no visible color",
+  );
+  assert.notEqual(
+    forcedRowPresentation.highlightBorder,
+    "rgba(0, 0, 0, 0)",
+    "forced-colors move target had no visible border",
+  );
+  assert.match(
+    (await page.locator(".mm-table-drag-preview").textContent()) ?? "",
+    /Move to position 1/,
+    "forced-colors preview clipped the destination text",
+  );
   await page.mouse.up();
   await page.waitForFunction(
     (expected) =>
@@ -389,7 +527,31 @@ async function testTablePresentation(page) {
         (message) => message.type === "edit",
       ).length ===
       expected + 1,
-    0,
+    beforeRowDragEdits,
+  );
+  const flashState = await page
+    .locator(".mm-table-row-highlight:not([hidden])")
+    .getAttribute("data-state");
+  assert.equal(
+    flashState,
+    "drop-flash",
+    "row drop did not show the drop flash immediately",
+  );
+  await page.screenshot({
+    path: resolve(output, "table-controls-row-drop-flash.png"),
+    fullPage: false,
+  });
+  const movedRows = await modelSnapshot(page);
+  assert.deepEqual(movedRows.rows[1], ["k", "l", "m", "n", "o"]);
+  assert.deepEqual(movedRows.rows[2], ["a", "b", "c", "d", "e"]);
+  assert.deepEqual(movedRows.rows[3], ["f", "g", "h", "i", "j"]);
+  await page.waitForTimeout(560);
+  assert.equal(
+    await page
+      .locator(".mm-table-row-highlight:not([hidden])")
+      .getAttribute("data-state"),
+    "selected",
+    "selected row highlight did not return after the drop flash",
   );
 
   await page.setViewportSize({ width: 640, height: 720 });
@@ -429,6 +591,105 @@ async function testTablePresentation(page) {
     fullPage: false,
   });
   await page.setViewportSize({ width: 960, height: 720 });
+}
+
+async function testDestinationPositionLabels(page) {
+  const check = async (axis, sourceIndex, destinationFor, expected) => {
+    await page.setViewportSize({ width: 960, height: 720 });
+    await load(page, emptyHeaderSource);
+    await setTheme(page, "light");
+    const table = await controlTable(page);
+    const handle =
+      axis === "column"
+        ? await revealColumnHandle(page, table, sourceIndex)
+        : await revealRowHandle(page, table, sourceIndex);
+    const handleBox = await handle.boundingBox();
+    assert.ok(handleBox, `${axis} label source has no handle geometry`);
+    const startX = handleBox.x + handleBox.width / 2;
+    const startY = handleBox.y + handleBox.height / 2;
+    const destination = await destinationFor(table, startX, startY);
+    await page.mouse.move(startX, startY);
+    await page.mouse.down();
+    await page.mouse.move(destination.x, destination.y, { steps: 8 });
+    await page.waitForSelector(".mm-table-drag-preview:visible");
+    assert.match(
+      (await page.locator(".mm-table-drag-preview").textContent()) ?? "",
+      new RegExp(`Move to position ${expected}`),
+      `${axis} destination label used the wrong post-removal position`,
+    );
+    assert.equal(
+      await page.locator(".mm-table-move-label").count(),
+      0,
+      `${axis} destination retained the independent move label`,
+    );
+    await page.mouse.up();
+    await page.waitForFunction(
+      () =>
+        window.__markdownMintHarness.messages.filter(
+          (message) => message.type === "edit",
+        ).length === 1,
+    );
+  };
+
+  await check(
+    "column",
+    4,
+    async (table) => {
+      const firstHeader = await table
+        .locator("tr")
+        .first()
+        .locator("th, td")
+        .first()
+        .boundingBox();
+      assert.ok(firstHeader, "column start label geometry is unavailable");
+      const handle = await revealColumnHandle(page, table, 4);
+      const handleBox = await handle.boundingBox();
+      assert.ok(handleBox, "column start label handle has no geometry");
+      return {
+        x: firstHeader.x,
+        y: handleBox.y + handleBox.height / 2,
+      };
+    },
+    1,
+  );
+
+  await check(
+    "column",
+    0,
+    async (table, _startX, startY) => {
+      const lastHeader = await table
+        .locator("tr")
+        .first()
+        .locator("th, td")
+        .last()
+        .boundingBox();
+      assert.ok(lastHeader, "column end label geometry is unavailable");
+      return { x: lastHeader.x + lastHeader.width, y: startY };
+    },
+    5,
+  );
+
+  await check(
+    "row",
+    3,
+    async (table, startX) => {
+      const firstBody = await table.locator("tr").nth(1).boundingBox();
+      assert.ok(firstBody, "row start label geometry is unavailable");
+      return { x: startX, y: firstBody.y };
+    },
+    1,
+  );
+
+  await check(
+    "row",
+    1,
+    async (table, startX) => {
+      const lastBody = await table.locator("tr").last().boundingBox();
+      assert.ok(lastBody, "row end label geometry is unavailable");
+      return { x: startX, y: lastBody.y + lastBody.height };
+    },
+    3,
+  );
 }
 
 async function testNumberedDragAndHistory(page) {
@@ -996,6 +1257,7 @@ async function main() {
     });
     page.setDefaultTimeout(10000);
     await testTablePresentation(page);
+    await testDestinationPositionLabels(page);
     await testNumberedDragAndHistory(page);
     await testColumnDrag(page);
     await testEscapeDuringUnselectedDrag(page);

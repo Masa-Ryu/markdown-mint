@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CellSelection, TableMap } from "prosemirror-tables";
 import type { Node as PMNode } from "prosemirror-model";
 import { TextSelection } from "prosemirror-state";
@@ -246,6 +246,10 @@ describe("direct table controls", () => {
         ?.textContent,
     ).toContain("e");
     expect(
+      controls.querySelector<HTMLElement>(".mm-table-drag-preview")
+        ?.textContent,
+    ).toContain("Move to position 3");
+    expect(
       controls.querySelector<HTMLElement>(".mm-table-move-indicator")!.hidden,
     ).toBe(false);
     expect(columnInsertLine.hidden).toBe(true);
@@ -253,6 +257,51 @@ describe("direct table controls", () => {
     expect(app.view.state.doc).toBe(before);
     columnHandle.dispatchEvent(pointer("pointerup", 260, 80));
     expect(editMessages(messages)).toHaveLength(1);
+  });
+
+  it("shows the row destination as a body-row number and flashes the drop before selected", () => {
+    vi.useFakeTimers();
+    try {
+      const source = [
+        "|   |   |   |   |   |",
+        "| - | - | - | - | - |",
+        "| a | b | c | d | e |",
+        "| f | g | h | i | j |",
+        "| k | l | m | n | o |",
+      ].join("\n");
+      const { app, root, messages } = makeApp(source);
+      mockTableGeometry(app, root);
+      selectText(app, root.querySelector("tbody td")!);
+
+      const controls = root.querySelector<HTMLElement>(".mm-table-controls")!;
+      const stage = root.querySelector<HTMLElement>(".mm-stage")!;
+      const rowHandle = controls.querySelector<HTMLButtonElement>(
+        '[data-table-control="row-handle"][data-index="3"]',
+      )!;
+      rowHandle.dispatchEvent(pointer("pointerdown", 10, 160));
+      stage.dispatchEvent(pointer("pointermove", 30, 60));
+      expect(
+        controls.querySelector<HTMLElement>(".mm-table-drag-preview")
+          ?.textContent,
+      ).toContain("Move to position 1");
+      expect(
+        controls.querySelector<HTMLElement>(".mm-table-drag-preview")?.dataset
+          .axis,
+      ).toBe("row");
+      rowHandle.dispatchEvent(pointer("pointerup", 30, 60));
+
+      expect(editMessages(messages)).toHaveLength(1);
+      const highlight = controls.querySelector<HTMLElement>(
+        ".mm-table-row-highlight",
+      )!;
+      expect(highlight.hidden).toBe(false);
+      expect(highlight.dataset.state).toBe("drop-flash");
+      vi.runOnlyPendingTimers();
+      expect(highlight.hidden).toBe(false);
+      expect(highlight.dataset.state).toBe("selected");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("selects a row without editing and moves it through a real pointer path", () => {

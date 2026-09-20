@@ -95,6 +95,7 @@ const EDGE_SCROLL_STEP = 22;
 const INSERT_BOUNDARY_DISTANCE = 12;
 const PREVIEW_OFFSET = 14;
 const PREVIEW_MAX_TEXT_LENGTH = 42;
+const PREVIEW_MAX_VALUES = 4;
 const DROP_FLASH_DURATION = 520;
 
 function finite(value: number): boolean {
@@ -124,6 +125,19 @@ function rectHeight(value: RectLike): number {
 
 function hasRectArea(value: RectLike): boolean {
   return rectWidth(value) > 0 && rectHeight(value) > 0;
+}
+
+function rectsOverlap(first: RectLike, second: RectLike): boolean {
+  return !(
+    first.right <= second.left ||
+    first.left >= second.right ||
+    first.bottom <= second.top ||
+    first.top >= second.bottom
+  );
+}
+
+function pointInRect(x: number, y: number, rect: RectLike): boolean {
+  return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
 }
 
 function unionRect(rects: RectLike[]): RectLike | null {
@@ -273,11 +287,14 @@ export class TableControls {
   private columnHighlight!: HTMLElement;
   private dragOriginHighlight!: HTMLElement;
   private moveIndicator!: HTMLElement;
-  private moveLabel!: HTMLElement;
   private dragPreview: HTMLElement | null = null;
+  private dragPreviewDestination: HTMLElement | null = null;
   private hoveredSelection: TableControlSelection | null = null;
   private focusedSelection: TableControlSelection | null = null;
   private flashedSelection: TableControlSelection | null = null;
+  private flashedTable: HTMLTableElement | null = null;
+  private flashedTablePos: number | null = null;
+  private flashedDocumentGeneration: number | null = null;
   private flashTimer: number | undefined;
   private scrollContainers: HTMLElement[] = [];
   private destroyed = false;
@@ -488,6 +505,7 @@ export class TableControls {
       this.target.numbered !== target.numbered ||
       this.target.supported !== target.supported;
     if (changed && this.drag) this.cancelDrag(false);
+    if (changed) this.clearFlashState();
     this.target = target;
     if (changed) {
       this.renderTarget();
@@ -512,7 +530,7 @@ export class TableControls {
     this.clearTransientPresentation();
     this.hoveredSelection = null;
     this.focusedSelection = null;
-    this.flashedSelection = null;
+    this.clearFlashState();
     this.element.hidden = true;
     this.element.setAttribute("aria-hidden", "true");
   }
@@ -692,6 +710,10 @@ export class TableControls {
       this.ownerWindow?.clearTimeout(this.flashTimer);
       this.flashTimer = undefined;
     }
+    this.flashedSelection = null;
+    this.flashedTable = null;
+    this.flashedTablePos = null;
+    this.flashedDocumentGeneration = null;
     this.removeDragPreview();
     this.element.remove();
   }
@@ -728,11 +750,7 @@ export class TableControls {
     this.moveIndicator.className = "mm-table-move-indicator";
     this.moveIndicator.hidden = true;
     this.moveIndicator.setAttribute("aria-hidden", "true");
-    this.moveLabel = this.stage.ownerDocument.createElement("div");
-    this.moveLabel.className = "mm-table-move-label";
-    this.moveLabel.hidden = true;
-    this.moveLabel.setAttribute("aria-hidden", "true");
-    this.presentationLayer.append(this.moveIndicator, this.moveLabel);
+    this.presentationLayer.append(this.moveIndicator);
 
     const height = this.target.table.childCount;
     const width = this.target.table.firstChild?.childCount ?? 0;
@@ -1382,15 +1400,19 @@ export class TableControls {
   private updatePresentation(): void {
     if (!this.target || !this.layout || !this.handleLayer) return;
     const selected = this.target.selection ?? null;
+    const flashed = this.flashMatchesTarget() ? this.flashedSelection : null;
+    const flashingSelected = Boolean(
+      flashed && selected && selectionKey(flashed) === selectionKey(selected),
+    );
     const active =
+      (flashingSelected ? flashed : null) ??
       selected ??
-      this.flashedSelection ??
       this.focusedSelection ??
       this.hoveredSelection;
     const visibleSelections = new Set(
       [
         selected,
-        this.flashedSelection,
+        flashingSelected ? flashed : null,
         this.focusedSelection,
         this.hoveredSelection,
       ]
@@ -1464,10 +1486,10 @@ export class TableControls {
     } else {
       this.dragOriginHighlight.hidden = true;
       if (active) {
-        const state = selected
-          ? "selected"
-          : this.flashedSelection
-            ? "drop-flash"
+        const state = flashingSelected
+          ? "drop-flash"
+          : selected
+            ? "selected"
             : this.focusedSelection
               ? "focus"
               : "hover";
@@ -1516,7 +1538,7 @@ export class TableControls {
       drag.boundary === null
     ) {
       this.moveIndicator.hidden = true;
-      this.moveLabel.hidden = true;
+      this.setDragPreviewDestination(null);
       return;
     }
     const { stageRect, visibleGridRect, rowBoundaries, columnBoundaries } =
@@ -1531,22 +1553,19 @@ export class TableControls {
         : columnBoundaries[drag.boundary];
     if (boundary === undefined) {
       this.moveIndicator.hidden = true;
-      this.moveLabel.hidden = true;
+      this.setDragPreviewDestination(null);
       return;
     }
     this.moveIndicator.dataset.axis = drag.selection.axis;
-    this.moveLabel.dataset.axis = drag.selection.axis;
     const finalIndex =
       drag.boundary > drag.selection.index ? drag.boundary - 1 : drag.boundary;
-    const sourceLabel =
-      drag.selection.axis === "row"
-        ? `Row ${drag.selection.index}`
-        : `Column ${drag.selection.index + 1}`;
-    this.moveLabel.textContent = `Move ${sourceLabel.toLowerCase()} to position ${finalIndex + 1}`;
+    const displayPosition =
+      drag.selection.axis === "row" ? finalIndex : finalIndex + 1;
+    this.setDragPreviewDestination(`Move to position ${displayPosition}`);
     if (drag.selection.axis === "row") {
       if (boundary < visibleGridRect.top || boundary > visibleGridRect.bottom) {
         this.moveIndicator.hidden = true;
-        this.moveLabel.hidden = true;
+        this.setDragPreviewDestination(null);
         return;
       }
       setBox(
@@ -1556,12 +1575,10 @@ export class TableControls {
         rectWidth(visibleGridRect),
         2,
       );
-      this.moveLabel.style.left = `${Math.round(localX(visibleGridRect.left) + 8)}px`;
-      this.moveLabel.style.top = `${Math.round(localY(boundary) - 28)}px`;
     } else {
       if (boundary < visibleGridRect.left || boundary > visibleGridRect.right) {
         this.moveIndicator.hidden = true;
-        this.moveLabel.hidden = true;
+        this.setDragPreviewDestination(null);
         return;
       }
       setBox(
@@ -1571,11 +1588,8 @@ export class TableControls {
         2,
         rectHeight(visibleGridRect),
       );
-      this.moveLabel.style.left = `${Math.round(localX(boundary) + 8)}px`;
-      this.moveLabel.style.top = `${Math.round(localY(visibleGridRect.top) + 8)}px`;
     }
     this.moveIndicator.hidden = false;
-    this.moveLabel.hidden = false;
   }
 
   private createDragPreview(drag: DragState): void {
@@ -1595,17 +1609,21 @@ export class TableControls {
     values.className = "mm-table-drag-preview-values";
     const rows = Array.from(drag.target.tableElement.rows);
     const rawValues: string[] = [];
+    let omitted = false;
     if (drag.selection.axis === "row") {
       const row = rows[drag.selection.index];
       if (row) {
-        for (const cell of Array.from(row.cells).slice(0, 4))
+        const cells = Array.from(row.cells);
+        omitted = cells.length > PREVIEW_MAX_VALUES;
+        for (const cell of cells.slice(0, PREVIEW_MAX_VALUES))
           rawValues.push(cell.textContent ?? "");
       }
     } else {
-      for (const row of rows.slice(0, 4))
+      omitted = rows.length > PREVIEW_MAX_VALUES;
+      for (const row of rows.slice(0, PREVIEW_MAX_VALUES))
         rawValues.push(row.cells[drag.selection.index]?.textContent ?? "");
     }
-    for (const value of rawValues) {
+    for (const [index, value] of rawValues.entries()) {
       const item = this.stage.ownerDocument.createElement("div");
       item.className = "mm-table-drag-preview-item";
       const text = value.trim().replace(/\s+/g, " ");
@@ -1613,16 +1631,32 @@ export class TableControls {
         text.length > PREVIEW_MAX_TEXT_LENGTH
           ? `${text.slice(0, PREVIEW_MAX_TEXT_LENGTH - 1)}…`
           : text || "(empty)";
+      if (!text) item.classList.add("is-empty");
+      if (text.length > PREVIEW_MAX_TEXT_LENGTH)
+        item.classList.add("is-excerpt");
       values.append(item);
+      if (index === rawValues.length - 1 && omitted) {
+        const marker = this.stage.ownerDocument.createElement("div");
+        marker.className =
+          "mm-table-drag-preview-item mm-table-drag-preview-item-excerpt";
+        marker.textContent = "…";
+        marker.setAttribute("aria-label", "More values omitted");
+        values.append(marker);
+      }
     }
     preview.append(values);
+    const destination = this.stage.ownerDocument.createElement("div");
+    destination.className = "mm-table-drag-preview-destination";
+    destination.hidden = true;
+    preview.append(destination);
     this.presentationLayer.append(preview);
     this.dragPreview = preview;
+    this.dragPreviewDestination = destination;
   }
 
   private updateDragPreview(): void {
     if (!this.dragPreview || !this.layout || !this.drag) return;
-    const { stageRect, controlClipRect } = this.layout;
+    const { stageRect, controlClipRect, visibleGridRect } = this.layout;
     const localX = (value: number): number =>
       value - stageRect.left + this.stage.scrollLeft;
     const localY = (value: number): number =>
@@ -1633,25 +1667,78 @@ export class TableControls {
       right: localX(controlClipRect.right),
       bottom: localY(controlClipRect.bottom),
     };
+    const visibleGrid = {
+      left: localX(visibleGridRect.left),
+      top: localY(visibleGridRect.top),
+      right: localX(visibleGridRect.right),
+      bottom: localY(visibleGridRect.bottom),
+    };
     const width = this.dragPreview.offsetWidth || 180;
     const height = this.dragPreview.offsetHeight || 96;
-    const desiredLeft = localX(this.drag.lastX) + PREVIEW_OFFSET;
-    const desiredTop = localY(this.drag.lastY) + PREVIEW_OFFSET;
-    const left = Math.max(
-      clip.left + 4,
-      Math.min(desiredLeft, Math.max(clip.left + 4, clip.right - width - 4)),
-    );
-    const top = Math.max(
-      clip.top + 4,
-      Math.min(desiredTop, Math.max(clip.top + 4, clip.bottom - height - 4)),
-    );
-    this.dragPreview.style.left = `${Math.round(left)}px`;
-    this.dragPreview.style.top = `${Math.round(top)}px`;
+    const clamp = (value: number, start: number, end: number): number =>
+      Math.max(start + 4, Math.min(value, Math.max(start + 4, end - 4)));
+    const pointerLeft = localX(this.drag.lastX);
+    const pointerTop = localY(this.drag.lastY);
+    const candidateLocalRects = [
+      { left: pointerLeft + PREVIEW_OFFSET, top: pointerTop + PREVIEW_OFFSET },
+      {
+        left: pointerLeft - width - PREVIEW_OFFSET,
+        top: pointerTop + PREVIEW_OFFSET,
+      },
+      {
+        left: pointerLeft + PREVIEW_OFFSET,
+        top: pointerTop - height - PREVIEW_OFFSET,
+      },
+      {
+        left: pointerLeft - width - PREVIEW_OFFSET,
+        top: pointerTop - height - PREVIEW_OFFSET,
+      },
+      {
+        left: visibleGrid.right + PREVIEW_OFFSET,
+        top: visibleGrid.top + PREVIEW_OFFSET,
+      },
+      {
+        left: visibleGrid.left - width - PREVIEW_OFFSET,
+        top: visibleGrid.bottom - height - PREVIEW_OFFSET,
+      },
+      { left: clip.left + 4, top: clip.top + 4 },
+      { left: clip.right - width - 4, top: clip.top + 4 },
+      { left: clip.left + 4, top: clip.bottom - height - 4 },
+      { left: clip.right - width - 4, top: clip.bottom - height - 4 },
+    ].map((candidate) => ({
+      left: clamp(candidate.left, clip.left, clip.right - width),
+      top: clamp(candidate.top, clip.top, clip.bottom - height),
+    }));
+    const toClientRect = (candidate: {
+      left: number;
+      top: number;
+    }): RectLike => ({
+      left: stageRect.left - this.stage.scrollLeft + candidate.left,
+      top: stageRect.top - this.stage.scrollTop + candidate.top,
+      right: stageRect.left - this.stage.scrollLeft + candidate.left + width,
+      bottom: stageRect.top - this.stage.scrollTop + candidate.top + height,
+    });
+    const line = this.moveIndicator.hidden
+      ? null
+      : rectLike(clientRect(this.moveIndicator));
+    const pointerX = this.drag.lastX;
+    const pointerY = this.drag.lastY;
+    const safe = candidateLocalRects.find((candidate) => {
+      const rect = toClientRect(candidate);
+      return (
+        !pointInRect(pointerX, pointerY, rect) &&
+        (!line || !rectsOverlap(rect, line))
+      );
+    });
+    const chosen = safe ?? candidateLocalRects[0]!;
+    this.dragPreview.style.left = `${Math.round(chosen.left)}px`;
+    this.dragPreview.style.top = `${Math.round(chosen.top)}px`;
   }
 
   private removeDragPreview(): void {
     this.dragPreview?.remove();
     this.dragPreview = null;
+    this.dragPreviewDestination = null;
   }
 
   private clearTransientPresentation(): void {
@@ -1660,26 +1747,53 @@ export class TableControls {
     if (this.rowAppend) this.rowAppend.hidden = true;
     if (this.columnAppend) this.columnAppend.hidden = true;
     if (this.moveIndicator) this.moveIndicator.hidden = true;
-    if (this.moveLabel) this.moveLabel.hidden = true;
     if (this.dragOriginHighlight) this.dragOriginHighlight.hidden = true;
     this.removeDragPreview();
     this.updatePresentation();
   }
 
   flashSelection(selection: TableControlSelection): void {
-    if (this.destroyed) return;
+    if (this.destroyed || !this.target) return;
+    this.clearFlashState();
     this.flashedSelection = selection;
+    this.flashedTable = this.target.tableElement;
+    this.flashedTablePos = this.target.tablePos;
+    this.flashedDocumentGeneration = this.target.documentGeneration;
     this.updatePresentation();
-    if (this.flashTimer !== undefined)
-      this.ownerWindow?.clearTimeout(this.flashTimer);
     const clear = (): void => {
-      this.flashTimer = undefined;
-      this.flashedSelection = null;
+      this.clearFlashState();
       this.updatePresentation();
     };
     if (this.ownerWindow)
       this.flashTimer = this.ownerWindow.setTimeout(clear, DROP_FLASH_DURATION);
     else clear();
+  }
+
+  private flashMatchesTarget(): boolean {
+    return Boolean(
+      this.target &&
+      this.flashedSelection &&
+      this.flashedTable === this.target.tableElement &&
+      this.flashedTablePos === this.target.tablePos &&
+      this.flashedDocumentGeneration === this.target.documentGeneration,
+    );
+  }
+
+  private clearFlashState(): void {
+    if (this.flashTimer !== undefined) {
+      this.ownerWindow?.clearTimeout(this.flashTimer);
+      this.flashTimer = undefined;
+    }
+    this.flashedSelection = null;
+    this.flashedTable = null;
+    this.flashedTablePos = null;
+    this.flashedDocumentGeneration = null;
+  }
+
+  private setDragPreviewDestination(text: string | null): void {
+    if (!this.dragPreviewDestination) return;
+    this.dragPreviewDestination.hidden = text === null;
+    this.dragPreviewDestination.textContent = text ?? "";
   }
 
   private measureControlClip(stageRect: DOMRect): RectLike {
@@ -1740,7 +1854,6 @@ export class TableControls {
 
   private hideDropLine(): void {
     this.moveIndicator.hidden = true;
-    this.moveLabel.hidden = true;
     this.removeDragPreview();
     this.dragOriginHighlight.hidden = true;
     this.hideInsertButtons();
