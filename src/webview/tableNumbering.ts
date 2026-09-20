@@ -412,7 +412,7 @@ function collectTables(doc: PMNode): TableEntry[] {
   return entries;
 }
 
-function safeNumberColumn(table: PMNode): boolean {
+export function safeNumberColumn(table: PMNode): boolean {
   if (!isTableNode(table) || table.childCount === 0) return false;
   if (table.child(0).childCount < 2) return false;
   for (let rowIndex = 0; rowIndex < table.childCount; rowIndex += 1) {
@@ -458,7 +458,7 @@ function replaceCellType(
   return true;
 }
 
-function renumberRows(
+export function renumberRows(
   tr: Transaction,
   tablePos: number,
   table: PMNode,
@@ -484,7 +484,7 @@ function renumberRows(
   return changed;
 }
 
-function mappedTableFor(
+export function mappedTableFor(
   oldEntry: TableEntry,
   mapping: Mapping,
   newTables: TableEntry[],
@@ -510,6 +510,24 @@ function mappedTableFor(
     );
   candidates.sort((left, right) => overlap(right) - overlap(left));
   return candidates[0]!;
+}
+
+/**
+ * Renumber one already-numbered table in the transaction being built.
+ *
+ * Structural table commands use this helper after their replacement step so
+ * the row move/add/delete and the resulting number changes remain one editor
+ * transaction. The guard deliberately accepts only the same narrow first
+ * column shape used by the append-transaction plugin.
+ */
+export function renumberTableAt(
+  transaction: Transaction,
+  tablePos: number,
+): boolean {
+  const table = tableAt(transaction.doc, tablePos);
+  return table && safeNumberColumn(table)
+    ? renumberRows(transaction, tablePos, table)
+    : false;
 }
 
 /**

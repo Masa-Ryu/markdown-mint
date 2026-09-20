@@ -54,6 +54,42 @@ Its `window.__markdownMintNative.metrics().mermaid` result reports node anchors,
 viewport-coordinate center deltas, edge labels, sequence messages, and source
 preservation.
 
+## Direct table-controls regression suite
+
+Run the real-browser table interaction checks with:
+
+```sh
+npm run test:browser:tables
+```
+
+The suite uses Chromium pointer events and keyboard focus against the bundled
+Rich Editor. It checks row and column handle selection and dragging, boundary
+and append controls, numbered-row renumbering, source/host edit delivery,
+Undo/Redo, Delete/Backspace structural selection, Escape cancellation of
+unselected row/column drags, and vertical/horizontal scrolling on a 100-row by
+10-column table. Keyboard checks also cover the row/column roving handle groups,
+arbitrary handle focus, selection, and post-selection movement. It also captures
+light/dark/high-contrast diagnostic screenshots under
+`output/playwright/table-controls/`. The presentation case uses an empty-header
+five-column table and verifies that a wide table outer box does not move the
+actual cell-grid line, highlight, or append control. It drags the fifth column
+between columns two and three and asserts the exact result (`a b e c d`,
+`f g j h i`, `k l o m n`), while checking the text-only preview, final-position
+label, muted origin, and no-edit-before-drop invariant. Captured states include
+idle, fifth-column hover, column drag, column drop, row drag, numbered-row drag,
+wide horizontal scroll, light, dark, and high contrast. Pointer movement during
+a drag is checked for zero host edits; actual VS Code focus, native IME
+candidate windows, and screen-reader announcements remain manual/native
+acceptance checks. The integrated Table Toolbar also captures
+`table-toolbar-default.png`, `table-toolbar-row-selected.png`,
+`table-toolbar-column-selected.png`, `table-toolbar-dark.png`, and
+`table-toolbar-high-contrast.png`, checking axis-specific visibility,
+numbering-column protection, disabled boundary moves, icon labels, hidden
+button Tab order, and stable toolbar/table geometry.
+The add controls keep the table/grid icons while the four movement controls
+use separate arrow-only SVGs, and the browser assertions verify that those
+icon identities do not overlap.
+
 The server maps `/__vscode__/markdown.css` to the installed VS Code Markdown
 stylesheet before `media/document.css` is loaded. Set `VSCODE_MARKDOWN_CSS` on
 another machine to the matching installed stylesheet. This makes the rich and

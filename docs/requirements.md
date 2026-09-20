@@ -1436,6 +1436,104 @@ without pressing Enter first. Dialog generation/profile and stale-document
 guards remain in force; Cancel leaves the boundary, ProseMirror document,
 source, and host edit count unchanged.
 
+## Current direct table manipulation invariant
+
+- In Rich GitHub and GitLab editing, a supported rectangular, unmerged table
+  exposes one editor-only overlay with body-row handles on the left and
+  column handles on the top. Clicking a handle records transient structural
+  state without creating a ProseMirror `CellSelection`, changing the caret,
+  or sending a host edit. A roughly 6px pointer threshold distinguishes a
+  click from a drag; pointer movement only updates the drop preview.
+- The control geometry distinguishes the table element's outer/scroll viewport
+  from the union of its direct `th`/`td` cell rectangles. Row and column rails,
+  highlights, insertion lines, move indicators, and append buttons use the
+  actual cell-grid rectangle and its visible intersection with the table and
+  stage clips; external handles remain independently positioned beside the
+  visible grid. Resizing, stage scrolling, and the table's own horizontal
+  scrolling remeasure the same direct-cell geometry, and an off-screen append
+  control is never relocated into a visible middle position.
+- Normal presentation is quiet: handles are small six-dot grips and only the
+  matching hovered/focused/selected candidate is visible for each axis. A
+  hover or focus highlights the complete target row or column; a structural
+  click leaves a stronger translucent range and outline until Escape or an
+  ordinary cell interaction. Boundary insertion uses one small rounded `+`
+  control at a valid boundary, while append controls stay small and near the
+  actual grid end without an oversized transparent hit rail. The existing
+  Table Toolbar uses the same group/button styling and icon path: normal cells
+  show only the six-dot grip, row selection shows grip plus up/down moves, and
+  column selection shows grip plus left/right moves. Unrelated move buttons are
+  hidden and removed from the Tab order; boundary moves remain visible but are
+  disabled, and switching states does not change toolbar height or document
+  position.
+- A row or column can be moved within its current table by a real pointer drag.
+  The overlay uses the explicit table document position and measured row or
+  column boundaries, cancels on an invalid/outside drop, document replacement,
+  mode change, pointer cancellation, window blur, or destroy, and never moves
+  between tables. Boundary `+` controls insert before an indicated body row or
+  data column; the bottom and right `+` controls append one row or column and
+  place the caret in the new cells. New rows retain existing per-column
+  alignment attributes; moved, deleted, and untouched cells retain their
+  ProseMirror content and marks.
+- During a drag, the original range remains lightly muted, a pointer-following
+  preview is built from bounded `textContent` only, and a valid insertion
+  boundary keeps only its line on the table. The preview card includes the
+  source label, bounded cell values, and the `Move to position N` explanation;
+  there is no separate destination label. Column values are vertical and row
+  values are horizontal with restrained separators; empty headers remain
+  identifiable as `Column N`, numbered rows retain their number and body
+  identifiers, and an ellipsis marks omitted values. The preview is
+  pointer-inert, aria-hidden, and placed from candidates that account for the
+  pointer, visible grid, and move line while staying inside the viewport clip.
+  Invalid and no-op destinations show no move line or destination explanation;
+  Escape clears the preview, origin, line, pointer capture, and auto-scroll
+  before a later pointerup can commit. A successful drop briefly gives the
+  final structural range a targeted drop flash and then keeps the normal
+  structural selection; stale table targets and timers are discarded.
+- Direct transformations live in `src/webview/tableCommands.ts` and validate
+  the supplied table position, rectangular unit-cell shape, and no-op
+  boundary. Existing merged or otherwise unsupported tables continue to use
+  the existing table commands. The ordinary table minimum is one column.
+  Numbered tables protect the first `#` column, prohibit left insertion, and
+  retain at least one data column. The existing strict `isNumberedTable()`
+  predicate is the only automatic-numbering gate; a manually edited number or
+  custom first-column value is not auto-renumbered.
+- A valid numbered row move, insertion, or deletion and its sequential
+  renumbering are one ProseMirror transaction, so Markdown/source sync, dirty
+  state, and Undo/Redo see one structural edit. Structural selection is
+  cleared by ordinary text or CellSelection interaction, outside focus/click,
+  Escape, mode changes, external updates, and destroy. Delete/Backspace acts
+  structurally only while a handle is selected; normal text selection,
+  CellSelection copy/paste, alignment, and table navigation retain their
+  existing behavior. The existing contextual table toolbar remains available,
+  with keyboard-accessible handle focus and auxiliary row/column move buttons.
+  The Handles action exposes one roving Tab stop per row and column group;
+  before a structural selection, row ArrowUp/ArrowDown and column
+  ArrowLeft/ArrowRight move focus, while Enter/Space selects the focused
+  handle and Escape clears the selection.
+  No Cmd/Ctrl+D duplication path, Alt-drag duplication, or custom context menu
+  is added; the browser and VS Code context-menu behavior remains unchanged.
+- The overlay and direct Table Toolbar are styled only in `media/webview.css`;
+  the toolbar uses the existing table SVG assets for additions and separate
+  arrow-only table-move SVG assets for movement; it has no separate dashed
+  Direct/Handles group or Unicode arrow controls. `media/document.css` and
+  the five required Markdown fixtures (`common-test.md`, `github-test.md`,
+  `github-test-class-B.md`, `gitlab-test.md`, and `gitlab-test-class-B.md`) are
+  unchanged. Theme variables provide normal highlight colors, and forced-color
+  mode uses system-color borders and visible line caps rather than relying on
+  background alone. `npm run test:browser:tables` covers real Chromium
+  pointer, keyboard, scrolling, numbering, source-sync, history, preview
+  clipping, rectangle overlap, light/dark/forced-color presentation, and the
+  drop-flash path. Native VS Code focus/IME behavior remains a separate
+  acceptance/manual check.
+- The browser presentation regression also records idle, hover, drag, drop,
+  row-drag, row-drop-flash, forced-color row-drag, numbered-row-drag,
+  wide-scroll, light, dark, and high-contrast screenshots under
+  `output/playwright/table-controls/`. It also records
+  `table-toolbar-default.png`, `table-toolbar-row-selected.png`,
+  `table-toolbar-column-selected.png`, `table-toolbar-dark.png`, and
+  `table-toolbar-high-contrast.png` for the integrated toolbar states; the five
+  required Markdown acceptance fixtures remain unchanged.
+
 ## Explicit limits
 
 Paste/drop image asset copying is optional follow-up work. Native IME and visual
