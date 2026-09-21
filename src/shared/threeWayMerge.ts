@@ -30,9 +30,39 @@ const MAX_DIFF_WORK_UNITS = 4_000_000;
 const MAX_DIFF_TRACE_CELLS = 250_000;
 const MAX_SIMPLE_REPLACEMENT_PROBE_LINES = 64;
 
+/** @internal The default limits used by the production merge entry point. */
+export const DEFAULT_DIFF_BUDGET_LIMITS = Object.freeze({
+  maxWorkUnits: MAX_DIFF_WORK_UNITS,
+  maxTraceCells: MAX_DIFF_TRACE_CELLS,
+});
+
+/** @internal Limits exposed only for deterministic merge-budget tests. */
+export interface DiffBudgetLimits {
+  readonly maxWorkUnits: number;
+  readonly maxTraceCells: number;
+}
+
+export type DiffBudgetExhaustionReason = "work-budget" | "trace-budget";
+
+/** @internal Diagnostics returned by the test-only budget seam. */
+export interface DiffBudgetDiagnostics {
+  readonly limits: DiffBudgetLimits;
+  workUnits: number;
+  traceCells: number;
+  reason: DiffBudgetExhaustionReason | undefined;
+}
+
+/** @internal Result shape for deterministic merge-budget tests. */
+export interface BudgetedMergeResult {
+  readonly result: string | undefined;
+  readonly diagnostics: DiffBudgetDiagnostics;
+}
+
 interface DiffBudget {
   workUnits: number;
   traceCells: number;
+  readonly limits: DiffBudgetLimits;
+  reason: DiffBudgetExhaustionReason | undefined;
 }
 
 /** Return a merged Markdown source, or undefined when safe merging is unavailable. */
@@ -41,15 +71,73 @@ export function mergeMarkdownSnapshots(
   local: string,
   external: string,
 ): string | undefined {
+  return mergeMarkdownSnapshotsInternal(
+    base,
+    local,
+    external,
+    DEFAULT_DIFF_BUDGET_LIMITS,
+  );
+}
+
+/**
+ * @internal
+ * Run the same merge with explicit limits and deterministic diagnostics.
+ * Production callers must use mergeMarkdownSnapshots instead.
+ */
+export function mergeMarkdownSnapshotsWithBudget(
+  base: string,
+  local: string,
+  external: string,
+  limits: DiffBudgetLimits = DEFAULT_DIFF_BUDGET_LIMITS,
+): BudgetedMergeResult {
+  const diagnostics: DiffBudgetDiagnostics = {
+    limits: {
+      maxWorkUnits: limits.maxWorkUnits,
+      maxTraceCells: limits.maxTraceCells,
+    },
+    workUnits: 0,
+    traceCells: 0,
+    reason: undefined,
+  };
+  const result = mergeMarkdownSnapshotsInternal(
+    base,
+    local,
+    external,
+    diagnostics.limits,
+    diagnostics,
+  );
+  return { result, diagnostics };
+}
+
+function mergeMarkdownSnapshotsInternal(
+  base: string,
+  local: string,
+  external: string,
+  limits: DiffBudgetLimits,
+  diagnostics?: DiffBudgetDiagnostics,
+): string | undefined {
   if (local === external) return local;
   if (local === base) return external;
   if (external === base) return local;
 
   const baseLines = splitLines(base);
-  const localHunks = diffHunks(baseLines, splitLines(local));
-  if (localHunks === undefined) return undefined;
-  const externalHunks = diffHunks(baseLines, splitLines(external));
-  if (externalHunks === undefined) return undefined;
+  const localBudget = createDiffBudget(limits);
+  const localHunks = diffHunks(baseLines, splitLines(local), localBudget);
+  if (localHunks === undefined) {
+    copyBudgetDiagnostics(diagnostics, localBudget);
+    return undefined;
+  }
+  const externalBudget = createDiffBudget(limits);
+  const externalHunks = diffHunks(
+    baseLines,
+    splitLines(external),
+    externalBudget,
+  );
+  if (externalHunks === undefined) {
+    copyBudgetDiagnostics(diagnostics, externalBudget);
+    return undefined;
+  }
+  copyBudgetDiagnostics(diagnostics, externalBudget);
   const mergedHunks: ChangeHunk[] = [...localHunks];
 
   for (const candidate of externalHunks) {
@@ -105,11 +193,30 @@ function splitLines(value: string): string[] {
   return lines.at(-1) === "" ? lines.slice(0, -1) : lines;
 }
 
+function createDiffBudget(limits: DiffBudgetLimits): DiffBudget {
+  return {
+    workUnits: 0,
+    traceCells: 0,
+    limits,
+    reason: undefined,
+  };
+}
+
+function copyBudgetDiagnostics(
+  diagnostics: DiffBudgetDiagnostics | undefined,
+  budget: DiffBudget,
+): void {
+  if (!diagnostics) return;
+  diagnostics.workUnits = budget.workUnits;
+  diagnostics.traceCells = budget.traceCells;
+  diagnostics.reason = budget.reason;
+}
+
 function diffHunks(
   base: readonly string[],
   variant: readonly string[],
+  budget: DiffBudget,
 ): ChangeHunk[] | undefined {
-  const budget: DiffBudget = { workUnits: 0, traceCells: 0 };
   let prefixLength = 0;
   while (prefixLength < base.length && prefixLength < variant.length) {
     if (!consumeWork(budget)) return undefined;
@@ -360,7 +467,11 @@ function myersDiff(
 
 function consumeWork(budget: DiffBudget): boolean {
   budget.workUnits += 1;
-  return budget.workUnits <= MAX_DIFF_WORK_UNITS;
+  if (budget.workUnits > budget.limits.maxWorkUnits) {
+    budget.reason = "work-budget";
+    return false;
+  }
+  return true;
 }
 
 function retainTrace(
@@ -369,7 +480,10 @@ function retainTrace(
   budget: DiffBudget,
 ): boolean {
   budget.traceCells += frontier.size;
-  if (budget.traceCells > MAX_DIFF_TRACE_CELLS) return false;
+  if (budget.traceCells > budget.limits.maxTraceCells) {
+    budget.reason = "trace-budget";
+    return false;
+  }
   trace.push(frontier);
   return true;
 }
