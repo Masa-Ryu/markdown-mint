@@ -11485,12 +11485,20 @@ export class MarkdownEditorApp {
     let snapshot: unknown;
     let starterState: StarterPluginState | undefined;
     let restoredStructuredDocument = false;
-    if (hasStructuredRecovery && saved.recoveryDocument !== undefined) {
+    const persistedStructuredDocument =
+      hasStructuredRecovery && saved.recoveryDocument !== undefined;
+    if (persistedStructuredDocument) {
       try {
         editorDoc = PMNode.fromJSON(this.schema, saved.recoveryDocument);
         restoredStructuredDocument = true;
-      } catch {
-        editorDoc = undefined;
+      } catch (error) {
+        this.notifyHost(
+          "error",
+          error instanceof Error
+            ? `The saved structured recovery could not be restored: ${error.message}`
+            : "The saved structured recovery could not be restored.",
+        );
+        return false;
       }
     }
     if (!editorDoc) {

@@ -143,6 +143,46 @@ describe("structured serializer recovery", () => {
     },
   );
 
+  it.each([
+    ["same as the host source", "old"],
+    ["different from the host source", "stale recovery source"],
+  ])(
+    "retains structured recovery when recoveryDocument is invalid and recoveryDraft is %s",
+    (_description, recoveryDraft) => {
+      const state = { value: undefined as unknown };
+      const failing = createApp(
+        state,
+        createCore(() => {
+          throw new Error("serializer failure");
+        }),
+        [],
+      );
+      appendText(failing, " NEW INPUT");
+      const invalidRecoveryDocument = {
+        type: "invalid-recovery-document",
+      };
+      state.value = {
+        ...(state.value as Record<string, unknown>),
+        recoveryDraft,
+        recoveryDocument: invalidRecoveryDocument,
+        recoveryDocumentPending: true,
+      };
+      failing.destroy();
+      apps.splice(apps.indexOf(failing), 1);
+
+      const messages: unknown[] = [];
+      const restored = createApp(state, createCore(), messages);
+
+      expect(restored.view.state.doc.textContent).toBe("old");
+      expect(editMessages(messages)).toHaveLength(0);
+      expect(state.value).toMatchObject({
+        recoveryDraft,
+        recoveryDocument: invalidRecoveryDocument,
+        recoveryDocumentPending: true,
+      });
+    },
+  );
+
   it("keeps the structured draft after a second serializer failure", () => {
     const state = { value: undefined as unknown };
     const initialMessages: unknown[] = [];
