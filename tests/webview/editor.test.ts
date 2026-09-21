@@ -4270,6 +4270,7 @@ describe("table clipboard integration", () => {
       '<table><tr><td colspan="0">A</td></tr></table>',
       "<table><tr><td>A<table><tr><td>B</td></tr></table></td></tr></table>",
       '<table><thead><tr><th rowspan="2">H</th><th>J</th></tr></thead><tbody><tr><td>A</td><td>B</td></tr></tbody></table>',
+      '<table><tbody><tr><td>A</td><td rowspan="2">B</td></tr><tr><td colspan="2">C</td><td>D</td></tr></tbody></table>',
     ]) {
       const { app, root, messages } = makeApp("Before");
       const paragraph = root.querySelector<HTMLElement>(".ProseMirror > p")!;
@@ -4310,6 +4311,39 @@ describe("table clipboard integration", () => {
       }),
     );
     inside.app.destroy();
+
+    const overlappingInside = makeApp(
+      "| H1 | H2 | H3 |\n| --- | --- | --- |\n| old1 | old2 | old3 |",
+    );
+    const overlappingBodyCell =
+      overlappingInside.root.querySelector<HTMLElement>("tbody td")!;
+    selectTableCellText(overlappingInside.app, overlappingBodyCell, 1);
+    const overlappingBefore = overlappingInside.app.view.state.doc;
+    const overlappingSelection = overlappingInside.app.view.state.selection;
+    const overlappingEvent = dispatchPaste(overlappingInside.app, {
+      "text/html":
+        '<table><tbody><tr><td>A</td><td rowspan="2">B</td></tr><tr><td colspan="2">C</td><td>D</td></tr></tbody></table>',
+    });
+
+    expect(overlappingEvent.defaultPrevented).toBe(true);
+    expect(overlappingInside.app.view.state.doc).toBe(overlappingBefore);
+    expect(overlappingInside.app.view.state.selection).toBe(
+      overlappingSelection,
+    );
+    expect(overlappingInside.messages.filter(isEditMessage)).toHaveLength(0);
+    expect(overlappingInside.messages).toContainEqual(
+      expect.objectContaining({
+        type: "notify",
+        level: "warning",
+      }),
+    );
+    expect(overlappingInside.messages).not.toContainEqual(
+      expect.objectContaining({ type: "undo" }),
+    );
+    expect(overlappingInside.messages).not.toContainEqual(
+      expect.objectContaining({ type: "redo" }),
+    );
+    overlappingInside.app.destroy();
   });
 
   it("keeps TSV ahead of HTML inside a table and treats multiline prose as native text", () => {

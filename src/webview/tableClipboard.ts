@@ -342,27 +342,33 @@ function parseClipboardHtmlResult(value: string): ClipboardMatrixParseResult {
           if (!spanColumns || !spanRows) return failure("malformed");
           if (rowIndex + spanRows > groupEnd) return failure("malformed");
 
-          // Find the first contiguous range that is free in this row. Existing
-          // entries here are reservations created by rowspans from earlier rows.
-          while (true) {
-            while (currentRow[column] !== undefined) column += 1;
-            const endColumn = column + spanColumns;
-            if (endColumn > MAX_CLIPBOARD_DIMENSION)
-              return failure("too-large");
-            const occupied = currentRow.findIndex(
-              (entry, index) =>
-                index >= column && index < endColumn && entry !== undefined,
-            );
-            if (occupied < 0) break;
-            column = occupied + 1;
-          }
+          // Find the first free start slot in this row. Existing entries here
+          // are reservations created by rowspans from earlier rows. Once the
+          // start is selected, however, the full cell rectangle must be free;
+          // moving a partially overlapping colspan to the right would change
+          // the HTML table model instead of rejecting malformed input.
+          while (currentRow[column] !== undefined) column += 1;
 
           const endColumn = column + spanColumns;
+          if (endColumn > MAX_CLIPBOARD_DIMENSION) return failure("too-large");
           columns = Math.max(columns, endColumn);
           if (htmlRows.length > Math.floor(MAX_CLIPBOARD_CELLS / columns))
             return failure("too-large");
 
           const endRow = rowIndex + spanRows;
+          for (let targetRow = rowIndex; targetRow < endRow; targetRow += 1) {
+            const target = grid[targetRow];
+            if (!target) return failure("malformed");
+            for (
+              let targetColumn = column;
+              targetColumn < endColumn;
+              targetColumn += 1
+            ) {
+              if (target[targetColumn] !== undefined)
+                return failure("malformed");
+            }
+          }
+
           const text = extractText(cell);
           for (let targetRow = rowIndex; targetRow < endRow; targetRow += 1) {
             for (
