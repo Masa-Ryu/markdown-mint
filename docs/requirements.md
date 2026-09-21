@@ -1540,6 +1540,25 @@ source, and host edit count unchanged.
   `table-toolbar-high-contrast.png` for the integrated toolbar states; the five
   required Markdown acceptance fixtures remain unchanged.
 
+## Current structured recovery invariant
+
+When serializer failure leaves a structured recovery pending, the review
+dialog and separate-copy command materialize the latest persisted ProseMirror
+JSON against a validated snapshot parsed from its recorded
+`recoveryBaseMarkdown` and `recoveryProfile`. This keeps source-only metadata,
+such as footnote and reference definitions, available without changing the
+current editor, profile, or authoritative host snapshot. The review text must
+therefore represent the materialized PM document rather than its potentially
+stale `recoveryDraft` companion.
+
+Pending recovery remains reviewable and explicitly discardable even when its
+`documentId` differs from the current editor; document identity gates automatic
+restore only. If materialization fails, the pending slot is retained, the
+separate-copy action is disabled, and an explanatory error is reported. A
+successful separate-copy response consumes only the exact pending snapshot
+that was sent for that operation, so a replacement pending recovery cannot be
+deleted by a late host response.
+
 ## Explicit limits
 
 Paste/drop image asset copying is optional follow-up work. Native IME and visual

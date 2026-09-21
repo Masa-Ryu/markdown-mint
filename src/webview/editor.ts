@@ -2569,7 +2569,9 @@ export class MarkdownEditorApp {
   private pendingRecoveryButton: HTMLButtonElement | null = null;
   private pendingRecoveryDialog: HTMLDialogElement | null = null;
   private pendingRecoveryText: HTMLTextAreaElement | null = null;
+  private pendingRecoveryOpenButton: HTMLButtonElement | null = null;
   private pendingRecoveryOperationId: string | undefined;
+  private pendingRecoveryOperationIdentity: string | undefined;
   private pendingRecoveryInvokingButton: HTMLButtonElement | null = null;
   private clipboardAvailable = false;
   private readonly pendingClipboard = new Map<
@@ -3252,7 +3254,9 @@ export class MarkdownEditorApp {
     this.pendingRecoveryDialog?.remove();
     this.pendingRecoveryDialog = null;
     this.pendingRecoveryText = null;
+    this.pendingRecoveryOpenButton = null;
     this.pendingRecoveryOperationId = undefined;
+    this.pendingRecoveryOperationIdentity = undefined;
     this.pendingRecoveryInvokingButton = null;
     this.clearTableDeletePreview();
     this.clearTableStructureSelection(false);
@@ -10641,6 +10645,7 @@ export class MarkdownEditorApp {
     } else if (message.type === "edit-rejected") {
       if (message.operationId === this.pendingRecoveryOperationId) {
         this.pendingRecoveryOperationId = undefined;
+        this.pendingRecoveryOperationIdentity = undefined;
         this.notifyHost(
           "warning",
           "The pending recovery draft was kept because it could not be opened separately.",
@@ -10701,9 +10706,18 @@ export class MarkdownEditorApp {
     } else if (message.type === "recovery-opened") {
       if (message.operationId !== this.pendingRecoveryOperationId) return;
       this.pendingRecoveryOperationId = undefined;
+      const expectedIdentity = this.pendingRecoveryOperationIdentity;
+      this.pendingRecoveryOperationIdentity = undefined;
+      if (!expectedIdentity) {
+        this.notifyHost(
+          "warning",
+          "The pending recovery draft was kept because its open request could not be verified.",
+        );
+        return;
+      }
       // Opening a separate copy is the explicit recovery decision. The host
       // has confirmed the copy before the retained pending slot is consumed.
-      this.discardPendingRecovery();
+      this.discardPendingRecovery(expectedIdentity);
     } else if (message.type === "clipboard-result") {
       this.resolveClipboard(message);
     } else if (message.type === "workspace-file-search-result") {
@@ -10722,6 +10736,7 @@ export class MarkdownEditorApp {
         return;
       if (message.operationId === this.pendingRecoveryOperationId) {
         this.pendingRecoveryOperationId = undefined;
+        this.pendingRecoveryOperationIdentity = undefined;
         this.notifyHost(
           "warning",
           "The pending recovery draft was kept because it could not be opened separately.",
@@ -11658,11 +11673,26 @@ export class MarkdownEditorApp {
       saved.recoveryBaseVersion > this.authoritativeVersion
     )
       return undefined;
+    return this.recoverySourceSnapshot(
+      saved.recoveryBaseMarkdown,
+      saved.recoveryProfile,
+    );
+  }
+
+  private recoverySourceSnapshot(
+    markdown: unknown,
+    profileValue: unknown,
+  ): unknown | undefined {
+    if (typeof markdown !== "string") return undefined;
+    const profile =
+      profileValue === "github" ||
+      profileValue === "gitlab" ||
+      profileValue === "commonmark"
+        ? profileValue
+        : undefined;
+    if (!profile) return undefined;
     try {
-      const parsed = this.core.parseMarkdown(
-        this.authoritativeMarkdown,
-        this.profile,
-      );
+      const parsed = this.core.parseMarkdown(markdown, profile);
       const snapshot = parsed.snapshot ?? parsed;
       if (
         typeof snapshot !== "object" ||
@@ -11671,12 +11701,57 @@ export class MarkdownEditorApp {
           "source" in snapshot &&
           typeof (snapshot as { source?: unknown }).source === "string"
         ) ||
-        (snapshot as { source: string }).source !== this.authoritativeMarkdown
+        (snapshot as { source: string }).source !== markdown
       )
         return undefined;
       return snapshot;
     } catch {
       return undefined;
+    }
+  }
+
+  /**
+   * Materialize a pending recovery without changing the current editor,
+   * profile, or authoritative host snapshot. Structured recovery stores the
+   * latest PM document separately from its Markdown companion, so the PM JSON
+   * must be serialized with a snapshot parsed from its recorded base source.
+   */
+  private materializePendingRecoveryMarkdown(
+    pending: RecoverySnapshot,
+  ): string | null {
+    const fail = (message: string): null => {
+      this.notifyHost(
+        "error",
+        `The pending recovery draft could not be materialized: ${message}`,
+      );
+      return null;
+    };
+    const hasStructuredRecovery =
+      pending.recoveryDocumentPending === true ||
+      (pending.recoveryDocumentPending === undefined &&
+        pending.recoveryDocument !== undefined);
+    if (!hasStructuredRecovery) {
+      return typeof pending.recoveryDraft === "string"
+        ? pending.recoveryDraft
+        : fail("its Markdown companion is missing.");
+    }
+    if (pending.recoveryDocument === undefined)
+      return fail("its structured document is missing.");
+    const snapshot = this.recoverySourceSnapshot(
+      pending.recoveryBaseMarkdown,
+      pending.recoveryProfile,
+    );
+    if (snapshot === undefined)
+      return fail("its recovery base or profile is not valid.");
+    try {
+      const document = PMNode.fromJSON(this.schema, pending.recoveryDocument);
+      return this.core.serializeMarkdown(document, snapshot);
+    } catch (error) {
+      return fail(
+        error instanceof Error
+          ? error.message
+          : "its structured document could not be serialized.",
+      );
     }
   }
 
@@ -11857,11 +11932,12 @@ export class MarkdownEditorApp {
     )
       return null;
     const pending = this.recoveryStateRecord(saved.pendingRecovery);
-    if (
-      !pending ||
-      typeof pending.recoveryDraft !== "string" ||
-      !this.recoveryBelongsToCurrentDocument(pending)
-    )
+    if (!pending) return null;
+    const hasStructuredRecovery =
+      pending.recoveryDocumentPending === true ||
+      (pending.recoveryDocumentPending === undefined &&
+        pending.recoveryDocument !== undefined);
+    if (!hasStructuredRecovery && typeof pending.recoveryDraft !== "string")
       return null;
     return pending;
   }
@@ -11898,7 +11974,12 @@ export class MarkdownEditorApp {
     const pending = this.pendingRecoverySnapshot();
     if (!pending) return;
     const dialog = this.ensurePendingRecoveryDialog();
-    this.pendingRecoveryText!.value = pending.recoveryDraft!;
+    const markdown = this.materializePendingRecoveryMarkdown(pending);
+    this.pendingRecoveryText!.value =
+      markdown ??
+      "This pending recovery draft could not be materialized safely. Keep it for later or discard it.";
+    if (this.pendingRecoveryOpenButton)
+      this.pendingRecoveryOpenButton.disabled = markdown === null;
     this.pendingRecoveryInvokingButton = this.pendingRecoveryButton;
     this.openDialog(dialog);
     this.pendingRecoveryText?.focus({ preventScroll: true });
@@ -11951,6 +12032,7 @@ export class MarkdownEditorApp {
       this.closePendingRecoveryDialog(true);
       this.sendPendingRecoveryToHost();
     });
+    this.pendingRecoveryOpenButton = open;
     actions.append(keep, discard, open);
     form.append(title, help, this.pendingRecoveryText, actions);
     dialog.append(form);
@@ -11972,15 +12054,43 @@ export class MarkdownEditorApp {
       invokingButton.focus({ preventScroll: true });
   }
 
-  private discardPendingRecovery(): void {
+  private recoverySnapshotIdentity(
+    snapshot: RecoverySnapshot,
+  ): string | undefined {
+    try {
+      const identity = JSON.stringify(snapshot);
+      return typeof identity === "string" ? identity : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  private discardPendingRecovery(expectedIdentity?: string): void {
     const saved = this.recoveryStateRecord(this.vscode?.getState?.());
     if (
       !saved ||
       !Object.prototype.hasOwnProperty.call(saved, "pendingRecovery")
     )
       return;
+    if (expectedIdentity !== undefined) {
+      const pending = this.recoveryStateRecord(saved.pendingRecovery);
+      if (
+        !pending ||
+        this.recoverySnapshotIdentity(pending) !== expectedIdentity
+      ) {
+        this.notifyHost(
+          "warning",
+          "The pending recovery draft was kept because it changed while the copy was opening.",
+        );
+        return;
+      }
+    }
     const { pendingRecovery: _pendingRecovery, ...current } = saved;
     if (!this.setRecoveryState(current)) return;
+    if (expectedIdentity === undefined) {
+      this.pendingRecoveryOperationId = undefined;
+      this.pendingRecoveryOperationIdentity = undefined;
+    }
     this.recoveryStateToPreserve = null;
     this.refreshPendingRecoveryAction();
   }
@@ -11988,14 +12098,25 @@ export class MarkdownEditorApp {
   private sendPendingRecoveryToHost(): void {
     const pending = this.pendingRecoverySnapshot();
     if (!pending || !this.vscode) return;
+    const markdown = this.materializePendingRecoveryMarkdown(pending);
+    if (markdown === null) return;
+    const identity = this.recoverySnapshotIdentity(pending);
+    if (!identity) {
+      this.notifyHost(
+        "error",
+        "The pending recovery draft could not be verified before opening separately.",
+      );
+      return;
+    }
     const operationId = newOperationId();
     this.pendingRecoveryOperationId = operationId;
+    this.pendingRecoveryOperationIdentity = identity;
     this.vscode.postMessage({
       protocolVersion: PROTOCOL_VERSION,
       type: "recoverDraft",
       baseVersion: this.version,
       operationId,
-      markdown: pending.recoveryDraft,
+      markdown,
     });
   }
 

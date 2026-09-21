@@ -566,7 +566,7 @@ describe("structured serializer recovery", () => {
       value: {
         documentId: "file:///workspace/doc.md",
         pendingRecovery: {
-          documentId: "file:///workspace/doc.md",
+          documentId: "file:///workspace/other.md",
           recoveryDraft: "old pending draft",
           recoveryBaseMarkdown: "old",
           recoveryBaseVersion: 1,
@@ -624,19 +624,250 @@ describe("structured serializer recovery", () => {
       value: {
         documentId: "file:///workspace/doc.md",
         pendingRecovery: {
-          documentId: "file:///workspace/doc.md",
-          recoveryDraft: "old pending draft",
+          documentId: "file:///workspace/other.md",
+          recoveryDraft: "old",
           recoveryBaseMarkdown: "old",
           recoveryBaseVersion: 1,
           recoveryProfile: "github" as const,
           recoveryDocument: parseMarkdown(
-            "old pending draft",
+            "old NEW INPUT",
             "github",
           ).doc.toJSON(),
           recoveryDocumentPending: true,
         },
       } as unknown,
     };
+    const messages: unknown[] = [];
+    const app = createApp(state, createCore(), messages, {
+      markdown: "external",
+      version: 2,
+    });
+    app.root
+      .querySelector<HTMLButtonElement>(
+        "[data-testid='pending-recovery-button']",
+      )
+      ?.click();
+    const dialog = app.root.querySelector<HTMLDialogElement>(
+      ".mm-pending-recovery-dialog",
+    );
+    expect(
+      dialog?.querySelector<HTMLTextAreaElement>(".mm-pending-recovery-text")
+        ?.value,
+    ).toContain("NEW INPUT");
+    app.root
+      .querySelector<HTMLButtonElement>("[data-testid='pending-recovery-open']")
+      ?.click();
+    const recover = messages.find(
+      (message): message is Record<string, unknown> =>
+        typeof message === "object" &&
+        message !== null &&
+        (message as { type?: unknown }).type === "recoverDraft",
+    );
+    expect(recover).toMatchObject({
+      markdown: expect.stringContaining("NEW INPUT"),
+      baseVersion: 2,
+    });
+    expect(recover?.markdown).not.toBe("old");
+    expect(state.value).toMatchObject({
+      pendingRecovery: { recoveryDraft: "old" },
+    });
+    expect(app.view.state.doc.textContent).toBe("external");
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        data: {
+          protocolVersion: PROTOCOL_VERSION,
+          type: "recovery-opened",
+          operationId: recover?.operationId,
+          currentMarkdown: "external",
+          currentVersion: 2,
+          profile: "github",
+        },
+      }),
+    );
+    expect(state.value).toEqual({ documentId: "file:///workspace/doc.md" });
+    expect(app.view.state.doc.textContent).toBe("external");
+    app.destroy();
+    apps.splice(apps.indexOf(app), 1);
+  });
+
+  it("materializes the latest structured recovery after an external mismatch", () => {
+    const source = "Text[^n].\n\n[^n]: KEEP FOOTNOTE";
+    const state = { value: undefined as unknown };
+    const failing = createApp(
+      state,
+      createCore(() => {
+        throw new Error("serializer failure");
+      }),
+      [],
+      { markdown: source },
+    );
+    appendText(failing, " NEW INPUT");
+    expect(state.value).toMatchObject({
+      recoveryDraft: source,
+      recoveryDocument: expect.any(Object),
+      recoveryDocumentPending: true,
+    });
+    failing.destroy();
+    apps.splice(apps.indexOf(failing), 1);
+
+    const messages: unknown[] = [];
+    const current = createApp(state, createCore(), messages, {
+      markdown: "external",
+      version: 2,
+    });
+    appendText(current, " NEXT");
+    expect(state.value).toMatchObject({
+      pendingRecovery: {
+        recoveryDraft: source,
+        recoveryDocument: expect.any(Object),
+        recoveryDocumentPending: true,
+      },
+    });
+    expect(current.view.state.doc.textContent).toBe("external NEXT");
+
+    current.root
+      .querySelector<HTMLButtonElement>(
+        "[data-testid='pending-recovery-button']",
+      )
+      ?.click();
+    const dialog = current.root.querySelector<HTMLDialogElement>(
+      ".mm-pending-recovery-dialog",
+    );
+    const preview = dialog?.querySelector<HTMLTextAreaElement>(
+      ".mm-pending-recovery-text",
+    );
+    expect(preview?.value).toContain("NEW INPUT");
+    expect(preview?.value).toContain("[^n]: KEEP FOOTNOTE");
+
+    dialog
+      ?.querySelector<HTMLButtonElement>(
+        "[data-testid='pending-recovery-open']",
+      )
+      ?.click();
+    const recover = messages.find(
+      (message): message is Record<string, unknown> =>
+        typeof message === "object" &&
+        message !== null &&
+        (message as { type?: unknown }).type === "recoverDraft",
+    );
+    expect(recover).toMatchObject({
+      markdown: expect.stringContaining("NEW INPUT"),
+      baseVersion: 2,
+    });
+    expect(recover?.markdown).toContain("[^n]: KEEP FOOTNOTE");
+    expect(current.view.state.doc.textContent).toBe("external NEXT");
+    expect(state.value).toMatchObject({ pendingRecovery: expect.any(Object) });
+
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        data: {
+          protocolVersion: PROTOCOL_VERSION,
+          type: "recovery-opened",
+          operationId: recover?.operationId,
+          currentMarkdown: "external NEXT",
+          currentVersion: 2,
+          profile: "github",
+        },
+      }),
+    );
+    expect(state.value).not.toHaveProperty("pendingRecovery");
+  });
+
+  it("keeps an unmaterializable pending recovery and disables separate opening", () => {
+    const pending = {
+      documentId: "file:///workspace/other.md",
+      recoveryDraft: "old",
+      recoveryBaseMarkdown: "old",
+      recoveryBaseVersion: 1,
+      recoveryProfile: "github" as const,
+      recoveryDocument: parseMarkdown("old NEW INPUT", "github").doc.toJSON(),
+      recoveryDocumentPending: true,
+    };
+    const state = {
+      value: {
+        documentId: "file:///workspace/doc.md",
+        pendingRecovery: pending,
+      },
+    } as { value: unknown };
+    const messages: unknown[] = [];
+    const app = createApp(
+      state,
+      createCore((document) => {
+        if (document.textContent.includes("NEW INPUT"))
+          throw new Error("serializer failure");
+        return serializeMarkdown(document);
+      }),
+      messages,
+      { markdown: "external", version: 2 },
+    );
+
+    app.root
+      .querySelector<HTMLButtonElement>(
+        "[data-testid='pending-recovery-button']",
+      )
+      ?.click();
+    const dialog = app.root.querySelector<HTMLDialogElement>(
+      ".mm-pending-recovery-dialog",
+    );
+    expect(
+      dialog?.querySelector<HTMLTextAreaElement>(".mm-pending-recovery-text")
+        ?.value,
+    ).toContain("could not be materialized safely");
+    expect(
+      dialog?.querySelector<HTMLTextAreaElement>(".mm-pending-recovery-text")
+        ?.value,
+    ).not.toContain("NEW INPUT");
+    expect(
+      dialog?.querySelector<HTMLButtonElement>(
+        "[data-testid='pending-recovery-open']",
+      )?.disabled,
+    ).toBe(true);
+    expect(
+      messages.some(
+        (message) =>
+          typeof message === "object" &&
+          message !== null &&
+          (message as { type?: unknown }).type === "notify" &&
+          String((message as { message?: unknown }).message).includes(
+            "could not be materialized",
+          ),
+      ),
+    ).toBe(true);
+    expect(state.value).toEqual({
+      documentId: "file:///workspace/doc.md",
+      pendingRecovery: pending,
+    });
+    expect(
+      messages.some(
+        (message) =>
+          typeof message === "object" &&
+          message !== null &&
+          (message as { type?: unknown }).type === "recoverDraft",
+      ),
+    ).toBe(false);
+  });
+
+  it("does not consume a replacement pending recovery after a stale open confirmation", () => {
+    const first = {
+      documentId: "file:///workspace/other.md",
+      recoveryDraft: "old",
+      recoveryBaseMarkdown: "old",
+      recoveryBaseVersion: 1,
+      recoveryProfile: "github" as const,
+      recoveryDocument: parseMarkdown("old NEW INPUT", "github").doc.toJSON(),
+      recoveryDocumentPending: true,
+    };
+    const replacement = {
+      ...first,
+      recoveryDraft: "replacement",
+      recoveryDocument: parseMarkdown("replacement", "github").doc.toJSON(),
+    };
+    const state = {
+      value: {
+        documentId: "file:///workspace/doc.md",
+        pendingRecovery: first,
+      },
+    } as { value: unknown };
     const messages: unknown[] = [];
     const app = createApp(state, createCore(), messages, {
       markdown: "external",
@@ -656,13 +887,12 @@ describe("structured serializer recovery", () => {
         message !== null &&
         (message as { type?: unknown }).type === "recoverDraft",
     );
-    expect(recover).toMatchObject({
-      markdown: "old pending draft",
-      baseVersion: 2,
-    });
-    expect(state.value).toMatchObject({
-      pendingRecovery: { recoveryDraft: "old pending draft" },
-    });
+    expect(recover?.operationId).toEqual(expect.any(String));
+
+    state.value = {
+      ...(state.value as Record<string, unknown>),
+      pendingRecovery: replacement,
+    };
     window.dispatchEvent(
       new MessageEvent("message", {
         data: {
@@ -675,9 +905,19 @@ describe("structured serializer recovery", () => {
         },
       }),
     );
-    expect(state.value).toEqual({ documentId: "file:///workspace/doc.md" });
-    app.destroy();
-    apps.splice(apps.indexOf(app), 1);
+
+    expect(state.value).toMatchObject({ pendingRecovery: replacement });
+    expect(
+      messages.some(
+        (message) =>
+          typeof message === "object" &&
+          message !== null &&
+          (message as { type?: unknown }).type === "notify" &&
+          String((message as { message?: unknown }).message).includes(
+            "changed while the copy was opening",
+          ),
+      ),
+    ).toBe(true);
   });
 
   it("does not replace malformed recovery storage while current input continues", () => {
