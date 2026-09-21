@@ -757,6 +757,27 @@ function attrsOf(token: MarkdownToken): Record<string, string> {
   return result;
 }
 
+// markdown-it accepts ordered markers with at most nine decimal digits. Keep
+// the parsed zero start valid while preventing malformed ProseMirror attrs
+// from producing non-Markdown starts during serialization.
+const MAX_ORDERED_LIST_START = 999_999_999;
+
+function normalizeOrderedListStart(value: unknown): number {
+  return typeof value === "number" &&
+    Number.isFinite(value) &&
+    Number.isSafeInteger(value) &&
+    value >= 0 &&
+    value <= MAX_ORDERED_LIST_START
+    ? value
+    : 1;
+}
+
+function orderedListMarker(start: number, index: number): number {
+  // Repeating the largest valid marker keeps every item in the list when
+  // arithmetic continuation would cross markdown-it's nine-digit limit.
+  return Math.min(MAX_ORDERED_LIST_START, start + index);
+}
+
 function tokenText(token: MarkdownToken): string {
   return restoreEscapedDollars(token.content ?? "");
 }
@@ -1350,7 +1371,7 @@ function parseList(
     const attrs = attrsOf(tokens[openIndex]!);
     const order = Number.parseInt(attrs.start ?? "1", 10);
     return nodeTypes.ordered_list.create(
-      { order: Number.isFinite(order) ? order : 1 },
+      { order: normalizeOrderedListStart(order) },
       items,
     );
   }
@@ -2391,14 +2412,16 @@ function serializeImageAlt(value: unknown, table = false): string {
 
 function serializeInlineTitle(value: unknown, table = false): string {
   const source = String(value ?? "");
-  if (!table) return source.replace(/"/g, '\\"');
   // Titles are semantic attributes, so escape their backslashes before
-  // protecting table pipes rather than treating existing escapes as source.
-  return source
-    .replace(/\r\n|\r|\n/g, " ")
+  // protecting quotes or table pipes rather than treating existing escapes as
+  // source syntax.
+  const normalized = table ? source.replace(/\r\n|\r|\n/g, " ") : source;
+  let escaped = normalized
     .replace(/\\/g, "\\\\")
     .replace(/"/g, '\\"')
-    .replace(/\|/g, "\\|");
+    .replace(/&/g, "&amp;");
+  if (table) escaped = escaped.replace(/\|/g, "\\|");
+  return escaped;
 }
 
 function serializeInlineMarked(
@@ -2754,9 +2777,11 @@ function serializeBlock(node: PMNode, tableCell = false): string {
         .map((item) => serializeListItem(item, "- "))
         .join("\n");
     case "ordered_list": {
-      const start = Number(node.attrs.order) || 1;
+      const start = normalizeOrderedListStart(node.attrs.order);
       return childrenOf(node)
-        .map((item, index) => serializeListItem(item, `${start + index}. `))
+        .map((item, index) =>
+          serializeListItem(item, `${orderedListMarker(start, index)}. `),
+        )
         .join("\n");
     }
     case "list_item":
@@ -4421,10 +4446,8 @@ function renderNode(
     case "bullet_list":
     case "ordered_list": {
       const ordered = node.type.name === "ordered_list";
-      const start =
-        ordered && Number(node.attrs.order) !== 1
-          ? ` start="${Number(node.attrs.order)}"`
-          : "";
+      const order = normalizeOrderedListStart(node.attrs.order);
+      const start = ordered && order !== 1 ? ` start="${order}"` : "";
       const taskList = childrenOf(node).some(
         (item) => item.attrs.checked != null,
       );
