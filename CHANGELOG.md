@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.3
+
+- Preserve multiline and code-adjacent reference definitions when neighboring
+  Markdown blocks are deleted or edited, including mixed line endings and
+  first-valid duplicate resolution without rescuing fenced-code text.
+
 ## 0.4.2
 
 - Preserve structured recovery snapshots after serializer failures, including
