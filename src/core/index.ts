@@ -3533,6 +3533,19 @@ export function serializeMarkdown(
   }
   const children = childrenOf(doc);
   const blocks = previous?.blocks ?? [];
+  const preserveSourceMetadata = (
+    output: string,
+    ending: "\n" | "\r\n",
+  ): string => {
+    if (previous)
+      return preserveFootnoteDefinitions(
+        preserveReferenceDefinitions(output, previous, ending),
+        previous,
+        ending,
+      );
+    const metadata = documentMetadata.get(doc);
+    return appendFootnoteDefinitions(output, metadata?.footnotes ?? [], ending);
+  };
   if (blocks.length === 0) {
     const metadata = documentMetadata.get(doc);
     const ending: "\n" | "\r\n" =
@@ -3552,14 +3565,11 @@ export function serializeMarkdown(
           : rawEnding.includes("\r")
             ? "\r"
             : "\n";
-        return serialized + ending;
+        const metadataEnding = ending === "\r\n" ? "\r\n" : "\n";
+        return preserveSourceMetadata(serialized + ending, metadataEnding);
       }
     }
-    return appendFootnoteDefinitions(
-      serialized,
-      metadata?.footnotes ?? [],
-      ending,
-    );
+    return preserveSourceMetadata(serialized, ending);
   }
 
   const matches = sourceMatches(children, blocks);
@@ -3706,15 +3716,7 @@ export function serializeMarkdown(
     hasContentBefore = true;
   }
   if (children.length === 0 && previous?.trailing) output += previous.trailing;
-  if (!previous) {
-    const metadata = documentMetadata.get(doc);
-    return appendFootnoteDefinitions(output, metadata?.footnotes ?? [], ending);
-  }
-  return preserveFootnoteDefinitions(
-    preserveReferenceDefinitions(output, previous, ending),
-    previous,
-    ending,
-  );
+  return preserveSourceMetadata(output, ending);
 }
 
 function escapeHtml(value: string): string {

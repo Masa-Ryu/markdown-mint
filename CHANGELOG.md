@@ -10,6 +10,13 @@
   opens a confirmed draft as a separate untitled document, and supports
   deliberate discard without applying stale content to the current document.
 
+## 0.4.9
+
+- Restore source-only Markdown metadata, including footnote and reference
+  definitions, when recovering structured drafts after serializer failures;
+  validate recovery provenance and keep unsafe legacy drafts pending instead of
+  synchronizing incomplete Markdown.
+
 ## 0.4.8
 
 - Add full README translations for 13 languages under `docs/i18n/`, preserving

@@ -214,6 +214,212 @@ describe("structured serializer recovery", () => {
     apps.splice(apps.indexOf(recreated), 1);
   });
 
+  it("restores source-only footnote definitions with the structured draft", () => {
+    const source = "Text[^n].\n\n[^n]: KEEP FOOTNOTE";
+    const state = { value: undefined as unknown };
+    const failing = createApp(
+      state,
+      createCore(() => {
+        throw new Error("serializer failure");
+      }),
+      [],
+      { markdown: source },
+    );
+    appendText(failing, " NEW INPUT");
+    expect(state.value).toMatchObject({
+      recoveryDraft: source,
+      recoveryDocument: expect.any(Object),
+      recoveryDocumentPending: true,
+    });
+    state.value = {
+      ...(state.value as Record<string, unknown>),
+      recoveryDraft: "stale recovery source",
+    };
+    failing.destroy();
+    apps.splice(apps.indexOf(failing), 1);
+
+    const messages: unknown[] = [];
+    const restored = createApp(state, createCore(), messages, {
+      markdown: source,
+    });
+    const edits = editMessages(messages);
+    expect(edits).toHaveLength(1);
+    const recovered = String(edits[0]?.markdown);
+    expect(recovered).toContain("NEW INPUT");
+    expect(recovered).toContain("[^n]: KEEP FOOTNOTE");
+    expect(recovered.match(/\[\^n\]:/g)).toHaveLength(1);
+
+    const reparsed = parseMarkdown(recovered, "github");
+    expect(reparsed.footnotes?.map((definition) => definition.content)).toEqual(
+      ["KEEP FOOTNOTE"],
+    );
+    expect(renderMarkdown(recovered, "github")).toContain("KEEP FOOTNOTE");
+    restored.destroy();
+    apps.splice(apps.indexOf(restored), 1);
+  });
+
+  it("restores a source-only footnote after structured recovery", () => {
+    const source = "[^n]: KEEP FOOTNOTE";
+    const state = { value: undefined as unknown };
+    const failing = createApp(
+      state,
+      createCore(() => {
+        throw new Error("serializer failure");
+      }),
+      [],
+      { markdown: source },
+    );
+    appendText(failing, "NEW INPUT");
+    expect(state.value).toMatchObject({
+      recoveryDraft: source,
+      recoveryDocument: expect.any(Object),
+      recoveryDocumentPending: true,
+    });
+    state.value = {
+      ...(state.value as Record<string, unknown>),
+      recoveryDraft: "stale recovery source",
+    };
+    failing.destroy();
+    apps.splice(apps.indexOf(failing), 1);
+
+    const messages: unknown[] = [];
+    const restored = createApp(state, createCore(), messages, {
+      markdown: source,
+    });
+    const firstEdit = editMessages(messages)[0]!;
+    const recovered = String(firstEdit.markdown);
+    expect(recovered).toContain("NEW INPUT");
+    expect(recovered).toContain("[^n]: KEEP FOOTNOTE");
+    expect(recovered.match(/\[\^n\]:/g)).toHaveLength(1);
+
+    const reparsed = parseMarkdown(recovered, "github");
+    expect(reparsed.doc.textContent).toContain("NEW INPUT");
+    expect(reparsed.footnotes?.map((definition) => definition.content)).toEqual(
+      ["KEEP FOOTNOTE"],
+    );
+
+    acknowledge(restored, firstEdit);
+    appendText(restored, " MORE INPUT");
+    const secondEdit = editMessages(messages).at(-1)!;
+    expect(secondEdit.markdown).toContain("NEW INPUT");
+    expect(secondEdit.markdown).toContain("MORE INPUT");
+    expect(secondEdit.markdown).toContain("[^n]: KEEP FOOTNOTE");
+    expect(String(secondEdit.markdown).match(/\[\^n\]:/g)).toHaveLength(1);
+    restored.destroy();
+    apps.splice(apps.indexOf(restored), 1);
+  });
+
+  it.each(["\n", "\r\n"])(
+    "preserves multiple footnotes and multiline reference definitions with %s line endings",
+    (ending) => {
+      const source = [
+        "Text[^n] and [link][guide].",
+        "",
+        "Unchanged block.",
+        "",
+        "[guide]: https://example.com/docs",
+        '  "Guide title"',
+        "",
+        "[^n]: KEEP FOOTNOTE",
+        "    continuation line",
+        "",
+        "[^m]: SECOND FOOTNOTE",
+      ].join(ending);
+      const state = { value: undefined as unknown };
+      const failing = createApp(
+        state,
+        createCore(() => {
+          throw new Error("serializer failure");
+        }),
+        [],
+        { markdown: source },
+      );
+      appendText(failing, " NEW INPUT");
+      failing.destroy();
+      apps.splice(apps.indexOf(failing), 1);
+
+      const messages: unknown[] = [];
+      const restored = createApp(state, createCore(), messages, {
+        markdown: source,
+      });
+      const firstEdit = editMessages(messages)[0]!;
+      const recovered = String(firstEdit.markdown);
+      expect(recovered).toContain("NEW INPUT");
+      expect(recovered).toContain("Unchanged block");
+      expect(recovered).toContain("[^n]: KEEP FOOTNOTE");
+      expect(recovered).toContain("    continuation line");
+      expect(recovered).toContain("[^m]: SECOND FOOTNOTE");
+      expect(recovered).toContain(
+        ["[guide]: https://example.com/docs", '  "Guide title"'].join(ending),
+      );
+      expect(recovered.match(/\[\^n\]:/g)).toHaveLength(1);
+      expect(recovered.match(/\[\^m\]:/g)).toHaveLength(1);
+      expect(recovered.match(/\[guide\]:/g)).toHaveLength(1);
+      if (ending === "\r\n")
+        expect(recovered.replace(/\r\n/g, "")).not.toContain("\n");
+      else expect(recovered).not.toContain("\r");
+
+      const reparsed = parseMarkdown(recovered, "github");
+      expect(
+        reparsed.footnotes?.map((definition) => definition.content),
+      ).toEqual(["KEEP FOOTNOTE\ncontinuation line", "SECOND FOOTNOTE"]);
+      let linkHref: unknown;
+      reparsed.doc.descendants((node) => {
+        const link = node.marks.find((mark) => mark.type.name === "link");
+        if (link) linkHref = link.attrs.href;
+      });
+      expect(linkHref).toBe("https://example.com/docs");
+      expect(renderMarkdown(recovered, "github")).toContain("KEEP FOOTNOTE");
+
+      acknowledge(restored, firstEdit);
+      appendText(restored, " MORE INPUT");
+      const secondEdit = editMessages(messages).at(-1)!;
+      expect(secondEdit.markdown).toContain("NEW INPUT");
+      expect(secondEdit.markdown).toContain("MORE INPUT");
+      expect(secondEdit.markdown).toContain("[^n]: KEEP FOOTNOTE");
+      expect(secondEdit.markdown).toContain("[^m]: SECOND FOOTNOTE");
+      expect(secondEdit.markdown).toContain(
+        "[guide]: https://example.com/docs",
+      );
+      restored.destroy();
+      apps.splice(apps.indexOf(restored), 1);
+    },
+  );
+
+  it("keeps structured recovery pending when its source provenance is incomplete", () => {
+    const source = "Text[^n].\n\n[^n]: KEEP FOOTNOTE";
+    const state = { value: undefined as unknown };
+    const failing = createApp(
+      state,
+      createCore(() => {
+        throw new Error("serializer failure");
+      }),
+      [],
+      { markdown: source },
+    );
+    appendText(failing, " NEW INPUT");
+    const legacyState = { ...(state.value as Record<string, unknown>) };
+    delete legacyState.recoveryBaseMarkdown;
+    delete legacyState.recoveryBaseVersion;
+    state.value = legacyState;
+    failing.destroy();
+    apps.splice(apps.indexOf(failing), 1);
+
+    const messages: unknown[] = [];
+    const restored = createApp(state, createCore(), messages, {
+      markdown: source,
+    });
+    expect(restored.view.state.doc.textContent).not.toContain("NEW INPUT");
+    expect(editMessages(messages)).toHaveLength(0);
+    expect(state.value).toMatchObject({
+      recoveryDraft: source,
+      recoveryDocument: expect.any(Object),
+      recoveryDocumentPending: true,
+    });
+    restored.destroy();
+    apps.splice(apps.indexOf(restored), 1);
+  });
+
   it("retains a withheld draft through implicit ACK and an external update", () => {
     const state = { value: undefined as unknown };
     const failing = createApp(

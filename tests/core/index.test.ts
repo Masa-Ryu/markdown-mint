@@ -171,6 +171,42 @@ describe("Markdown core", () => {
     expect(serializeMarkdown(snapshot.doc, snapshot)).toBe("");
   });
 
+  it.each([
+    ["LF", "\n"],
+    ["CRLF", "\r\n"],
+  ] as const)(
+    "preserves source-only footnotes for a metadata-less document with %s",
+    (_name, ending) => {
+      const source = `[^n]: KEEP FOOTNOTE${ending}`;
+      const snapshot = parseMarkdown(source);
+      expect(snapshot.blocks).toHaveLength(0);
+
+      const metadataLess = schema.nodeFromJSON(
+        schema.topNodeType
+          .create(null, [
+            schema.nodes.paragraph!.create(null, schema.text("NEW INPUT")),
+          ])
+          .toJSON(),
+      );
+      const serialized = serializeMarkdown(metadataLess, snapshot);
+
+      expect(serialized).toContain("NEW INPUT");
+      expect(serialized).toContain(
+        `NEW INPUT${ending}${ending}[^n]: KEEP FOOTNOTE`,
+      );
+      expect(serialized.match(/\[\^n\]:/g)).toHaveLength(1);
+      if (ending === "\r\n")
+        expect(serialized.replace(/\r\n/g, "")).not.toContain("\n");
+      else expect(serialized).not.toContain("\r");
+
+      const reparsed = reparseMarkdown(serialized);
+      expect(reparsed.doc.eq(metadataLess)).toBe(true);
+      expect(
+        reparsed.footnotes?.map((definition) => definition.content),
+      ).toEqual(["KEEP FOOTNOTE"]);
+    },
+  );
+
   it("preserves a source-authored separator when a neighboring block changes", () => {
     const source = "one\n\n\n\ntwo";
     const snapshot = parseMarkdown(source);
