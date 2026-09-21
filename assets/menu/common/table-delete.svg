@@ -12,7 +12,7 @@
     width="11"
     height="9"
     rx="1"
-    stroke="#1E2A38"
+    stroke="currentColor"
     stroke-width="1.2"
     stroke-linejoin="round"
   />
@@ -20,13 +20,13 @@
   <!-- vertical grid lines -->
   <path
     d="M6.17 3V12"
-    stroke="#1E2A38"
+    stroke="currentColor"
     stroke-width="1.1"
     stroke-linecap="round"
   />
   <path
     d="M9.83 3V12"
-    stroke="#1E2A38"
+    stroke="currentColor"
     stroke-width="1.1"
     stroke-linecap="round"
   />
@@ -34,13 +34,13 @@
   <!-- horizontal grid lines -->
   <path
     d="M2.5 6H13.5"
-    stroke="#1E2A38"
+    stroke="currentColor"
     stroke-width="1.1"
     stroke-linecap="round"
   />
   <path
     d="M2.5 9H13.5"
-    stroke="#1E2A38"
+    stroke="currentColor"
     stroke-width="1.1"
     stroke-linecap="round"
   />

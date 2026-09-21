@@ -67,7 +67,6 @@ export type ToolbarIconName =
   | "undo"
   | "redo";
 
-const FIXED_ICON_COLOR = /#111827/gi;
 const ICON_TEMPLATE_CACHE = new Map<ToolbarIconName, SVGSVGElement>();
 
 const ICON_SOURCES: Readonly<Record<ToolbarIconName, string>> = {
@@ -105,20 +104,6 @@ const ICON_SOURCES: Readonly<Record<ToolbarIconName, string>> = {
   redo: redoAsset,
 };
 
-function replaceFixedColors(svg: SVGSVGElement): void {
-  const elements = [svg, ...Array.from(svg.querySelectorAll<SVGElement>("*"))];
-  for (const element of elements) {
-    for (const attribute of Array.from(element.attributes)) {
-      if (!FIXED_ICON_COLOR.test(attribute.value)) continue;
-      FIXED_ICON_COLOR.lastIndex = 0;
-      element.setAttribute(
-        attribute.name,
-        attribute.value.replace(FIXED_ICON_COLOR, "currentColor"),
-      );
-    }
-  }
-}
-
 function removeFormattingWhitespace(node: Node): void {
   for (const child of Array.from(node.childNodes)) {
     if (child.nodeType === 3 && !(child.textContent ?? "").trim()) {
@@ -146,7 +131,6 @@ function getToolbarIconTemplate(name: ToolbarIconName): SVGSVGElement {
   }
 
   const template = document.importNode(root, true) as unknown as SVGSVGElement;
-  replaceFixedColors(template);
   removeFormattingWhitespace(template);
   ICON_TEMPLATE_CACHE.set(name, template);
   return template;
@@ -156,8 +140,8 @@ function getToolbarIconTemplate(name: ToolbarIconName): SVGSVGElement {
  * Build a trusted repository icon as an inline SVG.
  *
  * SVGs are imported at build time, so rendering never performs a runtime
- * request. The supplied files use a fixed design color; converting that color
- * to currentColor keeps the same shapes usable in every VS Code theme.
+ * request. Theme-following assets declare `currentColor` in the SVG itself;
+ * semantic accent colors remain explicit in their source assets.
  */
 export function createToolbarIcon(
   name: ToolbarIconName,
