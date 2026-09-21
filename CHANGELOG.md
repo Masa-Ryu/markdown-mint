@@ -2,6 +2,10 @@
 
 ## 0.5.1
 
+- Release provider-owned Markdown document state after panels and documents
+  close or queued operations settle, avoiding accumulation from Source-only
+  changes while preserving pending edits and multi-panel synchronization.
+
 - Preserve zero-based and nine-digit ordered-list starts when editing and
   serializing lists, including nested lists, without emitting invalid
   ten-digit markers.
