@@ -138,7 +138,7 @@
       "./dist/katex/katex.css"
     ],
     "markdown.previewScripts": [
-      "./dist/mermaid.js"
+      "./dist/mermaid-loader.js"
     ],
     "markdown.markdownItPlugins": true
   },
@@ -161,6 +161,7 @@
     "benchmark:file-search:browser": "npm run build:webview && node scripts/benchmark-file-search-browser.mjs",
     "benchmark:file-search:extension": "npm run compile && npm run build && node scripts/benchmark-file-search-extension.mjs",
     "benchmark:source-serialization": "node scripts/benchmark-source-serialization.mjs",
+    "benchmark:mermaid-startup": "npm run build && node scripts/benchmark-mermaid-startup.mjs",
     "test:watch": "vitest",
     "test:extension": "npm run compile && npm run build && node scripts/test-extension.mjs",
     "verify:package": "npm run build && node scripts/verify-package.mjs",

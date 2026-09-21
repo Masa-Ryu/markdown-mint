@@ -12,7 +12,7 @@
   <link rel="stylesheet" href="/media/webview.css">
 </head>
 <body data-markdown-mint-mode="editor">
-  <main id="app" aria-label="Markdown Mint"></main>
+  <main id="app" aria-label="Markdown Mint" data-mermaid-runtime-uri="/dist/mermaid.js" data-mermaid-runtime-nonce="mm-test-nonce"></main>
   <script nonce="mm-test-nonce">
     window.__markdownMintCspViolations = [];
     document.addEventListener('securitypolicyviolation', event => {
@@ -409,7 +409,6 @@
       };
     })();
   </script>
-  <script nonce="mm-test-nonce" src="/dist/mermaid.js"></script>
   <script nonce="mm-test-nonce" src="/dist/webview.js"></script>
 </body>
 </html>

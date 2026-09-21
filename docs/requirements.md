@@ -27,6 +27,36 @@ system IME candidate UI remains unverified.
 | Q03 webview security                   | Webviews use a nonce-based strict CSP, bounded `localResourceRoots`, safe image/link rendering, bounded message fields, and no arbitrary command or filesystem bridge.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | Q04 profile and resource limits        | Markdown sources are capped at two million UTF-16 code units, clipboard matrices are capped at 10,000 cells with whole-paste rejection, spreadsheet TSV/HTML payloads reuse the shared clipboard text bound, and final spreadsheet serialization is checked before commit. Operation ids and resource URLs are bounded, and relative local images resolve through scoped webview resources.                                                                                                                                                                                                                                                                                                                                        |
 
+## Issue #124 Mermaid startup performance (0.5.5)
+
+The dedicated Webview no longer embeds a loading `<script>` for the packaged
+Mermaid runtime. The Extension Host supplies the local runtime URI and CSP
+nonce as root configuration; `src/webview/mermaidValidation.ts` owns one
+shared load promise used by both diagram rendering and syntax validation.
+Concurrent first requests therefore create one local script element. A failed
+load keeps the existing escaped Mermaid source and offline fallback message;
+it does not make the rest of the editor unavailable. Native Markdown Preview
+uses the lightweight `dist/mermaid-loader.js`, which requests
+`dist/mermaid.js` only when a Mermaid element exists.
+
+Production builds are minified with `keepNames` retained for useful selection
+diagnostics, while `npm run dev` keeps non-minified sourcemapped bundles.
+`npm run verify:package` and `npm run package` require both Mermaid assets, and
+the existing generated third-party notice path remains part of every build.
+
+The reproducible benchmark is `npm run benchmark:mermaid-startup` (five local
+Chromium samples by default). On 2026-09-22, the `origin/main` 0.5.4 build
+loaded the 8,346,647-byte `mermaid.js` for an ordinary document and reached an
+editable surface in a 421.5 ms median. The 0.5.5 build requested Mermaid zero
+times for the ordinary document and reached editability in 190.8 ms median;
+its first Mermaid use made exactly one request, with a 3,769,058-byte transfer
+and 246.3 ms median from the first Mermaid request to the first rendered SVG.
+The production file sizes are 1,743,401 bytes for `webview.js`, 464,943 bytes
+for `mermaid-loader.js`, and 3,768,758 bytes for `mermaid.js` (the previous
+non-minified sizes were 3,145,992 and 8,346,347 bytes for `webview.js` and
+`mermaid.js`). These are local benchmark values, not hardware-independent
+budgets.
+
 ## Repository layout and VSIX package boundary
 
 Repository assets are separated by their consumer:

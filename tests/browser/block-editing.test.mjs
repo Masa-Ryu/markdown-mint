@@ -4409,6 +4409,14 @@ async function testDocumentFixtures(page) {
           ).every((element) => element.closest("details:not([open])")),
         root,
       );
+      if (profile !== "commonmark")
+        await page.waitForFunction((selector) => {
+          const content = document.querySelector(selector);
+          return Boolean(
+            content?.querySelectorAll(".mm-mermaid svg").length &&
+            !content.querySelector('[data-mm-mermaid-state="rendering"]'),
+          );
+        }, root);
       const result = await page.locator(root).evaluate((element) => ({
         width: element.getBoundingClientRect().width,
         headings: element.querySelectorAll("h1,h2,h3").length,

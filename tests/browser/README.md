@@ -41,6 +41,24 @@ TD, subgraph, rounded/diamond/rectangular, Japanese, multiline, Markdown
 label, class-diagram, and state-diagram coverage. The same helper checks the
 visible node geometry and diagram-type boundaries.
 
+The dedicated harness supplies the packaged runtime URI and nonce as root
+configuration but does not load `dist/mermaid.js` in its HTML. Mermaid fixtures
+therefore exercise the real first-use loader; ordinary harness pages should
+have no `/dist/mermaid.js` resource entry. Native pages load the lightweight
+`dist/mermaid-loader.js` and request the heavy runtime only for Mermaid
+placeholders.
+
+Run the startup benchmark with:
+
+```sh
+npm run benchmark:mermaid-startup
+```
+
+It reports five local Chromium samples for ordinary-document time-to-editable,
+Mermaid first-use latency, runtime request count/bytes, and production bundle
+sizes. Set `MM_MERMAID_BENCHMARK_SAMPLES` or
+`MM_MERMAID_BENCHMARK_PORT` to adjust the run.
+
 Open `http://127.0.0.1:4173/native.html?fixture=math` to run the same equations
 through the native preview cascade. The server generates the KaTeX markup with
 `trust: false`, so the rich editor, dedicated preview, and native preview can

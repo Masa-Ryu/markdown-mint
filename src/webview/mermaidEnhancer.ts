@@ -4,6 +4,7 @@ import {
 } from "./codeBlockControls";
 import {
   MAX_MERMAID_SOURCE_LENGTH,
+  ensureMermaidRuntime,
   mermaidRuntimeFromGlobal,
   normalizeMermaidSource,
   type MermaidRuntime,
@@ -11,6 +12,8 @@ import {
 
 export {
   MAX_MERMAID_SOURCE_LENGTH,
+  MERMAID_RUNTIME_READY_EVENT,
+  ensureMermaidRuntime,
   mermaidRuntimeFromGlobal,
   normalizeMermaidSource,
 } from "./mermaidValidation";
@@ -22,8 +25,20 @@ export interface RenderingEnhancer {
 }
 
 const MERMAID_SELECTOR = '[data-mm-mermaid="true"]';
+const MERMAID_FIRST_USE_START_MARK = "markdown-mint-mermaid-first-use";
+const MERMAID_FIRST_USE_END_MARK = "markdown-mint-mermaid-first-rendered";
 const configuredThemes = new WeakMap<object, string>();
 let nextMermaidId = 0;
+let firstMermaidUseMarked = false;
+let firstMermaidRenderMarked = false;
+
+function markPerformance(name: string): void {
+  try {
+    globalThis.performance?.mark(name);
+  } catch {
+    // Performance marks are diagnostic only and must never affect rendering.
+  }
+}
 
 interface MermaidPalette {
   background: string;
@@ -508,7 +523,10 @@ export function enhanceRenderedContent(
     textForStatus(element, message);
   };
 
-  const renderElement = (element: HTMLElement, force = false): void => {
+  const renderElement = async (
+    element: HTMLElement,
+    force = false,
+  ): Promise<void> => {
     if (
       disposed ||
       !ownerDocument ||
@@ -543,7 +561,27 @@ export function enhanceRenderedContent(
     activeElements.add(element);
     retryElements.delete(element);
     element.dataset.mmMermaidState = "rendering";
-    const runtime = mermaidRuntimeFromGlobal();
+    if (!firstMermaidUseMarked) {
+      firstMermaidUseMarked = true;
+      markPerformance(MERMAID_FIRST_USE_START_MARK);
+    }
+    let runtime: MermaidRuntime | undefined;
+    try {
+      runtime =
+        mermaidRuntimeFromGlobal() ??
+        (await ensureMermaidRuntime()) ??
+        undefined;
+    } catch {
+      runtime = undefined;
+    }
+    const current = jobs.get(element);
+    if (
+      disposed ||
+      controller.signal.aborted ||
+      !current ||
+      current.generation !== generation
+    )
+      return;
     if (!runtime) {
       finishFailure(
         element,
@@ -593,6 +631,10 @@ export function enhanceRenderedContent(
         if (sourceBlock) sourceBlock.setAttribute("hidden", "true");
         textForStatus(element, "Mermaid diagram");
         element.dataset.mmMermaidState = "rendered";
+        if (!firstMermaidRenderMarked) {
+          firstMermaidRenderMarked = true;
+          markPerformance(MERMAID_FIRST_USE_END_MARK);
+        }
         activeElements.delete(element);
         retryElements.delete(element);
       })
@@ -617,7 +659,7 @@ export function enhanceRenderedContent(
       rootElement.matches(MERMAID_SELECTOR)
     )
       candidates.unshift(rootElement as HTMLElement);
-    for (const element of candidates) renderElement(element);
+    for (const element of candidates) void renderElement(element);
   }
 
   function scheduleScan(): void {
@@ -630,7 +672,7 @@ export function enhanceRenderedContent(
   }
 
   const onRuntimeReady = (): void => {
-    for (const element of retryElements) renderElement(element, true);
+    for (const element of retryElements) void renderElement(element, true);
     scheduleScan();
   };
   ownerDocument?.defaultView?.addEventListener(
@@ -667,7 +709,7 @@ export function enhanceRenderedContent(
         rootElement.matches(MERMAID_SELECTOR)
       )
         candidates.unshift(rootElement as HTMLElement);
-      for (const element of candidates) renderElement(element, true);
+      for (const element of candidates) void renderElement(element, true);
       scheduleScan();
     },
   };
