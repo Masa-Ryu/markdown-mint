@@ -2655,9 +2655,20 @@ function serializeInlineMarked(
       active[common]!.eq(target[common]!)
     )
       common += 1;
+    // A fallback can force a still-open Markdown mark to close after a
+    // preceding marked text run. Do not put the closing delimiter after that
+    // run's trailing space: CommonMark cannot close a delimiter after
+    // whitespace, and the delimiter would become visible literal text. Keep
+    // the same whitespace outside only the marks that are being closed; marks
+    // retained in `target` remain active around it.
+    const detachedWhitespace =
+      active.length > common ? (output.match(/[ \t]+$/)?.[0] ?? "") : "";
+    if (detachedWhitespace)
+      output = output.slice(0, -detachedWhitespace.length);
     for (let index = active.length - 1; index >= common; index -= 1)
       output += delimiter(active[index]!);
     if (active.length !== common) lineStart = false;
+    if (detachedWhitespace) output += detachedWhitespace;
     active = active.slice(0, common);
     for (let index = common; index < target.length; index += 1) {
       output += delimiter(target[index]!);

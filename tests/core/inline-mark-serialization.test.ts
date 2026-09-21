@@ -1,5 +1,6 @@
 import MarkdownIt from "markdown-it";
 import { describe, expect, it } from "vitest";
+import { EditorState } from "prosemirror-state";
 import {
   parseMarkdown,
   renderMarkdown,
@@ -15,6 +16,26 @@ function paragraph(...children: PMNode[]) {
 
 function documentWithParagraph(...children: PMNode[]): PMNode {
   return schema.topNodeType.create(null, [paragraph(...children)]);
+}
+
+function replaceText(
+  document: PMNode,
+  value: string,
+  replacement: string,
+): PMNode {
+  let from = -1;
+  let marks: PMNode["marks"] = [];
+  document.descendants((node, position) => {
+    if (!node.isText || from >= 0 || !node.text?.includes(value)) return;
+    from = position + node.text.indexOf(value);
+    marks = node.marks;
+  });
+  if (from < 0) throw new Error(`Text not found: ${value}`);
+  return EditorState.create({ schema, doc: document }).tr.replaceWith(
+    from,
+    from + value.length,
+    schema.text(replacement, marks),
+  ).doc;
 }
 
 function expectExactRoundTrip(
@@ -408,4 +429,145 @@ describe("inline mark serialization", () => {
 
     expectExactRoundTrip(document, "a**foo**[**bar**](https://example.com)b");
   });
+
+  it.each(["commonmark", "github", "gitlab"] as const)(
+    "keeps a continued strong mark valid before a code fallback for %s",
+    (profile) => {
+      const strong = schema.marks.strong!.create();
+      const code = schema.marks.code!.create();
+      const document = documentWithParagraph(
+        schema.text("foo ", [strong]),
+        schema.text("bar", [strong, code]),
+        schema.text("x"),
+      );
+      const expectedSource = "**foo** <strong><code>bar</code></strong>x";
+      const expectedHtml =
+        "<strong>foo</strong> <strong><code>bar</code></strong>x";
+
+      const serialized = serializeMarkdown(document);
+      expect(serialized).toBe(expectedSource);
+      const reparsed = parseMarkdown(serialized, profile).doc.firstChild!;
+      expect(reparsed.child(0).text).toBe("foo");
+      expect(reparsed.child(0).marks.map((mark) => mark.type.name)).toEqual([
+        "strong",
+      ]);
+      expect(reparsed.child(2).attrs.source).toBe(
+        "<strong><code>bar</code></strong>",
+      );
+      expect(
+        new MarkdownIt("commonmark", { html: true }).render(serialized),
+      ).toContain(expectedHtml);
+      expect(renderMarkdown(serialized, profile)).toContain(expectedHtml);
+    },
+  );
+
+  it.each([
+    { markName: "strong", delimiter: "**", tag: "strong" },
+    { markName: "em", delimiter: "*", tag: "em" },
+    { markName: "strike", delimiter: "~~", tag: "del" },
+  ] as const)(
+    "detaches whitespace before a continued %s mark fallback",
+    ({ markName, delimiter, tag }) => {
+      const mark = schema.marks[markName]!.create();
+      const document = documentWithParagraph(
+        schema.text("foo ", [mark]),
+        schema.text("bar", [mark, schema.marks.code!.create()]),
+        schema.text("x"),
+      );
+      const expectedSource = `${delimiter}foo${delimiter} <${tag}><code>bar</code></${tag}>x`;
+      const expectedHtml = `<${tag}>foo</${tag}> <${tag}><code>bar</code></${tag}>x`;
+      const expectedParserHtml =
+        markName === "strike"
+          ? `<s>foo</s> <del><code>bar</code></del>x`
+          : expectedHtml;
+      const parserPreset = markName === "strike" ? "default" : "commonmark";
+      const renderProfile = markName === "strike" ? "github" : "commonmark";
+
+      const serialized = serializeMarkdown(document);
+      expect(serialized).toBe(expectedSource);
+      expect(
+        new MarkdownIt(parserPreset, { html: true }).render(serialized),
+      ).toContain(expectedParserHtml);
+      expect(renderMarkdown(serialized, renderProfile)).toContain(expectedHtml);
+    },
+  );
+
+  it.each(["commonmark", "github", "gitlab"] as const)(
+    "keeps a source edit and a neighboring re-edit valid after fallback (%s)",
+    (profile) => {
+      const source = "**foo `bar`** x";
+      const expectedBeforeNeighborEdit =
+        "**foo** <strong><code>bar</code></strong>x";
+      const expectedAfterNeighborEdit =
+        "**foo** <strong><code>bar</code></strong>y";
+      const expectedBeforeHtml =
+        "<strong>foo</strong> <strong><code>bar</code></strong>x";
+      const expectedAfterHtml =
+        "<strong>foo</strong> <strong><code>bar</code></strong>y";
+
+      const snapshot = parseMarkdown(source, profile);
+      const changed = replaceText(snapshot.doc, " x", "x");
+      const serialized = serializeMarkdown(changed, snapshot);
+      expect(serialized).toBe(expectedBeforeNeighborEdit);
+      expect(
+        new MarkdownIt("commonmark", { html: true }).render(serialized),
+      ).toContain(expectedBeforeHtml);
+      expect(renderMarkdown(serialized, profile)).toContain(expectedBeforeHtml);
+
+      const reparsedSnapshot = parseMarkdown(serialized, profile);
+      const editedAgain = replaceText(reparsedSnapshot.doc, "x", "y");
+      const serializedAgain = serializeMarkdown(editedAgain, reparsedSnapshot);
+      expect(serializedAgain).toBe(expectedAfterNeighborEdit);
+      expect(
+        new MarkdownIt("commonmark", { html: true }).render(serializedAgain),
+      ).toContain(expectedAfterHtml);
+      expect(renderMarkdown(serializedAgain, profile)).toContain(
+        expectedAfterHtml,
+      );
+    },
+  );
+
+  it.each(["github", "gitlab"] as const)(
+    "keeps a continued strong mark valid in a table cell for %s",
+    (profile) => {
+      const cellAttrs = {
+        colspan: 1,
+        rowspan: 1,
+        colwidth: null,
+        alignment: null,
+      };
+      const strong = schema.marks.strong!.create();
+      const code = schema.marks.code!.create();
+      const table = schema.nodes.table!.create(null, [
+        schema.nodes.table_row!.create(null, [
+          schema.nodes.table_header!.create(
+            cellAttrs,
+            paragraph(schema.text("A")),
+          ),
+        ]),
+        schema.nodes.table_row!.create(null, [
+          schema.nodes.table_cell!.create(
+            cellAttrs,
+            paragraph(
+              schema.text("foo ", [strong]),
+              schema.text("bar", [strong, code]),
+              schema.text("x"),
+            ),
+          ),
+        ]),
+      ]);
+      const document = schema.topNodeType.create(null, [table]);
+      const serialized = serializeMarkdown(document);
+      const expectedSource =
+        "| A |\n| --- |\n| **foo** <strong><code>bar</code></strong>x |";
+      const expectedHtml =
+        "<strong>foo</strong> <strong><code>bar</code></strong>x";
+
+      expect(serialized).toBe(expectedSource);
+      expect(renderMarkdown(serialized, profile)).toContain(expectedHtml);
+      expect(
+        new MarkdownIt("default", { html: true }).render(serialized),
+      ).toContain(expectedHtml);
+    },
+  );
 });
