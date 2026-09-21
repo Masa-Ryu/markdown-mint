@@ -74,6 +74,18 @@ function mathAtoms(doc: PMNode): PMNode[] {
   return atoms;
 }
 
+function rawInlineAtoms(doc: PMNode, kind?: string): PMNode[] {
+  const atoms: PMNode[] = [];
+  doc.descendants((node) => {
+    if (
+      node.type.name === "raw_inline" &&
+      (kind === undefined || node.attrs.kind === kind)
+    )
+      atoms.push(node);
+  });
+  return atoms;
+}
+
 describe("Markdown core", () => {
   it("parses common rich Markdown into the shared PM schema", () => {
     const snapshot = parseMarkdown(
@@ -476,6 +488,114 @@ describe("Markdown core", () => {
       const reparsedAgain = reparseMarkdown(serializedAgain, profile).doc;
       expect(reparsedAgain.child(0).child(1).childCount).toBe(2);
       expect(reparsedAgain.child(0).child(1).child(1).textContent).toBe("KEEP");
+    },
+  );
+
+  it.each(["github", "gitlab"] as const)(
+    "preserves a semantic pipe in math raw_inline after repeated table edits (%s)",
+    (profile) => {
+      for (const ending of ["\n", "\r\n"] as const) {
+        const source = [
+          "| math | note |",
+          "| --- | --- |",
+          "| $a\\\\|b$ | KEEP |",
+          "",
+        ].join(ending);
+        const snapshot = parseMarkdown(source, profile);
+        const originalMath = mathAtoms(snapshot.doc);
+        expect(originalMath).toHaveLength(1);
+        const originalSource = String(originalMath[0]!.attrs.source);
+        expect(originalSource).toContain("\\|");
+
+        const changed = replaceText(snapshot.doc, "note", "memo");
+        const serialized = serializeMarkdown(changed, snapshot);
+        expect(serialized).toContain("$a\\\\|b$");
+
+        const reparsedSnapshot = reparseMarkdown(serialized, profile);
+        const reparsed = reparsedSnapshot.doc;
+        const table = reparsed.child(0)!;
+        expect(table.type.name).toBe("table");
+        expect(table.childCount).toBe(2);
+        expect(table.child(1).childCount).toBe(2);
+        expect(table.child(1).child(1).textContent).toBe("KEEP");
+        expect(mathAtoms(reparsed).map((node) => node.attrs.source)).toEqual([
+          originalSource,
+        ]);
+        expect(reparsed.eq(changed)).toBe(true);
+
+        const changedAgain = replaceText(reparsed, "memo", "final");
+        const serializedAgain = serializeMarkdown(
+          changedAgain,
+          reparsedSnapshot,
+        );
+        expect(serializedAgain).toContain("$a\\\\|b$");
+        const reparsedAgain = reparseMarkdown(serializedAgain, profile).doc;
+        expect(reparsedAgain.child(0).childCount).toBe(2);
+        expect(reparsedAgain.child(0).child(1).childCount).toBe(2);
+        expect(reparsedAgain.child(0).child(1).child(1).textContent).toBe(
+          "KEEP",
+        );
+        expect(
+          mathAtoms(reparsedAgain).map((node) => node.attrs.source),
+        ).toEqual([originalSource]);
+        expect(reparsedAgain.eq(changedAgain)).toBe(true);
+      }
+    },
+  );
+
+  it.each(["github", "gitlab"] as const)(
+    "preserves a semantic pipe in HTML raw_inline after repeated table edits (%s)",
+    (profile) => {
+      for (const ending of ["\n", "\r\n"] as const) {
+        const source = [
+          "| html | note |",
+          "| --- | --- |",
+          '| <strong data-value="\\\\|">A</strong> | KEEP |',
+          "",
+        ].join(ending);
+        const snapshot = parseMarkdown(source, profile);
+        const originalHtml = rawInlineAtoms(snapshot.doc, "html-pair");
+        expect(originalHtml).toHaveLength(1);
+        const originalSource = String(originalHtml[0]!.attrs.source);
+        expect(originalSource).toBe('<strong data-value="\\|">A</strong>');
+
+        const changed = replaceText(snapshot.doc, "note", "memo");
+        const serialized = serializeMarkdown(changed, snapshot);
+        expect(serialized).toContain('data-value="\\\\|"');
+
+        const reparsedSnapshot = reparseMarkdown(serialized, profile);
+        const reparsed = reparsedSnapshot.doc;
+        const table = reparsed.child(0)!;
+        expect(table.type.name).toBe("table");
+        expect(table.childCount).toBe(2);
+        expect(table.child(1).childCount).toBe(2);
+        expect(table.child(1).child(1).textContent).toBe("KEEP");
+        expect(
+          rawInlineAtoms(reparsed, "html-pair").map(
+            (node) => node.attrs.source,
+          ),
+        ).toEqual([originalSource]);
+        expect(reparsed.eq(changed)).toBe(true);
+
+        const changedAgain = replaceText(reparsed, "memo", "final");
+        const serializedAgain = serializeMarkdown(
+          changedAgain,
+          reparsedSnapshot,
+        );
+        expect(serializedAgain).toContain('data-value="\\\\|"');
+        const reparsedAgain = reparseMarkdown(serializedAgain, profile).doc;
+        expect(reparsedAgain.child(0).childCount).toBe(2);
+        expect(reparsedAgain.child(0).child(1).childCount).toBe(2);
+        expect(reparsedAgain.child(0).child(1).child(1).textContent).toBe(
+          "KEEP",
+        );
+        expect(
+          rawInlineAtoms(reparsedAgain, "html-pair").map(
+            (node) => node.attrs.source,
+          ),
+        ).toEqual([originalSource]);
+        expect(reparsedAgain.eq(changedAgain)).toBe(true);
+      }
     },
   );
 

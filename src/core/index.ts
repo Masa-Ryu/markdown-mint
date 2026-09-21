@@ -2492,6 +2492,7 @@ function serializeInlineMarked(
         let raw = String(child.attrs.source ?? "");
         const code = child.marks.some((mark) => mark.type.name === "code");
         if (code) raw = serializeCodeSpan(raw, table);
+        else if (table) raw = raw.replace(/\|/g, "\\|");
         const regular = regularMarks(child);
         const link = child.marks.find(
           (mark) => mark.type.name === "link" && !ignoredLink?.eq(mark),
