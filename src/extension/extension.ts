@@ -461,7 +461,18 @@ export class MarkdownMintEditorProvider
     panel.webview.html = this.webviewHtml(panel.webview, mode);
     session.disposables.push(
       panel.webview.onDidReceiveMessage(
-        (value: unknown) => void this.onMessage(session, value),
+        (value: unknown) =>
+          void this.onMessage(session, value).catch((error: unknown) => {
+            // onMessage owns operation-specific failure replies. This final
+            // boundary only protects the Webview callback from an unexpected
+            // failure in that recovery path.
+            this.post(
+              session,
+              this.errorMessage(
+                errorMessage(error, "The webview operation failed."),
+              ),
+            );
+          }),
       ),
       panel.onDidDispose(() => this.detachPanel(session)),
     );
@@ -722,109 +733,274 @@ export class MarkdownMintEditorProvider
       );
       return;
     }
-    switch (message.type) {
-      case "ready":
-        session.ready = true;
-        this.sendDocumentIfVisible(session, "initial");
-        if (session.mode === "preview") this.requestPreviewRender(session);
-        return;
-      case "edit":
-        await this.enqueue(session.state, () =>
-          this.handleEdit(session, message),
-        );
-        return;
-      case "clipboard-write":
-        await this.handleClipboardWrite(session, message);
-        return;
-      case "open-link":
-        await this.handleOpenLink(session, message);
-        return;
-      case "workspace-file-search":
-        await this.handleWorkspaceFileSearch(session, message);
-        return;
-      case "workspace-file-search-warmup":
-        this.workspaceFileSearch.warmup(
-          session.state.uri,
-          vscode.workspace.getWorkspaceFolder(session.state.uri),
-        );
-        return;
-      case "image-import":
-        await this.enqueue(session.state, () =>
-          this.handleImageImport(session, message),
-        );
-        return;
-      case "image-import-uri":
-        await this.enqueue(session.state, () =>
-          this.handleImageImportUri(session, message),
-        );
-        return;
-      case "notify":
-        this.notifyUser(message);
-        return;
-      case "recoverDraft":
-        await this.enqueue(session.state, () =>
-          this.handleRecoverDraft(session, message),
-        );
-        return;
-      case "undo":
-        await this.enqueue(session.state, () =>
-          this.handleUndoRedo(
-            session,
-            message.type,
-            message.baseVersion,
-            message.operationId,
-          ),
-        );
-        return;
-      case "redo":
-        await this.enqueue(session.state, () =>
-          this.handleUndoRedo(
-            session,
-            message.type,
-            message.baseVersion,
-            message.operationId,
-          ),
-        );
-        return;
-      case "format":
-        await this.enqueue(session.state, () =>
-          this.handleFormat(
-            session,
-            session.state,
-            message.baseVersion,
-            message.operationId,
-          ),
-        );
-        return;
-      case "save":
-        await this.enqueue(session.state, () =>
-          this.handleSave(session, message),
-        );
-        return;
-      case "set-profile":
-        await this.enqueue(session.state, () =>
-          this.handleSetProfile(session, message),
-        );
-        return;
-      case "source":
-        try {
-          await this.openSource(session.state.uri, session.panel.viewColumn);
-        } catch (error) {
-          this.post(
-            session,
-            this.errorMessage(
-              errorMessage(
-                error,
-                "The standard source editor could not be opened.",
-              ),
+    try {
+      switch (message.type) {
+        case "ready":
+          session.ready = true;
+          this.sendDocumentIfVisible(session, "initial");
+          if (session.mode === "preview") this.requestPreviewRender(session);
+          return;
+        case "edit":
+          await this.enqueue(session.state, () =>
+            this.handleEdit(session, message),
+          );
+          return;
+        case "clipboard-write":
+          await this.handleClipboardWrite(session, message);
+          return;
+        case "open-link":
+          await this.handleOpenLink(session, message);
+          return;
+        case "workspace-file-search":
+          await this.handleWorkspaceFileSearch(session, message);
+          return;
+        case "workspace-file-search-warmup":
+          this.workspaceFileSearch.warmup(
+            session.state.uri,
+            vscode.workspace.getWorkspaceFolder(session.state.uri),
+          );
+          return;
+        case "image-import":
+          await this.enqueue(session.state, () =>
+            this.handleImageImport(session, message),
+          );
+          return;
+        case "image-import-uri":
+          await this.enqueue(session.state, () =>
+            this.handleImageImportUri(session, message),
+          );
+          return;
+        case "notify":
+          this.notifyUser(message);
+          return;
+        case "recoverDraft":
+          await this.enqueue(session.state, () =>
+            this.handleRecoverDraft(session, message),
+          );
+          return;
+        case "undo":
+          await this.enqueue(session.state, () =>
+            this.handleUndoRedo(
+              session,
+              message.type,
+              message.baseVersion,
               message.operationId,
             ),
           );
+          return;
+        case "redo":
+          await this.enqueue(session.state, () =>
+            this.handleUndoRedo(
+              session,
+              message.type,
+              message.baseVersion,
+              message.operationId,
+            ),
+          );
+          return;
+        case "format":
+          await this.enqueue(session.state, () =>
+            this.handleFormat(
+              session,
+              session.state,
+              message.baseVersion,
+              message.operationId,
+            ),
+          );
+          return;
+        case "save":
+          await this.enqueue(session.state, () =>
+            this.handleSave(session, message),
+          );
+          return;
+        case "set-profile":
+          await this.enqueue(session.state, () =>
+            this.handleSetProfile(session, message),
+          );
+          return;
+        case "source":
+          try {
+            await this.openSource(session.state.uri, session.panel.viewColumn);
+          } catch (error) {
+            this.post(
+              session,
+              this.errorMessage(
+                errorMessage(
+                  error,
+                  "The standard source editor could not be opened.",
+                ),
+                message.operationId,
+              ),
+            );
+          }
+          return;
+        case "preview":
+          await this.openPreview(session.state.uri);
+          return;
+      }
+    } catch (error) {
+      await this.handleMessageFailure(session, message, error);
+    }
+  }
+
+  private async handleMessageFailure(
+    session: PanelSession,
+    message: WebviewMessage,
+    error: unknown,
+  ): Promise<void> {
+    const state = session.state;
+    const failure = errorMessage(error, "The webview operation failed.");
+    switch (message.type) {
+      case "edit":
+        if (state.pending.has(message.operationId)) {
+          await this.handleCandidateFailure(
+            session,
+            state,
+            message.markdown,
+            message.operationId,
+            "edit",
+            failure,
+            true,
+          );
+        } else {
+          this.rejectEdit(
+            session,
+            message.operationId,
+            "apply-failed",
+            failure,
+            message.markdown,
+          );
         }
         return;
-      case "preview":
-        await this.openPreview(session.state.uri);
+      case "format":
+        if (state.pending.has(message.operationId)) {
+          await this.handleCandidateFailure(
+            session,
+            state,
+            state.pending.get(message.operationId)?.targetMarkdown ??
+              state.document.getText(),
+            message.operationId,
+            "format",
+            failure,
+            true,
+          );
+        } else {
+          this.rejectFormat(
+            session,
+            message.operationId,
+            "apply-failed",
+            failure,
+          );
+        }
         return;
+      case "save":
+        {
+          const document = await this.documentAfterFailure(state);
+          this.reportSaveFailure(document, failure);
+          this.postSaveResult(
+            session,
+            message.operationId,
+            false,
+            document,
+            message.baseVersion,
+            failure,
+          );
+        }
+        return;
+      case "set-profile":
+      case "undo":
+      case "redo":
+        if (
+          (message.type === "undo" || message.type === "redo") &&
+          state.pendingCommand?.operationId === message.operationId
+        )
+          delete state.pendingCommand;
+        this.post(session, this.errorMessage(failure, message.operationId));
+        return;
+      case "recoverDraft":
+        this.rejectEdit(
+          session,
+          message.operationId,
+          "apply-failed",
+          failure,
+          message.markdown,
+        );
+        return;
+      default:
+        if ("operationId" in message && message.operationId)
+          this.post(session, this.errorMessage(failure, message.operationId));
+    }
+  }
+
+  /**
+   * Finish an edit whose WorkspaceEdit result is ambiguous. A rejected
+   * applyEdit can still have emitted a document change before its promise was
+   * settled, so inspect the real TextDocument instead of restoring the old
+   * full source. If the target is already authoritative, acknowledge it;
+   * otherwise release the pending entry and preserve the submitted draft in a
+   * single failure response.
+   */
+  private async handleCandidateFailure(
+    session: PanelSession | undefined,
+    state: DocumentState,
+    candidate: string,
+    operationId: string,
+    action: EditAction,
+    message: string,
+    acknowledgeIfTarget: boolean,
+  ): Promise<void> {
+    if (!state.pending.has(operationId)) return;
+
+    let current = state.document;
+    let refreshed = false;
+    try {
+      current = await this.currentDocument(state);
+      refreshed = true;
+    } catch {
+      // Keep the last host snapshot available for the failure response. The
+      // operation is still terminal even when VS Code cannot reopen it.
+    }
+
+    if (!state.pending.delete(operationId)) return;
+    if (acknowledgeIfTarget && refreshed && current.getText() === candidate) {
+      this.broadcastDocument(state, {
+        reason: action === "edit" ? "ack" : action,
+        operationId,
+      });
+      return;
+    }
+    this.rejectCandidate(
+      session,
+      action,
+      operationId,
+      "apply-failed",
+      message,
+      candidate,
+    );
+  }
+
+  private rejectCandidate(
+    session: PanelSession | undefined,
+    action: EditAction,
+    operationId: string,
+    reason: "stale" | "invalid" | "apply-failed" | "too-large",
+    message: string,
+    candidate?: string,
+  ): void {
+    if (action === "format") {
+      this.rejectFormat(session, operationId, reason, message);
+    } else {
+      this.rejectEdit(session, operationId, reason, message, candidate);
+    }
+  }
+
+  private async documentAfterFailure(
+    state: DocumentState,
+  ): Promise<vscode.TextDocument> {
+    try {
+      return await this.currentDocument(state);
+    } catch {
+      return state.document;
     }
   }
 
@@ -1384,8 +1560,9 @@ export class MarkdownMintEditorProvider
     endOfLineOption?: unknown,
   ): Promise<void> {
     if (candidate.length > MAX_MARKDOWN_LENGTH) {
-      this.rejectEdit(
+      this.rejectCandidate(
         session,
+        action,
         operationId,
         "too-large",
         "The Markdown source is too large.",
@@ -1394,8 +1571,9 @@ export class MarkdownMintEditorProvider
       return;
     }
     if (expectedVersion !== undefined && document.version !== expectedVersion) {
-      this.rejectEdit(
+      this.rejectCandidate(
         session,
+        action,
         operationId,
         "stale",
         "The Markdown document changed before this edit was applied.",
@@ -1414,8 +1592,9 @@ export class MarkdownMintEditorProvider
     try {
       await this.validateMarkdown(candidate, state.profile);
     } catch (error) {
-      this.rejectEdit(
+      this.rejectCandidate(
         session,
+        action,
         operationId,
         "invalid",
         errorMessage(error, "The Markdown candidate is invalid."),
@@ -1423,10 +1602,24 @@ export class MarkdownMintEditorProvider
       );
       return;
     }
-    const latest = await this.currentDocument(state);
-    if (expectedVersion !== undefined && latest.version !== expectedVersion) {
-      this.rejectEdit(
+    let latest: vscode.TextDocument;
+    try {
+      latest = await this.currentDocument(state);
+    } catch (error) {
+      this.rejectCandidate(
         session,
+        action,
+        operationId,
+        "apply-failed",
+        errorMessage(error, "VS Code could not reopen the Markdown document."),
+        candidate,
+      );
+      return;
+    }
+    if (expectedVersion !== undefined && latest.version !== expectedVersion) {
+      this.rejectCandidate(
+        session,
+        action,
         operationId,
         "stale",
         "The Markdown document changed while this edit was validated.",
@@ -1476,22 +1669,51 @@ export class MarkdownMintEditorProvider
         vscode.TextEdit.setEndOfLine(eol),
       ]);
     }
-    const applied = await vscode.workspace.applyEdit(edit);
-    if (!applied) {
-      state.pending.delete(operationId);
-      this.rejectEdit(
+    let applied: boolean;
+    try {
+      applied = await vscode.workspace.applyEdit(edit);
+    } catch (error) {
+      await this.handleCandidateFailure(
         session,
-        operationId,
-        "apply-failed",
-        "VS Code did not apply the Markdown edit.",
+        state,
         candidate,
+        operationId,
+        action,
+        errorMessage(error, "VS Code could not apply the Markdown edit."),
+        true,
+      );
+      return;
+    }
+    if (!applied) {
+      await this.handleCandidateFailure(
+        session,
+        state,
+        candidate,
+        operationId,
+        action,
+        "VS Code did not apply the Markdown edit.",
+        false,
       );
       return;
     }
 
     // Usually onDidChangeTextDocument has already committed the pending entry.
     // The fallback covers hosts that report applyEdit before dispatching the event.
-    const current = await this.currentDocument(state);
+    let current: vscode.TextDocument;
+    try {
+      current = await this.currentDocument(state);
+    } catch (error) {
+      await this.handleCandidateFailure(
+        session,
+        state,
+        candidate,
+        operationId,
+        action,
+        errorMessage(error, "VS Code could not confirm the Markdown edit."),
+        true,
+      );
+      return;
+    }
     if (current.getText() === candidate && state.pending.delete(operationId)) {
       state.version = current.version;
       this.broadcastDocument(state, {
@@ -1503,13 +1725,22 @@ export class MarkdownMintEditorProvider
       state.pending.has(operationId)
     ) {
       state.pending.delete(operationId);
-      this.rejectEdit(
-        session,
-        operationId,
-        "stale",
-        "The document changed while the edit was being applied.",
-        candidate,
-      );
+      if (action === "format") {
+        this.rejectFormat(
+          session,
+          operationId,
+          "stale",
+          "The document changed while formatting was being applied.",
+        );
+      } else {
+        this.rejectEdit(
+          session,
+          operationId,
+          "stale",
+          "The document changed while the edit was being applied.",
+          candidate,
+        );
+      }
     }
   }
 
@@ -1692,7 +1923,7 @@ export class MarkdownMintEditorProvider
     draftMarkdown?: string,
   ): void {
     const state = session?.state;
-    if (!state) return;
+    if (!session || !state || !state.panels.has(session)) return;
     const rejection: EditRejectedMessage = {
       protocolVersion: PROTOCOL_VERSION,
       type: "edit-rejected",
@@ -1712,7 +1943,7 @@ export class MarkdownMintEditorProvider
     reason: FormatRejectedMessage["reason"],
     message: string,
   ): void {
-    if (!session) return;
+    if (!session || !session.state.panels.has(session)) return;
     const rejection: FormatRejectedMessage = {
       protocolVersion: PROTOCOL_VERSION,
       type: "format-rejected",
@@ -1726,6 +1957,7 @@ export class MarkdownMintEditorProvider
   }
 
   private post(session: PanelSession, message: HostMessage): void {
+    if (!session.state.panels.has(session)) return;
     void session.panel.webview.postMessage(message);
   }
 
