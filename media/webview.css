@@ -334,6 +334,9 @@ textarea:focus-visible {
   align-items: center;
   justify-content: center;
 }
+.mm-pending-recovery-button {
+  color: var(--vscode-editorWarning-foreground, var(--mm-toolbar-foreground));
+}
 .mm-floating-button {
   display: inline-flex;
   align-items: center;
@@ -1100,6 +1103,22 @@ textarea:focus-visible {
 .mm-dialog-field textarea {
   min-height: 120px;
   resize: vertical;
+  font: inherit;
+  line-height: 1.4;
+}
+.mm-pending-recovery-dialog {
+  width: min(760px, calc(100vw - 30px));
+  max-width: calc(100vw - 30px);
+}
+.mm-pending-recovery-text {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: min(360px, 48vh);
+  resize: vertical;
+  border: 1px solid var(--vscode-input-border, var(--mm-control-border));
+  border-radius: 3px;
+  color: var(--vscode-input-foreground, var(--mm-control-foreground));
+  background: var(--vscode-input-background, var(--mm-control-background));
   font: inherit;
   line-height: 1.4;
 }

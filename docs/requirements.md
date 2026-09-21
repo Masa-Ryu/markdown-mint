@@ -72,14 +72,20 @@ Format-on-save uses the existing VS Code save lifecycle and does not alter the
 user's auto-save setting. Real save failures are recorded in the Markdown Mint
 Output channel and surfaced through VS Code's error notification.
 
-Recovery state is retained independently of the editor DOM. After webview
-recreation, a draft is restored automatically only when its document id,
-profile, and exact base source still match; an empty draft is valid. A draft
-from another document or a changed base remains stored and is not silently
-applied. Parser failures keep the raw Markdown and route editing to VS Code's
-standard source editor. Serializer failures keep the ProseMirror state and a
-JSON recovery snapshot without replacing it with `lastValidMarkdown`. Native
-filesystem read-only constraints are never overridden.
+Recovery state is retained independently of the editor DOM. The root recovery
+slot belongs to the current draft; a structured draft that cannot be restored
+automatically is moved to a separate `pendingRecovery` slot before later input
+is persisted. After webview recreation, a draft is restored automatically only
+when its document id, profile, and exact base source still match; an empty
+draft is valid. A draft from another document or a changed base remains stored
+and is not silently applied. A pending draft can be reviewed, opened as a
+separate untitled document, or explicitly discarded; closing the review keeps
+it. Only one pending slot is retained, and an invalid or overflowing write is
+left untouched rather than deleting an older draft. Parser failures keep the
+raw Markdown and route editing to VS Code's standard source editor. Serializer
+failures keep the ProseMirror state and a JSON recovery snapshot without
+replacing it with `lastValidMarkdown`. Native filesystem read-only constraints
+are never overridden.
 
 There is no dedicated bottom status element, empty status bar, or persistent
 replacement banner for these internal states. Only an actual save failure or

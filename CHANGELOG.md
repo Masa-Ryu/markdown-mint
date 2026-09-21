@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.5.0
+
+- Preserve structured recovery drafts in a separate pending slot when the
+  authoritative document, profile, or recovery source prevents automatic
+  restoration, so later input, acknowledgements, saves, and external changes
+  cannot overwrite the retained ProseMirror JSON and provenance.
+- Add an explicit pending-draft review flow that keeps cancellation safe,
+  opens a confirmed draft as a separate untitled document, and supports
+  deliberate discard without applying stale content to the current document.
+
 ## 0.4.8
 
 - Add full README translations for 13 languages under `docs/i18n/`, preserving
