@@ -74,6 +74,18 @@ function mathAtoms(doc: PMNode): PMNode[] {
   return atoms;
 }
 
+function rawInlineAtoms(doc: PMNode, kind?: string): PMNode[] {
+  const atoms: PMNode[] = [];
+  doc.descendants((node) => {
+    if (
+      node.type.name === "raw_inline" &&
+      (kind === undefined || node.attrs.kind === kind)
+    )
+      atoms.push(node);
+  });
+  return atoms;
+}
+
 describe("Markdown core", () => {
   it("parses common rich Markdown into the shared PM schema", () => {
     const snapshot = parseMarkdown(
@@ -447,8 +459,235 @@ describe("Markdown core", () => {
     expect(table.child(1).child(1).textContent).toBe("x|y");
     const serialized = serializeMarkdown(snapshot.doc);
     expect(parseMarkdown(serialized).doc.eq(snapshot.doc)).toBe(true);
+    expect(serialized).toContain("| a\\|b | `x\\|y` |");
     expect(serialized).toContain("`x\\|y`");
   });
+
+  it.each(["github", "gitlab"] as const)(
+    "preserves an image alt pipe when another table cell changes (%s)",
+    (profile) => {
+      const source =
+        "| image | note |\n| --- | --- |\n| ![A\\|B](a.png) | KEEP |\n";
+      const snapshot = parseMarkdown(source, profile);
+      const changed = replaceText(snapshot.doc, "note", "memo");
+
+      const serialized = serializeMarkdown(changed, snapshot);
+      expect(serialized).toContain("![A\\|B](a.png)");
+
+      const reparsed = reparseMarkdown(serialized, profile).doc;
+      const table = reparsed.child(0)!;
+      expect(table.type.name).toBe("table");
+      expect(table.childCount).toBe(2);
+      expect(table.child(1).childCount).toBe(2);
+      expect(table.child(1).child(0).child(0).child(0).attrs.alt).toBe("A|B");
+      expect(table.child(1).child(1).textContent).toBe("KEEP");
+
+      const reparsedSnapshot = reparseMarkdown(serialized, profile);
+      const editedAgain = replaceText(reparsedSnapshot.doc, "memo", "final");
+      const serializedAgain = serializeMarkdown(editedAgain, reparsedSnapshot);
+      const reparsedAgain = reparseMarkdown(serializedAgain, profile).doc;
+      expect(reparsedAgain.child(0).child(1).childCount).toBe(2);
+      expect(reparsedAgain.child(0).child(1).child(1).textContent).toBe("KEEP");
+    },
+  );
+
+  it.each(["github", "gitlab"] as const)(
+    "preserves a semantic pipe in math raw_inline after repeated table edits (%s)",
+    (profile) => {
+      for (const ending of ["\n", "\r\n"] as const) {
+        const source = [
+          "| math | note |",
+          "| --- | --- |",
+          "| $a\\\\|b$ | KEEP |",
+          "",
+        ].join(ending);
+        const snapshot = parseMarkdown(source, profile);
+        const originalMath = mathAtoms(snapshot.doc);
+        expect(originalMath).toHaveLength(1);
+        const originalSource = String(originalMath[0]!.attrs.source);
+        expect(originalSource).toContain("\\|");
+
+        const changed = replaceText(snapshot.doc, "note", "memo");
+        const serialized = serializeMarkdown(changed, snapshot);
+        expect(serialized).toContain("$a\\\\|b$");
+
+        const reparsedSnapshot = reparseMarkdown(serialized, profile);
+        const reparsed = reparsedSnapshot.doc;
+        const table = reparsed.child(0)!;
+        expect(table.type.name).toBe("table");
+        expect(table.childCount).toBe(2);
+        expect(table.child(1).childCount).toBe(2);
+        expect(table.child(1).child(1).textContent).toBe("KEEP");
+        expect(mathAtoms(reparsed).map((node) => node.attrs.source)).toEqual([
+          originalSource,
+        ]);
+        expect(reparsed.eq(changed)).toBe(true);
+
+        const changedAgain = replaceText(reparsed, "memo", "final");
+        const serializedAgain = serializeMarkdown(
+          changedAgain,
+          reparsedSnapshot,
+        );
+        expect(serializedAgain).toContain("$a\\\\|b$");
+        const reparsedAgain = reparseMarkdown(serializedAgain, profile).doc;
+        expect(reparsedAgain.child(0).childCount).toBe(2);
+        expect(reparsedAgain.child(0).child(1).childCount).toBe(2);
+        expect(reparsedAgain.child(0).child(1).child(1).textContent).toBe(
+          "KEEP",
+        );
+        expect(
+          mathAtoms(reparsedAgain).map((node) => node.attrs.source),
+        ).toEqual([originalSource]);
+        expect(reparsedAgain.eq(changedAgain)).toBe(true);
+      }
+    },
+  );
+
+  it.each(["github", "gitlab"] as const)(
+    "preserves a semantic pipe in HTML raw_inline after repeated table edits (%s)",
+    (profile) => {
+      for (const ending of ["\n", "\r\n"] as const) {
+        const source = [
+          "| html | note |",
+          "| --- | --- |",
+          '| <strong data-value="\\\\|">A</strong> | KEEP |',
+          "",
+        ].join(ending);
+        const snapshot = parseMarkdown(source, profile);
+        const originalHtml = rawInlineAtoms(snapshot.doc, "html-pair");
+        expect(originalHtml).toHaveLength(1);
+        const originalSource = String(originalHtml[0]!.attrs.source);
+        expect(originalSource).toBe('<strong data-value="\\|">A</strong>');
+
+        const changed = replaceText(snapshot.doc, "note", "memo");
+        const serialized = serializeMarkdown(changed, snapshot);
+        expect(serialized).toContain('data-value="\\\\|"');
+
+        const reparsedSnapshot = reparseMarkdown(serialized, profile);
+        const reparsed = reparsedSnapshot.doc;
+        const table = reparsed.child(0)!;
+        expect(table.type.name).toBe("table");
+        expect(table.childCount).toBe(2);
+        expect(table.child(1).childCount).toBe(2);
+        expect(table.child(1).child(1).textContent).toBe("KEEP");
+        expect(
+          rawInlineAtoms(reparsed, "html-pair").map(
+            (node) => node.attrs.source,
+          ),
+        ).toEqual([originalSource]);
+        expect(reparsed.eq(changed)).toBe(true);
+
+        const changedAgain = replaceText(reparsed, "memo", "final");
+        const serializedAgain = serializeMarkdown(
+          changedAgain,
+          reparsedSnapshot,
+        );
+        expect(serializedAgain).toContain('data-value="\\\\|"');
+        const reparsedAgain = reparseMarkdown(serializedAgain, profile).doc;
+        expect(reparsedAgain.child(0).childCount).toBe(2);
+        expect(reparsedAgain.child(0).child(1).childCount).toBe(2);
+        expect(reparsedAgain.child(0).child(1).child(1).textContent).toBe(
+          "KEEP",
+        );
+        expect(
+          rawInlineAtoms(reparsedAgain, "html-pair").map(
+            (node) => node.attrs.source,
+          ),
+        ).toEqual([originalSource]);
+        expect(reparsedAgain.eq(changedAgain)).toBe(true);
+      }
+    },
+  );
+
+  it.each(["github", "gitlab"] as const)(
+    "roundtrips protected inline table content after a neighboring edit (%s)",
+    (profile) => {
+      for (const ending of ["\n", "\r\n"] as const) {
+        const source = [
+          "| image | link | code | raw |",
+          "| --- | --- | --- | --- |",
+          '| ![A\\|B (alt)\\\\tail](<img\\|path/(part)> "T\\|U") | [L](<dest\\|path/(part)> "LT\\|U") | `C\\|D` | <span>A\\|B</span> |',
+          "| KEEP | KEEP | KEEP | KEEP |",
+          "",
+        ].join(ending);
+        const snapshot = parseMarkdown(source, profile);
+        expect(serializeMarkdown(snapshot.doc, snapshot)).toBe(source);
+        const changed = replaceText(snapshot.doc, "link", "url");
+
+        const serialized = serializeMarkdown(changed, snapshot);
+        const reparsed = reparseMarkdown(serialized, profile).doc;
+        const table = reparsed.child(0)!;
+        const row = table.child(1)!;
+
+        expect(table.type.name).toBe("table");
+        expect(row.childCount).toBe(4);
+        expect(table.child(2).child(0).textContent).toBe("KEEP");
+        expect(reparsed.eq(changed)).toBe(true);
+      }
+    },
+  );
+
+  it.each(["github", "gitlab"] as const)(
+    "keeps newline-bearing inline table values inside their cells (%s)",
+    (profile) => {
+      const link = schema.marks.link!.create({
+        href: "dest|path/(part)\\tail\nnext",
+        title: "link|title\\tail\nnext",
+      });
+      const image = schema.nodes.image!.create({
+        src: "image|path/(part)\\tail\nnext",
+        alt: "alt|text (part)\\tail\nnext",
+        title: "image|title\\tail\nnext",
+      });
+      const paragraph = schema.nodes.paragraph!.create(null, [
+        image,
+        schema.text(" "),
+        schema.text("label|text (part)\\tail\nnext", [link]),
+        schema.text(" "),
+        schema.text("code|text (part)\\tail\nnext", [
+          schema.marks.code!.create(),
+        ]),
+        schema.text(" "),
+        schema.nodes.raw_inline!.create({
+          source: "<span>raw|text (part)\\tail\nnext</span>",
+          kind: "html-pair",
+        }),
+      ]);
+      const cellAttrs = {
+        colspan: 1,
+        rowspan: 1,
+        colwidth: null,
+        alignment: null,
+      };
+      const table = schema.nodes.table!.create(null, [
+        schema.nodes.table_row!.create(null, [
+          schema.nodes.table_header!.create(
+            cellAttrs,
+            schema.nodes.paragraph!.create(null, schema.text("value")),
+          ),
+          schema.nodes.table_header!.create(
+            cellAttrs,
+            schema.nodes.paragraph!.create(null, schema.text("note")),
+          ),
+        ]),
+        schema.nodes.table_row!.create(null, [
+          schema.nodes.table_cell!.create(cellAttrs, paragraph),
+          schema.nodes.table_cell!.create(
+            cellAttrs,
+            schema.nodes.paragraph!.create(null, schema.text("KEEP")),
+          ),
+        ]),
+      ]);
+      const document = schema.topNodeType.create(null, [table]);
+      const changed = replaceText(document, "note", "memo");
+
+      const serialized = serializeMarkdown(changed);
+      const reparsed = reparseMarkdown(serialized, profile).doc;
+      expect(reparsed.child(0).child(1).childCount).toBe(2);
+      expect(reparsed.child(0).child(1).child(1).textContent).toBe("KEEP");
+      expect(serialized).not.toContain("\nnext");
+    },
+  );
 
   it("maps only the safe br spelling to a table hard break", () => {
     const snapshot = parseMarkdown(

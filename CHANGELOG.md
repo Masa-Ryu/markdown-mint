@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.4.1
+
+- Preserve semantic backslash-and-pipe sequences in non-code raw inline math
+  and HTML content when neighboring table cells are edited or serialized
+  repeatedly, without double-escaping code-marked raw inline content.
+- Keep the existing image alt/title, link title/destination, inline code, and
+  table-cell pipe protection behavior intact.
+
 ## 0.4.0
 
 - Add direct row and column table controls based on the visible cell grid,
