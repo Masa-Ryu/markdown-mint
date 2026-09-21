@@ -143,10 +143,10 @@ describe("heading ids at shared Details body occurrences", () => {
     const snapshot = parseMarkdown(source);
     expect(
       headingIds(renderMarkdownDocument(snapshot.doc, "github", snapshot)),
-    ).toEqual(["shared", "shared-2", "shared-1"]);
+    ).toEqual(["shared", "shared-1", "shared-2"]);
     expect(headingAnchorIds(snapshot.doc).map((anchor) => anchor.id)).toEqual([
       "shared",
-      "shared-1",
+      "shared-2",
     ]);
   });
 });

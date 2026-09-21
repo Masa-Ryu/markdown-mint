@@ -1093,6 +1093,72 @@ describe("Markdown core", () => {
     expect(inlineDocument.child(0).child(1).attrs.kind).toBe("html");
   });
 
+  it.each<Profile>(["github", "gitlab", "commonmark"])(
+    "keeps safe HTML pair source aligned with real inline tokens in %s",
+    (profile) => {
+      for (const ending of ["\n", "\r\n"] as const) {
+        const source = [
+          "Example `<strong>OLD</strong>` and <strong>KEEP</strong>.",
+          "",
+          "Example <strong>A `</strong>` KEEP</strong>.",
+          "Example <!-- <strong>COMMENT</strong> --> and <strong>FINAL</strong>.",
+          "Example <strong>\\<em>literal\\</em> KEEP</strong>.",
+          "Example <strong><em>NESTED</em></strong>.",
+          "Example <strong>FIRST</strong> and <strong>SECOND</strong>.",
+        ].join(ending);
+        const expectedSources = [
+          "<strong>KEEP</strong>",
+          "<strong>A `</strong>` KEEP</strong>",
+          "<strong>FINAL</strong>",
+          "<strong>\\<em>literal\\</em> KEEP</strong>",
+          "<strong><em>NESTED</em></strong>",
+          "<strong>FIRST</strong>",
+          "<strong>SECOND</strong>",
+        ];
+        const snapshot = parseMarkdown(source, profile);
+
+        expect(
+          rawInlineAtoms(snapshot.doc, "html-pair").map(
+            (node) => node.attrs.source,
+          ),
+        ).toEqual(expectedSources);
+        expect(serializeMarkdown(snapshot.doc, snapshot)).toBe(source);
+
+        const changed = replaceText(snapshot.doc, "Example", "Changed");
+        const serialized = serializeMarkdown(changed, snapshot);
+        expect(serialized).toContain("<strong>KEEP</strong>");
+        expect(serialized).toContain("<strong>A `</strong>` KEEP</strong>");
+
+        const reparsedSnapshot = reparseMarkdown(serialized, profile);
+        expect(
+          rawInlineAtoms(reparsedSnapshot.doc, "html-pair").map(
+            (node) => node.attrs.source,
+          ),
+        ).toEqual(expectedSources);
+
+        const changedAgain = replaceText(
+          reparsedSnapshot.doc,
+          "Changed",
+          "Rechanged",
+        );
+        const serializedAgain = serializeMarkdown(
+          changedAgain,
+          reparsedSnapshot,
+        );
+        expect(serializedAgain).toContain("Rechanged");
+        expect(serializedAgain).toContain(
+          "<strong>A `</strong>` KEEP</strong>",
+        );
+        expect(
+          rawInlineAtoms(
+            reparseMarkdown(serializedAgain, profile).doc,
+            "html-pair",
+          ).map((node) => node.attrs.source),
+        ).toContain("<strong>A `</strong>` KEEP</strong>");
+      }
+    },
+  );
+
   it("roundtrips nested marks and ordered-list continuation indentation", () => {
     for (const source of [
       "A **bold *and italic* end** text.\n",

@@ -6,6 +6,10 @@
   marked text touches whitespace or Unicode punctuation, including links,
   images, and table cells, while preserving the original text.
 
+- Share profile-aware heading-anchor calculation across the core renderer,
+  Rich Editor, dedicated preview, native preview, and GitLab table of
+  contents, preserving Unicode and preventing final-ID collisions.
+
 - Keep escaped task-like text such as `\[x\]`, `\[ \]`, and GitLab's
   `\[~\]` as ordinary list content instead of converting it to a checkbox.
 
