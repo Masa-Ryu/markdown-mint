@@ -649,29 +649,40 @@ function markdownMintSpaceOnlyCodeSpan(
     markerEnd += 1;
   const marker = state.src.slice(start, markerEnd);
 
-  let search = markerEnd;
-  while ((search = state.src.indexOf("`", search)) !== -1) {
-    let closerEnd = search + 1;
-    while (closerEnd < state.posMax && state.src.charCodeAt(closerEnd) === 0x60)
-      closerEnd += 1;
-    if (closerEnd - search !== marker.length) {
-      search = closerEnd;
-      continue;
-    }
+  const firstContentCharacter = state.src.charCodeAt(markerEnd);
+  if (
+    firstContentCharacter !== 0x20 &&
+    firstContentCharacter !== 0x0a &&
+    firstContentCharacter !== 0x0d
+  )
+    return false;
 
-    const content = state.src
-      .slice(markerEnd, search)
-      .replace(/\r\n|\r|\n/g, " ");
-    if (!/^ {3,}$/.test(content)) return false;
-    if (!silent) {
-      const token = state.push("code_inline", "code", 0);
-      token.markup = marker;
-      token.content = content;
-    }
-    state.pos = closerEnd;
-    return true;
+  let search = markerEnd;
+  while (
+    search < state.posMax &&
+    (state.src.charCodeAt(search) === 0x20 ||
+      state.src.charCodeAt(search) === 0x0a ||
+      state.src.charCodeAt(search) === 0x0d)
+  )
+    search += 1;
+  if (state.src.charCodeAt(search) !== 0x60) return false;
+
+  let closerEnd = search + 1;
+  while (closerEnd < state.posMax && state.src.charCodeAt(closerEnd) === 0x60)
+    closerEnd += 1;
+  if (closerEnd - search !== marker.length) return false;
+
+  const content = state.src
+    .slice(markerEnd, search)
+    .replace(/\r\n|\r|\n/g, " ");
+  if (!/^ {3,}$/.test(content)) return false;
+  if (!silent) {
+    const token = state.push("code_inline", "code", 0);
+    token.markup = marker;
+    token.content = content;
   }
-  return false;
+  state.pos = closerEnd;
+  return true;
 }
 
 function markdownMintMathBlock(

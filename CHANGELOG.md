@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.1
+
+- Preserve ASCII space-only inline code contents when neighboring paragraph or
+  table text is edited, including repeated serialize-and-parse cycles, without
+  adding padding or regressing safe backtick fences.
+
 ## 0.5.0
 
 - Preserve structured recovery drafts in a separate pending slot when the

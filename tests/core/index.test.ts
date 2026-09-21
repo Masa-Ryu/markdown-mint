@@ -576,6 +576,19 @@ describe("Markdown core", () => {
     },
   );
 
+  it("does not rescan non-space backtick runs before the standard parser", () => {
+    const source =
+      "x " +
+      Array.from(
+        { length: 1_000 },
+        (_, index) => "`".repeat(index + 1) + "x ",
+      ).join("");
+    const snapshot = parseMarkdown(source, "commonmark");
+
+    expect(snapshot.doc.childCount).toBe(1);
+    expect(snapshot.doc.firstChild?.type.name).toBe("paragraph");
+  });
+
   it.each(["github", "gitlab", "commonmark"] as const)(
     "keeps inline code padding and backtick contents after a neighboring edit (%s)",
     (profile) => {
