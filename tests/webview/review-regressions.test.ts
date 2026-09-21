@@ -245,30 +245,121 @@ describe("reviewed webview synchronization races", () => {
     ).toBe("https://example.test/docs/image.png");
   });
 
-  it("serializes an edit once and defers hidden preview work until after sync", async () => {
-    const serialize = vi.fn(serializeMarkdown);
-    const render = vi.fn(renderMarkdown);
-    const inspectCompatibility = vi.fn(() => []);
-    const { app, messages } = makeApp({
-      core: {
-        serializeMarkdown: serialize,
-        renderMarkdown: render,
-        inspectCompatibility,
+  it("serializes an edit once and debounces hidden preview work", () => {
+    vi.useFakeTimers();
+    try {
+      const serialize = vi.fn(serializeMarkdown);
+      const render = vi.fn(renderMarkdown);
+      const inspectCompatibility = vi.fn(() => []);
+      const { app, messages, root } = makeApp({
+        core: {
+          serializeMarkdown: serialize,
+          renderMarkdown: render,
+          inspectCompatibility,
+        },
+      });
+      serialize.mockClear();
+      render.mockClear();
+      inspectCompatibility.mockClear();
+
+      app.view.dispatch(app.view.state.tr.insertText("!"));
+
+      expect(serialize).toHaveBeenCalledTimes(1);
+      expect(edits(messages)).toHaveLength(1);
+      expect(
+        root.querySelector<HTMLTextAreaElement>(".mm-source-textarea")?.value,
+      ).toBe(edits(messages)[0]?.markdown);
+      expect(render).not.toHaveBeenCalled();
+      expect(inspectCompatibility).not.toHaveBeenCalled();
+
+      vi.advanceTimersByTime(249);
+      expect(inspectCompatibility).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(1);
+      expect(inspectCompatibility).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("bounds compatibility debounce wait and starts a new window afterward", () => {
+    vi.useFakeTimers();
+    try {
+      const inspectCompatibility = vi.fn(() => []);
+      const { app } = makeApp({ core: { inspectCompatibility } });
+      inspectCompatibility.mockClear();
+
+      app.view.dispatch(app.view.state.tr.insertText("1"));
+      for (let index = 0; index < 4; index += 1) {
+        vi.advanceTimersByTime(200);
+        app.view.dispatch(app.view.state.tr.insertText(String(index + 2)));
+      }
+
+      expect(inspectCompatibility).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(200);
+      expect(inspectCompatibility).toHaveBeenCalledTimes(1);
+
+      app.view.dispatch(app.view.state.tr.insertText("6"));
+      vi.advanceTimersByTime(249);
+      expect(inspectCompatibility).toHaveBeenCalledTimes(1);
+      vi.advanceTimersByTime(1);
+      expect(inspectCompatibility).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("coalesces visible Preview refreshes to one animation frame", () => {
+    const originalRequestAnimationFrame = window.requestAnimationFrame;
+    const originalCancelAnimationFrame = window.cancelAnimationFrame;
+    const callbacks: FrameRequestCallback[] = [];
+    Object.defineProperty(window, "requestAnimationFrame", {
+      configurable: true,
+      value: (callback: FrameRequestCallback) => {
+        callbacks.push(callback);
+        return callbacks.length;
       },
     });
-    serialize.mockClear();
-    render.mockClear();
-    inspectCompatibility.mockClear();
+    Object.defineProperty(window, "cancelAnimationFrame", {
+      configurable: true,
+      value: () => undefined,
+    });
+    try {
+      const render = vi.fn(
+        (source: string) => `<p data-source="${source}">${source}</p>`,
+      );
+      const { app, root } = makeApp({ core: { renderMarkdown: render } });
+      const setMode = (mode: EditorMode): void => {
+        (
+          app as unknown as {
+            setMode: (nextMode: EditorMode, requestHost?: boolean) => void;
+          }
+        ).setMode(mode, false);
+      };
+      setMode("preview");
+      render.mockClear();
 
-    app.view.dispatch(app.view.state.tr.insertText("!"));
+      app.view.dispatch(app.view.state.tr.insertText("1"));
+      app.view.dispatch(app.view.state.tr.insertText("2"));
+      app.view.dispatch(app.view.state.tr.insertText("3"));
 
-    expect(serialize).toHaveBeenCalledTimes(1);
-    expect(edits(messages)).toHaveLength(1);
-    expect(render).not.toHaveBeenCalled();
-    expect(inspectCompatibility).not.toHaveBeenCalled();
-
-    await flush();
-    expect(inspectCompatibility).toHaveBeenCalledTimes(1);
+      expect(render).not.toHaveBeenCalled();
+      expect(callbacks).toHaveLength(1);
+      callbacks.shift()?.(0);
+      expect(render).toHaveBeenCalledTimes(1);
+      expect(
+        root.querySelector<HTMLElement>("[data-testid=preview-content]")
+          ?.textContent,
+      ).toContain("123");
+    } finally {
+      Object.defineProperty(window, "requestAnimationFrame", {
+        configurable: true,
+        value: originalRequestAnimationFrame,
+      });
+      Object.defineProperty(window, "cancelAnimationFrame", {
+        configurable: true,
+        value: originalCancelAnimationFrame,
+      });
+    }
   });
 
   it("cancels deferred derived work when the editor is destroyed", async () => {

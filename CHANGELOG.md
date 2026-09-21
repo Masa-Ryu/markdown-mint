@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.5
+
+- Coalesce visible Preview refreshes per animation frame and debounce
+  compatibility diagnostics during typing bursts with a one-second maximum
+  wait, while keeping source synchronization, recovery, and host edits
+  immediate.
+
 ## 0.5.4
 
 - Preserve direct table-control handle DOM during ordinary cell edits, reuse
