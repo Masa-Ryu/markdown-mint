@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.5.1
+
+- Preserve backslashes and literal character-reference text in link and image
+  titles across Rich edits, including table cells and repeated serialization.
+
 ## 0.5.0
 
 - Preserve structured recovery drafts in a separate pending slot when the

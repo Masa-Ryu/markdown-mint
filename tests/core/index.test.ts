@@ -86,6 +86,23 @@ function rawInlineAtoms(doc: PMNode, kind?: string): PMNode[] {
   return atoms;
 }
 
+function firstLinkMark(doc: PMNode): PMNode["marks"][number] | undefined {
+  let result: PMNode["marks"][number] | undefined;
+  doc.descendants((node) => {
+    if (!result) result = node.marks.find((mark) => mark.type.name === "link");
+    return !result;
+  });
+  return result;
+}
+
+function firstNodeOfType(doc: PMNode, typeName: string): PMNode | undefined {
+  let result: PMNode | undefined;
+  doc.descendants((node) => {
+    if (!result && node.type.name === typeName) result = node;
+  });
+  return result;
+}
+
 describe("Markdown core", () => {
   it("parses common rich Markdown into the shared PM schema", () => {
     const snapshot = parseMarkdown(
@@ -484,6 +501,152 @@ describe("Markdown core", () => {
       /^before\n\n<div data-x="1">raw<\/div>\n\n# changed\n$/,
     );
   });
+
+  it("preserves a link title ending in a backslash after a neighboring edit", () => {
+    const source = 'Before [x](u "C:\\\\") after.\n';
+    const snapshot = parseMarkdown(source);
+    const edited = replaceText(snapshot.doc, "Before", "Changed");
+
+    const serialized = serializeMarkdown(edited, snapshot);
+
+    expect(serialized).toContain('Changed [x](u "C:\\\\") after');
+    const reparsed = reparseMarkdown(serialized).doc;
+    expect(reparsed.toJSON()).toEqual(edited.toJSON());
+    expect(firstLinkMark(reparsed)?.attrs).toEqual({
+      href: "u",
+      title: "C:\\",
+    });
+  });
+
+  it("preserves literal entity text in link and image titles across edits", () => {
+    const source =
+      'Before [x](u "literal &amp;copy;") and ![alt](image.png "image &amp;copy; &amp;#65;") after.\n';
+    const snapshot = parseMarkdown(source);
+    const edited = replaceText(snapshot.doc, "Before", "Changed");
+
+    expect(firstLinkMark(snapshot.doc)?.attrs.title).toBe("literal &copy;");
+    expect(firstNodeOfType(snapshot.doc, "image")?.attrs.title).toBe(
+      "image &copy; &#65;",
+    );
+
+    const serialized = serializeMarkdown(edited, snapshot);
+    const reparsedSnapshot = reparseMarkdown(serialized);
+    const reparsed = reparsedSnapshot.doc;
+
+    expect(serialized).toContain('"literal &amp;copy;"');
+    expect(serialized).toContain('"image &amp;copy; &amp;#65;"');
+    expect(firstLinkMark(reparsed)?.attrs.title).toBe("literal &copy;");
+    expect(firstNodeOfType(reparsed, "image")?.attrs.title).toBe(
+      "image &copy; &#65;",
+    );
+    expect(reparsed.eq(edited)).toBe(true);
+
+    const editedAgain = replaceText(reparsed, "Changed", "Final");
+    const serializedAgain = serializeMarkdown(editedAgain, reparsedSnapshot);
+    const reparsedAgain = reparseMarkdown(serializedAgain).doc;
+
+    expect(firstLinkMark(reparsedAgain)?.attrs.title).toBe("literal &copy;");
+    expect(firstNodeOfType(reparsedAgain, "image")?.attrs.title).toBe(
+      "image &copy; &#65;",
+    );
+    expect(reparsedAgain.eq(editedAgain)).toBe(true);
+  });
+
+  it.each([
+    ["before a quote", "\\" + '"quote'],
+    ["before punctuation", "\\" + "!punctuation"],
+    ["before a letter", "\\" + "letter"],
+    ["at the end", "\\"],
+    ["before another backslash", "\\" + "\\" + "tail"],
+  ] as const)("roundtrips a link title %s", (_label, title) => {
+    const link = schema.marks.link!.create({ href: "u", title });
+    const document = schema.topNodeType.create(null, [
+      schema.nodes.paragraph!.create(null, schema.text("label", [link])),
+    ]);
+
+    const serialized = serializeMarkdown(document);
+    const reparsed = reparseMarkdown(serialized).doc;
+
+    expect(reparsed.eq(document)).toBe(true);
+    expect(firstLinkMark(reparsed)?.attrs.title).toBe(title);
+  });
+
+  it("preserves titles for normal links, marked links, linked images, and raw inline links", () => {
+    const slash = "\\";
+    const link = schema.marks.link!.create({
+      href: "u",
+      title: "link" + slash,
+    });
+    const strong = schema.marks.strong!.create();
+    const image = schema.nodes.image!.create(
+      {
+        src: "image.png",
+        alt: "picture",
+        title: "image" + slash,
+      },
+      null,
+      [link],
+    );
+    const raw = schema.nodes.raw_inline!.create(
+      { source: "$x$", kind: "math_inline" },
+      null,
+      [link],
+    );
+    const document = schema.topNodeType.create(null, [
+      schema.nodes.paragraph!.create(null, [
+        schema.text("Before "),
+        schema.text("marked", [strong, link]),
+        schema.text(" "),
+        image,
+        schema.text(" "),
+        raw,
+        schema.text(" after"),
+      ]),
+    ]);
+    const edited = replaceText(document, "Before", "Changed");
+
+    const serialized = serializeMarkdown(edited);
+    const reparsed = reparseMarkdown(serialized).doc;
+    let reparsedImage: PMNode | undefined;
+    reparsed.descendants((node) => {
+      if (!reparsedImage && node.type.name === "image") reparsedImage = node;
+    });
+
+    expect(reparsed.toJSON()).toEqual(edited.toJSON());
+    expect(firstLinkMark(reparsed)?.attrs.title).toBe("link" + slash);
+    expect(reparsedImage?.attrs.title).toBe("image" + slash);
+  });
+
+  it.each(["\n", "\r\n"] as const)(
+    "keeps link and image titles inside table cells for %j line endings",
+    (ending) => {
+      const source = [
+        "| image | link | note |",
+        "| --- | --- | --- |",
+        '| ![alt](image.png "image\\|title\\\\ &amp;copy; &amp;#65;") | [label](u "link\\|title\\\\ &amp;copy;") | KEEP |',
+        "",
+      ].join(ending);
+      const snapshot = parseMarkdown(source);
+      const edited = replaceText(snapshot.doc, "KEEP", "changed");
+
+      const serialized = serializeMarkdown(edited, snapshot);
+      const reparsed = reparseMarkdown(serialized).doc;
+      const table = reparsed.child(0)!;
+      const row = table.child(1)!;
+
+      expect(table.type.name).toBe("table");
+      expect(row.childCount).toBe(3);
+      expect(row.child(0).child(0).child(0).attrs.title).toBe(
+        "image|title\\ &copy; &#65;",
+      );
+      expect(firstLinkMark(row.child(1))?.attrs.title).toBe(
+        "link|title\\ &copy;",
+      );
+      expect(row.child(2).textContent).toBe("changed");
+      expect(reparsed.eq(edited)).toBe(true);
+      expect(serialized.endsWith(ending)).toBe(true);
+    },
+  );
 
   it("keeps table dimensions and pipes in text and code spans", () => {
     const source = "| A | B |\n| --- | --- |\n| a\\|b | `x\\|y` |\n";
