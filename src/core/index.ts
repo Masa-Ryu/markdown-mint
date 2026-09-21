@@ -1204,43 +1204,62 @@ function paragraphFromInline(
   );
 }
 
-function firstTextNode(node: PMNode): PMNode | undefined {
-  if (node.type.name !== "paragraph") return undefined;
-  for (let index = 0; index < node.childCount; index += 1) {
-    const child = node.child(index);
-    if (child.isText) return child;
-  }
-  return undefined;
-}
-
 type TaskState = boolean | "mixed" | null;
+
+function firstParagraphInline(
+  tokens: MarkdownToken[],
+  begin: number,
+  end: number,
+): MarkdownToken | undefined {
+  if (tokens[begin]?.type !== "paragraph_open") return undefined;
+  const close = findClosing(tokens, begin, "paragraph_open", end);
+  return tokens
+    .slice(begin + 1, close)
+    .find((token) => token.type === "inline");
+}
 
 function taskInfo(
   children: PMNode[],
   profile: Profile,
+  inline?: MarkdownToken,
 ): { checked: TaskState; children: PMNode[] } {
   if (profile === "commonmark") return { checked: null, children };
   const firstParagraph = children.find(
     (child) => child.type.name === "paragraph",
   );
-  const firstText = firstParagraph ? firstTextNode(firstParagraph) : undefined;
-  if (!firstText || !firstText.text) return { checked: null, children };
+  const firstInline = firstParagraph?.firstChild;
+  if (!firstInline?.isText || !firstInline.text) {
+    return { checked: null, children };
+  }
+  if (
+    firstInline.marks.some(
+      (mark) => mark.type.name === "code" || mark.type.name === "link",
+    )
+  ) {
+    return { checked: null, children };
+  }
   const markerPattern = profile === "gitlab" ? " xX~" : " xX";
-  const match = firstText.text.match(
+  // "inline.content" is the source text for this paragraph after
+  // Markdown's structural list/blockquote prefix has been consumed. Unlike
+  // the parsed PM text, it still distinguishes an escaped bracket from a
+  // task marker.
+  const match = inline?.content?.match(
     new RegExp("^\\[([" + markerPattern + "])\\][ \t]+"),
   );
-  if (!match) return { checked: null, children };
+  if (!match || !firstInline.text.startsWith(match[0])) {
+    return { checked: null, children };
+  }
   const marker = match[1]!.toLowerCase();
   const checked: TaskState =
     marker === "x" ? true : marker === "~" ? "mixed" : false;
-  const replacement = firstText.text.slice(match[0].length);
+  const replacement = firstInline.text.slice(match[0].length);
   const paragraphIndex = children.indexOf(firstParagraph!);
   const firstParagraphChildren = childrenOf(firstParagraph!);
-  const textIndex = firstParagraphChildren.indexOf(firstText);
+  const textIndex = firstParagraphChildren.indexOf(firstInline);
   if (paragraphIndex < 0 || textIndex < 0) return { checked, children };
   const paragraphChildren = firstParagraphChildren.slice();
   if (replacement)
-    paragraphChildren[textIndex] = schema.text(replacement, firstText.marks);
+    paragraphChildren[textIndex] = schema.text(replacement, firstInline.marks);
   else paragraphChildren.splice(textIndex, 1);
   const updatedParagraph = nodeTypes.paragraph.create(
     firstParagraph!.attrs,
@@ -1280,7 +1299,11 @@ function parseList(
       footnotes,
     );
     const content = children.length > 0 ? children : [emptyParagraph()];
-    const task = taskInfo(content, profile);
+    const task = taskInfo(
+      content,
+      profile,
+      firstParagraphInline(tokens, index + 1, itemClose),
+    );
     items.push(
       nodeTypes.list_item.create({ checked: task.checked }, task.children),
     );

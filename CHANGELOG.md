@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.5.1
+
+- Keep escaped task-like text such as `\[x\]`, `\[ \]`, and GitLab's
+  `\[~\]` as ordinary list content instead of converting it to a checkbox.
+
 ## 0.5.0
 
 - Preserve structured recovery drafts in a separate pending slot when the
