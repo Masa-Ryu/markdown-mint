@@ -90,6 +90,19 @@ The add controls keep the table/grid icons while the four movement controls
 use separate arrow-only SVGs, and the browser assertions verify that those
 icon identities do not overlap.
 
+Run the focused large-table controls benchmark with:
+
+```sh
+npm run benchmark:table-controls
+```
+
+It uses the same bundled Rich Editor and browser harness, edits one existing
+cell repeatedly, and reports edit latency, cell-rectangle queries, control-DOM
+replacements, and Markdown-output change state as JSON under
+`output/benchmark/table-controls.json`. The default 100x10 case is a
+repeatable performance signal for ordinary cell edits; it does not impose a
+wall-clock CI budget.
+
 The server maps `/__vscode__/markdown.css` to the installed VS Code Markdown
 stylesheet before `media/document.css` is loaded. Set `VSCODE_MARKDOWN_CSS` on
 another machine to the matching installed stylesheet. This makes the rich and

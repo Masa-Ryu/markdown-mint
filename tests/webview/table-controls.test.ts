@@ -180,6 +180,20 @@ function acknowledgeLatestEdit(
   });
 }
 
+function tableControls(app: MarkdownEditorApp): {
+  updateLayout: () => void;
+  requestLayout: () => void;
+} {
+  return (
+    app as unknown as {
+      tableControls: {
+        updateLayout: () => void;
+        requestLayout: () => void;
+      };
+    }
+  ).tableControls;
+}
+
 beforeEach(() => {
   document.body.replaceChildren();
 });
@@ -257,6 +271,74 @@ describe("direct table controls", () => {
     expect(app.view.state.doc).toBe(before);
     columnHandle.dispatchEvent(pointer("pointerup", 260, 80));
     expect(editMessages(messages)).toHaveLength(1);
+  });
+
+  it("reuses controls for cell edits, measures cells once, and coalesces layout requests", () => {
+    vi.useFakeTimers();
+    try {
+      const source = [
+        "| Name | Value | Notes |",
+        "| --- | --- | --- |",
+        "| Alpha | A | First |",
+        "| Beta | B | Second |",
+        "| Gamma | C | Third |",
+      ].join("\n");
+      const { app, root } = makeApp(source);
+      mockTableGeometry(app, root);
+      selectText(app, root.querySelector("tbody td")!);
+
+      const controls = tableControls(app);
+      const controlsElement =
+        root.querySelector<HTMLElement>(".mm-table-controls")!;
+      const rowHandle = controlsElement.querySelector<HTMLButtonElement>(
+        '[data-table-control="row-handle"][data-index="1"]',
+      )!;
+      const columnHandle = controlsElement.querySelector<HTMLButtonElement>(
+        '[data-table-control="column-handle"][data-index="0"]',
+      )!;
+      const cells = Array.from(
+        root.querySelectorAll<HTMLTableCellElement>("th, td"),
+      );
+      const rectSpies = cells.map((cell) =>
+        vi.spyOn(cell, "getBoundingClientRect"),
+      );
+
+      controls.updateLayout();
+      expect(rectSpies.every((spy) => spy.mock.calls.length === 1)).toBe(true);
+
+      rectSpies.forEach((spy) => spy.mockClear());
+      app.view.dispatch(app.view.state.tr.insertText("!"));
+      expect(
+        controlsElement.querySelector<HTMLButtonElement>(
+          '[data-table-control="row-handle"][data-index="1"]',
+        ),
+      ).toBe(rowHandle);
+      expect(
+        controlsElement.querySelector<HTMLButtonElement>(
+          '[data-table-control="column-handle"][data-index="0"]',
+        ),
+      ).toBe(columnHandle);
+
+      controls.updateLayout();
+      rectSpies.forEach((spy) => spy.mockClear());
+      controls.requestLayout();
+      controls.requestLayout();
+      controls.requestLayout();
+      vi.runOnlyPendingTimers();
+      expect(rectSpies.every((spy) => spy.mock.calls.length === 1)).toBe(true);
+
+      const appendRow = controlsElement.querySelector<HTMLButtonElement>(
+        '[data-table-control="row-append"]',
+      )!;
+      appendRow.click();
+      expect(
+        controlsElement.querySelector<HTMLButtonElement>(
+          '[data-table-control="row-handle"][data-index="1"]',
+        ),
+      ).not.toBe(rowHandle);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("integrates toolbar controls by axis and keeps hidden moves out of Tab order", () => {

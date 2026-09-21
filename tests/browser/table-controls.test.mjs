@@ -247,6 +247,66 @@ async function dragPresentationGeometry(page, pointerX, pointerY) {
   );
 }
 
+async function testCellEditPreservesControlDom(page) {
+  await load(page, numberedSource(100, 10));
+  const table = await controlTable(page);
+  const cell = table.locator("tbody td").nth(1);
+  await cell.click();
+  await page.keyboard.press("End");
+  const before = await page.evaluate(() => {
+    const rowHandle = document.querySelector(
+      '[data-table-control="row-handle"][data-index="1"]',
+    );
+    const columnHandle = document.querySelector(
+      '[data-table-control="column-handle"][data-index="1"]',
+    );
+    window.__tableControlProbe = { rowHandle, columnHandle };
+    return {
+      cellText: document.querySelector("tbody tr td:nth-child(2)")?.textContent,
+      hasHandles: Boolean(rowHandle && columnHandle),
+      markdown: window.__markdownMintHarness.document.markdown,
+    };
+  });
+  assert.ok(before.hasHandles, "control handles missing");
+
+  await page.keyboard.type("!");
+  await page.waitForFunction((previous) => {
+    const current = document.querySelector(
+      "tbody tr td:nth-child(2)",
+    )?.textContent;
+    return Boolean(current && current !== previous && current.includes("!"));
+  }, before.cellText);
+  await settle(page);
+  const after = await page.evaluate(() => ({
+    sameRowHandle:
+      window.__tableControlProbe?.rowHandle ===
+      document.querySelector(
+        '[data-table-control="row-handle"][data-index="1"]',
+      ),
+    sameColumnHandle:
+      window.__tableControlProbe?.columnHandle ===
+      document.querySelector(
+        '[data-table-control="column-handle"][data-index="1"]',
+      ),
+    markdown: window.__markdownMintHarness.document.markdown,
+  }));
+  assert.equal(
+    after.sameRowHandle,
+    true,
+    "ordinary cell typing replaced the row handle DOM",
+  );
+  assert.equal(
+    after.sameColumnHandle,
+    true,
+    "ordinary cell typing replaced the column handle DOM",
+  );
+  assert.notEqual(
+    after.markdown,
+    before.markdown,
+    "ordinary cell typing did not change Markdown output",
+  );
+}
+
 async function testTablePresentation(page) {
   await page.setViewportSize({ width: 960, height: 720 });
   await load(page, emptyHeaderSource);
@@ -1513,6 +1573,7 @@ async function main() {
       deviceScaleFactor: 1,
     });
     page.setDefaultTimeout(10000);
+    await testCellEditPreservesControlDom(page);
     await testTablePresentation(page);
     await testToolbarPresentation(page);
     await testDestinationPositionLabels(page);

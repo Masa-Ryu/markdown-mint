@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.5.2
+
+- Preserve direct table-control handle DOM during ordinary cell edits, reuse
+  one cell-rectangle measurement for row and column geometry, and coalesce
+  resize/scroll/update layout work per animation frame while retaining stale
+  drag protection and structural-operation feedback.
+- Add a reproducible real-Webview 100x10 table-controls benchmark reporting
+  edit latency, cell-rectangle queries, handle replacements, and synchronized
+  Markdown output.
+
 ## 0.5.1
 
 - Keep strong, emphasis, and strikethrough delimiter boundaries parseable when
