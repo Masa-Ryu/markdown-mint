@@ -170,6 +170,7 @@ type MarkdownToken = {
   map?: [number, number];
   children?: MarkdownToken[] | null;
   attrs?: Array<[string, string]> | null;
+  meta?: unknown;
   content?: string;
   info?: string;
   markup?: string;
@@ -562,6 +563,54 @@ const markTypes = schema.marks as unknown as KnownMarkTypes;
 const emptyParagraph = (): PMNode =>
   nodeTypes.paragraph.create(null, Fragment.empty);
 
+const inlineSourceMetadataKey = "markdownMintSource";
+const trackedMarkdownIt = new WeakSet<MarkdownIt>();
+
+interface InlineSourceMetadata {
+  start: number;
+}
+
+function setInlineSourceStart(token: { meta?: unknown }, start: number): void {
+  const previous =
+    token.meta && typeof token.meta === "object" && !Array.isArray(token.meta)
+      ? (token.meta as Record<string, unknown>)
+      : {};
+  token.meta = {
+    ...previous,
+    [inlineSourceMetadataKey]: { start },
+  };
+}
+
+/** Retain the inline tokenizer's exact source offset on emitted tokens. */
+function trackInlineTokenSources(md: MarkdownIt): void {
+  if (trackedMarkdownIt.has(md)) return;
+
+  const BaseState = md.inline.State;
+  type InlineStateInstance = InstanceType<typeof BaseState>;
+  class SourceTrackingState extends BaseState {
+    override pushPending(
+      ...args: Parameters<InlineStateInstance["pushPending"]>
+    ): ReturnType<InlineStateInstance["pushPending"]> {
+      const start = this.pos - this.pending.length;
+      const token = super.pushPending(...args);
+      setInlineSourceStart(token, start);
+      return token;
+    }
+
+    override push(
+      ...args: Parameters<InlineStateInstance["push"]>
+    ): ReturnType<InlineStateInstance["push"]> {
+      const start = this.pos;
+      const token = super.push(...args);
+      setInlineSourceStart(token, start);
+      return token;
+    }
+  }
+
+  md.inline.State = SourceTrackingState;
+  trackedMarkdownIt.add(md);
+}
+
 function childrenOf(node: PMNode): PMNode[] {
   const children: PMNode[] = [];
   node.forEach((child) => children.push(child));
@@ -579,6 +628,7 @@ export function configureMarkdownIt(
   md: MarkdownIt,
   profile: Profile = "github",
 ): MarkdownIt {
+  trackInlineTokenSources(md);
   md.options.html = true;
   md.options.linkify = false;
   md.options.typographer = false;
@@ -1040,35 +1090,52 @@ function findInlineHtmlPair(
 interface InlineHtmlPairSource {
   source: string;
   body: string;
-  end: number;
+  bodyStart: number;
 }
 
-/** Keep escaped Markdown source intact while grouping safe HTML pairs. */
+function inlineSourceStart(
+  token: MarkdownToken,
+  sourceOffset: number,
+): number | undefined {
+  if (!token.meta || typeof token.meta !== "object") return undefined;
+  const metadata = (token.meta as Record<string, unknown>)[
+    inlineSourceMetadataKey
+  ];
+  if (!metadata || typeof metadata !== "object") return undefined;
+  const start = (metadata as Partial<InlineSourceMetadata>).start;
+  if (typeof start !== "number" || !Number.isInteger(start)) return undefined;
+  return start - sourceOffset;
+}
+
+/** Use tokenizer-owned positions so literals cannot masquerade as HTML. */
 function findInlineHtmlPairSource(
   source: string,
-  openingSource: string,
-  openingName: string,
-  openingStart: number,
+  openingToken: MarkdownToken,
+  closingToken: MarkdownToken,
+  sourceOffset = 0,
 ): InlineHtmlPairSource | undefined {
-  if (openingStart < 0) return undefined;
-  const tagPattern = /<\/?[a-z][a-z0-9-]*(?:\s[^>]*)?>/gi;
-  tagPattern.lastIndex = openingStart + openingSource.length;
-  let depth = 1;
-  let match: RegExpExecArray | null;
-  while ((match = tagPattern.exec(source)) != null) {
-    const tag = inlineHtmlTag(match[0]!);
-    if (!tag || tag.name !== openingName || tag.void) continue;
-    if (tag.closing) depth -= 1;
-    else depth += 1;
-    if (depth !== 0) continue;
-    const end = match.index + match[0]!.length;
-    return {
-      source: source.slice(openingStart, end),
-      body: source.slice(openingStart + openingSource.length, match.index),
-      end,
-    };
-  }
-  return undefined;
+  const openingStart = inlineSourceStart(openingToken, sourceOffset);
+  const closingStart = inlineSourceStart(closingToken, sourceOffset);
+  if (openingStart == null || closingStart == null) return undefined;
+
+  const openingSource = literalTokenText(openingToken);
+  const closingSource = literalTokenText(closingToken);
+  const openingEnd = openingStart + openingSource.length;
+  const closingEnd = closingStart + closingSource.length;
+  if (
+    openingStart < 0 ||
+    closingStart < openingEnd ||
+    closingEnd > source.length ||
+    source.slice(openingStart, openingEnd) !== openingSource ||
+    source.slice(closingStart, closingEnd) !== closingSource
+  )
+    return undefined;
+
+  return {
+    source: source.slice(openingStart, closingEnd),
+    body: source.slice(openingEnd, closingStart),
+    bodyStart: openingEnd,
+  };
 }
 
 function parseInline(
@@ -1076,11 +1143,12 @@ function parseInline(
   profile: Profile = "github",
   footnotes?: Map<string, FootnoteDefinition>,
   sourceText = "",
+  sourceOffset = 0,
 ): PMNode[] {
   if (!children || children.length === 0) return [];
   const output: PMNode[] = [];
   const markStack: Mark[] = [];
-  let sourceCursor = 0;
+  const inlineSource = restoreEscapedDollars(sourceText, true);
   const emitText = (value: string): void => {
     const restored = restoreEscapedDollars(value);
     if (restored) output.push(schema.text(restored, markStack));
@@ -1246,10 +1314,6 @@ function parseInline(
       case "html_inline": {
         const source = literalTokenText(child);
         const tag = inlineHtmlTag(source);
-        const sourceStart = sourceText.indexOf(source, sourceCursor);
-        const consumedEnd =
-          sourceStart >= 0 ? sourceStart + source.length : sourceCursor;
-        let pairedSource: InlineHtmlPairSource | undefined;
         if (/^<br\s*\/?>(?:\s*)$/i.test(source.trim())) {
           output.push(nodeTypes.hard_break.create());
         } else if (/^<!--[\s\S]*-->$/.test(source.trim())) {
@@ -1261,38 +1325,39 @@ function parseInline(
           // safe tags so a nested <strong> cannot close the outer pair early.
           const closingIndex = findInlineHtmlPair(children, index, tag);
           if (closingIndex > index) {
-            const parts = [source];
+            let canPair = true;
             for (
               let candidate = index + 1;
               candidate <= closingIndex;
               candidate += 1
             ) {
-              const part = inlineTokenSource(children[candidate]!);
-              if (part === null) {
-                parts.length = 0;
+              if (inlineTokenSource(children[candidate]!) === null) {
+                canPair = false;
                 break;
               }
-              parts.push(part);
             }
-            if (parts.length > 0) {
-              pairedSource = findInlineHtmlPairSource(
-                sourceText,
-                source,
-                tag.name,
-                sourceStart,
-              );
+            const pairedSource = canPair
+              ? findInlineHtmlPairSource(
+                  inlineSource,
+                  child,
+                  children[closingIndex]!,
+                  sourceOffset,
+                )
+              : undefined;
+            if (pairedSource) {
               const inlineContent = parseInline(
                 children.slice(index + 1, closingIndex),
                 profile,
                 footnotes,
-                pairedSource?.body,
+                pairedSource.body,
+                sourceOffset + pairedSource.bodyStart,
               );
               const displayText = headingDisplayText(
                 nodeTypes.paragraph.create(null, inlineContent),
               );
               output.push(
                 rawInline(
-                  pairedSource?.source ?? parts.join(""),
+                  pairedSource.source,
                   "html-pair",
                   markStack,
                   displayText,
@@ -1300,15 +1365,19 @@ function parseInline(
               );
               index = closingIndex;
             } else {
+              // Without an exact tokenizer-backed range, preserve each token
+              // independently instead of inventing a source slice or
+              // skipping the tokens through a guessed closing tag.
               output.push(rawInline(source, "html-allowed", markStack));
             }
+          } else {
+            output.push(rawInline(source, "html-allowed", markStack));
           }
         } else if (tag) {
           output.push(rawInline(source, "html-allowed", markStack));
         } else {
           output.push(rawInline(source, "html", markStack));
         }
-        sourceCursor = pairedSource?.end ?? consumedEnd;
         break;
       }
       case "math_inline":

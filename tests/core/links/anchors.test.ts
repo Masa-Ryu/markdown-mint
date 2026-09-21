@@ -130,6 +130,30 @@ describe("profile-aware heading anchors", () => {
     },
   );
 
+  it.each<Profile>(["github", "gitlab", "commonmark"])(
+    "keeps HTML pair anchor text aligned with protected literals in %s",
+    (profile) => {
+      const source = [
+        "# Example `<strong>OLD</strong>` and <strong>KEEP</strong>.",
+        "# Example <strong>A `</strong>` KEEP</strong>.",
+      ].join("\n\n");
+      const snapshot = parseMarkdown(source, profile);
+      const anchors = collectHeadingAnchors(snapshot, profile);
+      const rendered = renderMarkdownDocument(snapshot.doc, profile, snapshot);
+
+      expect(anchors.map((anchor) => anchor.displayText)).toEqual([
+        "Example <strong>OLD</strong> and KEEP.",
+        "Example A </strong> KEEP.",
+      ]);
+      expect(renderedHeadingTexts(rendered)).toEqual(
+        anchors.map((anchor) => anchor.displayText),
+      );
+      expect(renderedHeadingIds(rendered)).toEqual(
+        anchors.map((anchor) => anchor.id),
+      );
+    },
+  );
+
   it("does not reuse an inherited anchor map from another profile", () => {
     const snapshot = parseMarkdown("# A  B", "gitlab");
     const githubSnapshot = parseMarkdown("# A  B", "github");
