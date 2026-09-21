@@ -3850,8 +3850,17 @@ function preserveFootnoteDefinitions(
   return appendFootnoteDefinitions(output, missing, ending);
 }
 
+// ProseMirror nodes are immutable, and transactions reuse untouched node
+// instances. Keep this cache weak so source snapshots can be collected with
+// the documents that own their nodes.
+const nodeFingerprintCache = new WeakMap<PMNode, string>();
+
 function nodeFingerprint(node: PMNode): string {
-  return JSON.stringify(node.toJSON());
+  const cached = nodeFingerprintCache.get(node);
+  if (cached !== undefined) return cached;
+  const fingerprint = JSON.stringify(node.toJSON());
+  nodeFingerprintCache.set(node, fingerprint);
+  return fingerprint;
 }
 
 function sourceMatches(

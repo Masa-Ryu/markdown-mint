@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { DOMSerializer, type Node as PMNode } from "prosemirror-model";
 import { redo, undo, history } from "prosemirror-history";
 import { EditorState } from "prosemirror-state";
@@ -1933,6 +1933,27 @@ $$
     );
     expect(serialized).toContain("changed");
     expect(serialized).toContain("paragraph 4999");
+  });
+
+  it("reuses fingerprints for unchanged ProseMirror node identities", () => {
+    const snapshot = parseMarkdown("first\n\nsecond\n\nthird\n");
+    const unchanged = snapshot.doc.child(0);
+    const changed = replaceTopLevel(
+      snapshot,
+      1,
+      schema.nodes.paragraph!.create(null, schema.text("updated")),
+    );
+    const toJSON = vi.spyOn(unchanged, "toJSON");
+
+    expect(serializeMarkdown(changed, snapshot)).toBe(
+      "first\n\nupdated\n\nthird\n",
+    );
+    expect(toJSON).toHaveBeenCalledTimes(1);
+
+    expect(serializeMarkdown(changed, snapshot)).toBe(
+      "first\n\nupdated\n\nthird\n",
+    );
+    expect(toJSON).toHaveBeenCalledTimes(1);
   });
 
   it("preserves reference definitions when a block carrying their separator is removed", () => {
