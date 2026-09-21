@@ -1847,6 +1847,29 @@ async function testMergedHtmlTablePaste(page) {
   await expectSource(page, source);
   const after = await saved(page);
   assert.equal(after.edits, before.edits);
+
+  const overlappingSpanHtml =
+    '<table><tbody><tr><td>A</td><td rowspan="2">B</td></tr><tr><td colspan="2">C</td><td>D</td></tr></tbody></table>';
+  await load(page, source);
+  await caret(page, `${rich} > p:first-child`, -1);
+  const overlappingBefore = await saved(page);
+  await page.evaluate((markup) => {
+    const clipboardData = new DataTransfer();
+    clipboardData.setData("text/html", markup);
+    const event = new ClipboardEvent("paste", {
+      bubbles: true,
+      cancelable: true,
+      clipboardData,
+    });
+    const editor = document.querySelector(".mm-rich-panel .ProseMirror");
+    if (!editor) throw new Error("Rich Editor was not rendered");
+    editor.dispatchEvent(event);
+    if (!event.defaultPrevented)
+      throw new Error("Overlapping HTML spans were not rejected");
+  }, overlappingSpanHtml);
+  await expectSource(page, source);
+  const overlappingAfter = await saved(page);
+  assert.equal(overlappingAfter.edits, overlappingBefore.edits);
 }
 
 async function testNestedBlockquoteTableNavigation(page) {

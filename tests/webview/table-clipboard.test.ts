@@ -151,6 +151,18 @@ describe("table clipboard parsing", () => {
     });
   });
 
+  it("rejects overlapping spans instead of moving cells to later columns", () => {
+    for (const html of [
+      '<table><tbody><tr><td>A</td><td rowspan="2">B</td></tr><tr><td colspan="2">C</td><td>D</td></tr></tbody></table>',
+      '<table><tbody><tr><td rowspan="2">A</td><td>B</td><td rowspan="2">C</td></tr><tr><td colspan="2">D</td></tr></tbody></table>',
+    ]) {
+      expect(parseClipboardHtmlWithStatus(html)).toEqual({
+        matrix: null,
+        failure: "malformed",
+      });
+    }
+  });
+
   it("keeps rowspans within HTML row groups", () => {
     expect(
       parseClipboardHtml(
