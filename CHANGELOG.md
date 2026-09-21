@@ -1,10 +1,13 @@
 # Changelog
 
-## 0.4.5
+## 0.4.6
 
 - Complete edit, format, and save operation failure paths when VS Code rejects
   or throws during WorkspaceEdit application or document reopening, preserving
   the Webview draft and preventing stuck synchronization state.
+
+## 0.4.5
+
 - Prevent large code-block and inline-code serializations from overflowing
   function arguments while selecting a safe backtick fence.
 
