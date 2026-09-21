@@ -21,7 +21,7 @@ import {
   renderCodeBlock as renderCodeBlockHtml,
   renderMath as renderMathHtml,
 } from "./visualRendering";
-import { codeFenceFor } from "./codeBlockSerialization";
+import { codeBlockFenceFor, codeFenceFor } from "./codeBlockSerialization";
 import infoIconAsset from "../../assets/menu/github/info-icon.svg?raw";
 import lightbulbAsset from "../../assets/menu/github/lightbulb.svg?raw";
 import warningTriangleAsset from "../../assets/menu/github/warning-triangle.svg?raw";
@@ -271,7 +271,10 @@ const baseNodes: Record<string, NodeSpec> = {
     group: "block",
     code: true,
     defining: true,
-    attrs: { params: { default: "" } },
+    attrs: {
+      params: { default: "" },
+      fence: { default: "```" },
+    },
     parseDOM: [
       {
         tag: "pre",
@@ -1546,7 +1549,7 @@ function parseBlocks(
           .replace(/\n$/, "");
         result.push(
           nodeTypes.code_block.create(
-            { params: "" },
+            { params: "", fence: "```" },
             content ? schema.text(content) : Fragment.empty,
           ),
         );
@@ -1571,9 +1574,12 @@ function parseBlocks(
           const content = literalTokenText(token)
             .replace(/\r\n|\r/g, "\n")
             .replace(/\n$/, "");
+          const fence = /^[`~]{3,}$/.test(token.markup ?? "")
+            ? token.markup!
+            : "```";
           result.push(
             nodeTypes.code_block.create(
-              { params },
+              { params, fence },
               content ? schema.text(content) : Fragment.empty,
             ),
           );
@@ -2674,8 +2680,12 @@ function serializeBlock(node: PMNode, tableCell = false): string {
       return "---";
     case "code_block": {
       const content = node.textContent.replace(/\r\n|\r/g, "\n");
-      const fence = codeFenceFor(content);
       const info = node.attrs.params ? String(node.attrs.params) : "";
+      const fence = codeBlockFenceFor(
+        content,
+        info,
+        String(node.attrs.fence ?? "```"),
+      );
       // The newline immediately before the closing fence is structural. It
       // must be emitted even when content already ends in a newline, or a
       // trailing blank line disappears when the document is reopened.
