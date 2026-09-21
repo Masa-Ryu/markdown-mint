@@ -99,4 +99,19 @@ describe("rich heading decorations for reused Details bodies", () => {
     );
     expectAnchors(app, ["shared", "shared-1", "shared-2"]);
   });
+
+  it("keeps Alert headings in the same shared document order", () => {
+    const app = fixture(["# A", "> [!NOTE]\n> # A", "# A"].join("\n\n"));
+    const headings = Array.from(app.view.dom.querySelectorAll("h1,h2"));
+
+    expect(headings.map((heading) => heading.id)).toEqual(["a", "a-2"]);
+    expect(
+      Array.from(
+        app.view.dom.querySelectorAll(
+          "h1[data-mm-heading-id],h2[data-mm-heading-id]",
+        ),
+        (heading) => heading.id,
+      ),
+    ).toEqual(["a", "a-2"]);
+  });
 });

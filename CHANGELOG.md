@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.1
+
+- Share profile-aware heading-anchor calculation across the core renderer,
+  Rich Editor, dedicated preview, native preview, and GitLab table of
+  contents, preserving Unicode and preventing final-ID collisions.
+
 ## 0.5.0
 
 - Preserve structured recovery drafts in a separate pending slot when the
