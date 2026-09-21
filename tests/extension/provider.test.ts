@@ -833,6 +833,30 @@ describe("MarkdownMintEditorProvider", () => {
     expect(policy).not.toContain("unsafe-eval");
   });
 
+  it("configures Mermaid for lazy loading without embedding its runtime script", async () => {
+    vscode.__state.reset();
+    const provider = new MarkdownMintEditorProvider(context() as never);
+    await provider.resolveCustomTextEditor(
+      vscode.__state.document as never,
+      vscode.__state.panel as never,
+      {} as never,
+    );
+
+    expect(vscode.__state.panel.webview.html).toMatch(
+      /data-mermaid-runtime-uri="[^"]*dist\/mermaid\.js"/,
+    );
+    expect(vscode.__state.panel.webview.html).toContain(
+      'data-mermaid-runtime-nonce="',
+    );
+    expect(vscode.__state.panel.webview.html).not.toMatch(
+      /<script[^>]+dist\/mermaid\.js/,
+    );
+    expect(vscode.__state.panel.webview.html).toMatch(
+      /<script[^>]+dist\/webview\.js/,
+    );
+    provider.dispose();
+  });
+
   it("does not retain source-only documents and releases closed editor state", async () => {
     vscode.__state.reset();
     const provider = new MarkdownMintEditorProvider(context() as never);

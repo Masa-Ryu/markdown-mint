@@ -1,5 +1,6 @@
 import * as core from "../core";
 import { PROTOCOL_VERSION, type MarkdownProfile } from "../shared/protocol";
+import { configureMermaidRuntimeLoader } from "./mermaidValidation";
 import {
   createEditorApp,
   type CoreBridge,
@@ -82,6 +83,15 @@ export function startWebview(
   options: Partial<EditorAppOptions> = {},
 ): MarkdownEditorApp {
   const root = options.root ?? getRoot();
+  const mermaidRuntimeUri = root.dataset.mermaidRuntimeUri;
+  if (mermaidRuntimeUri)
+    configureMermaidRuntimeLoader({
+      src: mermaidRuntimeUri,
+      ownerDocument: root.ownerDocument,
+      ...(root.dataset.mermaidRuntimeNonce
+        ? { nonce: root.dataset.mermaidRuntimeNonce }
+        : {}),
+    });
   const vscode = options.vscode === undefined ? getVsCodeApi() : options.vscode;
   const appOptions: EditorAppOptions = {
     root,

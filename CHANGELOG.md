@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.5.5
+
+- Lazy-load the packaged Mermaid runtime only when a Mermaid diagram or syntax
+  validation is first requested, sharing one local nonce-protected load across
+  concurrent requests while preserving offline source fallback behavior.
+- Use a lightweight native-preview loader, minify production bundles while
+  keeping watch sourcemaps readable, and add startup/first-use benchmark and
+  package-asset verification coverage.
+
 ## 0.5.4
 
 - Preserve direct table-control handle DOM during ordinary cell edits, reuse

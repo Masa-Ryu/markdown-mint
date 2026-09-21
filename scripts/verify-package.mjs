@@ -6,6 +6,7 @@ import Module from "node:module";
 
 const requiredAssets = [
   "dist/mermaid.js",
+  "dist/mermaid-loader.js",
   "dist/katex/katex.css",
   "dist/katex/fonts/KaTeX_Main-Regular.woff2",
 ];

@@ -1,5 +1,9 @@
 import mermaid from "mermaid";
-import { enhanceRenderedContent, type MermaidRuntime } from "./mermaidEnhancer";
+import {
+  enhanceRenderedContent,
+  MERMAID_RUNTIME_READY_EVENT,
+  type MermaidRuntime,
+} from "./mermaidEnhancer";
 
 declare const __MERMAID_VERSION__: string;
 
@@ -11,10 +15,13 @@ function installRuntime(): void {
   globals.markdownMintMermaidVersion = __MERMAID_VERSION__;
   const ownerDocument = typeof document === "undefined" ? undefined : document;
   if (!ownerDocument) return;
-  if (!ownerDocument.body.dataset.markdownMintMode)
+  if (
+    !ownerDocument.body.dataset.markdownMintMode &&
+    globals.markdownMintMermaidNativeLoader !== true
+  )
     enhanceRenderedContent(ownerDocument.body);
   ownerDocument.defaultView?.dispatchEvent(
-    new CustomEvent("markdown-mint-mermaid-ready"),
+    new CustomEvent(MERMAID_RUNTIME_READY_EVENT),
   );
 }
 
