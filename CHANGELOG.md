@@ -5,6 +5,24 @@
 - Keep escaped task-like text such as `\[x\]`, `\[ \]`, and GitLab's
   `\[~\]` as ordinary list content instead of converting it to a checkbox.
 
+- Preserve safe tilde/backtick fences when editing code blocks whose info
+  strings or bodies contain fence candidates, including source and line-ending
+  preservation for info-only edits.
+
+- Preserve ASCII space-only inline code contents when neighboring paragraph or
+  table text is edited, including repeated serialize-and-parse cycles, without
+  adding padding or regressing safe backtick fences.
+
+- Release provider-owned Markdown document state after panels and documents
+  close or queued operations settle, avoiding accumulation from Source-only
+  changes while preserving pending edits and multi-panel synchronization.
+
+- Preserve zero-based and nine-digit ordered-list starts when editing and
+  serializing lists, including nested lists, without emitting invalid
+  ten-digit markers.
+- Preserve backslashes and literal character-reference text in link and image
+  titles across Rich edits, including table cells and repeated serialization.
+
 ## 0.5.0
 
 - Preserve structured recovery drafts in a separate pending slot when the
