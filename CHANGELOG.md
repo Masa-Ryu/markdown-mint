@@ -2,6 +2,9 @@
 
 ## 0.5.1
 
+- Keep escaped task-like text such as `\[x\]`, `\[ \]`, and GitLab's
+  `\[~\]` as ordinary list content instead of converting it to a checkbox.
+
 - Preserve safe tilde/backtick fences when editing code blocks whose info
   strings or bodies contain fence candidates, including source and line-ending
   preservation for info-only edits.
