@@ -3551,6 +3551,31 @@ describe("code block vertical boundaries", () => {
 });
 
 describe("sync safety", () => {
+  it("keeps the queued draft recoverable after an apply failure without retrying", () => {
+    const { app, messages } = makeApp("Title\nBody");
+    app.view.dispatch(app.view.state.tr.insertText(" first"));
+    const first = messages.filter(isEditMessage).at(-1) as
+      { operationId?: string; markdown?: string } | undefined;
+    app.view.dispatch(app.view.state.tr.insertText(" second"));
+
+    receiveHostMessage({
+      protocolVersion: PROTOCOL_VERSION,
+      type: "edit-rejected",
+      operationId: first?.operationId,
+      reason: "apply-failed",
+      message: "The edit was not applied.",
+      currentMarkdown: "Title\nBody",
+      currentVersion: 1,
+      draftMarkdown: first?.markdown,
+    });
+
+    expect(app.sync.hasPending).toBe(false);
+    expect(app.sync.hasBlockedConflict).toBe(true);
+    expect(app.sync.blockedDraft).toContain("first second");
+    expect(messages.filter(isEditMessage)).toHaveLength(1);
+    app.destroy();
+  });
+
   it("keeps the latest local draft after a stale rejection when changes are independent", () => {
     const { app, messages } = makeApp("Title\nBody");
     const end = TextSelection.atEnd(app.view.state.doc);

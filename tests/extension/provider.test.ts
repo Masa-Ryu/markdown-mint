@@ -278,6 +278,9 @@ const vscode = vi.hoisted(() => {
   };
   const previousTexts: string[] = [];
   const redoTexts: string[] = [];
+  let applyEditMode: "success" | "false" | "reject" | "reject-after-change" =
+    "success";
+  let openTextDocumentError: Error | undefined;
   const panel = new WebviewPanel();
   const outputLines: string[] = [];
   const userNotifications: Array<{
@@ -416,6 +419,8 @@ const vscode = vi.hoisted(() => {
     async openTextDocument(
       value: Uri | { content: string; language: string },
     ): Promise<TextDocument> {
+      if (value instanceof Uri && openTextDocumentError)
+        throw openTextDocumentError;
       if (value instanceof Uri) return document;
       const draft = new TextDocument(
         Uri.parse("untitled:recovery.md"),
@@ -427,6 +432,8 @@ const vscode = vi.hoisted(() => {
       return draft;
     },
     async applyEdit(edit: WorkspaceEdit): Promise<boolean> {
+      if (applyEditMode === "false") return false;
+      if (applyEditMode === "reject") throw new Error("injected apply failure");
       for (const entry of edit.entries) {
         previousTexts.push(document.getText());
         const lines = document.getText().split(/\r?\n/);
@@ -447,6 +454,8 @@ const vscode = vi.hoisted(() => {
       redoTexts.length = 0;
       for (const listener of textDocumentListeners)
         listener({ document, contentChanges: [{}] });
+      if (applyEditMode === "reject-after-change")
+        throw new Error("injected apply failure after change");
       return true;
     },
     getConfiguration(section: string): {
@@ -602,6 +611,8 @@ const vscode = vi.hoisted(() => {
     configurationUpdates.length = 0;
     commandCalls.length = 0;
     openWithError = undefined;
+    applyEditMode = "success";
+    openTextDocumentError = undefined;
     openExternalCalls.length = 0;
     findFilesCalls.length = 0;
     openExternalResult = true;
@@ -672,6 +683,21 @@ const vscode = vi.hoisted(() => {
       set openWithError(value: Error | undefined) {
         openWithError = value;
       },
+      get applyEditMode():
+        "success" | "false" | "reject" | "reject-after-change" {
+        return applyEditMode;
+      },
+      set applyEditMode(
+        value: "success" | "false" | "reject" | "reject-after-change",
+      ) {
+        applyEditMode = value;
+      },
+      get openTextDocumentError(): Error | undefined {
+        return openTextDocumentError;
+      },
+      set openTextDocumentError(value: Error | undefined) {
+        openTextDocumentError = value;
+      },
     },
   };
 });
@@ -735,6 +761,201 @@ describe("MarkdownMintEditorProvider", () => {
         version: document.version,
       }),
     );
+    provider.dispose();
+  });
+
+  it.each(["false", "reject"] as const)(
+    "terminates an edit when applyEdit returns %s and keeps the queue usable",
+    async (mode) => {
+      vscode.__state.reset();
+      const provider = new MarkdownMintEditorProvider(context() as never);
+      const document = vscode.__state.document;
+      await provider.resolveCustomTextEditor(
+        document as never,
+        vscode.__state.panel as never,
+        {} as never,
+      );
+      vscode.__state.panel.webview.receive({
+        protocolVersion: 1,
+        type: "ready",
+      });
+      await flush();
+
+      vscode.__state.applyEditMode = mode;
+      const rejectedBaseVersion = document.version;
+      vscode.__state.panel.webview.receive({
+        protocolVersion: 1,
+        type: "edit",
+        baseVersion: rejectedBaseVersion,
+        operationId: `edit:apply-${mode}`,
+        markdown: "# Rejected",
+      });
+      await flush();
+
+      expect(document.getText()).toBe("# Original");
+      expect(vscode.__state.panel.webview.messages).toContainEqual(
+        expect.objectContaining({
+          type: "edit-rejected",
+          operationId: `edit:apply-${mode}`,
+          reason: "apply-failed",
+          draftMarkdown: "# Rejected",
+        }),
+      );
+
+      vscode.__state.applyEditMode = "success";
+      vscode.__state.panel.webview.receive({
+        protocolVersion: 1,
+        type: "edit",
+        baseVersion: document.version,
+        operationId: "edit:after-apply-failure",
+        markdown: "# Recovered",
+      });
+      await flush();
+
+      expect(document.getText()).toBe("# Recovered");
+      expect(vscode.__state.panel.webview.messages).toContainEqual(
+        expect.objectContaining({
+          type: "document",
+          reason: "ack",
+          operationId: "edit:after-apply-failure",
+        }),
+      );
+      provider.dispose();
+    },
+  );
+
+  it("does not reply twice when applyEdit rejects after the document change arrives", async () => {
+    vscode.__state.reset();
+    const provider = new MarkdownMintEditorProvider(context() as never);
+    const document = vscode.__state.document;
+    await provider.resolveCustomTextEditor(
+      document as never,
+      vscode.__state.panel as never,
+      {} as never,
+    );
+    vscode.__state.panel.webview.receive({ protocolVersion: 1, type: "ready" });
+    await flush();
+
+    vscode.__state.applyEditMode = "reject-after-change";
+    vscode.__state.panel.webview.receive({
+      protocolVersion: 1,
+      type: "edit",
+      baseVersion: document.version,
+      operationId: "edit:reject-after-change",
+      markdown: "# Changed before rejection",
+    });
+    await flush();
+
+    const replies = vscode.__state.panel.webview.messages.filter(
+      (message): message is { operationId?: string; type?: string } =>
+        typeof message === "object" &&
+        message !== null &&
+        (message as { operationId?: unknown }).operationId ===
+          "edit:reject-after-change",
+    );
+    expect(document.getText()).toBe("# Changed before rejection");
+    expect(replies).toEqual([
+      expect.objectContaining({ type: "document", reason: "ack" }),
+    ]);
+    expect(replies.some((message) => message.type === "edit-rejected")).toBe(
+      false,
+    );
+
+    vscode.__state.applyEditMode = "success";
+    vscode.__state.panel.webview.receive({
+      protocolVersion: 1,
+      type: "edit",
+      baseVersion: document.version,
+      operationId: "edit:after-rejection",
+      markdown: "# Queue remains live",
+    });
+    await flush();
+    expect(document.getText()).toBe("# Queue remains live");
+    provider.dispose();
+  });
+
+  it("returns an edit failure when openTextDocument rejects and can recover on the next edit", async () => {
+    vscode.__state.reset();
+    const provider = new MarkdownMintEditorProvider(context() as never);
+    const document = vscode.__state.document;
+    await provider.resolveCustomTextEditor(
+      document as never,
+      vscode.__state.panel as never,
+      {} as never,
+    );
+    vscode.__state.panel.webview.receive({ protocolVersion: 1, type: "ready" });
+    await flush();
+
+    vscode.__state.openTextDocumentError = new Error("injected open failure");
+    vscode.__state.panel.webview.receive({
+      protocolVersion: 1,
+      type: "edit",
+      baseVersion: document.version,
+      operationId: "edit:open-failed",
+      markdown: "# Preserved draft",
+    });
+    await flush();
+
+    expect(vscode.__state.panel.webview.messages).toContainEqual(
+      expect.objectContaining({
+        type: "edit-rejected",
+        operationId: "edit:open-failed",
+        reason: "apply-failed",
+        draftMarkdown: "# Preserved draft",
+      }),
+    );
+
+    vscode.__state.openTextDocumentError = undefined;
+    vscode.__state.panel.webview.receive({
+      protocolVersion: 1,
+      type: "edit",
+      baseVersion: document.version,
+      operationId: "edit:open-recovered",
+      markdown: "# Reopened",
+    });
+    await flush();
+    expect(document.getText()).toBe("# Reopened");
+    provider.dispose();
+  });
+
+  it("terminates a save request when openTextDocument rejects", async () => {
+    vscode.__state.reset();
+    const provider = new MarkdownMintEditorProvider(context() as never);
+    const document = vscode.__state.document;
+    await provider.resolveCustomTextEditor(
+      document as never,
+      vscode.__state.panel as never,
+      {} as never,
+    );
+    vscode.__state.panel.webview.receive({ protocolVersion: 1, type: "ready" });
+    await flush();
+
+    vscode.__state.openTextDocumentError = new Error(
+      "injected save open failure",
+    );
+    vscode.__state.panel.webview.receive({
+      protocolVersion: 1,
+      type: "save",
+      baseVersion: document.version,
+      operationId: "save:open-failed",
+    });
+    await flush();
+
+    expect(vscode.__state.panel.webview.messages).toContainEqual(
+      expect.objectContaining({
+        type: "save-result",
+        operationId: "save:open-failed",
+        saved: false,
+        message: "injected save open failure",
+      }),
+    );
+    expect(
+      vscode.__state.userNotifications.some(
+        (entry: { level: string; message: string }) =>
+          entry.level === "error" &&
+          entry.message.includes("injected save open failure"),
+      ),
+    ).toBe(true);
     provider.dispose();
   });
 
