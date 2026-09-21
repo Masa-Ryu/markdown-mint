@@ -697,6 +697,21 @@ function attrsOf(token: MarkdownToken): Record<string, string> {
   return result;
 }
 
+// markdown-it accepts ordered markers with at most nine decimal digits. Keep
+// the parsed zero start valid while preventing malformed ProseMirror attrs
+// from producing non-Markdown starts during serialization.
+const MAX_ORDERED_LIST_START = 999_999_999;
+
+function normalizeOrderedListStart(value: unknown): number {
+  return typeof value === "number" &&
+    Number.isFinite(value) &&
+    Number.isSafeInteger(value) &&
+    value >= 0 &&
+    value <= MAX_ORDERED_LIST_START
+    ? value
+    : 1;
+}
+
 function tokenText(token: MarkdownToken): string {
   return restoreEscapedDollars(token.content ?? "");
 }
@@ -1290,7 +1305,7 @@ function parseList(
     const attrs = attrsOf(tokens[openIndex]!);
     const order = Number.parseInt(attrs.start ?? "1", 10);
     return nodeTypes.ordered_list.create(
-      { order: Number.isFinite(order) ? order : 1 },
+      { order: normalizeOrderedListStart(order) },
       items,
     );
   }
@@ -2693,7 +2708,7 @@ function serializeBlock(node: PMNode, tableCell = false): string {
         .map((item) => serializeListItem(item, "- "))
         .join("\n");
     case "ordered_list": {
-      const start = Number(node.attrs.order) || 1;
+      const start = normalizeOrderedListStart(node.attrs.order);
       return childrenOf(node)
         .map((item, index) => serializeListItem(item, `${start + index}. `))
         .join("\n");
@@ -4360,10 +4375,8 @@ function renderNode(
     case "bullet_list":
     case "ordered_list": {
       const ordered = node.type.name === "ordered_list";
-      const start =
-        ordered && Number(node.attrs.order) !== 1
-          ? ` start="${Number(node.attrs.order)}"`
-          : "";
+      const order = normalizeOrderedListStart(node.attrs.order);
+      const start = ordered && order !== 1 ? ` start="${order}"` : "";
       const taskList = childrenOf(node).some(
         (item) => item.attrs.checked != null,
       );
