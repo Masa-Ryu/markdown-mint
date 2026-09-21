@@ -1,9 +1,17 @@
 /** Select a fence longer than every backtick run in the code body. */
 export function codeFenceFor(value: string, preferred = "```"): string {
-  const runs = value.match(/`+/g) ?? [];
-  const longest = Math.max(0, ...runs.map((run) => run.length));
+  let longest = 0;
+  let current = 0;
+  for (const character of value) {
+    if (character === "`") {
+      current += 1;
+      if (current > longest) longest = current;
+    } else {
+      current = 0;
+    }
+  }
   const count = Math.max(preferred.length, longest + 1);
-  return "`".repeat(Math.max(preferred.length, count));
+  return "`".repeat(count);
 }
 
 /** Serialize one code block using a fence that cannot be closed by its body. */
