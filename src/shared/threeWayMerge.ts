@@ -60,12 +60,24 @@ export function mergeMarkdownSnapshots(
   let cursor = 0;
   for (const hunk of mergedHunks) {
     if (hunk.start < cursor) return undefined;
-    result.push(...baseLines.slice(cursor, hunk.start));
-    result.push(...hunk.replacement);
+    appendLines(result, baseLines, cursor, hunk.start);
+    appendLines(result, hunk.replacement);
     cursor = hunk.end;
   }
-  result.push(...baseLines.slice(cursor));
+  appendLines(result, baseLines, cursor);
   return result.join("");
+}
+
+function appendLines(
+  target: string[],
+  source: readonly string[],
+  start = 0,
+  end = source.length,
+): void {
+  for (let index = start; index < end; index += 1) {
+    const line = source[index];
+    if (line !== undefined) target.push(line);
+  }
 }
 
 function splitLines(value: string): string[] {
