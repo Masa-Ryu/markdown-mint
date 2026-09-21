@@ -23,6 +23,65 @@ describe("three-way Markdown merge", () => {
       mergeMarkdownSnapshots("Title\n", "Local title\n", "Remote title\n"),
     ).toBeUndefined();
   });
+
+  it("merges independent changes in a 150,000-line source without spreading ranges", () => {
+    const count = 150_000;
+    const base = Array.from(
+      { length: count },
+      (_, index) => `line-${index}\n`,
+    ).join("");
+    const local = base.replace("line-0\n", "LOCAL\n");
+    const external = base.replace(`line-${count - 1}\n`, "EXTERNAL\n");
+
+    expect(base.length).toBeLessThan(2_000_000);
+    expect(mergeMarkdownSnapshots(base, local, external)).toBe(
+      local.replace(`line-${count - 1}\n`, "EXTERNAL\n"),
+    );
+  });
+
+  it("handles long unchanged prefixes and suffixes without spread arguments", () => {
+    const count = 30_000;
+    const base = Array.from(
+      { length: count },
+      (_, index) => `line-${index}\n`,
+    ).join("");
+
+    const localAtEnd = base.replace(`line-${count - 2}\n`, "LOCAL\n");
+    const externalAtEnd = base.replace(`line-${count - 1}\n`, "EXTERNAL\n");
+    expect(mergeMarkdownSnapshots(base, localAtEnd, externalAtEnd)).toBe(
+      localAtEnd.replace(`line-${count - 1}\n`, "EXTERNAL\n"),
+    );
+
+    const localAtStart = base.replace("line-0\n", "LOCAL\n");
+    const externalAtStart = base.replace("line-1\n", "EXTERNAL\n");
+    expect(mergeMarkdownSnapshots(base, localAtStart, externalAtStart)).toBe(
+      localAtStart.replace("line-1\n", "EXTERNAL\n"),
+    );
+  });
+
+  it("appends a long hunk replacement without spreading it into call arguments", () => {
+    const replacement = Array.from(
+      { length: 4_096 },
+      (_, index) => `replacement-${index}\n`,
+    ).join("");
+    const base = "before\nanchor\nafter\n";
+    const local = `before\n${replacement}after\n`;
+    const external = "before\nanchor\nexternal after\n";
+
+    expect(mergeMarkdownSnapshots(base, local, external)).toBe(
+      `before\n${replacement}external after\n`,
+    );
+  });
+
+  it("preserves CRLF line endings and a missing final newline", () => {
+    expect(
+      mergeMarkdownSnapshots(
+        "prefix\r\nunchanged\r\nsuffix",
+        "prefix\r\nLOCAL\r\nsuffix",
+        "prefix\r\nunchanged\r\nEXTERNAL",
+      ),
+    ).toBe("prefix\r\nLOCAL\r\nEXTERNAL");
+  });
 });
 
 describe("webview sync queue", () => {
