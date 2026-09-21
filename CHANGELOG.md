@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.4.8
+
+- Add full README translations for 13 languages under `docs/i18n/`, preserving
+  the English README content, structure, and demo images.
+- Add language navigation to the root README and all translations, ordered
+  by total speaker population with Simplified and Traditional Chinese grouped
+  together.
+
 ## 0.4.7
 
 - Bound three-way Markdown merge work and retained trace state so broad external
