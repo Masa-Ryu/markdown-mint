@@ -1781,6 +1781,51 @@ async function testSpreadsheetTablePasteHistory(page) {
   );
 }
 
+async function testMergedHtmlTablePaste(page) {
+  const source = blocks(
+    "Before",
+    "| H1 | H2 |\n| --- | --- |\n| A1 | A2 |",
+    "After",
+  );
+  const html =
+    '<table><tr><th rowspan="2">A</th><td colspan="2">B</td><td>C</td></tr><tr><td>D</td><td colspan="2">E</td></tr></table>';
+  await load(page, source);
+  await caret(page, `${rich} > p:first-child`, -1);
+  await page.evaluate((markup) => {
+    const clipboardData = new DataTransfer();
+    clipboardData.setData("text/html", markup);
+    const event = new ClipboardEvent("paste", {
+      bubbles: true,
+      cancelable: true,
+      clipboardData,
+    });
+    const editor = document.querySelector(".mm-rich-panel .ProseMirror");
+    if (!editor) throw new Error("Rich Editor was not rendered");
+    editor.dispatchEvent(event);
+    if (!event.defaultPrevented)
+      throw new Error("Merged HTML table paste was not handled");
+  }, html);
+  await page.waitForFunction(
+    () =>
+      document.querySelectorAll(".mm-rich-panel .ProseMirror > table")
+        .length === 2,
+  );
+  const values = await page
+    .locator(`${rich} > table`)
+    .first()
+    .locator("tr")
+    .evaluateAll((rows) =>
+      rows.map((row) =>
+        Array.from(row.children).map((cell) => cell.textContent ?? ""),
+      ),
+    );
+  assert.deepEqual(values, [
+    ["A", "B", "", "C"],
+    ["", "D", "E", ""],
+  ]);
+  assert.match((await saved(page)).markdown, /\| A \| B \|/);
+}
+
 async function testNestedBlockquoteTableNavigation(page) {
   const source = blocks(
     [
@@ -4429,6 +4474,7 @@ async function main() {
       testWrappedVerticalNavigation,
       testTableNavigation,
       testSpreadsheetTablePasteHistory,
+      testMergedHtmlTablePaste,
       testNestedBlockquoteTableNavigation,
       testCodeVerticalNavigation,
       testExpandedCodeVerticalNavigation,

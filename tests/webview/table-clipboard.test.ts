@@ -129,10 +129,47 @@ describe("table clipboard parsing", () => {
     ).toMatchObject({
       values: [
         ["A", "B"],
-        ["C", ""],
+        ["", "C"],
       ],
       rows: 2,
       columns: 2,
+    });
+  });
+
+  it("preserves logical positions for mixed rowspans and colspans", () => {
+    expect(
+      parseClipboardHtml(
+        '<table><tr><th rowspan="2">A</th><td colspan="2">B</td><td>C</td></tr><tr><td>D</td><td colspan="2">E</td></tr></table>',
+      ),
+    ).toMatchObject({
+      values: [
+        ["A", "B", "", "C"],
+        ["", "D", "E", ""],
+      ],
+      rows: 2,
+      columns: 4,
+    });
+  });
+
+  it("rejects malformed, nested, and over-budget HTML table layouts", () => {
+    for (const html of [
+      '<table><tr><td colspan="0">A</td></tr></table>',
+      '<table><tr><td rowspan="1.5">A</td></tr></table>',
+      "<table><tr><td>A<table><tr><td>B</td></tr></table></td></tr></table>",
+    ]) {
+      expect(parseClipboardHtmlWithStatus(html)).toEqual({
+        matrix: null,
+        failure: "malformed",
+      });
+    }
+
+    const oversized = `<table>${Array.from(
+      { length: 101 },
+      () => '<tr><td colspan="100">cell</td></tr>',
+    ).join("")}</table>`;
+    expect(parseClipboardHtmlWithStatus(oversized)).toEqual({
+      matrix: null,
+      failure: "too-large",
     });
   });
 

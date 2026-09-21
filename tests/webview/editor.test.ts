@@ -4222,6 +4222,73 @@ describe("table clipboard integration", () => {
     html.app.destroy();
   });
 
+  it("keeps merged HTML cell positions outside and inside existing tables", () => {
+    const mergedHtml =
+      '<table><tr><th rowspan="2">A</th><td colspan="2">B</td><td>C</td></tr><tr><td>D</td><td colspan="2">E</td></tr></table>';
+    const outside = makeApp("Before");
+    const outsideParagraph =
+      outside.root.querySelector<HTMLElement>(".ProseMirror > p")!;
+    selectText(outside.app, outsideParagraph, "Before".length);
+    const outsideEvent = dispatchPaste(outside.app, {
+      "text/html": mergedHtml,
+    });
+    expect(outsideEvent.defaultPrevented).toBe(true);
+    const outsideTable = outside.app.view.state.doc.child(1);
+    expect(outsideTable.child(0).child(0).textContent).toBe("A");
+    expect(outsideTable.child(0).child(1).textContent).toBe("B");
+    expect(outsideTable.child(0).child(2).textContent).toBe("");
+    expect(outsideTable.child(0).child(3).textContent).toBe("C");
+    expect(outsideTable.child(1).child(0).textContent).toBe("");
+    expect(outsideTable.child(1).child(1).textContent).toBe("D");
+    expect(outsideTable.child(1).child(2).textContent).toBe("E");
+    expect(outsideTable.child(1).child(3).textContent).toBe("");
+    outside.app.destroy();
+
+    const inside = makeApp(
+      "| H1 | H2 | H3 | H4 |\n| --- | --- | --- | --- |\n| old1 | old2 | old3 | old4 |",
+    );
+    const bodyCell = inside.root.querySelector<HTMLElement>("tbody td")!;
+    selectTableCellText(inside.app, bodyCell, 1);
+    const insideEvent = dispatchPaste(inside.app, {
+      "text/html": mergedHtml,
+    });
+    expect(insideEvent.defaultPrevented).toBe(true);
+    const insideTable = inside.app.view.state.doc.firstChild!;
+    expect(insideTable.child(1).child(0).textContent).toBe("A");
+    expect(insideTable.child(1).child(1).textContent).toBe("B");
+    expect(insideTable.child(1).child(2).textContent).toBe("");
+    expect(insideTable.child(1).child(3).textContent).toBe("C");
+    expect(insideTable.child(2).child(0).textContent).toBe("");
+    expect(insideTable.child(2).child(1).textContent).toBe("D");
+    expect(insideTable.child(2).child(2).textContent).toBe("E");
+    expect(insideTable.child(2).child(3).textContent).toBe("");
+    inside.app.destroy();
+  });
+
+  it("rejects unsafe merged HTML layouts without changing the document", () => {
+    for (const html of [
+      '<table><tr><td colspan="0">A</td></tr></table>',
+      "<table><tr><td>A<table><tr><td>B</td></tr></table></td></tr></table>",
+    ]) {
+      const { app, root, messages } = makeApp("Before");
+      const paragraph = root.querySelector<HTMLElement>(".ProseMirror > p")!;
+      selectText(app, paragraph, "Before".length);
+      const before = app.view.state.doc;
+      const event = dispatchPaste(app, { "text/html": html });
+
+      expect(event.defaultPrevented).toBe(true);
+      expect(app.view.state.doc).toBe(before);
+      expect(messages.filter(isEditMessage)).toHaveLength(0);
+      expect(messages).toContainEqual(
+        expect.objectContaining({
+          type: "notify",
+          level: "warning",
+        }),
+      );
+      app.destroy();
+    }
+  });
+
   it("keeps TSV ahead of HTML inside a table and treats multiline prose as native text", () => {
     const prioritized = makeApp(
       "| Header | Other |\n| --- | --- |\n| abc | def |",

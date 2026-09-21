@@ -11,6 +11,8 @@
   ten-digit markers.
 - Preserve backslashes and literal character-reference text in link and image
   titles across Rich edits, including table cells and repeated serialization.
+- Preserve logical cell positions when pasting HTML tables with `rowspan` or
+  `colspan`, and reject malformed, nested, or over-budget layouts safely.
 
 ## 0.5.0
 
