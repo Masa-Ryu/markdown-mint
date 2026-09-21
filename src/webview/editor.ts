@@ -11489,6 +11489,46 @@ export class MarkdownEditorApp {
     );
   }
 
+  /**
+   * Rebuild source-preserving metadata only from a validated recovery base.
+   * A structured PM document does not carry definitions such as footnotes;
+   * parsing an arbitrary recoveryDraft or an unrelated host snapshot here
+   * would make a successful serialization look like a complete recovery.
+   */
+  private recoverySnapshotForCurrentDocument(
+    saved: RecoveryState,
+  ): unknown | undefined {
+    if (
+      typeof saved.recoveryBaseMarkdown !== "string" ||
+      saved.recoveryBaseMarkdown !== this.authoritativeMarkdown ||
+      typeof saved.recoveryProfile !== "string" ||
+      saved.recoveryProfile !== this.profile ||
+      typeof saved.recoveryBaseVersion !== "number" ||
+      saved.recoveryBaseVersion > this.authoritativeVersion
+    )
+      return undefined;
+    try {
+      const parsed = this.core.parseMarkdown(
+        this.authoritativeMarkdown,
+        this.profile,
+      );
+      const snapshot = parsed.snapshot ?? parsed;
+      if (
+        typeof snapshot !== "object" ||
+        snapshot === null ||
+        !(
+          "source" in snapshot &&
+          typeof (snapshot as { source?: unknown }).source === "string"
+        ) ||
+        (snapshot as { source: string }).source !== this.authoritativeMarkdown
+      )
+        return undefined;
+      return snapshot;
+    } catch {
+      return undefined;
+    }
+  }
+
   private restoreRecoveryState(): boolean {
     const saved = this.vscode?.getState?.() as RecoveryState | undefined;
     if (!saved || typeof saved.recoveryDraft !== "string") return false;
@@ -11527,6 +11567,8 @@ export class MarkdownEditorApp {
     const persistedStructuredDocument =
       recoveryKind === "pending" && saved.recoveryDocument !== undefined;
     if (persistedStructuredDocument) {
+      snapshot = this.recoverySnapshotForCurrentDocument(saved);
+      if (snapshot === undefined) return false;
       try {
         editorDoc = PMNode.fromJSON(this.schema, saved.recoveryDocument);
         restoredStructuredDocument = true;
@@ -11570,11 +11612,13 @@ export class MarkdownEditorApp {
     this.view.updateState(recoveryState);
     this.profile = profile;
     if (restoredStructuredDocument) {
-      // The persisted PM document is newer than both the host source and the
-      // Markdown companion. Do not let source-preserving caches make the old
-      // source look like a serialization of this recovered document.
-      this.previousSnapshot = undefined;
-      this.starterOriginalSource = undefined;
+      // The persisted PM document is newer than the host source and the
+      // Markdown companion. The validated base snapshot supplies source-only
+      // metadata such as footnote and reference definitions, while the
+      // serializedDocument cache remains unset until this PM document itself
+      // has serialized successfully below.
+      this.previousSnapshot = snapshot;
+      this.starterOriginalSource = this.authoritativeMarkdown;
     } else {
       this.previousSnapshot = snapshot;
       this.starterOriginalSource = draft;
