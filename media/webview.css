@@ -2,7 +2,7 @@
   color-scheme: light dark;
   --mm-toolbar-height: 42px;
   --mm-toolbar-foreground: var(
-    --vscode-editor-foreground,
+    --vscode-icon-foreground,
     var(--vscode-foreground, #d4d4d4)
   );
   --mm-toolbar-hover-background: var(

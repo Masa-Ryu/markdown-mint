@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.3
+
+- Follow VS Code icon foreground colors for toolbar and table icons across
+  light, dark, and high-contrast themes while preserving semantic delete-color
+  accents.
+
 ## 0.5.2
 
 - Cache fingerprints for immutable ProseMirror nodes during source-preserving

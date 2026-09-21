@@ -69,4 +69,20 @@ describe("toolbar icons", () => {
       expect(moveIcon.outerHTML).not.toBe(addIcon.outerHTML);
     }
   });
+
+  it.each(["table-delete", "table-row-delete", "table-column-delete"] as const)(
+    "keeps %s theme-aware without changing its delete accent",
+    (name) => {
+      const svg = createToolbarIcon(name);
+      const strokes = Array.from(svg.querySelectorAll<SVGElement>("[stroke]"))
+        .map((element) => element.getAttribute("stroke"))
+        .filter((stroke): stroke is string => stroke !== null);
+      const normalStrokes = strokes.filter((stroke) => stroke !== "#FF3B30");
+
+      expect(svg.outerHTML).not.toContain("#1E2A38");
+      expect(normalStrokes.length).toBeGreaterThan(0);
+      expect(new Set(normalStrokes)).toEqual(new Set(["currentColor"]));
+      expect(strokes).toContain("#FF3B30");
+    },
+  );
 });
