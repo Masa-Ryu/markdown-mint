@@ -2,6 +2,10 @@
 
 ## 0.5.1
 
+- Keep strong, emphasis, and strikethrough delimiter boundaries parseable when
+  marked text touches whitespace or Unicode punctuation, including links,
+  images, and table cells, while preserving the original text.
+
 - Share profile-aware heading-anchor calculation across the core renderer,
   Rich Editor, dedicated preview, native preview, and GitLab table of
   contents, preserving Unicode and preventing final-ID collisions.

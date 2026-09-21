@@ -958,6 +958,37 @@ describe("Markdown core", () => {
     },
   );
 
+  it.each(["commonmark", "github", "gitlab"] as const)(
+    "preserves escaped literals in an HTML pair after neighboring edits (%s)",
+    (profile) => {
+      const source = "これは<strong>\\*重要\\*</strong>です\n";
+      const pair = String.raw`<strong>\*重要\*</strong>`;
+      const expectedHtml = String.raw`<strong>*重要*</strong>`;
+      let snapshot = reparseMarkdown(source, profile);
+
+      expect(rawInlineAtoms(snapshot.doc, "html-pair")).toHaveLength(1);
+      expect(rawInlineAtoms(snapshot.doc, "html-pair")[0]!.attrs.source).toBe(
+        pair,
+      );
+      expect(renderMarkdown(source, profile)).toContain(expectedHtml);
+
+      for (const [before, after] of [
+        ["これは", "変更"],
+        ["変更", "再編集"],
+      ] as const) {
+        const changed = replaceText(snapshot.doc, before, after);
+        const serialized = serializeMarkdown(changed, snapshot);
+        expect(serialized).toContain(pair);
+
+        snapshot = reparseMarkdown(serialized, profile);
+        expect(rawInlineAtoms(snapshot.doc, "html-pair")[0]!.attrs.source).toBe(
+          pair,
+        );
+        expect(renderMarkdown(serialized, profile)).toContain(expectedHtml);
+      }
+    },
+  );
+
   it.each(["github", "gitlab"] as const)(
     "roundtrips protected inline table content after a neighboring edit (%s)",
     (profile) => {

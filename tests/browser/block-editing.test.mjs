@@ -1810,6 +1810,11 @@ async function testMergedHtmlTablePaste(page) {
       document.querySelectorAll(".mm-rich-panel .ProseMirror > table")
         .length === 2,
   );
+  await page.waitForFunction(() => {
+    const table = document.querySelector(".mm-rich-panel .ProseMirror > table");
+    const rows = table ? Array.from(table.querySelectorAll("tr")) : [];
+    return rows.length === 2 && rows.every((row) => row.children.length === 4);
+  });
   const values = await page
     .locator(`${rich} > table`)
     .first()
