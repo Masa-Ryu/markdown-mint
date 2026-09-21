@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.8
+
+- Restore source-only Markdown metadata, including footnote and reference
+  definitions, when recovering structured drafts after serializer failures;
+  validate recovery provenance and keep unsafe legacy drafts pending instead of
+  synchronizing incomplete Markdown.
+
 ## 0.4.7
 
 - Bound three-way Markdown merge work and retained trace state so broad external
