@@ -1372,6 +1372,48 @@ $$
     expect(serializeMarkdown(reparsed.doc, reparsed)).toBe(expected);
   });
 
+  it("does not duplicate a preserved definition in mixed line endings", () => {
+    const source =
+      "First\r\n\r\n[ref]: https://example.org\r\n\r\nA [link][ref].\n\nTail\n";
+    const snapshot = parseMarkdown(source);
+    const changed = replaceText(snapshot.doc, "Tail", "Changed tail");
+    const serialized = serializeMarkdown(changed, snapshot);
+
+    expect(serialized).toBe(
+      "First\r\n\r\n[ref]: https://example.org\r\n\r\nA [link][ref].\n\nChanged tail\n",
+    );
+    expect(serialized.match(/\[ref\]:/g)).toHaveLength(1);
+    expect(serialized).toContain("[ref]: https://example.org");
+
+    const reparsed = reparseMarkdown(serialized);
+    expect(reparsed.doc.eq(changed)).toBe(true);
+    const link = childrenOf(reparsed.doc.child(1)).find(
+      (node) => node.marks.length > 0,
+    );
+    expect(link?.marks[0]?.attrs.href).toBe("https://example.org");
+  });
+
+  it("normalizes mixed line endings in multiline definition comparisons", () => {
+    const source =
+      'First\r\n\r\n[ref]: https://example.org/target "\r\nKeep\r\nthis title\r\n"\r\n\r\nA [link][ref].\n\nTail\n';
+    const snapshot = parseMarkdown(source);
+    const changed = replaceText(snapshot.doc, "Tail", "Changed tail");
+    const serialized = serializeMarkdown(changed, snapshot);
+
+    expect(serialized).toBe(
+      'First\r\n\r\n[ref]: https://example.org/target "\r\nKeep\r\nthis title\r\n"\r\n\r\nA [link][ref].\n\nChanged tail\n',
+    );
+    expect(serialized.match(/\[ref\]:/g)).toHaveLength(1);
+
+    const reparsed = reparseMarkdown(serialized);
+    expect(reparsed.doc.eq(changed)).toBe(true);
+    const link = childrenOf(reparsed.doc.child(1)).find(
+      (node) => node.marks.length > 0,
+    );
+    expect(link?.marks[0]?.attrs.href).toBe("https://example.org/target");
+    expect(link?.marks[0]?.attrs.title).toBe("\nKeep\nthis title\n");
+  });
+
   it("does not rescue reference-looking text from fenced code in containers", () => {
     for (const source of [
       "- item\n\n  ```markdown\n  [x]: https://example.com/not-a-definition\n  ```\n\n[x]\n",

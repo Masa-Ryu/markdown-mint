@@ -3078,7 +3078,7 @@ function preserveReferenceDefinitions(
   const existing = new Map(
     referenceDefinitions(output, previous.profile).map((definition) => [
       definition.label,
-      definition.source,
+      toLineEnding(definition.source, ending),
     ]),
   );
   const missing = definitions.filter(
