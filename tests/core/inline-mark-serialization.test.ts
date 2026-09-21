@@ -270,6 +270,59 @@ describe("inline mark serialization", () => {
     );
   });
 
+  it.each(["commonmark", "github", "gitlab"] as const)(
+    "re-escapes literal syntax when grouping fallback HTML pairs for %s",
+    (profile) => {
+      const pair = String.raw`<strong>「\*重要\*」 \&copy; \_literal\_ \\\.</strong>`;
+      const document = documentWithParagraph(
+        schema.text("a"),
+        schema.text(String.raw`「*重要*」 &copy; _literal_ \.`, [
+          schema.marks.strong!.create(),
+        ]),
+        schema.text("b"),
+      );
+
+      const serialized = serializeMarkdown(document);
+      expect(serialized).toBe(`a${pair}b`);
+      const reparsed = parseMarkdown(serialized, profile).doc;
+      expect(reparsed.firstChild!.child(1).attrs.source).toBe(pair);
+
+      const expectedHtml = String.raw`<strong>「*重要*」 &amp;copy; _literal_ \.</strong>`;
+      expect(
+        new MarkdownIt("commonmark", { html: true }).render(serialized),
+      ).toContain(expectedHtml);
+      expect(renderMarkdown(serialized, profile)).toContain(expectedHtml);
+      expect(renderMarkdown(serialized, profile)).not.toContain("<em>");
+    },
+  );
+
+  it.each(["commonmark", "github", "gitlab"] as const)(
+    "preserves a literal backslash and asterisk in a code fallback for %s",
+    (profile) => {
+      const pair = String.raw`<strong><code>\\\*</code></strong>`;
+      const document = documentWithParagraph(
+        schema.text("a"),
+        schema.text(String.raw`\*`, [
+          schema.marks.strong!.create(),
+          schema.marks.code!.create(),
+        ]),
+        schema.text("b"),
+      );
+
+      const serialized = serializeMarkdown(document);
+      expect(serialized).toBe(`a${pair}b`);
+      const reparsed = parseMarkdown(serialized, profile).doc;
+      expect(reparsed.firstChild!.child(1).attrs.source).toBe(pair);
+
+      const expectedHtml = String.raw`<strong><code>\*</code></strong>`;
+      expect(
+        new MarkdownIt("commonmark", { html: true }).render(serialized),
+      ).toContain(expectedHtml);
+      expect(renderMarkdown(serialized, profile)).toContain(expectedHtml);
+      expect(renderMarkdown(serialized, profile)).not.toContain("<em>");
+    },
+  );
+
   it("keeps marks adjacent to images parseable", () => {
     const image = schema.nodes.image!.create({
       src: "image.png",

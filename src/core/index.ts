@@ -902,8 +902,15 @@ function footnoteRawInline(
 }
 
 function inlineTokenSource(token: MarkdownToken): string | null {
-  if (token.type === "text" || token.type === "html_inline")
-    return literalTokenText(token);
+  if (token.type === "text") {
+    // Markdown-it exposes decoded text here. Re-escape it before rebuilding a
+    // safe HTML pair so a literal `*`, `_`, entity, or backslash cannot become
+    // Markdown syntax when the pair is rendered again. This is deliberately
+    // based on the semantic token value rather than blindly copying markup:
+    // the latter is only a summary for some escape/entity tokens.
+    return escapeMarkdownText(literalTokenText(token), false, false);
+  }
+  if (token.type === "html_inline") return literalTokenText(token);
   if (token.type === "softbreak") return "\n";
   if (token.type === "em_open" || token.type === "em_close")
     return token.markup ?? "*";
