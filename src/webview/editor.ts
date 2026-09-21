@@ -2168,6 +2168,7 @@ export class SyncController {
   private queued: PendingEdit | null = null;
   private blockedConflict: {
     baseMarkdown: string;
+    baseVersion: number;
     localMarkdown: string;
     externalMarkdown: string;
     externalVersion: number;
@@ -2212,9 +2213,17 @@ export class SyncController {
     return (
       this.pending?.baseMarkdown ??
       this.queued?.baseMarkdown ??
-      this.lastAcknowledged?.baseMarkdown ??
       this.blockedConflict?.baseMarkdown ??
       this.authoritativeMarkdown
+    );
+  }
+
+  get draftBaseVersion(): number {
+    return (
+      this.pending?.baseVersion ??
+      this.queued?.baseVersion ??
+      this.blockedConflict?.baseVersion ??
+      this.authoritativeVersion
     );
   }
 
@@ -2255,7 +2264,7 @@ export class SyncController {
     const baseVersion =
       this.pending?.baseVersion ??
       this.queued?.baseVersion ??
-      this.blockedConflict?.externalVersion ??
+      this.blockedConflict?.baseVersion ??
       this.baseVersion;
     const edit: PendingEdit = {
       markdown,
@@ -2311,6 +2320,7 @@ export class SyncController {
     this.resetRebaseBudget();
     this.blockedConflict = {
       baseMarkdown: pending.baseMarkdown,
+      baseVersion: pending.baseVersion,
       localMarkdown: local,
       externalMarkdown: currentMarkdown,
       externalVersion: version,
@@ -2399,6 +2409,7 @@ export class SyncController {
       this.noteAuthoritative(externalVersion, externalMarkdown);
       this.blockedConflict = {
         baseMarkdown: pending.baseMarkdown,
+        baseVersion: pending.baseVersion,
         localMarkdown,
         externalMarkdown,
         externalVersion,
@@ -2408,6 +2419,7 @@ export class SyncController {
     this.rebaseAttempts += 1;
     return this.reconcile(
       pending.baseMarkdown,
+      pending.baseVersion,
       localMarkdown,
       externalVersion,
       externalMarkdown,
@@ -2430,6 +2442,12 @@ export class SyncController {
       this.queued?.baseMarkdown ??
       this.blockedConflict?.baseMarkdown ??
       this.authoritativeMarkdown;
+    const baseVersion =
+      this.lastAcknowledged?.baseVersion ??
+      this.pending?.baseVersion ??
+      this.queued?.baseVersion ??
+      this.blockedConflict?.baseVersion ??
+      this.authoritativeVersion;
     const local =
       localMarkdown ??
       this.queued?.markdown ??
@@ -2439,6 +2457,7 @@ export class SyncController {
       this.authoritativeMarkdown;
     return this.reconcile(
       baseMarkdown,
+      baseVersion,
       local,
       externalVersion,
       externalMarkdown,
@@ -2447,6 +2466,7 @@ export class SyncController {
 
   private reconcile(
     baseMarkdown: string,
+    baseVersion: number,
     localMarkdown: string,
     externalVersion: number,
     externalMarkdown: string,
@@ -2468,6 +2488,7 @@ export class SyncController {
     if (merged === undefined) {
       this.blockedConflict = {
         baseMarkdown,
+        baseVersion,
         localMarkdown,
         externalMarkdown,
         externalVersion,
@@ -4072,8 +4093,8 @@ export class MarkdownEditorApp {
         }
         if (
           this.vscode &&
-          !this.syncPaused &&
-          !this.pendingExternal &&
+          (this.sync.hasBlockedConflict ||
+            (!this.syncPaused && !this.pendingExternal)) &&
           this.initialized &&
           !this.previewOnly
         )
@@ -4758,7 +4779,7 @@ export class MarkdownEditorApp {
     this.persistRecovery(
       localMarkdown,
       this.sync.draftBaseMarkdown,
-      this.sync.version,
+      this.sync.draftBaseVersion,
       this.serializationError !== null || this.parseError !== null,
     );
     this.notifyHost("error", message);
@@ -10854,6 +10875,7 @@ export class MarkdownEditorApp {
       this.updateEditingControlState();
       if (!this.sync.hasPending && message.markdown === this.currentMarkdown())
         this.clearRecoveryIfSaved();
+      this.persistRecoveryAfterAcknowledgement(message.markdown);
       this.flushDeferredHostCommand();
       return;
     }
@@ -10880,6 +10902,7 @@ export class MarkdownEditorApp {
         this.conflict = false;
         this.syncPaused = false;
         this.updateEditingControlState();
+        this.persistRecoveryAfterAcknowledgement(message.markdown);
         this.flushDeferredHostCommand();
       }
       return;
@@ -10971,7 +10994,7 @@ export class MarkdownEditorApp {
       this.persistRecovery(
         this.currentMarkdown(),
         this.sync.draftBaseMarkdown,
-        this.sync.version,
+        this.sync.draftBaseVersion,
         true,
       );
       return;
@@ -11038,7 +11061,7 @@ export class MarkdownEditorApp {
         this.persistRecovery(
           localMarkdown,
           this.sync.draftBaseMarkdown,
-          this.sync.version,
+          this.sync.draftBaseVersion,
           true,
         );
         return;
@@ -11395,8 +11418,8 @@ export class MarkdownEditorApp {
 
   private persistRecovery(
     markdown: string,
-    baseMarkdown = this.authoritativeMarkdown,
-    baseVersion = this.authoritativeVersion,
+    baseMarkdown = this.sync.draftBaseMarkdown,
+    baseVersion = this.sync.draftBaseVersion,
     includeDocument = false,
   ): void {
     if (!this.vscode?.setState) return;
@@ -11419,6 +11442,21 @@ export class MarkdownEditorApp {
       }
     }
     this.vscode.setState(state satisfies RecoveryState);
+  }
+
+  private persistRecoveryAfterAcknowledgement(
+    acknowledgedMarkdown: string,
+  ): void {
+    const pending = this.sync.inflight;
+    if (!pending) return;
+    const markdown = this.currentMarkdown();
+    if (markdown === acknowledgedMarkdown) return;
+    this.persistRecovery(
+      markdown,
+      this.sync.draftBaseMarkdown,
+      this.sync.draftBaseVersion,
+      this.serializationError !== null || this.parseError !== null,
+    );
   }
 
   private recoveryBelongsToCurrentDocument(saved: RecoveryState): boolean {

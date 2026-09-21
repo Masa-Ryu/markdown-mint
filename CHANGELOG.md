@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.4.7
+
+- Bound three-way Markdown merge work and retained trace state so broad external
+  changes cannot monopolize the Webview, falling back to the existing explicit
+  conflict path when the safety budget is exhausted.
+- Preserve recoverable local drafts and their original base provenance across
+  stale edits, delayed acknowledgements, external changes, and Webview
+  recreation.
+
 ## 0.4.6
 
 - Complete edit, format, and save operation failure paths when VS Code rejects

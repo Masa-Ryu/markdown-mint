@@ -235,6 +235,7 @@ function makeApp(
   clipboardAvailable = false,
   documentId?: string,
   profile: EditorInitialDocument["profile"] = "github",
+  version = 1,
 ) {
   const root = document.createElement("div");
   document.body.append(root);
@@ -250,6 +251,7 @@ function makeApp(
     core: { schema, parseMarkdown, serializeMarkdown, renderMarkdown },
     initialDocument: {
       ...documentFixture(markdown, clipboardAvailable, profile),
+      version,
       ...(documentId === undefined ? {} : { documentId }),
     },
   });
@@ -3653,6 +3655,145 @@ describe("sync safety", () => {
     app.destroy();
   });
 
+  it("uses the acknowledged snapshot as the next recovery base", () => {
+    const messages: unknown[] = [];
+    let recoveryState: unknown;
+    const { app } = makeApp("base", {
+      postMessage: (message) => messages.push(message),
+      getState: () => recoveryState,
+      setState: (next) => {
+        recoveryState = next;
+      },
+    });
+
+    app.view.dispatch(app.view.state.tr.insertText(" A"));
+    const first = messages.filter(isEditMessage).at(-1)! as unknown as {
+      markdown: string;
+      operationId: string;
+    };
+    expect(first.operationId).toBeDefined();
+
+    app.receiveDocument({
+      protocolVersion: PROTOCOL_VERSION,
+      type: "document",
+      markdown: first.markdown,
+      version: 2,
+      profile: "github",
+      operationId: first.operationId,
+      reason: "ack",
+    });
+    expect(recoveryState).toEqual({});
+
+    app.view.dispatch(app.view.state.tr.insertText(" B"));
+    const second = messages.filter(isEditMessage).at(-1)!;
+    expect(recoveryState).toMatchObject({
+      recoveryBaseMarkdown: first.markdown,
+      recoveryBaseVersion: 2,
+      recoveryDraft: (second as { markdown: string }).markdown,
+    });
+    expect(
+      (recoveryState as { recoveryBaseMarkdown: string }).recoveryBaseMarkdown,
+    ).not.toBe("base");
+    app.destroy();
+  });
+
+  it.each([
+    { acknowledgement: "explicit", operationId: true },
+    { acknowledgement: "implicit", operationId: false },
+  ])(
+    "rebases queued recovery provenance after a $acknowledgement acknowledgement",
+    ({ operationId }) => {
+      const messages: unknown[] = [];
+      let recoveryState: unknown;
+      const api: VSCodeApiLike = {
+        postMessage: (message) => messages.push(message),
+        getState: () => recoveryState,
+        setState: (next) => {
+          recoveryState = next;
+        },
+      };
+      const { app } = makeApp("base", api);
+
+      app.view.dispatch(
+        app.view.state.tr
+          .setSelection(TextSelection.atEnd(app.view.state.doc))
+          .insertText(" A"),
+      );
+      const first = messages.filter(isEditMessage).at(-1)! as unknown as {
+        markdown: string;
+        operationId: string;
+      };
+      app.view.dispatch(
+        app.view.state.tr
+          .setSelection(TextSelection.atEnd(app.view.state.doc))
+          .insertText(" B"),
+      );
+      const second = app.sync.queuedEdit!;
+
+      expect(app.sync.queuedEdit).toMatchObject({
+        markdown: second.markdown,
+        baseMarkdown: "base",
+        baseVersion: 1,
+      });
+      expect(recoveryState).toMatchObject({
+        recoveryDraft: second.markdown,
+        recoveryBaseMarkdown: "base",
+        recoveryBaseVersion: 1,
+      });
+
+      app.receiveDocument({
+        protocolVersion: PROTOCOL_VERSION,
+        type: "document",
+        markdown: first.markdown,
+        version: 2,
+        profile: "github",
+        ...(operationId ? { operationId: first.operationId } : {}),
+        reason: "ack",
+      });
+
+      expect(app.sync.inflight).toMatchObject({
+        markdown: second.markdown,
+        baseMarkdown: first.markdown,
+        baseVersion: 2,
+      });
+      expect(recoveryState).toMatchObject({
+        recoveryDraft: second.markdown,
+        recoveryBaseMarkdown: first.markdown,
+        recoveryBaseVersion: 2,
+      });
+      expect(
+        (recoveryState as { recoveryBaseMarkdown: string })
+          .recoveryBaseMarkdown,
+      ).not.toBe("base");
+      expect(
+        (recoveryState as { recoveryBaseVersion: number }).recoveryBaseVersion,
+      ).not.toBe(1);
+
+      app.destroy();
+
+      const restoredMessages: unknown[] = [];
+      const restored = makeApp(
+        first.markdown,
+        {
+          postMessage: (message) => restoredMessages.push(message),
+          getState: () => recoveryState,
+          setState: (next) => {
+            recoveryState = next;
+          },
+        },
+        false,
+        undefined,
+        "github",
+        2,
+      );
+      expect(restored.app.view.state.doc.textContent).toContain("base A B");
+      expect(restoredMessages).toContainEqual(
+        expect.objectContaining({ type: "edit", markdown: second.markdown }),
+      );
+      restored.app.destroy();
+    },
+  );
+
   it("applies a newer acknowledgement broadcast from another panel", () => {
     const source = makeApp("base");
     const end = TextSelection.atEnd(source.app.view.state.doc);
@@ -3819,6 +3960,69 @@ describe("sync safety", () => {
     expect(messages.some((message: any) => message.type === "notify")).toBe(
       true,
     );
+    app.destroy();
+  });
+
+  it("persists a recoverable local draft when a broad rebase exceeds its budget", () => {
+    const count = 1_000;
+    const base = Array.from(
+      { length: count },
+      (_, index) => `line-${index}\n`,
+    ).join("");
+    const external = Array.from(
+      { length: count },
+      (_, index) => `external-${index}\n`,
+    ).join("");
+    let state: unknown;
+    const messages: unknown[] = [];
+    const api: VSCodeApiLike = {
+      postMessage: (message) => messages.push(message),
+      getState: () => state,
+      setState: (next) => {
+        state = next;
+      },
+    };
+    const { app } = makeApp(base, api);
+
+    app.view.dispatch(
+      app.view.state.tr
+        .setSelection(TextSelection.atEnd(app.view.state.doc))
+        .insertText("LOCAL\n"),
+    );
+    const edit = messages.filter(isEditMessage).at(-1) as
+      { operationId?: string; markdown?: string } | undefined;
+    expect(edit?.operationId).toBeDefined();
+    expect(edit?.markdown).toBeDefined();
+
+    receiveHostMessage({
+      protocolVersion: PROTOCOL_VERSION,
+      type: "edit-rejected",
+      operationId: edit?.operationId,
+      reason: "stale",
+      message: "The document changed.",
+      currentMarkdown: external,
+      currentVersion: 2,
+      draftMarkdown: edit?.markdown,
+    });
+
+    expect(app.sync.hasBlockedConflict).toBe(true);
+    expect(app.sync.blockedDraft).toBe(edit?.markdown);
+    expect(app.sync.draftBaseMarkdown).toBe(base);
+    expect(app.sync.draftBaseVersion).toBe(1);
+    expect(state).toMatchObject({
+      recoveryDraft: edit?.markdown,
+      recoveryBaseMarkdown: base,
+      recoveryBaseVersion: 1,
+    });
+
+    app.view.dispatch(app.view.state.tr.insertText("!"));
+    const updatedRecovery = state as {
+      recoveryDraft?: string;
+      recoveryBaseMarkdown?: string;
+    };
+    expect(updatedRecovery.recoveryDraft).toContain("!");
+    expect(updatedRecovery.recoveryBaseMarkdown).toBe(base);
+    expect(app.sync.blockedDraft).toBe(updatedRecovery.recoveryDraft);
     app.destroy();
   });
 
