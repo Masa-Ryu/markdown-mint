@@ -10875,6 +10875,7 @@ export class MarkdownEditorApp {
       this.updateEditingControlState();
       if (!this.sync.hasPending && message.markdown === this.currentMarkdown())
         this.clearRecoveryIfSaved();
+      this.persistRecoveryAfterAcknowledgement(message.markdown);
       this.flushDeferredHostCommand();
       return;
     }
@@ -10901,6 +10902,7 @@ export class MarkdownEditorApp {
         this.conflict = false;
         this.syncPaused = false;
         this.updateEditingControlState();
+        this.persistRecoveryAfterAcknowledgement(message.markdown);
         this.flushDeferredHostCommand();
       }
       return;
@@ -11440,6 +11442,21 @@ export class MarkdownEditorApp {
       }
     }
     this.vscode.setState(state satisfies RecoveryState);
+  }
+
+  private persistRecoveryAfterAcknowledgement(
+    acknowledgedMarkdown: string,
+  ): void {
+    const pending = this.sync.inflight;
+    if (!pending) return;
+    const markdown = this.currentMarkdown();
+    if (markdown === acknowledgedMarkdown) return;
+    this.persistRecovery(
+      markdown,
+      this.sync.draftBaseMarkdown,
+      this.sync.draftBaseVersion,
+      this.serializationError !== null || this.parseError !== null,
+    );
   }
 
   private recoveryBelongsToCurrentDocument(saved: RecoveryState): boolean {
