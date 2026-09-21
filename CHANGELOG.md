@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.1
+
+- Keep strong, emphasis, and strikethrough delimiter boundaries parseable when
+  marked text touches whitespace or Unicode punctuation, including links,
+  images, and table cells, while preserving the original text.
+
 ## 0.5.0
 
 - Preserve structured recovery drafts in a separate pending slot when the
