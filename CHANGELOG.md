@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.5
+
+- Complete edit, format, and save operation failure paths when VS Code rejects
+  or throws during WorkspaceEdit application or document reopening, preserving
+  the Webview draft and preventing stuck synchronization state.
+
 ## 0.4.3
 
 - Preserve multiline and code-adjacent reference definitions when neighboring
