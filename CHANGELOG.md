@@ -1,13 +1,20 @@
 # Changelog
 
+## 0.5.6
+
+- Coalesce visible Preview refreshes per animation frame and debounce
+  compatibility diagnostics during typing bursts with a one-second maximum
+  wait, while keeping source synchronization, recovery, and host edits
+  immediate.
+
 ## 0.5.5
 
 - Lazy-load the packaged Mermaid runtime only when a Mermaid diagram or syntax
   validation is first requested, sharing one local nonce-protected load across
   concurrent requests while preserving offline source fallback behavior.
-- Use a lightweight native-preview loader, minify production bundles while
-  keeping watch sourcemaps readable, and add startup/first-use benchmark and
-  package-asset verification coverage.
+ - Use a lightweight native-preview loader, minify production bundles while
+   keeping watch sourcemaps readable, and add startup/first-use benchmark and
+   package-asset verification coverage.
 
 ## 0.5.4
 

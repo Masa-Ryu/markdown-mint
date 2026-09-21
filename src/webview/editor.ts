@@ -512,6 +512,9 @@ function compatibilityStateKey(
   return JSON.stringify([markdown, profile]);
 }
 
+const COMPATIBILITY_DEBOUNCE_MS = 250;
+const COMPATIBILITY_MAX_WAIT_MS = 1000;
+
 function getCellSelection(selection: Selection): CellSelection | null {
   return selection instanceof CellSelection ? selection : null;
 }
@@ -2593,8 +2596,15 @@ export class MarkdownEditorApp {
   private previewUsesTextFallback = false;
   private compatibilityKey: string | null = null;
   private previewNeedsRefresh = true;
+  private previewDomRevision = 0;
   private pendingDerivedViews: PendingDerivedViews | null = null;
-  private derivedViewsTimer: ReturnType<typeof setTimeout> | undefined;
+  private previewFrame: { cancel: () => void } | null = null;
+  private compatibilityDebounceTimer: ReturnType<typeof setTimeout> | undefined;
+  private compatibilityMaxWaitTimer: ReturnType<typeof setTimeout> | undefined;
+  private readonly displayImageScanKeys = new WeakMap<
+    ParentNode,
+    { base: string; contentKey: unknown }
+  >();
   private derivedViewsRevision = 0;
   private readonly sourceEl: HTMLTextAreaElement;
   private profileSelect!: HTMLSelectElement;
@@ -3238,9 +3248,8 @@ export class MarkdownEditorApp {
     if (!restoredRecovery) {
       this.refreshDerivedViews(initial.markdown, undefined, {
         renderPreview: this.mode === "preview",
-        refreshCompatibility: this.mode === "preview",
+        refreshCompatibility: true,
       });
-      if (this.mode !== "preview") this.scheduleDerivedViews(initial.markdown);
     }
     this.refreshPendingRecoveryAction();
     this.postReady();
@@ -3263,16 +3272,11 @@ export class MarkdownEditorApp {
     this.tableControls?.destroy();
     this.tableControls = undefined;
     this.destroyed = true;
-    this.derivedViewsRevision += 1;
+    this.invalidateDerivedViews();
     this.pendingRejectedEdit = null;
     if (this.blockCompositionTimer !== undefined) {
       clearTimeout(this.blockCompositionTimer);
       this.blockCompositionTimer = undefined;
-    }
-    this.pendingDerivedViews = null;
-    if (this.derivedViewsTimer !== undefined) {
-      clearTimeout(this.derivedViewsTimer);
-      this.derivedViewsTimer = undefined;
     }
     if (this.tableToolbarRevealTimer !== undefined) {
       clearTimeout(this.tableToolbarRevealTimer);
@@ -4120,12 +4124,10 @@ export class MarkdownEditorApp {
           true,
         );
       if (markdown !== null) {
-        if (alertLocalInput) {
-          // Keep source integrity, recovery, and host sync synchronous. Preview
-          // and compatibility are derived views and can share one frame across
-          // a burst of native textarea input events.
-          this.sourceEl.value = markdown;
-        }
+        // Keep source integrity, recovery, and host sync synchronous. Preview
+        // and compatibility are derived views and are scheduled independently
+        // below so a typing burst cannot make either path authoritative.
+        this.syncSourceValue(markdown);
         if (
           this.vscode &&
           (this.sync.hasBlockedConflict ||
@@ -4140,7 +4142,7 @@ export class MarkdownEditorApp {
         // hidden preview to parse and replace its DOM.
         if (!alertLocalInput)
           this.refreshDerivedViews(markdown, undefined, {
-            renderPreview: this.mode === "preview",
+            renderPreview: false,
             refreshCompatibility: false,
           });
         this.scheduleDerivedViews(markdown);
@@ -4447,7 +4449,7 @@ export class MarkdownEditorApp {
     );
     const hasHostFallback = fallbackHtml !== undefined;
 
-    this.sourceEl.value = markdown;
+    this.syncSourceValue(markdown);
     if (renderPreview) {
       if (
         this.previewNeedsRefresh ||
@@ -4470,7 +4472,8 @@ export class MarkdownEditorApp {
             this.previewUsesTextFallback = true;
           }
         }
-        this.resolveDisplayImages(this.previewEl);
+        this.previewDomRevision += 1;
+        this.resolveDisplayImages(this.previewEl, this.previewDomRevision);
         this.previewEnhancer?.dispose();
         this.previewEnhancer = enhanceRenderedContent(
           this.previewEl,
@@ -4484,8 +4487,17 @@ export class MarkdownEditorApp {
     }
     // ImageNodeView ignores this display-only attribute mutation so the
     // absolute webview URI never leaks into the ProseMirror document.
-    this.resolveDisplayImages(this.view.dom);
+    this.resolveDisplayImages(this.view.dom, this.view.state.doc);
     if (refreshCompatibility) this.refreshCompatibility(markdown);
+  }
+
+  private refreshDerivedViewsImmediately(
+    markdown: string,
+    fallbackHtml?: string,
+    options: DerivedViewsOptions = {},
+  ): void {
+    this.invalidateDerivedViews();
+    this.refreshDerivedViews(markdown, fallbackHtml, options);
   }
 
   private scheduleDerivedViews(markdown: string): void {
@@ -4498,25 +4510,107 @@ export class MarkdownEditorApp {
       document: this.view.state.doc,
       revision,
     };
-    if (this.derivedViewsTimer !== undefined) return;
-    this.derivedViewsTimer = setTimeout(() => {
-      this.derivedViewsTimer = undefined;
-      const pending = this.pendingDerivedViews;
-      this.pendingDerivedViews = null;
-      if (
-        this.destroyed ||
-        !pending ||
-        pending.revision !== this.derivedViewsRevision ||
-        pending.document !== this.view.state.doc ||
-        pending.profile !== this.profile ||
-        pending.resourceBaseUrl !== this.resourceBaseUrl
-      )
-        return;
-      this.refreshDerivedViews(pending.markdown, undefined, {
-        renderPreview: this.mode === "preview",
-        refreshCompatibility: true,
+    this.syncSourceValue(markdown);
+    if (this.mode === "preview") this.schedulePreviewFrame();
+    this.scheduleCompatibilityInspection();
+  }
+
+  private schedulePreviewFrame(): void {
+    if (this.destroyed || this.mode !== "preview" || this.previewFrame) return;
+    const view = this.root.ownerDocument.defaultView;
+    if (view && typeof view.requestAnimationFrame === "function") {
+      const handle = view.requestAnimationFrame(() => {
+        this.previewFrame = null;
+        this.refreshScheduledPreview();
       });
+      this.previewFrame = {
+        cancel: () => view.cancelAnimationFrame?.(handle),
+      };
+      return;
+    }
+    const timer = setTimeout(() => {
+      this.previewFrame = null;
+      this.refreshScheduledPreview();
     }, 0);
+    this.previewFrame = { cancel: () => clearTimeout(timer) };
+  }
+
+  private refreshScheduledPreview(): void {
+    const pending = this.pendingDerivedViews;
+    if (
+      this.destroyed ||
+      this.mode !== "preview" ||
+      !pending ||
+      pending.revision !== this.derivedViewsRevision ||
+      pending.document !== this.view.state.doc ||
+      pending.profile !== this.profile ||
+      pending.resourceBaseUrl !== this.resourceBaseUrl
+    )
+      return;
+    this.refreshDerivedViews(pending.markdown, undefined, {
+      renderPreview: true,
+      refreshCompatibility: false,
+    });
+  }
+
+  private scheduleCompatibilityInspection(): void {
+    if (this.compatibilityDebounceTimer !== undefined)
+      clearTimeout(this.compatibilityDebounceTimer);
+    this.compatibilityDebounceTimer = setTimeout(() => {
+      this.compatibilityDebounceTimer = undefined;
+      this.clearCompatibilityMaxWait();
+      this.refreshScheduledCompatibility();
+    }, COMPATIBILITY_DEBOUNCE_MS);
+    if (this.compatibilityMaxWaitTimer === undefined) {
+      this.compatibilityMaxWaitTimer = setTimeout(() => {
+        this.compatibilityMaxWaitTimer = undefined;
+        if (this.compatibilityDebounceTimer !== undefined) {
+          clearTimeout(this.compatibilityDebounceTimer);
+          this.compatibilityDebounceTimer = undefined;
+        }
+        this.refreshScheduledCompatibility();
+      }, COMPATIBILITY_MAX_WAIT_MS);
+    }
+  }
+
+  private refreshScheduledCompatibility(): void {
+    const pending = this.pendingDerivedViews;
+    if (
+      this.destroyed ||
+      !pending ||
+      pending.revision !== this.derivedViewsRevision ||
+      pending.document !== this.view.state.doc ||
+      pending.profile !== this.profile
+    )
+      return;
+    this.refreshCompatibility(pending.markdown);
+  }
+
+  private cancelPreviewFrame(): void {
+    const pending = this.previewFrame;
+    this.previewFrame = null;
+    pending?.cancel();
+  }
+
+  private clearCompatibilityMaxWait(): void {
+    if (this.compatibilityMaxWaitTimer === undefined) return;
+    clearTimeout(this.compatibilityMaxWaitTimer);
+    this.compatibilityMaxWaitTimer = undefined;
+  }
+
+  private invalidateDerivedViews(): void {
+    this.derivedViewsRevision += 1;
+    this.pendingDerivedViews = null;
+    this.cancelPreviewFrame();
+    if (this.compatibilityDebounceTimer !== undefined) {
+      clearTimeout(this.compatibilityDebounceTimer);
+      this.compatibilityDebounceTimer = undefined;
+    }
+    this.clearCompatibilityMaxWait();
+  }
+
+  private syncSourceValue(markdown: string): void {
+    if (this.sourceEl.value !== markdown) this.sourceEl.value = markdown;
   }
 
   private codeBlockControlOptions(): CodeBlockControlOptions {
@@ -4620,15 +4714,31 @@ export class MarkdownEditorApp {
   }
 
   /** Resolve local image references for the webview display only. */
-  private resolveDisplayImages(container: ParentNode): void {
+  private resolveDisplayImages(
+    container: ParentNode,
+    contentKey?: unknown,
+  ): void {
     const base = this.resourceBaseUrl;
-    if (!base) return;
+    if (!base) {
+      this.displayImageScanKeys.delete(container);
+      return;
+    }
+    const key =
+      contentKey ??
+      (container === this.view.dom
+        ? this.view.state.doc
+        : container === this.previewEl
+          ? this.previewDomRevision
+          : undefined);
+    const previous = this.displayImageScanKeys.get(container);
+    if (previous?.base === base && previous.contentKey === key) return;
     for (const image of Array.from(container.querySelectorAll("img[src]"))) {
       const source = image.getAttribute("src");
       if (!source) continue;
       const resolved = resolveDisplayUrl(source, base);
       if (resolved !== source) image.setAttribute("src", resolved);
     }
+    this.displayImageScanKeys.set(container, { base, contentKey: key });
   }
 
   private refreshCompatibility(markdown: string): void {
@@ -10114,7 +10224,7 @@ export class MarkdownEditorApp {
         // so CellSelection and the scroll position survive unchanged.
         this.lastValidMarkdown = formatted;
         this.serializedDocument = this.view.state.doc;
-        this.refreshDerivedViews(formatted);
+        this.refreshDerivedViewsImmediately(formatted);
       } else {
         const selection = this.view.state.selection;
         const transaction = this.view.state.tr.replaceWith(
@@ -10144,8 +10254,7 @@ export class MarkdownEditorApp {
     if (mode !== this.mode) {
       this.closeWritingPopups();
       this.closeEmojiPicker();
-      this.derivedViewsRevision += 1;
-      this.pendingDerivedViews = null;
+      this.cancelPreviewFrame();
     }
     if (this.tableDialogOpen && mode !== "rich") this.closeTableDialog();
     this.mode = mode;
@@ -10167,7 +10276,7 @@ export class MarkdownEditorApp {
       this.view.state.selection,
     );
     if (mode === "preview" && options.refreshPreview !== false) {
-      this.refreshDerivedViews(this.currentMarkdown(), undefined, {
+      this.refreshDerivedViewsImmediately(this.currentMarkdown(), undefined, {
         renderPreview: true,
         refreshCompatibility: true,
       });
@@ -10182,7 +10291,7 @@ export class MarkdownEditorApp {
         });
     }
     if (mode === "source") {
-      this.sourceEl.value = this.currentMarkdown();
+      this.syncSourceValue(this.currentMarkdown());
       if (requestHost && this.hasPendingHostSync())
         this.deferredHostCommand = "source";
       else if (requestHost)
@@ -10835,7 +10944,7 @@ export class MarkdownEditorApp {
     this.applyTypography(message.typography);
     this.lastValidMarkdown = message.markdown;
     this.serializedDocument = this.view.state.doc;
-    this.refreshDerivedViews(message.markdown, message.html, {
+    this.refreshDerivedViewsImmediately(message.markdown, message.html, {
       renderPreview: true,
       refreshCompatibility: true,
     });
@@ -11018,6 +11127,9 @@ export class MarkdownEditorApp {
       this.sync.hasPending ||
       this.dirty ||
       localMarkdown !== message.markdown;
+    const displayContextChanged =
+      this.profile !== message.profile ||
+      this.resourceBaseUrl !== message.resourceBaseUrl;
     this.version = Math.max(this.version, message.version);
     this.authoritativeMarkdown = message.markdown;
     this.authoritativeProfile = message.profile;
@@ -11032,6 +11144,11 @@ export class MarkdownEditorApp {
     this.updateProfileSelect();
     this.updateEditingControlState();
     if (!keepLocalDraft) this.applyDocument(message);
+    else if (displayContextChanged)
+      this.refreshDerivedViewsImmediately(localMarkdown, undefined, {
+        renderPreview: this.mode === "preview",
+        refreshCompatibility: true,
+      });
   }
 
   private rememberPendingExternal(message: DocumentMessage): void {
@@ -11149,6 +11266,11 @@ export class MarkdownEditorApp {
     this.profile = message.profile;
     this.resourceBaseUrl = message.resourceBaseUrl;
     this.applyTypography(message.typography);
+    if (localMatches)
+      this.refreshDerivedViewsImmediately(result.markdown, undefined, {
+        renderPreview: this.mode === "preview",
+        refreshCompatibility: true,
+      });
     this.sync.noteAuthoritative(message.version, message.markdown);
     this.conflict = false;
     this.syncPaused = false;
@@ -11215,11 +11337,10 @@ export class MarkdownEditorApp {
     this.updateEditingControlState();
     // The PM state remains untouched. Use the last serialized local draft so
     // an authoritative echo cannot reserialize or replace a newer queued edit.
-    this.refreshDerivedViews(this.lastValidMarkdown, undefined, {
+    this.refreshDerivedViewsImmediately(this.lastValidMarkdown, undefined, {
       renderPreview: this.mode === "preview",
-      refreshCompatibility: false,
+      refreshCompatibility: true,
     });
-    this.scheduleDerivedViews(this.lastValidMarkdown);
   }
 
   private applyDocument(
@@ -11236,8 +11357,7 @@ export class MarkdownEditorApp {
       return;
     }
 
-    this.derivedViewsRevision += 1;
-    this.pendingDerivedViews = null;
+    this.invalidateDerivedViews();
 
     const wasInitialized = this.initialized;
     const previousState = this.view.state;
@@ -11329,15 +11449,14 @@ export class MarkdownEditorApp {
       this.sync.noteAuthoritative(this.version, message.markdown);
       this.sync.clear();
       this.setInitialized(true);
-      this.refreshDerivedViews(message.markdown, undefined, {
+      this.refreshDerivedViewsImmediately(message.markdown, undefined, {
         // Entering the preview panel is a display event, so make its first
-        // snapshot visible immediately. Rich editing never takes this path;
-        // its compatibility work remains in the deferred batch below.
+        // snapshot visible immediately. Authoritative replacements also flush
+        // compatibility so no old diagnostic remains exposed.
         renderPreview: message.mode === "preview" || this.mode === "preview",
-        refreshCompatibility: message.mode === "preview",
+        refreshCompatibility: true,
       });
       if (message.mode !== "preview") {
-        this.scheduleDerivedViews(message.markdown);
         this.updateToolbarState(
           this.view.state.selection,
           this.view.state.selection,
@@ -11370,7 +11489,7 @@ export class MarkdownEditorApp {
       this.view.setProps({ editable: () => false });
       this.syncPaused = true;
       this.sync.noteAuthoritative(message.version, message.markdown);
-      this.sourceEl.value = message.markdown;
+      this.syncSourceValue(message.markdown);
       if (message.mode !== "preview")
         this.previewEl.textContent = message.markdown;
       this.setInitialized(true);
@@ -11442,12 +11561,11 @@ export class MarkdownEditorApp {
     this.sync.setVersion(this.version);
     this.sync.noteAuthoritative(this.version, message.markdown);
     this.sync.clear();
-    this.refreshDerivedViews(message.markdown, undefined, {
+    this.refreshDerivedViewsImmediately(message.markdown, undefined, {
       renderPreview: message.mode === "preview" || this.mode === "preview",
-      refreshCompatibility: message.mode === "preview",
+      refreshCompatibility: true,
     });
     if (message.mode !== "preview") {
-      this.scheduleDerivedViews(message.markdown);
       this.updateToolbarState(
         this.view.state.selection,
         this.view.state.selection,
@@ -11927,11 +12045,10 @@ export class MarkdownEditorApp {
     this.updateProfileSelect();
     this.updateEditingControlState();
     if (markdown === null) return true;
-    this.refreshDerivedViews(markdown, undefined, {
+    this.refreshDerivedViewsImmediately(markdown, undefined, {
       renderPreview: this.mode === "preview",
-      refreshCompatibility: false,
+      refreshCompatibility: true,
     });
-    this.scheduleDerivedViews(markdown);
     this.persistRecovery(
       markdown,
       this.authoritativeMarkdown,
