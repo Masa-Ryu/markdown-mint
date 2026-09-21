@@ -271,7 +271,11 @@ interface RecoveryState {
   recoveryProfile?: DocumentProfile;
   recoveryTimestamp?: number;
   recoveryDocument?: unknown;
+  /** True when recoveryDocument is newer PM state from a serializer failure. */
+  recoveryDocumentPending?: boolean;
 }
+
+type StructuredRecoveryKind = "pending" | "not-pending" | "legacy-ambiguous";
 
 interface DerivedViewsOptions {
   renderPreview?: boolean;
@@ -3184,14 +3188,16 @@ export class MarkdownEditorApp {
     document.addEventListener("pointerdown", this.writingPointerDownHandler);
     document.addEventListener("focusin", this.writingFocusInHandler);
     document.addEventListener("keydown", this.writingKeyDownHandler);
-    this.restoreRecoveryState();
+    const restoredRecovery = this.restoreRecoveryState();
     this.setInitialized(this.initialized);
     this.setMode(this.mode, false);
-    this.refreshDerivedViews(initial.markdown, undefined, {
-      renderPreview: this.mode === "preview",
-      refreshCompatibility: this.mode === "preview",
-    });
-    if (this.mode !== "preview") this.scheduleDerivedViews(initial.markdown);
+    if (!restoredRecovery) {
+      this.refreshDerivedViews(initial.markdown, undefined, {
+        renderPreview: this.mode === "preview",
+        refreshCompatibility: this.mode === "preview",
+      });
+      if (this.mode !== "preview") this.scheduleDerivedViews(initial.markdown);
+    }
     this.postReady();
   }
 
@@ -11404,6 +11410,7 @@ export class MarkdownEditorApp {
       ...(this.documentId ? { documentId: this.documentId } : {}),
     };
     if (includeDocument) {
+      state.recoveryDocumentPending = this.serializationError !== null;
       try {
         state.recoveryDocument = this.view.state.doc.toJSON();
       } catch {
@@ -11430,37 +11437,69 @@ export class MarkdownEditorApp {
     return saved.recoveryVersion === this.version;
   }
 
-  private restoreRecoveryState(): void {
+  private structuredRecoveryKind(saved: RecoveryState): StructuredRecoveryKind {
+    if (saved.recoveryDocument === undefined) return "not-pending";
+    if (saved.recoveryDocumentPending === true) return "pending";
+    if (saved.recoveryDocumentPending === false) return "not-pending";
+    return "legacy-ambiguous";
+  }
+
+  private recoveryMetadataMatchesCurrent(saved: RecoveryState): boolean {
+    return (
+      (saved.recoveryProfile ?? this.profile) === this.profile &&
+      this.recoveryBaseMatchesCurrent(saved)
+    );
+  }
+
+  private restoreRecoveryState(): boolean {
     const saved = this.vscode?.getState?.() as RecoveryState | undefined;
-    if (!saved || typeof saved.recoveryDraft !== "string") return;
-    if (!this.recoveryBelongsToCurrentDocument(saved)) return;
-    if (saved.recoveryDraft === this.currentMarkdown()) {
+    if (!saved || typeof saved.recoveryDraft !== "string") return false;
+    if (!this.recoveryBelongsToCurrentDocument(saved)) return false;
+    const recoveryKind = this.structuredRecoveryKind(saved);
+    if (recoveryKind === "legacy-ambiguous") return false;
+    // A structured recovery snapshot may contain newer PM input than its
+    // Markdown companion. Validate its provenance before considering either
+    // representation saved; a changed base/profile must remain recoverable.
+    if (!this.recoveryMetadataMatchesCurrent(saved)) return false;
+    if (
+      recoveryKind === "not-pending" &&
+      saved.recoveryDraft === this.currentMarkdown()
+    ) {
       this.clearRecoveryIfSaved();
-      return;
+      return false;
     }
     // Recovery is automatic only when the draft records the exact
     // authoritative document it was based on. A changed document is left in
     // storage for diagnostics/host-side recovery, never silently overwritten.
-    if (
-      (saved.recoveryProfile ?? this.profile) !== this.profile ||
-      !this.recoveryBaseMatchesCurrent(saved)
-    )
-      return;
-    this.restoreRecoveryDraft(saved);
+    return this.restoreRecoveryDraft(saved, recoveryKind);
   }
 
-  private restoreRecoveryDraft(saved: RecoveryState): void {
+  private restoreRecoveryDraft(
+    saved: RecoveryState,
+    recoveryKind = this.structuredRecoveryKind(saved),
+  ): boolean {
     const draft = saved.recoveryDraft;
-    if (draft === undefined) return;
+    if (draft === undefined) return false;
+    if (recoveryKind === "legacy-ambiguous") return false;
     const profile = saved.recoveryProfile ?? this.profile;
     let editorDoc: PMNode | undefined;
     let snapshot: unknown;
     let starterState: StarterPluginState | undefined;
-    if (saved.recoveryDocument !== undefined) {
+    let restoredStructuredDocument = false;
+    const persistedStructuredDocument =
+      recoveryKind === "pending" && saved.recoveryDocument !== undefined;
+    if (persistedStructuredDocument) {
       try {
         editorDoc = PMNode.fromJSON(this.schema, saved.recoveryDocument);
-      } catch {
-        editorDoc = undefined;
+        restoredStructuredDocument = true;
+      } catch (error) {
+        this.notifyHost(
+          "error",
+          error instanceof Error
+            ? `The saved structured recovery could not be restored: ${error.message}`
+            : "The saved structured recovery could not be restored.",
+        );
+        return false;
       }
     }
     if (!editorDoc) {
@@ -11477,7 +11516,7 @@ export class MarkdownEditorApp {
             ? `The saved Markdown draft could not be restored: ${error.message}`
             : "The saved Markdown draft could not be restored.",
         );
-        return;
+        return false;
       }
     }
 
@@ -11492,13 +11531,23 @@ export class MarkdownEditorApp {
       );
     this.view.updateState(recoveryState);
     this.profile = profile;
-    this.previousSnapshot = snapshot;
-    this.starterOriginalSource = draft;
+    if (restoredStructuredDocument) {
+      // The persisted PM document is newer than both the host source and the
+      // Markdown companion. Do not let source-preserving caches make the old
+      // source look like a serialization of this recovered document.
+      this.previousSnapshot = undefined;
+      this.starterOriginalSource = undefined;
+    } else {
+      this.previousSnapshot = snapshot;
+      this.starterOriginalSource = draft;
+    }
     this.parseError = null;
     this.serializationError = null;
     this.preservedSource = null;
-    this.lastValidMarkdown = draft;
-    this.serializedDocument = this.view.state.doc;
+    // Establish this cache only after the recovered PM document has actually
+    // serialized successfully. Until then, currentMarkdown() must not return
+    // the stale recoveryDraft or enqueue it as the latest host source.
+    this.serializedDocument = null;
     this.dirty = true;
     this.conflict = false;
     this.syncPaused = false;
@@ -11509,20 +11558,23 @@ export class MarkdownEditorApp {
       this.authoritativeMarkdown,
     );
     this.view.setProps({ editable: () => !this.previewOnly });
-    this.refreshDerivedViews(draft, undefined, {
+    const markdown = this.serializeCurrent();
+    this.updateProfileSelect();
+    this.updateEditingControlState();
+    if (markdown === null) return true;
+    this.refreshDerivedViews(markdown, undefined, {
       renderPreview: this.mode === "preview",
       refreshCompatibility: false,
     });
-    this.scheduleDerivedViews(draft);
-    this.updateProfileSelect();
-    this.updateEditingControlState();
+    this.scheduleDerivedViews(markdown);
     this.persistRecovery(
-      draft,
+      markdown,
       this.authoritativeMarkdown,
       this.authoritativeVersion,
     );
     if (this.vscode && this.initialized && !this.previewOnly)
-      this.sync.enqueue(draft);
+      this.sync.enqueue(markdown);
+    return true;
   }
 
   private clearRecoveryIfSaved(): void {
@@ -11532,6 +11584,7 @@ export class MarkdownEditorApp {
       !saved ||
       typeof saved.recoveryDraft !== "string" ||
       !this.recoveryBelongsToCurrentDocument(saved) ||
+      this.structuredRecoveryKind(saved) !== "not-pending" ||
       saved.recoveryDraft !== this.currentMarkdown()
     )
       return;
