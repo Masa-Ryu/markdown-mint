@@ -1742,7 +1742,7 @@ $$
     const cases = [
       ["```\n\n```\n", "", "```\n\n```"],
       ["```js\na\n\n```\n", "a\n", "```js\na\n\n```"],
-      ["~~~\na\n\n~~~\n", "a\n", "```\na\n\n```"],
+      ["~~~\na\n\n~~~\n", "a\n", "~~~\na\n\n~~~"],
       ["    a\n\n    b\n", "a\n\nb", "```\na\n\nb\n```"],
     ] as const;
     for (const [source, expectedText, expectedMarkdown] of cases) {
