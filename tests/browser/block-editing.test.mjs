@@ -1781,6 +1781,97 @@ async function testSpreadsheetTablePasteHistory(page) {
   );
 }
 
+async function testMergedHtmlTablePaste(page) {
+  const source = blocks(
+    "Before",
+    "| H1 | H2 |\n| --- | --- |\n| A1 | A2 |",
+    "After",
+  );
+  const html =
+    '<table><tr><th rowspan="2">A</th><td colspan="2">B</td><td>C</td></tr><tr><td>D</td><td colspan="2">E</td></tr></table>';
+  await load(page, source);
+  await caret(page, `${rich} > p:first-child`, -1);
+  await page.evaluate((markup) => {
+    const clipboardData = new DataTransfer();
+    clipboardData.setData("text/html", markup);
+    const event = new ClipboardEvent("paste", {
+      bubbles: true,
+      cancelable: true,
+      clipboardData,
+    });
+    const editor = document.querySelector(".mm-rich-panel .ProseMirror");
+    if (!editor) throw new Error("Rich Editor was not rendered");
+    editor.dispatchEvent(event);
+    if (!event.defaultPrevented)
+      throw new Error("Merged HTML table paste was not handled");
+  }, html);
+  await page.waitForFunction(
+    () =>
+      document.querySelectorAll(".mm-rich-panel .ProseMirror > table")
+        .length === 2,
+  );
+  const values = await page
+    .locator(`${rich} > table`)
+    .first()
+    .locator("tr")
+    .evaluateAll((rows) =>
+      rows.map((row) =>
+        Array.from(row.children).map((cell) => cell.textContent ?? ""),
+      ),
+    );
+  assert.deepEqual(values, [
+    ["A", "B", "", "C"],
+    ["", "D", "E", ""],
+  ]);
+  assert.match((await saved(page)).markdown, /\| A \| B \|/);
+
+  const crossingGroupHtml =
+    '<table><thead><tr><th rowspan="2">H</th><th>J</th></tr></thead><tbody><tr><td>A</td><td>B</td></tr></tbody></table>';
+  await load(page, source);
+  await caret(page, `${rich} > p:first-child`, -1);
+  const before = await saved(page);
+  await page.evaluate((markup) => {
+    const clipboardData = new DataTransfer();
+    clipboardData.setData("text/html", markup);
+    const event = new ClipboardEvent("paste", {
+      bubbles: true,
+      cancelable: true,
+      clipboardData,
+    });
+    const editor = document.querySelector(".mm-rich-panel .ProseMirror");
+    if (!editor) throw new Error("Rich Editor was not rendered");
+    editor.dispatchEvent(event);
+    if (!event.defaultPrevented)
+      throw new Error("Crossing row-group paste was not rejected");
+  }, crossingGroupHtml);
+  await expectSource(page, source);
+  const after = await saved(page);
+  assert.equal(after.edits, before.edits);
+
+  const overlappingSpanHtml =
+    '<table><tbody><tr><td>A</td><td rowspan="2">B</td></tr><tr><td colspan="2">C</td><td>D</td></tr></tbody></table>';
+  await load(page, source);
+  await caret(page, `${rich} > p:first-child`, -1);
+  const overlappingBefore = await saved(page);
+  await page.evaluate((markup) => {
+    const clipboardData = new DataTransfer();
+    clipboardData.setData("text/html", markup);
+    const event = new ClipboardEvent("paste", {
+      bubbles: true,
+      cancelable: true,
+      clipboardData,
+    });
+    const editor = document.querySelector(".mm-rich-panel .ProseMirror");
+    if (!editor) throw new Error("Rich Editor was not rendered");
+    editor.dispatchEvent(event);
+    if (!event.defaultPrevented)
+      throw new Error("Overlapping HTML spans were not rejected");
+  }, overlappingSpanHtml);
+  await expectSource(page, source);
+  const overlappingAfter = await saved(page);
+  assert.equal(overlappingAfter.edits, overlappingBefore.edits);
+}
+
 async function testNestedBlockquoteTableNavigation(page) {
   const source = blocks(
     [
@@ -4429,6 +4520,7 @@ async function main() {
       testWrappedVerticalNavigation,
       testTableNavigation,
       testSpreadsheetTablePasteHistory,
+      testMergedHtmlTablePaste,
       testNestedBlockquoteTableNavigation,
       testCodeVerticalNavigation,
       testExpandedCodeVerticalNavigation,

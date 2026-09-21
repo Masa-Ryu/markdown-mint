@@ -223,9 +223,37 @@ function hasOversizedHtmlTable(value: string): boolean {
     else cells += 1;
     if (rows > MAX_CLIPBOARD_CELLS || cells > MAX_CLIPBOARD_CELLS) return true;
   }
-  const oversizedSpan =
-    /<(?:td|th)\b[^>]*\b(?:rowspan|colspan)\s*=\s*["']?\s*(\d+)/i.exec(value);
-  return oversizedSpan ? Number(oversizedSpan[1]) > MAX_CLIPBOARD_CELLS : false;
+  const spans =
+    /<(?:td|th)\b[^>]*\s(?:rowspan|colspan)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+))/gi;
+  let span: RegExpExecArray | null;
+  while ((span = spans.exec(value))) {
+    const raw = (span[1] ?? span[2] ?? span[3] ?? "").trim();
+    if (/^\d+$/.test(raw)) {
+      const numeric = Number(raw);
+      if (!Number.isSafeInteger(numeric) || numeric > MAX_CLIPBOARD_DIMENSION)
+        return true;
+    }
+  }
+  return false;
+}
+
+type HtmlSpanResult =
+  | { span: number; failure: null }
+  | { span: null; failure: "malformed" | "too-large" };
+
+function readHtmlSpan(
+  cell: Element,
+  attribute: "rowspan" | "colspan",
+): HtmlSpanResult {
+  const raw = cell.getAttribute(attribute);
+  if (raw === null) return { span: 1, failure: null };
+  const normalized = raw.trim();
+  if (!/^\d+$/.test(normalized) || Number(normalized) === 0)
+    return { span: null, failure: "malformed" };
+  const span = Number(normalized);
+  if (!Number.isSafeInteger(span) || span > MAX_CLIPBOARD_DIMENSION)
+    return { span: null, failure: "too-large" };
+  return { span, failure: null };
 }
 
 function parseClipboardHtmlResult(value: string): ClipboardMatrixParseResult {
@@ -242,6 +270,7 @@ function parseClipboardHtmlResult(value: string): ClipboardMatrixParseResult {
     const parsed = new DOMParser().parseFromString(value, "text/html");
     const table = parsed.querySelector("table");
     if (!table) return failure("not-a-matrix");
+    if (table.querySelector("table")) return failure("malformed");
     const extractText = (cell: Element): string => {
       const walker = parsed.createTreeWalker(cell, NodeFilter.SHOW_ALL);
       let output = "";
@@ -260,15 +289,109 @@ function parseClipboardHtmlResult(value: string): ClipboardMatrixParseResult {
       }
       return output;
     };
-    const rows = Array.from(table.querySelectorAll("tr"))
-      .filter((row) => row.closest("table") === table)
-      .map((row) =>
-        Array.from(row.querySelectorAll(":scope > th, :scope > td")).map(
-          (cell) => extractText(cell),
-        ),
-      );
-    if (!rows.length) return failure("malformed");
-    return validateClipboardMatrix(rows);
+    const htmlRows = Array.from(table.querySelectorAll("tr")).filter(
+      (row) => row.closest("table") === table,
+    );
+    if (!htmlRows.length) return failure("malformed");
+    if (htmlRows.length > MAX_CLIPBOARD_DIMENSION) return failure("too-large");
+
+    type HtmlRowGroup = {
+      parent: Element;
+      rows: HTMLTableRowElement[];
+    };
+    const htmlRowGroups: HtmlRowGroup[] = [];
+    for (const row of htmlRows) {
+      const parent = row.parentElement ?? table;
+      const previous = htmlRowGroups[htmlRowGroups.length - 1];
+      if (!previous || previous.parent !== parent)
+        htmlRowGroups.push({ parent, rows: [row] });
+      else previous.rows.push(row);
+    }
+
+    // HTML tables are laid out on a logical grid. Keep the occupied positions
+    // explicit so a later cell cannot slide left through a rowspan/colspan.
+    // A rowspan cannot cross an HTML row-group boundary. Supporting implicit
+    // rows at the end of a group would require reproducing the full HTML table
+    // model, so reject that layout instead of reserving the next group's slots.
+    const grid: Array<Array<string | undefined>> = Array.from(
+      { length: htmlRows.length },
+      () => [],
+    );
+    let columns = 0;
+    let rowIndex = 0;
+    for (const group of htmlRowGroups) {
+      const groupEnd = rowIndex + group.rows.length;
+      for (const row of group.rows) {
+        const cells = Array.from(row.children).filter(
+          (child): child is HTMLTableCellElement =>
+            child.tagName === "TH" || child.tagName === "TD",
+        );
+        if (!cells.length) return failure("malformed");
+
+        const currentRow = grid[rowIndex];
+        if (!currentRow) return failure("malformed");
+        let column = 0;
+        for (const cell of cells) {
+          const rowSpan = readHtmlSpan(cell, "rowspan");
+          if (rowSpan.failure) return failure(rowSpan.failure);
+          const columnSpan = readHtmlSpan(cell, "colspan");
+          if (columnSpan.failure) return failure(columnSpan.failure);
+
+          const spanColumns = columnSpan.span;
+          const spanRows = rowSpan.span;
+          if (!spanColumns || !spanRows) return failure("malformed");
+          if (rowIndex + spanRows > groupEnd) return failure("malformed");
+
+          // Find the first free start slot in this row. Existing entries here
+          // are reservations created by rowspans from earlier rows. Once the
+          // start is selected, however, the full cell rectangle must be free;
+          // moving a partially overlapping colspan to the right would change
+          // the HTML table model instead of rejecting malformed input.
+          while (currentRow[column] !== undefined) column += 1;
+
+          const endColumn = column + spanColumns;
+          if (endColumn > MAX_CLIPBOARD_DIMENSION) return failure("too-large");
+          columns = Math.max(columns, endColumn);
+          if (htmlRows.length > Math.floor(MAX_CLIPBOARD_CELLS / columns))
+            return failure("too-large");
+
+          const endRow = rowIndex + spanRows;
+          for (let targetRow = rowIndex; targetRow < endRow; targetRow += 1) {
+            const target = grid[targetRow];
+            if (!target) return failure("malformed");
+            for (
+              let targetColumn = column;
+              targetColumn < endColumn;
+              targetColumn += 1
+            ) {
+              if (target[targetColumn] !== undefined)
+                return failure("malformed");
+            }
+          }
+
+          const text = extractText(cell);
+          for (let targetRow = rowIndex; targetRow < endRow; targetRow += 1) {
+            for (
+              let targetColumn = column;
+              targetColumn < endColumn;
+              targetColumn += 1
+            ) {
+              const target = grid[targetRow];
+              if (!target) return failure("malformed");
+              target[targetColumn] =
+                targetRow === rowIndex && targetColumn === column ? text : "";
+            }
+          }
+          column = endColumn;
+        }
+        rowIndex += 1;
+      }
+    }
+
+    const values = grid.map((row) =>
+      Array.from({ length: columns }, (_, column) => row[column] ?? ""),
+    );
+    return validateClipboardMatrix(values);
   } catch {
     return failure("malformed");
   }

@@ -6,6 +6,13 @@
   marked text touches whitespace or Unicode punctuation, including links,
   images, and table cells, while preserving the original text.
 
+- Keep escaped task-like text such as `\[x\]`, `\[ \]`, and GitLab's
+  `\[~\]` as ordinary list content instead of converting it to a checkbox.
+
+- Preserve safe tilde/backtick fences when editing code blocks whose info
+  strings or bodies contain fence candidates, including source and line-ending
+  preservation for info-only edits.
+
 - Preserve ASCII space-only inline code contents when neighboring paragraph or
   table text is edited, including repeated serialize-and-parse cycles, without
   adding padding or regressing safe backtick fences.
@@ -19,6 +26,8 @@
   ten-digit markers.
 - Preserve backslashes and literal character-reference text in link and image
   titles across Rich edits, including table cells and repeated serialization.
+- Preserve logical cell positions when pasting HTML tables with `rowspan` or
+  `colspan`, and reject malformed, nested, or over-budget layouts safely.
 
 ## 0.5.0
 
