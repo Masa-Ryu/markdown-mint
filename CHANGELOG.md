@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.2
+
+- Cache fingerprints for immutable ProseMirror nodes during source-preserving
+  serialization, avoiding repeated JSON conversion for unchanged editor blocks
+  while retaining weak cache lifetime and existing source matching behavior.
+
 ## 0.5.1
 
 - Keep strong, emphasis, and strikethrough delimiter boundaries parseable when
