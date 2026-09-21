@@ -95,6 +95,14 @@ function firstLinkMark(doc: PMNode): PMNode["marks"][number] | undefined {
   return result;
 }
 
+function firstNodeOfType(doc: PMNode, typeName: string): PMNode | undefined {
+  let result: PMNode | undefined;
+  doc.descendants((node) => {
+    if (!result && node.type.name === typeName) result = node;
+  });
+  return result;
+}
+
 describe("Markdown core", () => {
   it("parses common rich Markdown into the shared PM schema", () => {
     const snapshot = parseMarkdown(
@@ -510,6 +518,40 @@ describe("Markdown core", () => {
     });
   });
 
+  it("preserves literal entity text in link and image titles across edits", () => {
+    const source =
+      'Before [x](u "literal &amp;copy;") and ![alt](image.png "image &amp;copy; &amp;#65;") after.\n';
+    const snapshot = parseMarkdown(source);
+    const edited = replaceText(snapshot.doc, "Before", "Changed");
+
+    expect(firstLinkMark(snapshot.doc)?.attrs.title).toBe("literal &copy;");
+    expect(firstNodeOfType(snapshot.doc, "image")?.attrs.title).toBe(
+      "image &copy; &#65;",
+    );
+
+    const serialized = serializeMarkdown(edited, snapshot);
+    const reparsedSnapshot = reparseMarkdown(serialized);
+    const reparsed = reparsedSnapshot.doc;
+
+    expect(serialized).toContain('"literal &amp;copy;"');
+    expect(serialized).toContain('"image &amp;copy; &amp;#65;"');
+    expect(firstLinkMark(reparsed)?.attrs.title).toBe("literal &copy;");
+    expect(firstNodeOfType(reparsed, "image")?.attrs.title).toBe(
+      "image &copy; &#65;",
+    );
+    expect(reparsed.eq(edited)).toBe(true);
+
+    const editedAgain = replaceText(reparsed, "Changed", "Final");
+    const serializedAgain = serializeMarkdown(editedAgain, reparsedSnapshot);
+    const reparsedAgain = reparseMarkdown(serializedAgain).doc;
+
+    expect(firstLinkMark(reparsedAgain)?.attrs.title).toBe("literal &copy;");
+    expect(firstNodeOfType(reparsedAgain, "image")?.attrs.title).toBe(
+      "image &copy; &#65;",
+    );
+    expect(reparsedAgain.eq(editedAgain)).toBe(true);
+  });
+
   it.each([
     ["before a quote", "\\" + '"quote'],
     ["before punctuation", "\\" + "!punctuation"],
@@ -581,7 +623,7 @@ describe("Markdown core", () => {
       const source = [
         "| image | link | note |",
         "| --- | --- | --- |",
-        '| ![alt](image.png "image\\|title\\\\") | [label](u "link\\|title\\\\") | KEEP |',
+        '| ![alt](image.png "image\\|title\\\\ &amp;copy; &amp;#65;") | [label](u "link\\|title\\\\ &amp;copy;") | KEEP |',
         "",
       ].join(ending);
       const snapshot = parseMarkdown(source);
@@ -594,8 +636,12 @@ describe("Markdown core", () => {
 
       expect(table.type.name).toBe("table");
       expect(row.childCount).toBe(3);
-      expect(row.child(0).child(0).child(0).attrs.title).toBe("image|title\\");
-      expect(firstLinkMark(row.child(1))?.attrs.title).toBe("link|title\\");
+      expect(row.child(0).child(0).child(0).attrs.title).toBe(
+        "image|title\\ &copy; &#65;",
+      );
+      expect(firstLinkMark(row.child(1))?.attrs.title).toBe(
+        "link|title\\ &copy;",
+      );
       expect(row.child(2).textContent).toBe("changed");
       expect(reparsed.eq(edited)).toBe(true);
       expect(serialized.endsWith(ending)).toBe(true);

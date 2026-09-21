@@ -2334,7 +2334,10 @@ function serializeInlineTitle(value: unknown, table = false): string {
   // protecting quotes or table pipes rather than treating existing escapes as
   // source syntax.
   const normalized = table ? source.replace(/\r\n|\r|\n/g, " ") : source;
-  let escaped = normalized.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+  let escaped = normalized
+    .replace(/\\/g, "\\\\")
+    .replace(/"/g, '\\"')
+    .replace(/&/g, "&amp;");
   if (table) escaped = escaped.replace(/\|/g, "\\|");
   return escaped;
 }
