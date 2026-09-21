@@ -2226,4 +2226,20 @@ describe("MarkdownMintEditorProvider", () => {
       'src="vscode-resource:/workspace/docs/assets/images/icon.png"',
     );
   });
+
+  it("uses the shared heading anchor order in the native Markdown preview", () => {
+    const markdownIt = extendMarkdownIt(new MarkdownIt());
+    const source = ["# A", "> [!NOTE]\n> # A", "# A"].join("\n\n");
+    const tokens = markdownIt.parse(source, {
+      currentDocument: vscode.__state.document.uri,
+    });
+    const html = markdownIt.renderer.render(tokens, markdownIt.options, {
+      currentDocument: vscode.__state.document.uri,
+    });
+    const ids = Array.from(
+      html.matchAll(/<h[1-6][^>]*\bid="([^"]+)"/g),
+      (match) => match[1],
+    );
+    expect(ids).toEqual(["a", "a-1", "a-2"]);
+  });
 });

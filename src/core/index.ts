@@ -35,6 +35,22 @@ import {
   type DetailsTagRange,
 } from "./details";
 import { isMathFenceLanguage } from "./math";
+import {
+  collectHeadingAnchors as collectHeadingAnchorsFromSnapshot,
+  emojiForShortcode,
+  headingDisplayText,
+  headingFootnoteRoot,
+  headingOccurrenceId,
+  headingSlugBase,
+  nestedHeadingFragmentRoot,
+  type HeadingAnchor,
+  type HeadingAnchorCollectionOptions,
+} from "./links/anchors";
+export type {
+  HeadingAnchor,
+  HeadingAnchorCollectionOptions,
+  HeadingAnchorVerification,
+} from "./links/anchors";
 export {
   isMathFenceLanguage,
   mathFenceLanguage,
@@ -136,6 +152,8 @@ export interface RenderContext {
   footnoteNumbers?: Map<string, number>;
   /** Heading ids belong to positions within a rendering root, not node identity. */
   headingIds?: WeakMap<PMNode, Map<number, string>>;
+  /** Shared, profile-aware heading occurrences for the current render tree. */
+  headingAnchors?: ReadonlyMap<string, HeadingAnchor>;
   /** Optional document position for detached NodeView render calls. */
   nodePosition?: number;
   /** Hosts may provide richer renderers without coupling core to a webview. */
@@ -152,6 +170,7 @@ type MarkdownToken = {
   map?: [number, number];
   children?: MarkdownToken[] | null;
   attrs?: Array<[string, string]> | null;
+  meta?: unknown;
   content?: string;
   info?: string;
   markup?: string;
@@ -214,6 +233,8 @@ const rawInlineSpec: NodeSpec = {
   attrs: {
     source: { default: "" },
     kind: { default: "unknown" },
+    // Safe HTML pairs retain the tokenized visible text for heading anchors.
+    displayText: { default: null },
   },
   parseDOM: [
     {
@@ -553,6 +574,54 @@ const markTypes = schema.marks as unknown as KnownMarkTypes;
 const emptyParagraph = (): PMNode =>
   nodeTypes.paragraph.create(null, Fragment.empty);
 
+const inlineSourceMetadataKey = "markdownMintSource";
+const trackedMarkdownIt = new WeakSet<MarkdownIt>();
+
+interface InlineSourceMetadata {
+  start: number;
+}
+
+function setInlineSourceStart(token: { meta?: unknown }, start: number): void {
+  const previous =
+    token.meta && typeof token.meta === "object" && !Array.isArray(token.meta)
+      ? (token.meta as Record<string, unknown>)
+      : {};
+  token.meta = {
+    ...previous,
+    [inlineSourceMetadataKey]: { start },
+  };
+}
+
+/** Retain the inline tokenizer's exact source offset on emitted tokens. */
+function trackInlineTokenSources(md: MarkdownIt): void {
+  if (trackedMarkdownIt.has(md)) return;
+
+  const BaseState = md.inline.State;
+  type InlineStateInstance = InstanceType<typeof BaseState>;
+  class SourceTrackingState extends BaseState {
+    override pushPending(
+      ...args: Parameters<InlineStateInstance["pushPending"]>
+    ): ReturnType<InlineStateInstance["pushPending"]> {
+      const start = this.pos - this.pending.length;
+      const token = super.pushPending(...args);
+      setInlineSourceStart(token, start);
+      return token;
+    }
+
+    override push(
+      ...args: Parameters<InlineStateInstance["push"]>
+    ): ReturnType<InlineStateInstance["push"]> {
+      const start = this.pos;
+      const token = super.push(...args);
+      setInlineSourceStart(token, start);
+      return token;
+    }
+  }
+
+  md.inline.State = SourceTrackingState;
+  trackedMarkdownIt.add(md);
+}
+
 function childrenOf(node: PMNode): PMNode[] {
   const children: PMNode[] = [];
   node.forEach((child) => children.push(child));
@@ -570,6 +639,7 @@ export function configureMarkdownIt(
   md: MarkdownIt,
   profile: Profile = "github",
 ): MarkdownIt {
+  trackInlineTokenSources(md);
   md.options.html = true;
   md.options.linkify = false;
   md.options.typographer = false;
@@ -893,31 +963,6 @@ function markFor(type: string, attrs: Record<string, string>): Mark | null {
   }
 }
 
-const emojiShortcodes: Record<string, string> = {
-  tada: "🎉",
-  party: "🎉",
-  rocket: "🚀",
-  warning: "⚠️",
-  white_check_mark: "✅",
-  heavy_check_mark: "✔️",
-  checkered_flag: "🏁",
-  construction: "🚧",
-  x: "❌",
-  cross_mark: "❌",
-  bulb: "💡",
-  memo: "📝",
-  smile: "😄",
-  smiley: "😃",
-  grin: "😁",
-  blush: "😊",
-  wink: "😉",
-  heart: "❤️",
-  sparkles: "✨",
-  fire: "🔥",
-  eyes: "👀",
-  tada_dance: "💃",
-};
-
 interface ImageDimensions {
   width: string | null;
   height: string | null;
@@ -974,8 +1019,17 @@ function inlineHtmlTag(source: string): InlineHtmlTag | null {
   return { name, closing: Boolean(match[1]), void: name === "br" };
 }
 
-function rawInline(source: string, kind: string, marks: Mark[] = []): PMNode {
-  return nodeTypes.raw_inline.create({ source, kind }, null, marks);
+function rawInline(
+  source: string,
+  kind: string,
+  marks: Mark[] = [],
+  displayText: string | null = null,
+): PMNode {
+  return nodeTypes.raw_inline.create(
+    { source, kind, displayText },
+    null,
+    marks,
+  );
 }
 
 const footnoteNodeMetadata = new WeakMap<PMNode, FootnoteDefinition[]>();
@@ -993,7 +1047,13 @@ function footnoteRawInline(
 }
 
 function inlineTokenSource(token: MarkdownToken): string | null {
-  if (token.type === "text" || token.type === "html_inline")
+  if (
+    token.type === "text" ||
+    token.type === "html_inline" ||
+    token.type === "entity" ||
+    token.type === "escape" ||
+    token.type === "html_entity"
+  )
     return literalTokenText(token);
   if (token.type === "softbreak") return "\n";
   if (token.type === "em_open" || token.type === "em_close")
@@ -1038,14 +1098,68 @@ function findInlineHtmlPair(
   return -1;
 }
 
+interface InlineHtmlPairSource {
+  source: string;
+  body: string;
+  bodyStart: number;
+}
+
+function inlineSourceStart(
+  token: MarkdownToken,
+  sourceOffset: number,
+): number | undefined {
+  if (!token.meta || typeof token.meta !== "object") return undefined;
+  const metadata = (token.meta as Record<string, unknown>)[
+    inlineSourceMetadataKey
+  ];
+  if (!metadata || typeof metadata !== "object") return undefined;
+  const start = (metadata as Partial<InlineSourceMetadata>).start;
+  if (typeof start !== "number" || !Number.isInteger(start)) return undefined;
+  return start - sourceOffset;
+}
+
+/** Use tokenizer-owned positions so literals cannot masquerade as HTML. */
+function findInlineHtmlPairSource(
+  source: string,
+  openingToken: MarkdownToken,
+  closingToken: MarkdownToken,
+  sourceOffset = 0,
+): InlineHtmlPairSource | undefined {
+  const openingStart = inlineSourceStart(openingToken, sourceOffset);
+  const closingStart = inlineSourceStart(closingToken, sourceOffset);
+  if (openingStart == null || closingStart == null) return undefined;
+
+  const openingSource = literalTokenText(openingToken);
+  const closingSource = literalTokenText(closingToken);
+  const openingEnd = openingStart + openingSource.length;
+  const closingEnd = closingStart + closingSource.length;
+  if (
+    openingStart < 0 ||
+    closingStart < openingEnd ||
+    closingEnd > source.length ||
+    source.slice(openingStart, openingEnd) !== openingSource ||
+    source.slice(closingStart, closingEnd) !== closingSource
+  )
+    return undefined;
+
+  return {
+    source: source.slice(openingStart, closingEnd),
+    body: source.slice(openingEnd, closingStart),
+    bodyStart: openingEnd,
+  };
+}
+
 function parseInline(
   children: MarkdownToken[] | null | undefined,
   profile: Profile = "github",
   footnotes?: Map<string, FootnoteDefinition>,
+  sourceText = "",
+  sourceOffset = 0,
 ): PMNode[] {
   if (!children || children.length === 0) return [];
   const output: PMNode[] = [];
   const markStack: Mark[] = [];
+  const inlineSource = restoreEscapedDollars(sourceText, true);
   const emitText = (value: string): void => {
     const restored = restoreEscapedDollars(value);
     if (restored) output.push(schema.text(restored, markStack));
@@ -1079,7 +1193,7 @@ function parseInline(
         output.push(rawInline(source, "gitlab-inline-diff", markStack));
       } else {
         const name = source.slice(1, -1).toLowerCase();
-        if (emojiShortcodes[name])
+        if (emojiForShortcode(name))
           output.push(rawInline(source, "emoji", markStack));
         else emitText(source);
       }
@@ -1222,25 +1336,53 @@ function parseInline(
           // safe tags so a nested <strong> cannot close the outer pair early.
           const closingIndex = findInlineHtmlPair(children, index, tag);
           if (closingIndex > index) {
-            const parts = [source];
+            let canPair = true;
             for (
               let candidate = index + 1;
               candidate <= closingIndex;
               candidate += 1
             ) {
-              const part = inlineTokenSource(children[candidate]!);
-              if (part === null) {
-                parts.length = 0;
+              if (inlineTokenSource(children[candidate]!) === null) {
+                canPair = false;
                 break;
               }
-              parts.push(part);
             }
-            if (parts.length > 0) {
-              output.push(rawInline(parts.join(""), "html-pair", markStack));
+            const pairedSource = canPair
+              ? findInlineHtmlPairSource(
+                  inlineSource,
+                  child,
+                  children[closingIndex]!,
+                  sourceOffset,
+                )
+              : undefined;
+            if (pairedSource) {
+              const inlineContent = parseInline(
+                children.slice(index + 1, closingIndex),
+                profile,
+                footnotes,
+                pairedSource.body,
+                sourceOffset + pairedSource.bodyStart,
+              );
+              const displayText = headingDisplayText(
+                nodeTypes.paragraph.create(null, inlineContent),
+              );
+              output.push(
+                rawInline(
+                  pairedSource.source,
+                  "html-pair",
+                  markStack,
+                  displayText,
+                ),
+              );
               index = closingIndex;
             } else {
+              // Without an exact tokenizer-backed range, preserve each token
+              // independently instead of inventing a source slice or
+              // skipping the tokens through a guessed closing tag.
               output.push(rawInline(source, "html-allowed", markStack));
             }
+          } else {
+            output.push(rawInline(source, "html-allowed", markStack));
           }
         } else if (tag) {
           output.push(rawInline(source, "html-allowed", markStack));
@@ -1289,7 +1431,12 @@ function paragraphFromInline(
   profile: Profile = "github",
   footnotes?: Map<string, FootnoteDefinition>,
 ): PMNode {
-  const content = parseInline(token?.children, profile, footnotes);
+  const content = parseInline(
+    token?.children,
+    profile,
+    footnotes,
+    token?.content ?? "",
+  );
   return nodeTypes.paragraph.create(
     null,
     content.length > 0 ? content : Fragment.empty,
@@ -1583,7 +1730,12 @@ function parseBlocks(
           1,
           Math.min(6, Number.parseInt((token.tag ?? "h1").slice(1), 10) || 1),
         );
-        const content = parseInline(inline?.children, profile, footnotes);
+        const content = parseInline(
+          inline?.children,
+          profile,
+          footnotes,
+          inline?.content ?? "",
+        );
         result.push(nodeTypes.heading.create({ level }, content));
         index = close + 1;
         break;
@@ -3967,6 +4119,7 @@ interface RenderState extends RenderContext {
   footnoteRefs: Map<string, number>;
   footnoteNumbers: Map<string, number>;
   headingIds: WeakMap<PMNode, Map<number, string>>;
+  headingAnchors: ReadonlyMap<string, HeadingAnchor>;
 }
 
 type RenderInput = RenderContext | MarkdownSnapshot | PMNode | undefined;
@@ -3984,6 +4137,64 @@ function isPMDocument(value: RenderInput): value is PMNode {
     "type" in value &&
     "childCount" in value,
   );
+}
+
+function sourceBackedFragment(node: PMNode): string | undefined {
+  if (node.type.name !== "raw_block") return undefined;
+  const kind = String(node.attrs.kind ?? "");
+  const source = String(node.attrs.source ?? "");
+  if (kind === "alert") return parseAlertSource(source).body;
+  if (kind === "details") return detailsBodyForRender(source);
+  return undefined;
+}
+
+function referencedFootnoteLabels(
+  document: PMNode | undefined,
+  initial: Iterable<string> = [],
+): string[] {
+  const labels = new Set(initial);
+  if (document)
+    walk(document, (node) => {
+      if (node.type.name !== "raw_inline") return;
+      const kind = String(node.attrs.kind ?? "");
+      if (kind === "footnote_ref" || kind === "footnote_anchor")
+        labels.add(footnoteLabelFromSource(String(node.attrs.source ?? "")));
+    });
+  return Array.from(labels);
+}
+
+function activeFootnoteDefinitions(
+  definitions: readonly FootnoteDefinition[],
+  labels: readonly string[],
+): FootnoteDefinition[] {
+  const byLabel = new Map(
+    definitions.map((definition) => [definition.label, definition]),
+  );
+  return labels
+    .map((label) => byLabel.get(label))
+    .filter((definition): definition is FootnoteDefinition =>
+      Boolean(definition),
+    );
+}
+
+function collectRenderHeadingAnchors(
+  snapshot: Pick<MarkdownSnapshot, "doc">,
+  profile: Profile,
+  footnotes: readonly FootnoteDefinition[] = [],
+): HeadingAnchor[] {
+  const options: HeadingAnchorCollectionOptions = {
+    parseFragment: (source, fragmentProfile) =>
+      parseMarkdown(source, fragmentProfile),
+    fragmentSource: sourceBackedFragment,
+    footnotes,
+  };
+  return collectHeadingAnchorsFromSnapshot(snapshot, profile, options);
+}
+
+function headingAnchorMap(
+  anchors: readonly HeadingAnchor[],
+): ReadonlyMap<string, HeadingAnchor> {
+  return new Map(anchors.map((anchor) => [anchor.occurrenceId, anchor]));
 }
 
 function createRenderState(profile: Profile, input?: RenderInput): RenderState {
@@ -4016,6 +4227,36 @@ function createRenderState(profile: Profile, input?: RenderInput): RenderState {
   }
   const footnotes =
     context.footnotes ?? snapshot?.footnotes ?? inheritedFootnotes;
+  const inheritedHeadingAnchors =
+    context.headingAnchors !== undefined && context.profile === profile
+      ? context.headingAnchors
+      : undefined;
+  const anchorSnapshot =
+    snapshot ??
+    (document
+      ? {
+          doc: document,
+          source: "",
+          profile,
+          lineEnding: "none" as const,
+        }
+      : undefined);
+  const computedAnchors =
+    inheritedHeadingAnchors !== undefined
+      ? []
+      : anchorSnapshot
+        ? collectRenderHeadingAnchors(
+            anchorSnapshot,
+            profile,
+            activeFootnoteDefinitions(
+              footnotes,
+              referencedFootnoteLabels(
+                document,
+                context.footnoteNumbers?.keys(),
+              ),
+            ),
+          )
+        : [];
   const state: RenderState = {
     // The visual helpers are pure and can be overridden by a host renderer.
     // Put the defaults before the caller context so an injected renderer wins.
@@ -4037,74 +4278,27 @@ function createRenderState(profile: Profile, input?: RenderInput): RenderState {
     footnoteNumbers: context.footnoteNumbers ?? new Map<string, number>(),
     headingIds:
       context.headingIds ?? new WeakMap<PMNode, Map<number, string>>(),
+    headingAnchors:
+      inheritedHeadingAnchors ?? headingAnchorMap(computedAnchors),
   };
   if (document) state.document = document;
   if (snapshot) state.snapshot = snapshot;
   return state;
 }
 
-function headingText(node: PMNode): string {
-  let output = "";
-  node.forEach((child) => {
-    if (child.isText) output += child.text ?? "";
-    else if (child.type.name === "image")
-      output += String(child.attrs.alt ?? "");
-    else if (child.type.name === "raw_inline") {
-      const kind = String(child.attrs.kind ?? "");
-      const source = String(child.attrs.source ?? "");
-      if (kind === "emoji")
-        output += emojiShortcodes[source.slice(1, -1).toLowerCase()] ?? source;
-      else if (kind !== "html-comment")
-        output += source.replace(/<[^>]*>/g, "");
-    } else output += headingText(child);
-  });
-  return output;
-}
-
-function slugBase(value: string): string {
-  const normalized = value
-    .normalize("NFKD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase()
-    .trim()
-    .replace(/\s+/g, "-")
-    .replace(/[^\p{L}\p{N}_-]+/gu, "")
-    .replace(/-+/g, "-")
-    .replace(/^-|-$/g, "");
-  return normalized || "section";
-}
-
 function headingId(
   node: PMNode,
   state: RenderState,
-  root: PMNode,
-  position: number,
+  renderRoot: string,
+  nodePath: readonly number[],
 ): string {
-  // Details body snapshots deliberately share immutable nodes. The rendering
-  // root and position identify an occurrence, including inside nested Details;
-  // separate source fragments get their own root without reusing these slots.
-  let positions = state.headingIds.get(root);
-  if (!positions) {
-    positions = new Map<number, string>();
-    state.headingIds.set(root, positions);
-  }
-  const existing = positions.get(position);
-  if (existing) return existing;
-  const base = slugBase(headingText(node));
-  const count = state.headingSlugs.get(base) ?? 0;
-  state.headingSlugs.set(base, count + 1);
-  const id = count === 0 ? base : `${base}-${count}`;
-  positions.set(position, id);
-  return id;
-}
-
-function prepareHeadingIds(node: PMNode, state: RenderState): void {
-  if (node.type.name === "heading") headingId(node, state, node, 0);
-  const contentStart = node.type.name === "doc" ? 0 : 1;
-  node.descendants((child, position) => {
-    if (child.type.name === "heading")
-      headingId(child, state, node, position + contentStart);
-  });
+  const anchor = state.headingAnchors.get(
+    headingOccurrenceId(renderRoot, nodePath),
+  );
+  if (anchor) return anchor.id;
+  // The collector covers every supported renderer path. Keep a deterministic
+  // fallback for a detached node supplied by an external NodeView.
+  return headingSlugBase(headingDisplayText(node), state.profile);
 }
 
 function footnoteLabelFromSource(source: string): string {
@@ -4192,9 +4386,7 @@ function renderRawInline(node: PMNode, state: RenderState): string {
     output = renderSafeInlineHtml(source);
   else if (kind === "html-pair") output = renderHtmlPair(source, state);
   else if (kind === "emoji")
-    output = escapeHtml(
-      emojiShortcodes[source.slice(1, -1).toLowerCase()] ?? source,
-    );
+    output = escapeHtml(emojiForShortcode(source.slice(1, -1)) ?? source);
   else if (kind === "gitlab-inline-diff") output = renderInlineDiff(source);
   else if (kind === "footnote_ref" || kind === "footnote_anchor")
     output = renderFootnoteRef(source, state);
@@ -4271,12 +4463,22 @@ const ALERT_ICON_SOURCES = {
   caution: alertCommentAsset,
 } as const;
 
-function renderAlert(source: string, state: RenderState): string {
+function renderAlert(
+  source: string,
+  state: RenderState,
+  renderRoot: string,
+  nodePath: readonly number[],
+): string {
   const parts = parseAlertSource(source);
   const marker = parts.marker;
   const body = parts.body;
   const title = marker.charAt(0).toUpperCase() + marker.slice(1);
-  const bodyHtml = body ? renderSourceFragment(body, state.profile, state) : "";
+  const bodyHtml = body
+    ? renderSourceFragment(body, state.profile, state, {
+        renderRoot: nestedHeadingFragmentRoot(renderRoot, nodePath),
+        pathPrefix: nodePath,
+      })
+    : "";
   const icon =
     ALERT_ICON_SOURCES[marker as keyof typeof ALERT_ICON_SOURCES] ??
     ALERT_ICON_SOURCES.note;
@@ -4301,11 +4503,8 @@ function matchingDetailsClose(source: string, start = 0): number {
   return -1;
 }
 
-function renderDetails(source: string, state: RenderState): string {
+function detailsBodyForRender(source: string): string {
   const opening = source.match(/^\s*<details\b([^>]*)>/i);
-  const open = Boolean(
-    opening?.[1] && /(?:^|\s)open(?:\s|$)/i.test(opening[1]!),
-  );
   const summaryMatch = source.match(
     /<summary\b[^>]*>([\s\S]*?)<\/summary\s*>/i,
   );
@@ -4314,10 +4513,31 @@ function renderDetails(source: string, state: RenderState): string {
     ? (summaryMatch.index ?? 0) + summaryMatch[0].length
     : (opening?.[0].length ?? 0);
   const bodyEnd = closingIndex >= bodyStart ? closingIndex : source.length;
+  return source.slice(bodyStart, bodyEnd).replace(/^\s+|\s+$/g, "");
+}
+
+function renderDetails(
+  source: string,
+  state: RenderState,
+  renderRoot: string,
+  nodePath: readonly number[],
+): string {
+  const opening = source.match(/^\s*<details\b([^>]*)>/i);
+  const open = Boolean(
+    opening?.[1] && /(?:^|\s)open(?:\s|$)/i.test(opening[1]!),
+  );
+  const summaryMatch = source.match(
+    /<summary\b[^>]*>([\s\S]*?)<\/summary\s*>/i,
+  );
   const summary = summaryMatch?.[1] ?? "Details";
-  const body = source.slice(bodyStart, bodyEnd).replace(/^\s+|\s+$/g, "");
+  const body = detailsBodyForRender(source);
   const summaryHtml = renderInlineSource(summary, state.profile, state);
-  const bodyHtml = body ? renderSourceFragment(body, state.profile, state) : "";
+  const bodyHtml = body
+    ? renderSourceFragment(body, state.profile, state, {
+        renderRoot: nestedHeadingFragmentRoot(renderRoot, nodePath),
+        pathPrefix: nodePath,
+      })
+    : "";
   return `<details${open ? " open" : ""}><summary>${summaryHtml}</summary>${bodyHtml}</details>`;
 }
 
@@ -4355,12 +4575,18 @@ function renderToc(state: RenderState): string {
   const root = state.document;
   if (!root) return "";
   const items: string[] = [];
-  root.descendants((heading, position) => {
-    if (heading.type.name === "heading")
-      items.push(
-        `<li class="toc-level-${Number(heading.attrs.level) || 1}"><a href="#${escapeHtml(headingId(heading, state, root, position))}">${renderInline(heading, state)}</a></li>`,
-      );
-  });
+  for (const anchor of state.headingAnchors.values()) {
+    if (anchor.renderRoot.startsWith("footnote:")) continue;
+    const heading =
+      anchor.position === undefined ? undefined : root.nodeAt(anchor.position);
+    const label =
+      heading?.type.name === "heading"
+        ? renderInline(heading, state)
+        : escapeHtml(anchor.displayText);
+    items.push(
+      `<li class="toc-level-${anchor.level}"><a href="#${escapeHtml(anchor.id)}">${label}</a></li>`,
+    );
+  }
   if (items.length === 0) return "";
   return `<nav class="table-of-contents" aria-label="Table of contents"><ul>${items.join("")}</ul></nav>`;
 }
@@ -4391,6 +4617,10 @@ function renderFootnotes(state: RenderState): string {
         definition.content,
         state.profile,
         state,
+        {
+          renderRoot: headingFootnoteRoot(definition.label),
+          pathPrefix: [],
+        },
       );
       const count = state.footnoteRefs.get(definition.label) ?? 1;
       const backlinks = Array.from({ length: count }, (_, index) => {
@@ -4405,12 +4635,30 @@ function renderFootnotes(state: RenderState): string {
 
 function childrenWithPositions(
   node: PMNode,
-  position: number,
-): Array<{ node: PMNode; position: number }> {
-  const children: Array<{ node: PMNode; position: number }> = [];
-  const contentStart = position + (node.type.name === "doc" ? 0 : 1);
+  position: number | undefined,
+  nodePath: readonly number[],
+): Array<{
+  node: PMNode;
+  position: number | undefined;
+  path: readonly number[];
+}> {
+  const children: Array<{
+    node: PMNode;
+    position: number | undefined;
+    path: readonly number[];
+  }> = [];
+  const contentStart =
+    position === undefined
+      ? undefined
+      : position + (node.type.name === "doc" ? 0 : 1);
+  let childIndex = 0;
   node.forEach((child, offset) => {
-    children.push({ node: child, position: contentStart + offset });
+    children.push({
+      node: child,
+      position: contentStart === undefined ? undefined : contentStart + offset,
+      path: [...nodePath, childIndex],
+    });
+    childIndex += 1;
   });
   return children;
 }
@@ -4418,20 +4666,24 @@ function childrenWithPositions(
 function renderChildren(
   node: PMNode,
   state: RenderState,
-  root: PMNode,
-  position: number,
+  renderRoot: string,
+  position: number | undefined,
   separator = "",
+  nodePath: readonly number[] = [],
 ): string {
-  return childrenWithPositions(node, position)
-    .map((child) => renderNode(child.node, state, root, child.position))
+  return childrenWithPositions(node, position, nodePath)
+    .map((child) =>
+      renderNode(child.node, state, renderRoot, child.position, child.path),
+    )
     .join(separator);
 }
 
 function renderNode(
   node: PMNode,
   state: RenderState,
-  root: PMNode,
-  position: number,
+  renderRoot: string,
+  position: number | undefined,
+  nodePath: readonly number[],
 ): string {
   switch (node.type.name) {
     case "paragraph":
@@ -4440,10 +4692,10 @@ function renderNode(
         : `<p>${renderInline(node, state)}</p>`;
     case "heading": {
       const level = Math.max(1, Math.min(6, Number(node.attrs.level) || 1));
-      return `<h${level} id="${escapeHtml(headingId(node, state, root, position))}">${renderInline(node, state)}</h${level}>`;
+      return `<h${level} id="${escapeHtml(headingId(node, state, renderRoot, nodePath))}">${renderInline(node, state)}</h${level}>`;
     }
     case "blockquote":
-      return `<blockquote>${renderChildren(node, state, root, position, "\n")}</blockquote>`;
+      return `<blockquote>${renderChildren(node, state, renderRoot, position, "\n", nodePath)}</blockquote>`;
     case "horizontal_rule":
       return "<hr>";
     case "code_block":
@@ -4455,7 +4707,7 @@ function renderNode(
         state.profile,
         state,
       );
-      return `<details${parts?.open ? " open" : ""}><summary>${summary}</summary>${renderChildren(node, state, root, position, "\n")}</details>`;
+      return `<details${parts?.open ? " open" : ""}><summary>${summary}</summary>${renderChildren(node, state, renderRoot, position, "\n", nodePath)}</details>`;
     }
     case "raw_inline":
       return renderRawInline(node, state);
@@ -4466,8 +4718,10 @@ function renderNode(
         return '<div class="mm-blank-spacer" data-mm-blank-spacer="true" aria-hidden="true"></div>';
       if (kind === "html-comment" || /^\s*<!--[\s\S]*-->\s*$/.test(source))
         return "";
-      if (kind === "alert") return renderAlert(source, state);
-      if (kind === "details") return renderDetails(source, state);
+      if (kind === "alert")
+        return renderAlert(source, state, renderRoot, nodePath);
+      if (kind === "details")
+        return renderDetails(source, state, renderRoot, nodePath);
       if (kind === "gitlab-toc") return renderToc(state);
       if (kind === "gitlab-description-list")
         return renderDescriptionList(source, state);
@@ -4502,7 +4756,7 @@ function renderNode(
         (item) => item.attrs.checked != null,
       );
       const className = taskList ? ` class="contains-task-list"` : "";
-      return `<${ordered ? "ol" : "ul"}${start}${className}>${renderChildren(node, state, root, position)}</${ordered ? "ol" : "ul"}>`;
+      return `<${ordered ? "ol" : "ul"}${start}${className}>${renderChildren(node, state, renderRoot, position, "", nodePath)}</${ordered ? "ol" : "ul"}>`;
     }
     case "list_item": {
       const task = node.attrs.checked as TaskState;
@@ -4511,20 +4765,24 @@ function renderNode(
           ? ""
           : `<input type="checkbox" disabled${task === true ? " checked" : ""}${task === "mixed" ? ' data-task-state="mixed" aria-checked="mixed"' : ""}> `;
       const className = task == null ? "" : ` class="task-list-item"`;
-      return `<li${className}>${checkbox}${renderChildren(node, state, root, position)}</li>`;
+      return `<li${className}>${checkbox}${renderChildren(node, state, renderRoot, position, "", nodePath)}</li>`;
     }
     case "table": {
-      const rows = childrenWithPositions(node, position);
+      const rows = childrenWithPositions(node, position, nodePath);
       if (rows.length === 0) return "<table></table>";
-      const renderRow = (row: { node: PMNode; position: number }): string =>
-        `<tr>${childrenWithPositions(row.node, row.position)
+      const renderRow = (row: {
+        node: PMNode;
+        position: number | undefined;
+        path: readonly number[];
+      }): string =>
+        `<tr>${childrenWithPositions(row.node, row.position, row.path)
           .map((cell) => {
             const tag = cell.node.type.name === "table_header" ? "th" : "td";
             const alignment = cell.node.attrs.alignment;
             const style = alignment
               ? ` style="text-align:${escapeHtml(alignment)}"`
               : "";
-            return `<${tag}${style}>${renderChildren(cell.node, state, root, cell.position)}</${tag}>`;
+            return `<${tag}${style}>${renderChildren(cell.node, state, renderRoot, cell.position, "", cell.path)}</${tag}>`;
           })
           .join("")}</tr>`;
       const head = rows.filter(
@@ -4536,11 +4794,11 @@ function renderNode(
       return `<table>${head.length ? `<thead>${head.map(renderRow).join("")}</thead>` : ""}${body.length ? `<tbody>${body.map(renderRow).join("")}</tbody>` : ""}</table>`;
     }
     case "table_row":
-      return `<tr>${renderChildren(node, state, root, position)}</tr>`;
+      return `<tr>${renderChildren(node, state, renderRoot, position, "", nodePath)}</tr>`;
     case "table_cell":
-      return `<td>${renderChildren(node, state, root, position)}</td>`;
+      return `<td>${renderChildren(node, state, renderRoot, position, "", nodePath)}</td>`;
     case "table_header":
-      return `<th>${renderChildren(node, state, root, position)}</th>`;
+      return `<th>${renderChildren(node, state, renderRoot, position, "", nodePath)}</th>`;
     default:
       return escapeHtml(node.textContent);
   }
@@ -4581,27 +4839,77 @@ export function renderFootnotesHtml(
   return renderFootnotes(state);
 }
 
-export interface HeadingAnchor {
-  /** ProseMirror document position at which the heading starts. */
-  position: number;
-  /** Stable profile-specific slug used by heading links and TOC entries. */
-  id: string;
+/** Collect the profile-aware heading occurrences used by every renderer. */
+export function collectHeadingAnchors(
+  snapshot: MarkdownSnapshot,
+  profile: Profile = snapshot.profile ?? "github",
+): HeadingAnchor[] {
+  return collectRenderHeadingAnchors(
+    snapshot,
+    profile,
+    activeFootnoteDefinitions(
+      snapshot.footnotes ?? [],
+      referencedFootnoteLabels(snapshot.doc),
+    ),
+  );
 }
 
 /** Return heading positions and the exact ids used by the HTML renderer. */
 export function headingAnchorIds(
   doc: PMNode,
   profile: Profile = "github",
-): HeadingAnchor[] {
-  const state = createRenderState(profile, doc);
-  prepareHeadingIds(doc, state);
-  const anchors: HeadingAnchor[] = [];
-  doc.descendants((node, position) => {
-    if (node.type.name === "heading")
-      anchors.push({ position, id: headingId(node, state, doc, position) });
-    return true;
-  });
-  return anchors;
+): Array<{ position: number; id: string }> {
+  const footnotes = documentMetadata.get(doc)?.footnotes ?? [];
+  return collectRenderHeadingAnchors(
+    { doc },
+    profile,
+    activeFootnoteDefinitions(footnotes, referencedFootnoteLabels(doc)),
+  )
+    .filter((anchor): anchor is HeadingAnchor & { position: number } =>
+      Number.isInteger(anchor.position),
+    )
+    .map((anchor) => ({ position: anchor.position, id: anchor.id }));
+}
+
+interface FragmentRenderContext {
+  readonly renderRoot: string;
+  readonly pathPrefix: readonly number[];
+}
+
+function findNodeOccurrence(
+  root: PMNode,
+  target: PMNode,
+  targetPosition: number | undefined,
+): { position: number | undefined; path: readonly number[] } | undefined {
+  const visit = (
+    node: PMNode,
+    position: number | undefined,
+    path: readonly number[],
+  ): { position: number | undefined; path: readonly number[] } | undefined => {
+    if (
+      node === target &&
+      (targetPosition === undefined || position === targetPosition)
+    )
+      return { position, path };
+    let childIndex = 0;
+    const contentStart =
+      position === undefined
+        ? undefined
+        : position + (node.type.name === "doc" ? 0 : 1);
+    let found:
+      { position: number | undefined; path: readonly number[] } | undefined;
+    node.forEach((child, offset) => {
+      if (found) return;
+      found = visit(
+        child,
+        contentStart === undefined ? undefined : contentStart + offset,
+        [...path, childIndex],
+      );
+      childIndex += 1;
+    });
+    return found;
+  };
+  return visit(root, 0, []);
 }
 
 /** Render an individual PM node, including rich source-preserving atoms. */
@@ -4610,43 +4918,35 @@ export function renderNodeHtml(
   profile: Profile = "github",
   input?: RenderInput,
 ): string {
-  const state = createRenderState(profile, input);
+  const state = createRenderState(
+    profile,
+    input ?? {
+      document: node,
+    },
+  );
   if (node.type.name === "doc") {
     state.document = node;
-    prepareHeadingIds(node, state);
-    return renderChildren(node, state, node, 0, "\n") + renderFootnotes(state);
+    return (
+      renderChildren(node, state, "document", 0, "\n", []) +
+      renderFootnotes(state)
+    );
   }
-  let root = node;
-  let position = 0;
+  let position: number | undefined;
+  let nodePath: readonly number[] = [];
   if (state.document) {
     const suppliedPosition = state.nodePosition;
-    if (
-      suppliedPosition !== undefined &&
-      Number.isInteger(suppliedPosition) &&
-      suppliedPosition >= 0 &&
-      suppliedPosition < state.document.content.size &&
-      state.document.nodeAt(suppliedPosition) === node
-    ) {
-      root = state.document;
-      position = suppliedPosition;
-    } else if (suppliedPosition === undefined) {
-      // Without an explicit position the first occurrence is the only one an
-      // individual render call can identify. NodeViews supply getPos().
-      state.document.descendants((child, childPosition) => {
-        if (root === state.document) return false;
-        if (child === node) {
-          root = state.document!;
-          position = childPosition;
-          return false;
-        }
-        return true;
-      });
+    const occurrence = findNodeOccurrence(
+      state.document,
+      node,
+      Number.isInteger(suppliedPosition) ? suppliedPosition : undefined,
+    );
+    if (occurrence) {
+      position = occurrence.position;
+      nodePath = occurrence.path;
     }
-    prepareHeadingIds(state.document, state);
   }
-  if (root !== state.document) prepareHeadingIds(root, state);
   registerFootnoteReferencesBeforeNode(state.document, node, state);
-  return renderNode(node, state, root, position);
+  return renderNode(node, state, "document", position, nodePath);
 }
 
 /** Render a PM document with profile-aware anchors, atoms, and footnotes. */
@@ -4657,8 +4957,9 @@ export function renderMarkdownDocument(
 ): string {
   const state = createRenderState(profile, input ?? doc);
   state.document = doc;
-  prepareHeadingIds(doc, state);
-  return renderChildren(doc, state, doc, 0, "\n") + renderFootnotes(state);
+  return (
+    renderChildren(doc, state, "document", 0, "\n", []) + renderFootnotes(state)
+  );
 }
 
 /** Render an arbitrary Markdown source fragment using the shared renderer. */
@@ -4666,15 +4967,17 @@ export function renderSourceFragment(
   source: string,
   profile: Profile = "github",
   input?: RenderInput,
+  fragmentContext?: FragmentRenderContext,
 ): string {
   const snapshot = parseMarkdown(source, profile);
   const state = createRenderState(profile, input ?? snapshot);
   if (state.footnotes.length === 0 && snapshot.footnotes)
     state.footnotes = snapshot.footnotes;
   const document = snapshot.doc;
-  prepareHeadingIds(document, state);
+  const renderRoot = fragmentContext?.renderRoot ?? "document";
+  const pathPrefix = fragmentContext?.pathPrefix ?? [];
   return (
-    renderChildren(document, state, document, 0, "\n") +
+    renderChildren(document, state, renderRoot, undefined, "\n", pathPrefix) +
     (input ? "" : renderFootnotes(state))
   );
 }
