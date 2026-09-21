@@ -7,6 +7,7 @@ import { writeThirdPartyNotices } from "./third-party-notices.mjs";
 const watch = process.argv.includes("--watch");
 const extensionOnly = process.argv.includes("--extension-only");
 const webviewOnly = process.argv.includes("--webview-only");
+const minify = !watch;
 
 mkdirSync("dist", { recursive: true });
 
@@ -37,7 +38,8 @@ const extensionOptions = {
   target: "node18",
   external: ["vscode"],
   sourcemap: true,
-  minify: false,
+  minify,
+  keepNames: true,
   legalComments: "none",
   loader: { ".svg": "text" },
 };
@@ -50,7 +52,8 @@ const webviewOptions = {
   format: "iife",
   target: "es2022",
   sourcemap: true,
-  minify: false,
+  minify,
+  keepNames: true,
   legalComments: "none",
   loader: { ".svg": "text" },
 };
@@ -64,7 +67,8 @@ const integrationOptions = {
   target: "node18",
   external: ["vscode"],
   sourcemap: true,
-  minify: false,
+  minify,
+  keepNames: true,
   legalComments: "none",
 };
 
@@ -76,11 +80,25 @@ const mermaidOptions = {
   format: "iife",
   target: "es2022",
   sourcemap: true,
-  minify: false,
+  minify,
+  keepNames: true,
   legalComments: "none",
   define: {
     __MERMAID_VERSION__: JSON.stringify(mermaidVersion),
   },
+};
+
+const mermaidLoaderOptions = {
+  entryPoints: ["src/webview/mermaidLoader.ts"],
+  bundle: true,
+  outfile: "dist/mermaid-loader.js",
+  platform: "browser",
+  format: "iife",
+  target: "es2022",
+  sourcemap: true,
+  minify,
+  keepNames: true,
+  legalComments: "none",
 };
 
 async function buildOne(options) {
@@ -103,6 +121,7 @@ if (!extensionOnly) {
   }
   contexts.push(await buildOne(webviewOptions));
   contexts.push(await buildOne(mermaidOptions));
+  contexts.push(await buildOne(mermaidLoaderOptions));
   if (!watch) {
     if (!existsSync("tests/extension/integration/index.ts")) {
       throw new Error(

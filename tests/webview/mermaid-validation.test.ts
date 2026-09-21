@@ -1,7 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  configureMermaidRuntimeLoader,
+  ensureMermaidRuntime,
   humanizeMermaidDiagramType,
   MAX_MERMAID_SOURCE_LENGTH,
+  MERMAID_RUNTIME_READY_EVENT,
   MermaidValidationController,
   mermaidRuntimeVersionFromGlobal,
   normalizeMermaidSource,
@@ -24,6 +27,11 @@ afterEach(() => {
   const globals = globalThis as unknown as Record<string, unknown>;
   delete globals.markdownMintMermaid;
   delete globals.markdownMintMermaidVersion;
+  for (const script of document.querySelectorAll(
+    "script[data-markdown-mint-mermaid-runtime]",
+  ))
+    script.remove();
+  configureMermaidRuntimeLoader();
   vi.useRealTimers();
 });
 
@@ -76,6 +84,84 @@ describe("Mermaid validation helpers", () => {
       globalThis as unknown as Record<string, unknown>
     ).markdownMintMermaidVersion = "11.17.2";
     expect(mermaidRuntimeVersionFromGlobal()).toBe("11.17.2");
+  });
+});
+
+describe("Mermaid runtime loader", () => {
+  it("shares one nonce-bearing local script across concurrent requests", async () => {
+    configureMermaidRuntimeLoader({
+      src: "/dist/mermaid.js",
+      nonce: "test-nonce",
+      ownerDocument: document,
+    });
+    const first = ensureMermaidRuntime();
+    const second = ensureMermaidRuntime();
+    expect(first).toBe(second);
+
+    const scripts = Array.from(
+      document.querySelectorAll<HTMLScriptElement>(
+        "script[data-markdown-mint-mermaid-runtime]",
+      ),
+    );
+    expect(scripts).toHaveLength(1);
+    expect(scripts[0]?.getAttribute("src")).toBe("/dist/mermaid.js");
+    expect(scripts[0]?.getAttribute("nonce")).toBe("test-nonce");
+
+    let settled = false;
+    void first.then(() => {
+      settled = true;
+    });
+    document.dispatchEvent(new Event("DOMContentLoaded"));
+    await flush();
+    expect(settled).toBe(false);
+
+    const runtime: MermaidRuntime = {
+      parse: () => ({ diagramType: "flowchart-v2" }),
+      render: () => "<svg />",
+    };
+    (globalThis as unknown as Record<string, unknown>).markdownMintMermaid =
+      runtime;
+    window.dispatchEvent(new Event(MERMAID_RUNTIME_READY_EVENT));
+    await expect(first).resolves.toBe(runtime);
+  });
+
+  it("uses the shared request for first Mermaid validation", async () => {
+    configureMermaidRuntimeLoader({
+      src: "/dist/mermaid.js",
+      nonce: "test-nonce",
+      ownerDocument: document,
+    });
+    const validation = validateMermaidSource("flowchart TD\nA-->B");
+    const runtime: MermaidRuntime = {
+      parse: vi.fn(() => ({ diagramType: "flowchart-v2" })),
+      render: () => "<svg />",
+    };
+    (globalThis as unknown as Record<string, unknown>).markdownMintMermaid =
+      runtime;
+    window.dispatchEvent(new Event(MERMAID_RUNTIME_READY_EVENT));
+    await expect(validation).resolves.toEqual({
+      valid: true,
+      diagramType: "flowchart-v2",
+    });
+    expect(runtime.parse).toHaveBeenCalledWith("flowchart TD\nA-->B");
+  });
+
+  it("keeps a failed local load non-fatal and does not duplicate it", async () => {
+    configureMermaidRuntimeLoader({
+      src: "/dist/missing-mermaid.js",
+      ownerDocument: document,
+    });
+    const first = ensureMermaidRuntime();
+    const script = document.querySelector<HTMLScriptElement>(
+      "script[data-markdown-mint-mermaid-runtime]",
+    );
+    expect(script).not.toBeNull();
+    script?.dispatchEvent(new Event("error"));
+    await expect(first).resolves.toBeUndefined();
+    await expect(ensureMermaidRuntime()).resolves.toBeUndefined();
+    expect(
+      document.querySelectorAll("script[data-markdown-mint-mermaid-runtime]"),
+    ).toHaveLength(1);
   });
 });
 

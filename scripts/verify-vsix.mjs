@@ -26,6 +26,7 @@ const requiredEntries = [
   "extension/dist/extension.js",
   "extension/dist/webview.js",
   "extension/dist/mermaid.js",
+  "extension/dist/mermaid-loader.js",
   "extension/media/document.css",
 ];
 for (const entry of requiredEntries) {

@@ -2316,8 +2316,7 @@ export class MarkdownMintEditorProvider
   <title>Markdown Mint</title>
 </head>
 <body data-markdown-mint-mode="${mode}">
-  <main id="app" aria-label="Markdown Mint"></main>
-  <script nonce="${nonce}" src="${escapeAttribute(mermaidScriptUri.toString())}"></script>
+  <main id="app" aria-label="Markdown Mint" data-mermaid-runtime-uri="${escapeAttribute(mermaidScriptUri.toString())}" data-mermaid-runtime-nonce="${nonce}"></main>
   <script nonce="${nonce}" src="${escapeAttribute(scriptUri.toString())}"></script>
 </body>
 </html>`;

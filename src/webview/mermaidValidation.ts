@@ -24,6 +24,26 @@ export interface MermaidValidationSnapshot extends MermaidValidationResult {
   status: MermaidValidationStatus;
 }
 
+export const MERMAID_RUNTIME_READY_EVENT = "markdown-mint-mermaid-ready";
+export const MERMAID_RUNTIME_LOAD_START_MARK =
+  "markdown-mint-mermaid-load-start";
+export const MERMAID_RUNTIME_LOAD_END_MARK = "markdown-mint-mermaid-load-end";
+
+export interface MermaidRuntimeLoaderOptions {
+  src?: string;
+  nonce?: string;
+  ownerDocument?: Document;
+}
+
+interface ConfiguredMermaidRuntimeLoader {
+  src: string;
+  nonce?: string;
+  ownerDocument: Document;
+}
+
+let configuredMermaidRuntimeLoader: ConfiguredMermaidRuntimeLoader | undefined;
+let mermaidRuntimeLoadPromise: Promise<MermaidRuntime | undefined> | undefined;
+
 /** Keep validation and rendering on the same safe Mermaid source. */
 export function normalizeMermaidSource(source: string): string {
   return source
@@ -42,6 +62,120 @@ export function mermaidRuntimeFromGlobal(): MermaidRuntime | undefined {
   return typeof runtime.render === "function"
     ? (runtime as MermaidRuntime)
     : undefined;
+}
+
+/**
+ * Configure the local runtime URL supplied by the trusted Webview host.
+ * Keeping this separate from the renderer lets the editor bundle stay free of
+ * Mermaid's large dependency until the first real Mermaid request.
+ */
+export function configureMermaidRuntimeLoader(
+  options?: MermaidRuntimeLoaderOptions,
+): void {
+  const src = options?.src?.trim();
+  if (!src) {
+    configuredMermaidRuntimeLoader = undefined;
+    mermaidRuntimeLoadPromise = undefined;
+    return;
+  }
+  const ownerDocument =
+    options?.ownerDocument ??
+    (typeof document === "undefined" ? undefined : document);
+  if (!ownerDocument) return;
+  const nonce = options?.nonce?.trim() || undefined;
+  if (
+    configuredMermaidRuntimeLoader?.src === src &&
+    configuredMermaidRuntimeLoader.nonce === nonce &&
+    configuredMermaidRuntimeLoader.ownerDocument === ownerDocument
+  )
+    return;
+  configuredMermaidRuntimeLoader = {
+    src,
+    ownerDocument,
+    ...(nonce ? { nonce } : {}),
+  };
+  mermaidRuntimeLoadPromise = undefined;
+}
+
+function markPerformance(name: string): void {
+  try {
+    globalThis.performance?.mark(name);
+  } catch {
+    // Performance marks are diagnostic only and must never affect rendering.
+  }
+}
+
+function loadConfiguredMermaidRuntime(
+  config: ConfiguredMermaidRuntimeLoader,
+): Promise<MermaidRuntime | undefined> {
+  markPerformance(MERMAID_RUNTIME_LOAD_START_MARK);
+  return new Promise<MermaidRuntime | undefined>((resolve) => {
+    const ownerDocument = config.ownerDocument;
+    const ownerWindow = ownerDocument.defaultView;
+    let settled = false;
+    const finish = (runtime: MermaidRuntime | undefined): void => {
+      if (settled) return;
+      settled = true;
+      ownerDocument.removeEventListener("DOMContentLoaded", onReady);
+      ownerWindow?.removeEventListener(MERMAID_RUNTIME_READY_EVENT, onReady);
+      markPerformance(MERMAID_RUNTIME_LOAD_END_MARK);
+      resolve(runtime);
+    };
+    const onReady = (): void => {
+      // The runtime's own DOMContentLoaded listener may be registered after
+      // this loader's listener. Let the event dispatch finish before checking
+      // the global it installs.
+      queueMicrotask(() => {
+        const runtime = mermaidRuntimeFromGlobal();
+        if (runtime) finish(runtime);
+      });
+    };
+
+    try {
+      const script = ownerDocument.createElement("script");
+      script.async = true;
+      script.src = config.src;
+      script.dataset.markdownMintMermaidRuntime = "true";
+      if (config.nonce) script.setAttribute("nonce", config.nonce);
+      script.addEventListener("load", () => {
+        const runtime = mermaidRuntimeFromGlobal();
+        if (runtime) {
+          finish(runtime);
+          return;
+        }
+        if (ownerDocument.readyState !== "loading") finish(undefined);
+      });
+      script.addEventListener("error", () => finish(undefined), {
+        once: true,
+      });
+      ownerWindow?.addEventListener(MERMAID_RUNTIME_READY_EVENT, onReady);
+      ownerDocument.addEventListener("DOMContentLoaded", onReady, {
+        once: true,
+      });
+      const parent =
+        ownerDocument.head ??
+        ownerDocument.body ??
+        ownerDocument.documentElement;
+      if (!parent) {
+        finish(undefined);
+        return;
+      }
+      parent.append(script);
+    } catch {
+      finish(undefined);
+    }
+  });
+}
+
+/** Load the packaged Mermaid runtime once, if the host supplied a local URL. */
+export function ensureMermaidRuntime(): Promise<MermaidRuntime | undefined> {
+  const current = mermaidRuntimeFromGlobal();
+  if (current) return Promise.resolve(current);
+  const config = configuredMermaidRuntimeLoader;
+  if (!config) return Promise.resolve(undefined);
+  if (!mermaidRuntimeLoadPromise)
+    mermaidRuntimeLoadPromise = loadConfiguredMermaidRuntime(config);
+  return mermaidRuntimeLoadPromise;
 }
 
 export function mermaidRuntimeVersionFromGlobal(): string {
@@ -126,10 +260,11 @@ export async function validateMermaidSource(
     );
   const normalized = normalizeMermaidSource(source);
   if (!normalized) return invalidResult("Mermaid source is empty.");
-  if (!runtime?.parse)
+  const resolvedRuntime = runtime ?? (await ensureMermaidRuntime());
+  if (!resolvedRuntime?.parse)
     return invalidResult("Mermaid validator is unavailable offline.");
   try {
-    const parsed = await Promise.resolve(runtime.parse(normalized));
+    const parsed = await Promise.resolve(resolvedRuntime.parse(normalized));
     if (!parsed || typeof parsed !== "object")
       return invalidResult("Mermaid syntax is invalid.");
     const diagramType = (parsed as { diagramType?: unknown }).diagramType;
