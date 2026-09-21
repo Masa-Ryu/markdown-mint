@@ -2798,11 +2798,11 @@ export class MarkdownEditorApp {
     this.scheduleWritingToolbarUpdate();
   private readonly writingToolbarResizeHandler = (): void => {
     this.updateWritingToolbarState();
-    this.tableControls?.updateLayout();
+    this.tableControls?.requestLayout();
   };
   private readonly writingToolbarScrollHandler = (): void => {
     this.updateWritingToolbarState();
-    this.tableControls?.updateLayout();
+    this.tableControls?.requestLayout();
   };
   private readonly tableDeletePreviewResizeHandler = (): void =>
     this.updateTableDeletePreviewGeometry();
@@ -9568,6 +9568,7 @@ export class MarkdownEditorApp {
     };
     this.updateTableToolbar();
     this.updateTableControls();
+    this.tableControls?.updateLayout();
     this.tableControls?.flashSelection({
       axis: selection.axis,
       index: nextIndex,

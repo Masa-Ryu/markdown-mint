@@ -60,6 +60,7 @@ interface Layout {
   visibleGridRect: RectLike;
   controlClipRect: RectLike;
   stageRect: DOMRect;
+  cellRects: RectLike[][];
   rowBoundaries: number[];
   columnBoundaries: number[];
   scrollLeft: number;
@@ -274,6 +275,10 @@ export class TableControls {
   private columnAppend!: HTMLButtonElement;
   private drag: DragState | null = null;
   private autoScrollFrame: number | undefined;
+  private layoutFrame: {
+    id: number;
+    kind: "animation" | "timeout";
+  } | null = null;
   private readonly resizeObserver: ResizeObserver | null;
   private readonly ownerDocument: Document;
   private readonly ownerWindow: Window | null;
@@ -302,7 +307,7 @@ export class TableControls {
 
   private readonly scroll = (): void => {
     if (this.destroyed) return;
-    this.updateLayout();
+    this.requestLayout();
     if (this.drag) this.updateDragPresentation();
     else this.updatePointerPresentationFromStoredPointer();
   };
@@ -463,7 +468,7 @@ export class TableControls {
     stage.append(this.element);
     const ResizeObserverCtor = stage.ownerDocument.defaultView?.ResizeObserver;
     this.resizeObserver = ResizeObserverCtor
-      ? new ResizeObserverCtor(() => this.updateLayout())
+      ? new ResizeObserverCtor(() => this.requestLayout())
       : null;
     this.resizeObserver?.observe(stage);
     stage.addEventListener("pointermove", this.stagePointerMove);
@@ -492,36 +497,49 @@ export class TableControls {
       this.clear();
       return;
     }
-    const changed =
-      !this.target ||
-      this.target.tableElement !== target.tableElement ||
-      this.target.tablePos !== target.tablePos ||
-      this.target.table !== target.table ||
-      this.target.document !== target.document ||
-      this.target.documentGeneration !== target.documentGeneration ||
-      this.target.table.childCount !== target.table.childCount ||
-      this.target.table.firstChild?.childCount !==
+    const previous = this.target;
+    const targetChanged =
+      !previous ||
+      previous.tableElement !== target.tableElement ||
+      previous.tablePos !== target.tablePos ||
+      previous.table !== target.table ||
+      previous.document !== target.document ||
+      previous.documentGeneration !== target.documentGeneration;
+    const structureChanged =
+      !previous ||
+      previous.tableElement !== target.tableElement ||
+      previous.table.childCount !== target.table.childCount ||
+      previous.table.firstChild?.childCount !==
         target.table.firstChild?.childCount ||
-      this.target.numbered !== target.numbered ||
-      this.target.supported !== target.supported;
-    if (changed && this.drag) this.cancelDrag(false);
-    if (changed) this.clearFlashState();
+      previous.numbered !== target.numbered ||
+      previous.supported !== target.supported;
+    if (targetChanged && this.drag) this.cancelDrag(false);
+    if (targetChanged) this.clearFlashState();
     this.target = target;
-    if (changed) {
+    this.element.hidden = false;
+    this.element.setAttribute("aria-hidden", "false");
+    if (structureChanged) {
+      this.layout = null;
       this.renderTarget();
       this.resizeObserver?.disconnect();
       this.resizeObserver?.observe(this.stage);
       this.resizeObserver?.observe(target.tableElement);
       this.refreshScrollContainers();
+      this.updateSelectionState();
+      this.updateLayout();
+      return;
     }
-    this.element.hidden = false;
-    this.element.setAttribute("aria-hidden", "false");
     this.updateSelectionState();
-    this.updateLayout();
+    if (!this.layout || !hasRectArea(this.layout.gridRect)) {
+      this.updateLayout();
+      return;
+    }
+    if (targetChanged) this.requestLayout();
   }
 
   clear(): void {
     this.cancelDrag(false);
+    this.cancelScheduledLayout();
     this.target = null;
     this.layout = null;
     this.resizeObserver?.disconnect();
@@ -549,6 +567,48 @@ export class TableControls {
   }
 
   updateLayout(): void {
+    this.cancelScheduledLayout();
+    this.measureLayout();
+  }
+
+  /** Request one layout measurement on the next animation frame. */
+  requestLayout(): void {
+    if (
+      this.destroyed ||
+      !this.target ||
+      this.element.hidden ||
+      this.layoutFrame !== null
+    )
+      return;
+    const measure = (): void => {
+      this.layoutFrame = null;
+      this.measureLayout();
+    };
+    if (this.ownerWindow?.requestAnimationFrame) {
+      this.layoutFrame = {
+        id: this.ownerWindow.requestAnimationFrame(measure),
+        kind: "animation",
+      };
+    } else if (this.ownerWindow) {
+      this.layoutFrame = {
+        id: this.ownerWindow.setTimeout(measure, 16),
+        kind: "timeout",
+      };
+    } else {
+      measure();
+    }
+  }
+
+  private cancelScheduledLayout(): void {
+    const scheduled = this.layoutFrame;
+    if (!scheduled) return;
+    if (scheduled.kind === "animation")
+      this.ownerWindow?.cancelAnimationFrame(scheduled.id);
+    else this.ownerWindow?.clearTimeout(scheduled.id);
+    this.layoutFrame = null;
+  }
+
+  private measureLayout(): void {
     if (!this.target || this.element.hidden) return;
     const tableRect = clientRect(this.target.tableElement);
     const stageRect = clientRect(this.stage);
@@ -559,7 +619,8 @@ export class TableControls {
       { length: width },
       () => [],
     );
-    const cellRects: RectLike[] = [];
+    const allCellRects: RectLike[] = [];
+    const cellRects: RectLike[][] = [];
     const rowMeasured: Array<number | undefined> = Array.from(
       { length: height + 1 },
       () => undefined,
@@ -567,14 +628,14 @@ export class TableControls {
     rows.slice(0, height).forEach((row, rowIndex) => {
       const cells = Array.from(row.cells).slice(0, width);
       const measuredCells = cells.map((cell) => rectLike(clientRect(cell)));
+      cellRects[rowIndex] = measuredCells;
       const rowRect = unionRect(measuredCells) ?? rectLike(clientRect(row));
       if (rowRect) {
         rowMeasured[rowIndex] = rowRect.top;
         rowMeasured[rowIndex + 1] = rowRect.bottom;
-        cellRects.push(...measuredCells);
+        allCellRects.push(...measuredCells);
       }
-      cells.forEach((cell, columnIndex) => {
-        const rect = rectLike(clientRect(cell));
+      measuredCells.forEach((rect, columnIndex) => {
         if (columnRects[columnIndex]) columnRects[columnIndex]!.push(rect);
       });
     });
@@ -588,7 +649,7 @@ export class TableControls {
       columnMeasured[index] = rect.left;
       columnMeasured[index + 1] = rect.right;
     });
-    const gridRect = unionRect(cellRects) ?? rectLike(tableRect);
+    const gridRect = unionRect(allCellRects) ?? rectLike(tableRect);
     const controlClipRect = this.measureControlClip(stageRect);
     const visibleGridRect = intersectRect(
       intersectRect(gridRect, rectLike(tableRect)) ?? gridRect,
@@ -615,6 +676,7 @@ export class TableControls {
       visibleGridRect,
       controlClipRect,
       stageRect,
+      cellRects,
       rowBoundaries,
       columnBoundaries,
       scrollLeft: this.stage.scrollLeft,
@@ -685,6 +747,7 @@ export class TableControls {
     if (this.destroyed) return;
     this.destroyed = true;
     this.cancelDrag(false);
+    this.cancelScheduledLayout();
     this.stopAutoScroll();
     this.resizeObserver?.disconnect();
     this.stage.removeEventListener("pointermove", this.stagePointerMove);
@@ -1085,7 +1148,10 @@ export class TableControls {
       this.clearClickSuppression(drag.source);
       return;
     }
-    this.clearClickSuppression(drag.source);
+    // The native click follows pointerup. Keep the reused handle suppressed
+    // until that click has had a chance to consume the flag, otherwise a
+    // completed move can immediately reselect the old row/column.
+    this.clearClickSuppression(drag.source, true);
     if (canCommit && drag.boundary !== null && this.callbacks.canEdit())
       this.callbacks.onMove(drag.selection, drag.boundary, drag.target);
     else this.callbacks.onEscape();
@@ -1119,11 +1185,18 @@ export class TableControls {
       delete source.dataset.suppressClick;
   }
 
-  private clearClickSuppression(source: HTMLButtonElement): void {
+  private clearClickSuppression(
+    source: HTMLButtonElement,
+    waitForNativeClick = false,
+  ): void {
     const clear = (): void => {
       if (source.dataset.suppressClick === "true")
         delete source.dataset.suppressClick;
     };
+    if (waitForNativeClick) {
+      this.ownerWindow?.setTimeout(clear, 0) ?? clear();
+      return;
+    }
     if (typeof queueMicrotask === "function") queueMicrotask(clear);
     else void Promise.resolve().then(clear);
   }
@@ -1362,14 +1435,13 @@ export class TableControls {
   private selectionRect(selection: TableControlSelection): RectLike | null {
     if (!this.layout) return null;
     const { visibleGridRect } = this.layout;
-    const rows = this.target ? Array.from(this.target.tableElement.rows) : [];
     const cells =
       selection.axis === "row"
-        ? Array.from(rows[selection.index]?.cells ?? [])
-        : rows
-            .map((row) => row.cells[selection.index])
-            .filter((cell): cell is HTMLTableCellElement => Boolean(cell));
-    const raw = unionRect(cells.map((cell) => rectLike(clientRect(cell))));
+        ? (this.layout.cellRects[selection.index] ?? [])
+        : this.layout.cellRects
+            .map((row) => row[selection.index])
+            .filter((rect): rect is RectLike => Boolean(rect));
+    const raw = unionRect(cells);
     if (!raw) return null;
     return intersectRect(raw, visibleGridRect);
   }
