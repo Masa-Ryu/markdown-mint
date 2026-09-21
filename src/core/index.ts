@@ -2493,6 +2493,14 @@ function isMarkdownUnicodeWhitespace(value: string | undefined): boolean {
   return value === undefined || /^[\p{Zs}\t\n\f\r]$/u.test(value);
 }
 
+function trailingMarkdownWhitespace(value: string): string {
+  const codePoints = Array.from(value);
+  let start = codePoints.length;
+  while (start > 0 && isMarkdownUnicodeWhitespace(codePoints[start - 1]))
+    start -= 1;
+  return codePoints.slice(start).join("");
+}
+
 function isMarkdownUnicodePunctuation(value: string | undefined): boolean {
   return value !== undefined && /^[\p{P}\p{S}]$/u.test(value);
 }
@@ -2708,13 +2716,16 @@ function serializeInlineMarked(
     // the same whitespace outside only the marks that are being closed; marks
     // retained in `target` remain active around it.
     const detachedWhitespace =
-      active.length > common ? (output.match(/[ \t]+$/)?.[0] ?? "") : "";
+      active.length > common ? trailingMarkdownWhitespace(output) : "";
     if (detachedWhitespace)
       output = output.slice(0, -detachedWhitespace.length);
     for (let index = active.length - 1; index >= common; index -= 1)
       output += delimiter(active[index]!);
     if (active.length !== common) lineStart = false;
-    if (detachedWhitespace) output += detachedWhitespace;
+    if (detachedWhitespace) {
+      output += detachedWhitespace;
+      lineStart = output.endsWith("\n");
+    }
     active = active.slice(0, common);
     for (let index = common; index < target.length; index += 1) {
       output += delimiter(target[index]!);

@@ -493,6 +493,41 @@ describe("inline mark serialization", () => {
   );
 
   it.each(["commonmark", "github", "gitlab"] as const)(
+    "keeps Unicode whitespace before a continued mark fallback for %s",
+    (profile) => {
+      for (const whitespace of ["\n", "\u3000", "\u00a0", "\n\u3000\u00a0"]) {
+        const strong = schema.marks.strong!.create();
+        const code = schema.marks.code!.create();
+        const document = documentWithParagraph(
+          schema.text(`foo${whitespace}`, [strong]),
+          schema.text("bar", [strong, code]),
+          schema.text("x"),
+        );
+        const expectedSource = `**foo**${whitespace}<strong><code>bar</code></strong>x`;
+
+        const serialized = serializeMarkdown(document);
+        expect(serialized).toBe(expectedSource);
+        const reparsed = parseMarkdown(serialized, profile).doc;
+        const reparsedParagraph = reparsed.firstChild!;
+        expect(reparsedParagraph.child(0).text).toBe("foo");
+        expect(reparsedParagraph.child(1).text).toBe(whitespace);
+        expect(
+          reparsedParagraph.child(0).marks.map((mark) => mark.type.name),
+        ).toEqual(["strong"]);
+        expect(reparsedParagraph.child(2).attrs.source).toBe(
+          "<strong><code>bar</code></strong>",
+        );
+        expect(reparsedParagraph.child(3).text).toBe("x");
+        const expectedHtml = `<strong>foo</strong>${whitespace}<strong><code>bar</code></strong>x`;
+        expect(
+          new MarkdownIt("commonmark", { html: true }).render(serialized),
+        ).toContain(expectedHtml);
+        expect(renderMarkdown(serialized, profile)).toContain(expectedHtml);
+      }
+    },
+  );
+
+  it.each(["commonmark", "github", "gitlab"] as const)(
     "keeps a source edit and a neighboring re-edit valid after fallback (%s)",
     (profile) => {
       const source = "**foo `bar`** x";
@@ -524,6 +559,52 @@ describe("inline mark serialization", () => {
       expect(renderMarkdown(serializedAgain, profile)).toContain(
         expectedAfterHtml,
       );
+    },
+  );
+
+  it.each(["commonmark", "github", "gitlab"] as const)(
+    "preserves Unicode whitespace through source edit and re-edit (%s)",
+    (profile) => {
+      for (const whitespace of ["\n", "\u3000", "\u00a0"]) {
+        const source = `**foo${whitespace}\`bar\`** x`;
+        const expectedBefore = `**foo**${whitespace}<strong><code>bar</code></strong>x`;
+        const expectedAfter = `**foo**${whitespace}<strong><code>bar</code></strong>y`;
+
+        const snapshot = parseMarkdown(source, profile);
+        expect(snapshot.doc.textContent).toBe(`foo${whitespace}bar x`);
+        const changed = replaceText(snapshot.doc, " x", "x");
+        const serialized = serializeMarkdown(changed, snapshot);
+        expect(serialized).toBe(expectedBefore);
+        const reparsed = parseMarkdown(serialized, profile).doc;
+        const reparsedParagraph = reparsed.firstChild!;
+        expect(reparsedParagraph.child(0).text).toBe("foo");
+        expect(reparsedParagraph.child(1).text).toBe(whitespace);
+        expect(
+          reparsedParagraph.child(0).marks.map((mark) => mark.type.name),
+        ).toEqual(["strong"]);
+        expect(reparsedParagraph.child(2).attrs.source).toBe(
+          "<strong><code>bar</code></strong>",
+        );
+        expect(reparsedParagraph.child(3).text).toBe("x");
+        expect(renderMarkdown(serialized, profile)).toContain(
+          `<strong>foo</strong>${whitespace}<strong><code>bar</code></strong>x`,
+        );
+
+        const editedAgain = replaceText(reparsed, "x", "y");
+        const serializedAgain = serializeMarkdown(editedAgain, snapshot);
+        expect(serializedAgain).toBe(expectedAfter);
+        const editedAgainParagraph = parseMarkdown(serializedAgain, profile).doc
+          .firstChild!;
+        expect(editedAgainParagraph.child(0).text).toBe("foo");
+        expect(editedAgainParagraph.child(1).text).toBe(whitespace);
+        expect(editedAgainParagraph.child(2).attrs.source).toBe(
+          "<strong><code>bar</code></strong>",
+        );
+        expect(editedAgainParagraph.child(3).text).toBe("y");
+        expect(renderMarkdown(serializedAgain, profile)).toContain(
+          `<strong>foo</strong>${whitespace}<strong><code>bar</code></strong>y`,
+        );
+      }
     },
   );
 
@@ -568,6 +649,50 @@ describe("inline mark serialization", () => {
       expect(
         new MarkdownIt("default", { html: true }).render(serialized),
       ).toContain(expectedHtml);
+    },
+  );
+
+  it.each(["github", "gitlab"] as const)(
+    "keeps Unicode whitespace before a continued mark fallback in a table cell for %s",
+    (profile) => {
+      for (const whitespace of ["\u3000", "\u00a0"]) {
+        const cellAttrs = {
+          colspan: 1,
+          rowspan: 1,
+          colwidth: null,
+          alignment: null,
+        };
+        const strong = schema.marks.strong!.create();
+        const code = schema.marks.code!.create();
+        const table = schema.nodes.table!.create(null, [
+          schema.nodes.table_row!.create(null, [
+            schema.nodes.table_header!.create(
+              cellAttrs,
+              paragraph(schema.text("A")),
+            ),
+          ]),
+          schema.nodes.table_row!.create(null, [
+            schema.nodes.table_cell!.create(
+              cellAttrs,
+              paragraph(
+                schema.text(`foo${whitespace}`, [strong]),
+                schema.text("bar", [strong, code]),
+                schema.text("x"),
+              ),
+            ),
+          ]),
+        ]);
+        const document = schema.topNodeType.create(null, [table]);
+        const serialized = serializeMarkdown(document);
+        const expectedSource = `| A |\n| --- |\n| **foo**${whitespace}<strong><code>bar</code></strong>x |`;
+        const expectedHtml = `<strong>foo</strong>${whitespace}<strong><code>bar</code></strong>x`;
+
+        expect(serialized).toBe(expectedSource);
+        expect(renderMarkdown(serialized, profile)).toContain(expectedHtml);
+        expect(
+          new MarkdownIt("default", { html: true }).render(serialized),
+        ).toContain(expectedHtml);
+      }
     },
   );
 });
