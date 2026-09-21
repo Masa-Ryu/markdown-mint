@@ -586,6 +586,11 @@ export function configureMarkdownIt(
     "markdown_mint_math_inline",
     markdownMintMathInline,
   );
+  md.inline.ruler.before(
+    "backticks",
+    "markdown_mint_space_only_code_span",
+    markdownMintSpaceOnlyCodeSpan,
+  );
   return md;
 }
 
@@ -625,6 +630,61 @@ function markdownMintMathInline(state: StateInline, silent: boolean): boolean {
     token.content = match[0]!;
   }
   state.pos += match[0]!.length;
+  return true;
+}
+
+/**
+ * Preserve CommonMark's all-space code spans before markdown-it's backtick
+ * rule applies its general one-space trim. That rule uses /^ (.+) $/, which
+ * incorrectly strips two spaces from an all-space span of three or more
+ * spaces. Only the affected all-space case is claimed here; every other
+ * code-span shape remains on markdown-it's existing path.
+ */
+function markdownMintSpaceOnlyCodeSpan(
+  state: StateInline,
+  silent: boolean,
+): boolean {
+  const start = state.pos;
+  if (state.src.charCodeAt(start) !== 0x60) return false;
+
+  let markerEnd = start + 1;
+  while (markerEnd < state.posMax && state.src.charCodeAt(markerEnd) === 0x60)
+    markerEnd += 1;
+  const marker = state.src.slice(start, markerEnd);
+
+  const firstContentCharacter = state.src.charCodeAt(markerEnd);
+  if (
+    firstContentCharacter !== 0x20 &&
+    firstContentCharacter !== 0x0a &&
+    firstContentCharacter !== 0x0d
+  )
+    return false;
+
+  let search = markerEnd;
+  while (
+    search < state.posMax &&
+    (state.src.charCodeAt(search) === 0x20 ||
+      state.src.charCodeAt(search) === 0x0a ||
+      state.src.charCodeAt(search) === 0x0d)
+  )
+    search += 1;
+  if (state.src.charCodeAt(search) !== 0x60) return false;
+
+  let closerEnd = search + 1;
+  while (closerEnd < state.posMax && state.src.charCodeAt(closerEnd) === 0x60)
+    closerEnd += 1;
+  if (closerEnd - search !== marker.length) return false;
+
+  const content = state.src
+    .slice(markerEnd, search)
+    .replace(/\r\n|\r|\n/g, " ");
+  if (!/^ {3,}$/.test(content)) return false;
+  if (!silent) {
+    const token = state.push("code_inline", "code", 0);
+    token.markup = marker;
+    token.content = content;
+  }
+  state.pos = closerEnd;
   return true;
 }
 
@@ -698,6 +758,27 @@ function attrsOf(token: MarkdownToken): Record<string, string> {
     result[pair[0]] = restoreEscapedDollars(String(pair[1] ?? ""));
   }
   return result;
+}
+
+// markdown-it accepts ordered markers with at most nine decimal digits. Keep
+// the parsed zero start valid while preventing malformed ProseMirror attrs
+// from producing non-Markdown starts during serialization.
+const MAX_ORDERED_LIST_START = 999_999_999;
+
+function normalizeOrderedListStart(value: unknown): number {
+  return typeof value === "number" &&
+    Number.isFinite(value) &&
+    Number.isSafeInteger(value) &&
+    value >= 0 &&
+    value <= MAX_ORDERED_LIST_START
+    ? value
+    : 1;
+}
+
+function orderedListMarker(start: number, index: number): number {
+  // Repeating the largest valid marker keeps every item in the list when
+  // arithmetic continuation would cross markdown-it's nine-digit limit.
+  return Math.min(MAX_ORDERED_LIST_START, start + index);
 }
 
 function tokenText(token: MarkdownToken): string {
@@ -1293,7 +1374,7 @@ function parseList(
     const attrs = attrsOf(tokens[openIndex]!);
     const order = Number.parseInt(attrs.start ?? "1", 10);
     return nodeTypes.ordered_list.create(
-      { order: Number.isFinite(order) ? order : 1 },
+      { order: normalizeOrderedListStart(order) },
       items,
     );
   }
@@ -2298,6 +2379,7 @@ function serializeCodeSpan(value: string, table = false): string {
   const content = value.replace(/\r\n|\r|\n/g, " ");
   const fence = codeFenceFor(content, "`");
   const protectedContent = table ? content.replace(/\|/g, "\\|") : content;
+  if (/^ +$/.test(content)) return `${fence}${protectedContent}${fence}`;
   if (fence === "`" && !/^\s|\s$|`/.test(content))
     return `\`${protectedContent}\``;
   return `${fence} ${protectedContent} ${fence}`;
@@ -2336,14 +2418,16 @@ function serializeImageAlt(value: unknown, table = false): string {
 
 function serializeInlineTitle(value: unknown, table = false): string {
   const source = String(value ?? "");
-  if (!table) return source.replace(/"/g, '\\"');
   // Titles are semantic attributes, so escape their backslashes before
-  // protecting table pipes rather than treating existing escapes as source.
-  return source
-    .replace(/\r\n|\r|\n/g, " ")
+  // protecting quotes or table pipes rather than treating existing escapes as
+  // source syntax.
+  const normalized = table ? source.replace(/\r\n|\r|\n/g, " ") : source;
+  let escaped = normalized
     .replace(/\\/g, "\\\\")
     .replace(/"/g, '\\"')
-    .replace(/\|/g, "\\|");
+    .replace(/&/g, "&amp;");
+  if (table) escaped = escaped.replace(/\|/g, "\\|");
+  return escaped;
 }
 
 function serializeInlineMarked(
@@ -2703,9 +2787,11 @@ function serializeBlock(node: PMNode, tableCell = false): string {
         .map((item) => serializeListItem(item, "- "))
         .join("\n");
     case "ordered_list": {
-      const start = Number(node.attrs.order) || 1;
+      const start = normalizeOrderedListStart(node.attrs.order);
       return childrenOf(node)
-        .map((item, index) => serializeListItem(item, `${start + index}. `))
+        .map((item, index) =>
+          serializeListItem(item, `${orderedListMarker(start, index)}. `),
+        )
         .join("\n");
     }
     case "list_item":
@@ -4370,10 +4456,8 @@ function renderNode(
     case "bullet_list":
     case "ordered_list": {
       const ordered = node.type.name === "ordered_list";
-      const start =
-        ordered && Number(node.attrs.order) !== 1
-          ? ` start="${Number(node.attrs.order)}"`
-          : "";
+      const order = normalizeOrderedListStart(node.attrs.order);
+      const start = ordered && order !== 1 ? ` start="${order}"` : "";
       const taskList = childrenOf(node).some(
         (item) => item.attrs.checked != null,
       );
