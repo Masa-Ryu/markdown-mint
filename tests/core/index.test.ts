@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { DOMSerializer, type Node as PMNode } from "prosemirror-model";
+import { redo, undo, history } from "prosemirror-history";
 import { EditorState } from "prosemirror-state";
 import {
   formatMarkdown,
   inspectCompatibility,
   parseMarkdown,
   renderMarkdown,
+  renderNodeHtml,
   schema,
   serializeCodeBlockMarkdown,
   serializeMarkdown,
@@ -911,6 +913,189 @@ describe("Markdown core", () => {
       const snapshot = parseMarkdown(source);
       const serialized = serializeMarkdown(snapshot.doc);
       expect(parseMarkdown(serialized).doc.eq(snapshot.doc)).toBe(true);
+    }
+  });
+
+  it.each([
+    ["LF", "\n"],
+    ["CRLF", "\r\n"],
+  ] as const)(
+    "preserves ordered-list starts 0, 1, 9, and 10 after editing with %s",
+    (_name, ending) => {
+      for (const start of [0, 1, 9, 10]) {
+        const source = [`${start}. alpha`, `${start + 1}. beta`, ""].join(
+          ending,
+        );
+        const snapshot = parseMarkdown(source);
+        expect(snapshot.doc.child(0).attrs.order).toBe(start);
+        expect(serializeMarkdown(snapshot.doc, snapshot)).toBe(source);
+
+        const changed = replaceText(snapshot.doc, "alpha", "changed");
+        const serialized = serializeMarkdown(changed, snapshot);
+        expect(serialized).toBe(
+          [`${start}. changed`, `${start + 1}. beta`, ""].join(ending),
+        );
+        expect(reparseMarkdown(serialized).doc.child(0).attrs.order).toBe(
+          start,
+        );
+      }
+    },
+  );
+
+  it("preserves a zero start in a nested ordered list after editing", () => {
+    for (const ending of ["\n", "\r\n"] as const) {
+      const source = [
+        "0. outer",
+        "   ",
+        "   0. inner",
+        "   1. sibling",
+        "1. next",
+        "",
+      ].join(ending);
+      const snapshot = parseMarkdown(source);
+      const outer = snapshot.doc.child(0);
+      expect(outer.attrs.order).toBe(0);
+      expect(outer.child(0).child(1).attrs.order).toBe(0);
+
+      const changed = replaceText(snapshot.doc, "inner", "changed");
+      const serialized = serializeMarkdown(changed, snapshot);
+      expect(serialized).toBe(
+        [
+          "0. outer",
+          "   ",
+          "   0. changed",
+          "   1. sibling",
+          "1. next",
+          "",
+        ].join(ending),
+      );
+      const reparsed = reparseMarkdown(serialized).doc;
+      expect(reparsed.child(0).attrs.order).toBe(0);
+      expect(reparsed.child(0).child(0).child(1).attrs.order).toBe(0);
+    }
+  });
+
+  it("keeps every item when ordered markers reach the nine-digit limit", () => {
+    for (const testCase of [
+      {
+        source: "999999999. alpha\n999999999. beta\n",
+        start: 999_999_999,
+      },
+      {
+        source: "999999998. alpha\n999999999. beta\n",
+        start: 999_999_998,
+      },
+    ]) {
+      const snapshot = parseMarkdown(testCase.source);
+      expect(snapshot.doc.child(0).attrs.order).toBe(testCase.start);
+      expect(snapshot.doc.child(0).childCount).toBe(2);
+
+      const changed = replaceText(snapshot.doc, "alpha", "changed");
+      const serialized = serializeMarkdown(changed, snapshot);
+      expect(serialized).toBe(testCase.source.replace("alpha", "changed"));
+
+      const list = reparseMarkdown(serialized).doc.child(0);
+      expect(list.attrs.order).toBe(testCase.start);
+      expect(list.childCount).toBe(2);
+      expect(list.child(0).textContent).toBe("changed");
+      expect(list.child(1).textContent).toBe("beta");
+    }
+  });
+
+  it("keeps capped ordered markers in nested lists", () => {
+    const source = [
+      "999999998. outer",
+      "           ",
+      "           999999999. inner",
+      "           999999999. sibling",
+      "999999999. next",
+      "",
+    ].join("\n");
+    const snapshot = parseMarkdown(source);
+    const outer = snapshot.doc.child(0);
+    const nested = outer.child(0).child(1);
+    expect(outer.attrs.order).toBe(999_999_998);
+    expect(nested.attrs.order).toBe(999_999_999);
+    expect(nested.childCount).toBe(2);
+
+    const changed = replaceText(snapshot.doc, "inner", "changed");
+    const serialized = serializeMarkdown(changed, snapshot);
+    expect(serialized).toBe(
+      [
+        "999999998. outer",
+        "           ",
+        "           999999999. changed",
+        "           999999999. sibling",
+        "999999999. next",
+        "",
+      ].join("\n"),
+    );
+
+    const reparsedOuter = reparseMarkdown(serialized).doc.child(0);
+    const reparsedNested = reparsedOuter.child(0).child(1);
+    expect(reparsedOuter.attrs.order).toBe(999_999_998);
+    expect(reparsedOuter.childCount).toBe(2);
+    expect(reparsedNested.attrs.order).toBe(999_999_999);
+    expect(reparsedNested.childCount).toBe(2);
+    expect(reparsedNested.child(0).textContent).toBe("changed");
+    expect(reparsedNested.child(1).textContent).toBe("sibling");
+  });
+
+  it("keeps a zero start through ProseMirror undo and redo", () => {
+    const source = "0. alpha\n1. beta\n";
+    const snapshot = parseMarkdown(source);
+    let state = EditorState.create({
+      schema,
+      doc: snapshot.doc,
+      plugins: [history()],
+    });
+    let from = -1;
+    let to = -1;
+    state.doc.descendants((node, position) => {
+      if (node.isText && node.text === "alpha") {
+        from = position;
+        to = position + node.nodeSize;
+      }
+    });
+    expect(from).toBeGreaterThanOrEqual(0);
+    state = state.apply(state.tr.replaceWith(from, to, schema.text("changed")));
+    expect(serializeMarkdown(state.doc, snapshot)).toBe(
+      "0. changed\n1. beta\n",
+    );
+
+    expect(
+      undo(state, (transaction) => {
+        state = state.apply(transaction);
+      }),
+    ).toBe(true);
+    expect(serializeMarkdown(state.doc, snapshot)).toBe(source);
+
+    expect(
+      redo(state, (transaction) => {
+        state = state.apply(transaction);
+      }),
+    ).toBe(true);
+    expect(serializeMarkdown(state.doc, snapshot)).toBe(
+      "0. changed\n1. beta\n",
+    );
+  });
+
+  it("falls back to one for invalid ordered-list attrs", () => {
+    const item = schema.nodes.list_item!.create(
+      null,
+      schema.nodes.paragraph!.create(null, schema.text("item")),
+    );
+    for (const order of [
+      -1,
+      1.5,
+      Number.NaN,
+      Number.POSITIVE_INFINITY,
+      1_000_000_000,
+    ]) {
+      const list = schema.nodes.ordered_list!.create({ order }, item);
+      const document = schema.topNodeType.create(null, list);
+      expect(serializeMarkdown(document)).toBe("1. item");
+      expect(renderNodeHtml(document)).toBe("<ol><li><p>item</p></li></ol>");
     }
   });
 
