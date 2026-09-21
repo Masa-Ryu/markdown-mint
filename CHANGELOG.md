@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.5.1
+
+- Preserve logical cell positions when pasting HTML tables with `rowspan` or
+  `colspan`, and reject malformed, nested, or over-budget layouts safely.
+
 ## 0.5.0
 
 - Preserve structured recovery drafts in a separate pending slot when the
