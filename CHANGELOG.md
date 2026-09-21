@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.5.2
+## 0.5.3
 
 - Preserve direct table-control handle DOM during ordinary cell edits, reuse
   one cell-rectangle measurement for row and column geometry, and coalesce
@@ -9,6 +9,9 @@
 - Add a reproducible real-Webview 100x10 table-controls benchmark reporting
   edit latency, cell-rectangle queries, handle replacements, and synchronized
   Markdown output.
+
+## 0.5.2
+
 - Cache fingerprints for immutable ProseMirror nodes during source-preserving
   serialization, avoiding repeated JSON conversion for unchanged editor blocks
   while retaining weak cache lifetime and existing source matching behavior.
