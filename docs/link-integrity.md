@@ -27,6 +27,11 @@ whole document. A heading whose base already ends in `-1` therefore cannot
 collide with an earlier duplicate. For example, `A`, `A`, and `A-1` become
 `a`, `a-1`, and `a-1-1`.
 
+Footnote bodies are rendered after the main document under a distinct
+`footnote:<label>` render root, while still participating in the same
+document-wide collision allocation. GitLab table-of-contents output retains
+its existing policy and excludes footnote-body headings.
+
 ## Profile rules
 
 - GitHub lowercases letters, retains Unicode letters/numbers/marks, hyphens,

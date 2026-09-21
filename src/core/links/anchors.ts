@@ -1,5 +1,5 @@
 import type { Node as PMNode } from "prosemirror-model";
-import type { MarkdownSnapshot, Profile } from "../index";
+import type { FootnoteDefinition, MarkdownSnapshot, Profile } from "../index";
 
 /** Whether the active Markdown profile defines a portable heading fragment. */
 export type HeadingAnchorVerification = "verified" | "unknown";
@@ -38,6 +38,8 @@ export interface HeadingAnchorCollectionOptions {
     node: PMNode,
     profile: Profile,
   ) => string | undefined;
+  /** Footnote bodies emitted after the main document. */
+  readonly footnotes?: readonly Pick<FootnoteDefinition, "label" | "content">[];
 }
 
 /** Build a stable key for a rendered heading occurrence. */
@@ -176,6 +178,21 @@ export function headingFragmentRoot(path: readonly number[]): string {
   return `fragment:${path.length > 0 ? path.join(".") : "root"}`;
 }
 
+/** Return the render-root id used for a rendered footnote body. */
+export function headingFootnoteRoot(label: string): string {
+  return `footnote:${encodeURIComponent(label)}`;
+}
+
+/** Return a nested source-fragment root without colliding with its parent. */
+export function nestedHeadingFragmentRoot(
+  parentRoot: string,
+  path: readonly number[],
+): string {
+  return parentRoot === "document"
+    ? headingFragmentRoot(path)
+    : `${parentRoot}/${headingFragmentRoot(path)}`;
+}
+
 function headingLevel(node: PMNode): number {
   return Math.max(1, Math.min(6, Number(node.attrs.level) || 1));
 }
@@ -231,7 +248,7 @@ export function collectHeadingAnchors(
             fragment.doc,
             nodePath,
             undefined,
-            headingFragmentRoot(nodePath),
+            nestedHeadingFragmentRoot(renderRoot, nodePath),
           );
         } catch {
           // A source-backed fragment that cannot be parsed is not a heading
@@ -257,5 +274,15 @@ export function collectHeadingAnchors(
   };
 
   visit(snapshot.doc, [], 0, "document");
+  for (const footnote of options.footnotes ?? []) {
+    try {
+      const fragment = options.parseFragment?.(footnote.content, profile);
+      if (fragment)
+        visit(fragment.doc, [], undefined, headingFootnoteRoot(footnote.label));
+    } catch {
+      // A malformed footnote body remains source-preserving and has no
+      // collectable heading occurrence.
+    }
+  }
   return anchors;
 }

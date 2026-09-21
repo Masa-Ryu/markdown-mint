@@ -39,9 +39,10 @@ import {
   collectHeadingAnchors as collectHeadingAnchorsFromSnapshot,
   emojiForShortcode,
   headingDisplayText,
-  headingFragmentRoot,
+  headingFootnoteRoot,
   headingOccurrenceId,
   headingSlugBase,
+  nestedHeadingFragmentRoot,
   type HeadingAnchor,
   type HeadingAnchorCollectionOptions,
 } from "./links/anchors";
@@ -3852,14 +3853,45 @@ function sourceBackedFragment(node: PMNode): string | undefined {
   return undefined;
 }
 
+function referencedFootnoteLabels(
+  document: PMNode | undefined,
+  initial: Iterable<string> = [],
+): string[] {
+  const labels = new Set(initial);
+  if (document)
+    walk(document, (node) => {
+      if (node.type.name !== "raw_inline") return;
+      const kind = String(node.attrs.kind ?? "");
+      if (kind === "footnote_ref" || kind === "footnote_anchor")
+        labels.add(footnoteLabelFromSource(String(node.attrs.source ?? "")));
+    });
+  return Array.from(labels);
+}
+
+function activeFootnoteDefinitions(
+  definitions: readonly FootnoteDefinition[],
+  labels: readonly string[],
+): FootnoteDefinition[] {
+  const byLabel = new Map(
+    definitions.map((definition) => [definition.label, definition]),
+  );
+  return labels
+    .map((label) => byLabel.get(label))
+    .filter((definition): definition is FootnoteDefinition =>
+      Boolean(definition),
+    );
+}
+
 function collectRenderHeadingAnchors(
   snapshot: Pick<MarkdownSnapshot, "doc">,
   profile: Profile,
+  footnotes: readonly FootnoteDefinition[] = [],
 ): HeadingAnchor[] {
   const options: HeadingAnchorCollectionOptions = {
     parseFragment: (source, fragmentProfile) =>
       parseMarkdown(source, fragmentProfile),
     fragmentSource: sourceBackedFragment,
+    footnotes,
   };
   return collectHeadingAnchorsFromSnapshot(snapshot, profile, options);
 }
@@ -3900,6 +3932,10 @@ function createRenderState(profile: Profile, input?: RenderInput): RenderState {
   }
   const footnotes =
     context.footnotes ?? snapshot?.footnotes ?? inheritedFootnotes;
+  const inheritedHeadingAnchors =
+    context.headingAnchors !== undefined && context.profile === profile
+      ? context.headingAnchors
+      : undefined;
   const anchorSnapshot =
     snapshot ??
     (document
@@ -3910,9 +3946,22 @@ function createRenderState(profile: Profile, input?: RenderInput): RenderState {
           lineEnding: "none" as const,
         }
       : undefined);
-  const computedAnchors = anchorSnapshot
-    ? collectRenderHeadingAnchors(anchorSnapshot, profile)
-    : [];
+  const computedAnchors =
+    inheritedHeadingAnchors !== undefined
+      ? []
+      : anchorSnapshot
+        ? collectRenderHeadingAnchors(
+            anchorSnapshot,
+            profile,
+            activeFootnoteDefinitions(
+              footnotes,
+              referencedFootnoteLabels(
+                document,
+                context.footnoteNumbers?.keys(),
+              ),
+            ),
+          )
+        : [];
   const state: RenderState = {
     // The visual helpers are pure and can be overridden by a host renderer.
     // Put the defaults before the caller context so an injected renderer wins.
@@ -3934,7 +3983,8 @@ function createRenderState(profile: Profile, input?: RenderInput): RenderState {
     footnoteNumbers: context.footnoteNumbers ?? new Map<string, number>(),
     headingIds:
       context.headingIds ?? new WeakMap<PMNode, Map<number, string>>(),
-    headingAnchors: context.headingAnchors ?? headingAnchorMap(computedAnchors),
+    headingAnchors:
+      inheritedHeadingAnchors ?? headingAnchorMap(computedAnchors),
   };
   if (document) state.document = document;
   if (snapshot) state.snapshot = snapshot;
@@ -4121,6 +4171,7 @@ const ALERT_ICON_SOURCES = {
 function renderAlert(
   source: string,
   state: RenderState,
+  renderRoot: string,
   nodePath: readonly number[],
 ): string {
   const parts = parseAlertSource(source);
@@ -4129,7 +4180,7 @@ function renderAlert(
   const title = marker.charAt(0).toUpperCase() + marker.slice(1);
   const bodyHtml = body
     ? renderSourceFragment(body, state.profile, state, {
-        renderRoot: headingFragmentRoot(nodePath),
+        renderRoot: nestedHeadingFragmentRoot(renderRoot, nodePath),
         pathPrefix: nodePath,
       })
     : "";
@@ -4173,6 +4224,7 @@ function detailsBodyForRender(source: string): string {
 function renderDetails(
   source: string,
   state: RenderState,
+  renderRoot: string,
   nodePath: readonly number[],
 ): string {
   const opening = source.match(/^\s*<details\b([^>]*)>/i);
@@ -4187,7 +4239,7 @@ function renderDetails(
   const summaryHtml = renderInlineSource(summary, state.profile, state);
   const bodyHtml = body
     ? renderSourceFragment(body, state.profile, state, {
-        renderRoot: headingFragmentRoot(nodePath),
+        renderRoot: nestedHeadingFragmentRoot(renderRoot, nodePath),
         pathPrefix: nodePath,
       })
     : "";
@@ -4229,6 +4281,7 @@ function renderToc(state: RenderState): string {
   if (!root) return "";
   const items: string[] = [];
   for (const anchor of state.headingAnchors.values()) {
+    if (anchor.renderRoot.startsWith("footnote:")) continue;
     const heading =
       anchor.position === undefined ? undefined : root.nodeAt(anchor.position);
     const label =
@@ -4269,6 +4322,10 @@ function renderFootnotes(state: RenderState): string {
         definition.content,
         state.profile,
         state,
+        {
+          renderRoot: headingFootnoteRoot(definition.label),
+          pathPrefix: [],
+        },
       );
       const count = state.footnoteRefs.get(definition.label) ?? 1;
       const backlinks = Array.from({ length: count }, (_, index) => {
@@ -4366,8 +4423,10 @@ function renderNode(
         return '<div class="mm-blank-spacer" data-mm-blank-spacer="true" aria-hidden="true"></div>';
       if (kind === "html-comment" || /^\s*<!--[\s\S]*-->\s*$/.test(source))
         return "";
-      if (kind === "alert") return renderAlert(source, state, nodePath);
-      if (kind === "details") return renderDetails(source, state, nodePath);
+      if (kind === "alert")
+        return renderAlert(source, state, renderRoot, nodePath);
+      if (kind === "details")
+        return renderDetails(source, state, renderRoot, nodePath);
       if (kind === "gitlab-toc") return renderToc(state);
       if (kind === "gitlab-description-list")
         return renderDescriptionList(source, state);
@@ -4492,7 +4551,14 @@ export function collectHeadingAnchors(
   snapshot: MarkdownSnapshot,
   profile: Profile = snapshot.profile ?? "github",
 ): HeadingAnchor[] {
-  return collectRenderHeadingAnchors(snapshot, profile);
+  return collectRenderHeadingAnchors(
+    snapshot,
+    profile,
+    activeFootnoteDefinitions(
+      snapshot.footnotes ?? [],
+      referencedFootnoteLabels(snapshot.doc),
+    ),
+  );
 }
 
 /** Return heading positions and the exact ids used by the HTML renderer. */
@@ -4500,7 +4566,12 @@ export function headingAnchorIds(
   doc: PMNode,
   profile: Profile = "github",
 ): Array<{ position: number; id: string }> {
-  return collectRenderHeadingAnchors({ doc }, profile)
+  const footnotes = documentMetadata.get(doc)?.footnotes ?? [];
+  return collectRenderHeadingAnchors(
+    { doc },
+    profile,
+    activeFootnoteDefinitions(footnotes, referencedFootnoteLabels(doc)),
+  )
     .filter((anchor): anchor is HeadingAnchor & { position: number } =>
       Number.isInteger(anchor.position),
     )

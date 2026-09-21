@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import * as anchorModule from "../../../src/core/links/anchors";
 import {
   collectHeadingAnchors,
   headingAnchorIds,
@@ -80,6 +81,19 @@ describe("profile-aware heading anchors", () => {
     ).toEqual(["a--b", "a---b"]);
   });
 
+  it("does not reuse an inherited anchor map from another profile", () => {
+    const snapshot = parseMarkdown("# A  B", "gitlab");
+    const githubSnapshot = parseMarkdown("# A  B", "github");
+    const githubAnchor = collectHeadingAnchors(githubSnapshot, "github")[0]!;
+    const html = renderMarkdownDocument(snapshot.doc, "gitlab", {
+      document: snapshot.doc,
+      profile: "github",
+      headingAnchors: new Map([[githubAnchor.occurrenceId, githubAnchor]]),
+    });
+
+    expect(renderedHeadingIds(html)).toEqual(["a--b"]);
+  });
+
   it("uses the historical display-only CommonMark shape without claiming standard fragments", () => {
     const snapshot = parseMarkdown("## A  B\n\n## café\n", "commonmark");
     const anchors = collectHeadingAnchors(snapshot, "commonmark");
@@ -106,6 +120,27 @@ describe("profile-aware heading anchors", () => {
     ).toEqual(["a", "a-1", "a-2"]);
   });
 
+  it("collects the parent document once when rendering multiple source fragments", () => {
+    const source = [
+      "# Main",
+      "> [!NOTE]\n> # Alert one",
+      "> [!TIP]\n> # Alert two",
+    ].join("\n\n");
+    const snapshot = parseMarkdown(source, "github");
+    const collectSpy = vi.spyOn(anchorModule, "collectHeadingAnchors");
+
+    try {
+      expect(
+        renderedHeadingIds(
+          renderMarkdownDocument(snapshot.doc, "github", snapshot),
+        ),
+      ).toEqual(["main", "alert-one", "alert-two"]);
+      expect(collectSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      collectSpy.mockRestore();
+    }
+  });
+
   it("includes headings in a source-preserving Details fallback", () => {
     const source = [
       "# A",
@@ -124,6 +159,44 @@ describe("profile-aware heading anchors", () => {
     ).toEqual(["a", "a-1", "a-2"]);
   });
 
+  it("allocates unique anchors for rendered footnote headings", () => {
+    const source = [
+      "# Main",
+      "",
+      "First paragraph.",
+      "",
+      "Second paragraph with Text[^first] and Text[^second].",
+      "",
+      "[^first]: # Footnote heading",
+      "",
+      "[^second]: # Footnote heading",
+    ].join("\n");
+    const snapshot = parseMarkdown(source, "github");
+    expect(snapshot.footnotes?.map((footnote) => footnote.content)).toEqual([
+      "# Footnote heading",
+      "# Footnote heading",
+    ]);
+    const anchors = collectHeadingAnchors(snapshot, "github");
+    const rendered = renderedHeadingIds(
+      renderMarkdownDocument(snapshot.doc, "github", snapshot),
+    );
+
+    expect(anchors.map(({ displayText, id }) => ({ displayText, id }))).toEqual(
+      [
+        { displayText: "Main", id: "main" },
+        { displayText: "Footnote heading", id: "footnote-heading" },
+        { displayText: "Footnote heading", id: "footnote-heading-1" },
+      ],
+    );
+    expect(rendered).toEqual(anchors.map((anchor) => anchor.id));
+    expect(new Set(rendered).size).toBe(rendered.length);
+    expect(
+      anchors
+        .slice(1)
+        .every((anchor) => anchor.renderRoot.startsWith("footnote:")),
+    ).toBe(true);
+  });
+
   it("uses the same collection for GitLab TOC links", () => {
     const source = ["[[_TOC_]]", "# A", "> [!NOTE]\n> # A", "# A"].join("\n\n");
     const snapshot = parseMarkdown(source, "gitlab");
@@ -136,6 +209,31 @@ describe("profile-aware heading anchors", () => {
         (link) => link.getAttribute("href"),
       ),
     ).toEqual(["#a", "#a-1", "#a-2"]);
+  });
+
+  it("keeps footnote headings out of the GitLab table of contents", () => {
+    const source = [
+      "[[_TOC_]]",
+      "# Main",
+      "",
+      "Text[^note].",
+      "",
+      "[^note]: # Footnote heading",
+    ].join("\n");
+    const snapshot = parseMarkdown(source, "gitlab");
+    const root = document.createElement("div");
+    root.innerHTML = renderMarkdownDocument(snapshot.doc, "gitlab", snapshot);
+
+    expect(
+      Array.from(
+        root.querySelectorAll<HTMLAnchorElement>(".table-of-contents a[href]"),
+        (link) => link.getAttribute("href"),
+      ),
+    ).toEqual(["#main"]);
+    expect(renderedHeadingIds(root.innerHTML)).toEqual([
+      "main",
+      "footnote-heading",
+    ]);
   });
 
   it("keeps reused Details nodes separate by path rather than object identity", () => {
