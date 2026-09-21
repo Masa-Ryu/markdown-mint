@@ -2,13 +2,17 @@
 
 ## 0.5.1
 
-- Preserve logical cell positions when pasting HTML tables with `rowspan` or
-  `colspan`, and reject malformed, nested, or over-budget layouts safely.
+- Release provider-owned Markdown document state after panels and documents
+  close or queued operations settle, avoiding accumulation from Source-only
+  changes while preserving pending edits and multi-panel synchronization.
+
 - Preserve zero-based and nine-digit ordered-list starts when editing and
   serializing lists, including nested lists, without emitting invalid
   ten-digit markers.
 - Preserve backslashes and literal character-reference text in link and image
   titles across Rich edits, including table cells and repeated serialization.
+- Preserve logical cell positions when pasting HTML tables with `rowspan` or
+  `colspan`, and reject malformed, nested, or over-budget layouts safely.
 
 ## 0.5.0
 
