@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.1
+
+- Preserve safe tilde/backtick fences when editing code blocks whose info
+  strings or bodies contain fence candidates, including source and line-ending
+  preservation for info-only edits.
+
 ## 0.5.0
 
 - Preserve structured recovery drafts in a separate pending slot when the
