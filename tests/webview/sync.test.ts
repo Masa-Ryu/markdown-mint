@@ -164,6 +164,30 @@ describe("webview sync queue", () => {
     expect(sync.blockedDraft).toBe(local);
     expect(sync.hasPending).toBe(false);
   });
+
+  it("retains base, local and external drafts when a diff budget is exhausted", () => {
+    const count = 1_000;
+    const base = Array.from(
+      { length: count },
+      (_, index) => `line-${index}\n`,
+    ).join("");
+    const local = `${base}LOCAL\n`;
+    const external = Array.from(
+      { length: count },
+      (_, index) => `external-${index}\n`,
+    ).join("");
+    const sync = new SyncController(1, { postMessage: () => undefined }, base);
+    const pending = sync.enqueue(local);
+
+    const result = sync.rebaseRejected(pending.operationId, 2, external, local);
+
+    expect(result).toEqual({ kind: "conflict", markdown: local });
+    expect(sync.hasBlockedConflict).toBe(true);
+    expect(sync.blockedDraft).toBe(local);
+    expect(sync.draftBaseMarkdown).toBe(base);
+    expect(sync.draftBaseVersion).toBe(1);
+    expect(sync.hasPending).toBe(false);
+  });
 });
 
 describe("table clipboard text", () => {

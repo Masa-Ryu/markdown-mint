@@ -3797,6 +3797,69 @@ describe("sync safety", () => {
     app.destroy();
   });
 
+  it("persists a recoverable local draft when a broad rebase exceeds its budget", () => {
+    const count = 1_000;
+    const base = Array.from(
+      { length: count },
+      (_, index) => `line-${index}\n`,
+    ).join("");
+    const external = Array.from(
+      { length: count },
+      (_, index) => `external-${index}\n`,
+    ).join("");
+    let state: unknown;
+    const messages: unknown[] = [];
+    const api: VSCodeApiLike = {
+      postMessage: (message) => messages.push(message),
+      getState: () => state,
+      setState: (next) => {
+        state = next;
+      },
+    };
+    const { app } = makeApp(base, api);
+
+    app.view.dispatch(
+      app.view.state.tr
+        .setSelection(TextSelection.atEnd(app.view.state.doc))
+        .insertText("LOCAL\n"),
+    );
+    const edit = messages.filter(isEditMessage).at(-1) as
+      { operationId?: string; markdown?: string } | undefined;
+    expect(edit?.operationId).toBeDefined();
+    expect(edit?.markdown).toBeDefined();
+
+    receiveHostMessage({
+      protocolVersion: PROTOCOL_VERSION,
+      type: "edit-rejected",
+      operationId: edit?.operationId,
+      reason: "stale",
+      message: "The document changed.",
+      currentMarkdown: external,
+      currentVersion: 2,
+      draftMarkdown: edit?.markdown,
+    });
+
+    expect(app.sync.hasBlockedConflict).toBe(true);
+    expect(app.sync.blockedDraft).toBe(edit?.markdown);
+    expect(app.sync.draftBaseMarkdown).toBe(base);
+    expect(app.sync.draftBaseVersion).toBe(1);
+    expect(state).toMatchObject({
+      recoveryDraft: edit?.markdown,
+      recoveryBaseMarkdown: base,
+      recoveryBaseVersion: 1,
+    });
+
+    app.view.dispatch(app.view.state.tr.insertText("!"));
+    const updatedRecovery = state as {
+      recoveryDraft?: string;
+      recoveryBaseMarkdown?: string;
+    };
+    expect(updatedRecovery.recoveryDraft).toContain("!");
+    expect(updatedRecovery.recoveryBaseMarkdown).toBe(base);
+    expect(app.sync.blockedDraft).toBe(updatedRecovery.recoveryDraft);
+    app.destroy();
+  });
+
   it("automatically restores a same-document draft and keeps an empty draft valid", () => {
     let state: unknown = {
       documentId: "file:///workspace/doc.md",

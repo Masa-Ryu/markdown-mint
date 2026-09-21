@@ -2,9 +2,10 @@
  * Merge Markdown snapshots without treating a version number as a patch.
  *
  * The merge is deliberately conservative: independent line hunks are joined,
- * while overlapping edits (including different insertions at one position)
- * return undefined. Callers can then retain both snapshots for an explicit
- * user decision instead of silently replacing one with the other.
+ * while overlapping edits (including different insertions at one position) or
+ * a diff that exceeds its deterministic safety budget return undefined.
+ * Callers can then retain both snapshots for an explicit user decision
+ * instead of silently replacing one with the other.
  */
 
 interface ChangeHunk {
@@ -18,7 +19,23 @@ interface DiffOperation {
   readonly value: string;
 }
 
-/** Return a merged Markdown source, or undefined when the edits overlap. */
+/**
+ * Keep one diff attempt bounded independently of the Markdown source size.
+ *
+ * The work budget covers comparisons and frontier visits. The trace budget is
+ * counted separately because backtracking needs every completed frontier, and
+ * that retained state is the expensive part of a broad diff.
+ */
+const MAX_DIFF_WORK_UNITS = 4_000_000;
+const MAX_DIFF_TRACE_CELLS = 250_000;
+const MAX_SIMPLE_REPLACEMENT_PROBE_LINES = 64;
+
+interface DiffBudget {
+  workUnits: number;
+  traceCells: number;
+}
+
+/** Return a merged Markdown source, or undefined when safe merging is unavailable. */
 export function mergeMarkdownSnapshots(
   base: string,
   local: string,
@@ -30,7 +47,9 @@ export function mergeMarkdownSnapshots(
 
   const baseLines = splitLines(base);
   const localHunks = diffHunks(baseLines, splitLines(local));
+  if (localHunks === undefined) return undefined;
   const externalHunks = diffHunks(baseLines, splitLines(external));
+  if (externalHunks === undefined) return undefined;
   const mergedHunks: ChangeHunk[] = [...localHunks];
 
   for (const candidate of externalHunks) {
@@ -89,10 +108,48 @@ function splitLines(value: string): string[] {
 function diffHunks(
   base: readonly string[],
   variant: readonly string[],
-): ChangeHunk[] {
-  const operations = myersDiff(base, variant);
+): ChangeHunk[] | undefined {
+  const budget: DiffBudget = { workUnits: 0, traceCells: 0 };
+  let prefixLength = 0;
+  while (prefixLength < base.length && prefixLength < variant.length) {
+    if (!consumeWork(budget)) return undefined;
+    if (base[prefixLength] !== variant[prefixLength]) break;
+    prefixLength += 1;
+  }
+
+  let baseEnd = base.length;
+  let variantEnd = variant.length;
+  while (baseEnd > prefixLength && variantEnd > prefixLength) {
+    if (!consumeWork(budget)) return undefined;
+    if (base[baseEnd - 1] !== variant[variantEnd - 1]) break;
+    baseEnd -= 1;
+    variantEnd -= 1;
+  }
+
+  const simpleReplacement = simpleReplacementHunk(
+    base,
+    variant,
+    prefixLength,
+    baseEnd,
+    variantEnd,
+    budget,
+  );
+  if (simpleReplacement !== null) {
+    return simpleReplacement === undefined ? undefined : [simpleReplacement];
+  }
+
+  const operations = myersDiff(
+    base,
+    variant,
+    prefixLength,
+    baseEnd,
+    prefixLength,
+    variantEnd,
+    budget,
+  );
+  if (operations === undefined) return undefined;
   const hunks: ChangeHunk[] = [];
-  let baseIndex = 0;
+  let baseIndex = prefixLength;
   let index = 0;
   while (index < operations.length) {
     const operation = operations[index];
@@ -116,6 +173,52 @@ function diffHunks(
   return hunks;
 }
 
+/**
+ * A pure insertion/deletion or a replacement with no shared line has one
+ * unambiguous hunk. Recognize it without asking Myers to enumerate thousands
+ * of edit distances (the long replacement regression is one such case).
+ */
+function simpleReplacementHunk(
+  base: readonly string[],
+  variant: readonly string[],
+  start: number,
+  baseEnd: number,
+  variantEnd: number,
+  budget: DiffBudget,
+): ChangeHunk | null | undefined {
+  const baseLength = baseEnd - start;
+  const variantLength = variantEnd - start;
+  if (baseLength === 0 || variantLength === 0)
+    return {
+      start,
+      end: baseEnd,
+      replacement: variant.slice(start, variantEnd),
+    };
+  if (
+    baseLength > MAX_SIMPLE_REPLACEMENT_PROBE_LINES &&
+    variantLength > MAX_SIMPLE_REPLACEMENT_PROBE_LINES
+  )
+    return null;
+
+  const larger = baseLength >= variantLength ? base : variant;
+  const largerStart = start;
+  const largerEnd = baseLength >= variantLength ? baseEnd : variantEnd;
+  const smaller = baseLength >= variantLength ? variant : base;
+  const smallerEnd = baseLength >= variantLength ? variantEnd : baseEnd;
+  const values = new Set<string>();
+  for (let index = largerStart; index < largerEnd; index += 1) {
+    if (!consumeWork(budget)) return undefined;
+    const value = larger[index];
+    if (value !== undefined) values.add(value);
+  }
+  for (let index = start; index < smallerEnd; index += 1) {
+    if (!consumeWork(budget)) return undefined;
+    const value = smaller[index];
+    if (value !== undefined && values.has(value)) return null;
+  }
+  return { start, end: baseEnd, replacement: variant.slice(start, variantEnd) };
+}
+
 function hunksConflict(left: ChangeHunk, right: ChangeHunk): boolean {
   const leftInsertion = left.start === left.end;
   const rightInsertion = right.start === right.end;
@@ -132,17 +235,26 @@ function sameLines(left: readonly string[], right: readonly string[]): boolean {
   );
 }
 
-/** Myers' O((N+M)D) diff keeps the merge usable for large Markdown files. */
+/** Myers' O((N+M)D) diff with bounded search and backtracking state. */
 function myersDiff(
   base: readonly string[],
   variant: readonly string[],
-): DiffOperation[] {
-  const max = base.length + variant.length;
+  baseStart: number,
+  baseEnd: number,
+  variantStart: number,
+  variantEnd: number,
+  budget: DiffBudget,
+): DiffOperation[] | undefined {
+  const baseLength = baseEnd - baseStart;
+  const variantLength = variantEnd - variantStart;
+  const max = baseLength + variantLength;
   const trace: Array<Map<number, number>> = [];
   let frontier = new Map<number, number>([[1, 0]]);
 
   for (let distance = 0; distance <= max; distance += 1) {
+    const nextFrontier = new Map<number, number>();
     for (let diagonal = -distance; diagonal <= distance; diagonal += 2) {
+      if (!consumeWork(budget)) return undefined;
       const down = frontier.get(diagonal + 1) ?? 0;
       const right = frontier.get(diagonal - 1) ?? -1;
       let x =
@@ -150,21 +262,53 @@ function myersDiff(
           ? down
           : right + 1;
       let y = x - diagonal;
-      while (x < base.length && y < variant.length && base[x] === variant[y]) {
+      while (x < baseLength && y < variantLength) {
+        if (!consumeWork(budget)) return undefined;
+        if (base[baseStart + x] !== variant[variantStart + y]) break;
         x += 1;
         y += 1;
       }
-      frontier.set(diagonal, x);
-      if (x >= base.length && y >= variant.length) {
-        trace.push(new Map(frontier));
-        return backtrackDiff(trace, distance, base, variant, x, y);
-      }
+      nextFrontier.set(diagonal, x);
     }
-    // Store the completed frontier. Backtracking from distance d needs the
-    // frontier completed at distance d - 1.
-    trace.push(new Map(frontier));
+    // Store only the frontier for this distance. Retaining the old cumulative
+    // map makes the trace grow quadratically before the trace is even copied.
+    if (!retainTrace(trace, nextFrontier, budget)) return undefined;
+    const endpoint = nextFrontier.get(baseLength - variantLength);
+    if (
+      endpoint !== undefined &&
+      endpoint >= baseLength &&
+      endpoint - (baseLength - variantLength) >= variantLength
+    ) {
+      return backtrackDiff(
+        trace,
+        distance,
+        base,
+        variant,
+        baseStart,
+        variantStart,
+        endpoint,
+        endpoint - (baseLength - variantLength),
+      );
+    }
+    frontier = nextFrontier;
   }
-  return [];
+  return undefined;
+}
+
+function consumeWork(budget: DiffBudget): boolean {
+  budget.workUnits += 1;
+  return budget.workUnits <= MAX_DIFF_WORK_UNITS;
+}
+
+function retainTrace(
+  trace: Array<Map<number, number>>,
+  frontier: Map<number, number>,
+  budget: DiffBudget,
+): boolean {
+  budget.traceCells += frontier.size;
+  if (budget.traceCells > MAX_DIFF_TRACE_CELLS) return false;
+  trace.push(frontier);
+  return true;
 }
 
 function backtrackDiff(
@@ -172,6 +316,8 @@ function backtrackDiff(
   endDistance: number,
   base: readonly string[],
   variant: readonly string[],
+  baseStart: number,
+  variantStart: number,
   endX: number,
   endY: number,
 ): DiffOperation[] {
@@ -195,30 +341,48 @@ function backtrackDiff(
     const previousY = previousX - previousDiagonal;
 
     while (x > previousX && y > previousY) {
-      operations.push({ kind: "equal", value: base[x - 1] ?? "" });
+      operations.push({
+        kind: "equal",
+        value: base[baseStart + x - 1] ?? "",
+      });
       x -= 1;
       y -= 1;
     }
     if (x === previousX) {
-      operations.push({ kind: "insert", value: variant[y - 1] ?? "" });
+      operations.push({
+        kind: "insert",
+        value: variant[variantStart + y - 1] ?? "",
+      });
       y -= 1;
     } else {
-      operations.push({ kind: "delete", value: base[x - 1] ?? "" });
+      operations.push({
+        kind: "delete",
+        value: base[baseStart + x - 1] ?? "",
+      });
       x -= 1;
     }
   }
 
   while (x > 0 && y > 0) {
-    operations.push({ kind: "equal", value: base[x - 1] ?? "" });
+    operations.push({
+      kind: "equal",
+      value: base[baseStart + x - 1] ?? "",
+    });
     x -= 1;
     y -= 1;
   }
   while (x > 0) {
-    operations.push({ kind: "delete", value: base[x - 1] ?? "" });
+    operations.push({
+      kind: "delete",
+      value: base[baseStart + x - 1] ?? "",
+    });
     x -= 1;
   }
   while (y > 0) {
-    operations.push({ kind: "insert", value: variant[y - 1] ?? "" });
+    operations.push({
+      kind: "insert",
+      value: variant[variantStart + y - 1] ?? "",
+    });
     y -= 1;
   }
   operations.reverse();
