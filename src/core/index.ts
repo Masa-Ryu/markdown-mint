@@ -862,6 +862,7 @@ const safeInlineTagNames = new Set([
   "kbd",
   "sup",
   "sub",
+  "code",
   "del",
   "s",
   "br",
@@ -916,8 +917,11 @@ function inlineTokenSource(token: MarkdownToken): string | null {
   )
     return token.markup ?? "";
   if (token.type === "code_inline") {
-    const marker = token.markup ?? String.fromCharCode(96);
-    return marker + literalTokenText(token) + marker;
+    // Markdown-it exposes only the code content and fence marker on a code
+    // token. Reconstruct the semantic span with the same padding/fence rules
+    // as the serializer so grouping a safe HTML pair cannot trim code-edge
+    // whitespace or make backticks part of the surrounding source.
+    return serializeCodeSpan(literalTokenText(token));
   }
   return null;
 }
@@ -2364,6 +2368,47 @@ function isFlankingDelimiterMark(mark: Mark): boolean {
   );
 }
 
+function inlineMarkTag(
+  mark: Mark,
+): { opening: string; closing: string } | undefined {
+  switch (mark.type.name) {
+    case "strong":
+      return { opening: "<strong>", closing: "</strong>" };
+    case "em":
+      return { opening: "<em>", closing: "</em>" };
+    case "strike":
+      return { opening: "<del>", closing: "</del>" };
+    default:
+      return undefined;
+  }
+}
+
+// A delimiter run cannot represent a mark when its marked punctuation touches
+// an alphanumeric neighbour. Safe inline HTML is already supported by every
+// profile and preserves that mark without dropping or synthesizing text.
+function serializeInlineMarkFallback(
+  value: string,
+  marks: readonly Mark[],
+  code: boolean,
+  table: boolean,
+): string {
+  let output = code
+    ? `<code>${escapeMarkdownText(value, table, false)}</code>`
+    : escapeMarkdownText(value, table, false);
+  for (let index = marks.length - 1; index >= 0; index -= 1) {
+    const tag = inlineMarkTag(marks[index]!);
+    if (!tag) continue;
+    output = `${tag.opening}${output}${tag.closing}`;
+  }
+  return output;
+}
+
+function containsMarkdownUnicodePunctuation(value: string): boolean {
+  return Array.from(value).some((character) =>
+    isMarkdownUnicodePunctuation(character),
+  );
+}
+
 function delimiterCanOpen(
   before: string | undefined,
   after: string | undefined,
@@ -2574,6 +2619,7 @@ function serializeInlineMarked(
     }
     if (child.isText) {
       const targetMarks = regularMarks(child);
+      const code = child.marks.some((mark) => mark.type.name === "code");
       let value = child.text ?? "";
       // A newly opened mark cannot begin immediately before a softbreak: the
       // delimiter would land at the end of the previous line and Markdown-it
@@ -2604,17 +2650,18 @@ function serializeInlineMarked(
       );
       const originalValue = value;
       let prefix = "";
-      let boundaryFallback = false;
-      if (opensDelimiter) {
+      let trailingSuffix = "";
+      let useHtmlFallback = false;
+      if (opensDelimiter && code) {
+        useHtmlFallback = !delimiterCanOpen(before, "`");
+      } else if (opensDelimiter) {
         const trimmed = trimLeadingDelimiterBoundary(value, before);
         if (trimmed.rest) {
           prefix = trimmed.prefix;
           value = trimmed.rest;
+          useHtmlFallback = containsMarkdownUnicodePunctuation(prefix);
         } else {
-          // There is no non-whitespace/non-punctuation payload left that can
-          // carry the mark. Keep the original delimiter pair rather than
-          // silently dropping an otherwise unrepresentable mark.
-          boundaryFallback = true;
+          useHtmlFallback = true;
         }
       }
       if (!value) {
@@ -2626,21 +2673,35 @@ function serializeInlineMarked(
           !nextMarks.some((next) => next.eq(mark)),
       );
       let body = value;
-      let suffix = "";
-      if (closesDelimiter && !boundaryFallback) {
+      if (closesDelimiter && code) {
+        useHtmlFallback =
+          useHtmlFallback ||
+          !delimiterCanClose("`", boundaryCharacter(children[index + 1], true));
+      } else if (closesDelimiter) {
         const trimmed = trimTrailingDelimiterBoundary(
           value,
           boundaryCharacter(children[index + 1], true),
         );
         body = trimmed.body;
-        suffix = trimmed.suffix;
+        trailingSuffix = trimmed.suffix;
+        useHtmlFallback =
+          useHtmlFallback ||
+          !body ||
+          containsMarkdownUnicodePunctuation(trailingSuffix);
       }
-      if (opensDelimiter && !boundaryFallback && !body) {
-        boundaryFallback = true;
-        prefix = "";
-        value = originalValue;
-        body = originalValue;
-        suffix = "";
+      if (useHtmlFallback) {
+        const fallbackMarks = targetMarks.filter(
+          (mark) => !baseMarks.some((base) => base.eq(mark)),
+        );
+        closeTo([...baseMarks]);
+        output += serializeInlineMarkFallback(
+          originalValue,
+          fallbackMarks,
+          code,
+          table,
+        );
+        lineStart = false;
+        continue;
       }
       if (prefix) {
         const prefixMarks = active.filter((mark) =>
@@ -2656,7 +2717,6 @@ function serializeInlineMarked(
       if (body) closeTo(targetMarks);
       else closeTo(suffixMarks);
       if (body) {
-        const code = child.marks.some((mark) => mark.type.name === "code");
         let text = code
           ? serializeCodeSpan(body, table)
           : escapeMarkdownText(body, table, lineStart);
@@ -2672,10 +2732,10 @@ function serializeInlineMarked(
         output += text;
         lineStart = body.endsWith("\n");
       }
-      if (suffix) {
+      if (trailingSuffix) {
         closeTo(suffixMarks);
-        output += escapeMarkdownText(suffix, table, lineStart);
-        lineStart = suffix.endsWith("\n");
+        output += escapeMarkdownText(trailingSuffix, table, lineStart);
+        lineStart = trailingSuffix.endsWith("\n");
       }
     } else {
       if (child.type.name === "hard_break") {
@@ -4005,10 +4065,29 @@ function renderHtmlPair(source: string, state: RenderState): string {
     return renderSafeInlineHtml(source);
   const closing = closingMatch[0]!;
   const body = source.slice(opening.length, closingMatch.index);
-  const bodyHtml = body ? renderInlineSource(body, state.profile, state) : "";
+  const bodyHtml =
+    body && openingTag.name === "code"
+      ? escapeHtml(unescapeSerializedInlineText(body))
+      : body
+        ? renderInlineSource(body, state.profile, state)
+        : "";
   return (
     renderSafeInlineHtml(opening) + bodyHtml + renderSafeInlineHtml(closing)
   );
+}
+
+function unescapeSerializedInlineText(value: string): string {
+  const escapable = new Set(Array.from("\\`*_[]<>#-+.!~$:=&()|"));
+  let output = "";
+  for (let index = 0; index < value.length; index += 1) {
+    const character = value[index]!;
+    const next = value[index + 1];
+    if (character === "\\" && next && escapable.has(next)) {
+      output += next;
+      index += 1;
+    } else output += character;
+  }
+  return output;
 }
 
 function renderCodeFallback(source: string, language: string): string {
