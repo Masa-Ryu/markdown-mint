@@ -712,6 +712,12 @@ function normalizeOrderedListStart(value: unknown): number {
     : 1;
 }
 
+function orderedListMarker(start: number, index: number): number {
+  // Repeating the largest valid marker keeps every item in the list when
+  // arithmetic continuation would cross markdown-it's nine-digit limit.
+  return Math.min(MAX_ORDERED_LIST_START, start + index);
+}
+
 function tokenText(token: MarkdownToken): string {
   return restoreEscapedDollars(token.content ?? "");
 }
@@ -2710,7 +2716,9 @@ function serializeBlock(node: PMNode, tableCell = false): string {
     case "ordered_list": {
       const start = normalizeOrderedListStart(node.attrs.order);
       return childrenOf(node)
-        .map((item, index) => serializeListItem(item, `${start + index}. `))
+        .map((item, index) =>
+          serializeListItem(item, `${orderedListMarker(start, index)}. `),
+        )
         .join("\n");
     }
     case "list_item":

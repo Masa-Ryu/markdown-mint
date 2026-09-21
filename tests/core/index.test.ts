@@ -812,6 +812,72 @@ describe("Markdown core", () => {
     }
   });
 
+  it("keeps every item when ordered markers reach the nine-digit limit", () => {
+    for (const testCase of [
+      {
+        source: "999999999. alpha\n999999999. beta\n",
+        start: 999_999_999,
+      },
+      {
+        source: "999999998. alpha\n999999999. beta\n",
+        start: 999_999_998,
+      },
+    ]) {
+      const snapshot = parseMarkdown(testCase.source);
+      expect(snapshot.doc.child(0).attrs.order).toBe(testCase.start);
+      expect(snapshot.doc.child(0).childCount).toBe(2);
+
+      const changed = replaceText(snapshot.doc, "alpha", "changed");
+      const serialized = serializeMarkdown(changed, snapshot);
+      expect(serialized).toBe(testCase.source.replace("alpha", "changed"));
+
+      const list = reparseMarkdown(serialized).doc.child(0);
+      expect(list.attrs.order).toBe(testCase.start);
+      expect(list.childCount).toBe(2);
+      expect(list.child(0).textContent).toBe("changed");
+      expect(list.child(1).textContent).toBe("beta");
+    }
+  });
+
+  it("keeps capped ordered markers in nested lists", () => {
+    const source = [
+      "999999998. outer",
+      "           ",
+      "           999999999. inner",
+      "           999999999. sibling",
+      "999999999. next",
+      "",
+    ].join("\n");
+    const snapshot = parseMarkdown(source);
+    const outer = snapshot.doc.child(0);
+    const nested = outer.child(0).child(1);
+    expect(outer.attrs.order).toBe(999_999_998);
+    expect(nested.attrs.order).toBe(999_999_999);
+    expect(nested.childCount).toBe(2);
+
+    const changed = replaceText(snapshot.doc, "inner", "changed");
+    const serialized = serializeMarkdown(changed, snapshot);
+    expect(serialized).toBe(
+      [
+        "999999998. outer",
+        "           ",
+        "           999999999. changed",
+        "           999999999. sibling",
+        "999999999. next",
+        "",
+      ].join("\n"),
+    );
+
+    const reparsedOuter = reparseMarkdown(serialized).doc.child(0);
+    const reparsedNested = reparsedOuter.child(0).child(1);
+    expect(reparsedOuter.attrs.order).toBe(999_999_998);
+    expect(reparsedOuter.childCount).toBe(2);
+    expect(reparsedNested.attrs.order).toBe(999_999_999);
+    expect(reparsedNested.childCount).toBe(2);
+    expect(reparsedNested.child(0).textContent).toBe("changed");
+    expect(reparsedNested.child(1).textContent).toBe("sibling");
+  });
+
   it("keeps a zero start through ProseMirror undo and redo", () => {
     const source = "0. alpha\n1. beta\n";
     const snapshot = parseMarkdown(source);
