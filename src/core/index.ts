@@ -161,6 +161,14 @@ type MarkdownToken = {
   type: string;
 };
 
+type InlineSourceParser = (source: string) => MarkdownToken | undefined;
+
+interface TaskMarker {
+  inline: MarkdownToken;
+  length: number;
+  checked: Exclude<TaskState, null>;
+}
+
 interface SourceLocation {
   start: number;
   end: number;
@@ -1218,56 +1226,47 @@ function firstParagraphInline(
     .find((token) => token.type === "inline");
 }
 
+function taskMarkerFor(
+  inline: MarkdownToken | undefined,
+  profile: Profile,
+): TaskMarker | undefined {
+  if (profile === "commonmark" || !inline?.content) return undefined;
+  const markerPattern = profile === "gitlab" ? " xX~" : " xX";
+  const match = inline.content.match(
+    new RegExp("^\\[([" + markerPattern + "])\\][ \\t]+"),
+  );
+  if (!match) return undefined;
+  const marker = match[1]!.toLowerCase();
+  return {
+    inline,
+    length: match[0].length,
+    checked: marker === "x" ? true : marker === "~" ? "mixed" : false,
+  };
+}
+
+function taskInline(
+  inline: MarkdownToken | undefined,
+  marker: TaskMarker | undefined,
+  parseInlineSource: InlineSourceParser | undefined,
+): MarkdownToken | undefined {
+  if (!inline || !marker || marker.inline !== inline || !parseInlineSource)
+    return inline;
+  // Consume the raw task prefix before reference links and other inline
+  // constructs are resolved, then parse the remaining source normally.
+  const source = inline.content?.slice(marker.length) ?? "";
+  const parsed = parseInlineSource?.(source);
+  return {
+    ...inline,
+    content: source,
+    children: parsed?.children ?? null,
+  };
+}
+
 function taskInfo(
   children: PMNode[],
-  profile: Profile,
-  inline?: MarkdownToken,
+  marker: TaskMarker | undefined,
 ): { checked: TaskState; children: PMNode[] } {
-  if (profile === "commonmark") return { checked: null, children };
-  const firstParagraph = children.find(
-    (child) => child.type.name === "paragraph",
-  );
-  const firstInline = firstParagraph?.firstChild;
-  if (!firstInline?.isText || !firstInline.text) {
-    return { checked: null, children };
-  }
-  if (
-    firstInline.marks.some(
-      (mark) => mark.type.name === "code" || mark.type.name === "link",
-    )
-  ) {
-    return { checked: null, children };
-  }
-  const markerPattern = profile === "gitlab" ? " xX~" : " xX";
-  // "inline.content" is the source text for this paragraph after
-  // Markdown's structural list/blockquote prefix has been consumed. Unlike
-  // the parsed PM text, it still distinguishes an escaped bracket from a
-  // task marker.
-  const match = inline?.content?.match(
-    new RegExp("^\\[([" + markerPattern + "])\\][ \t]+"),
-  );
-  if (!match || !firstInline.text.startsWith(match[0])) {
-    return { checked: null, children };
-  }
-  const marker = match[1]!.toLowerCase();
-  const checked: TaskState =
-    marker === "x" ? true : marker === "~" ? "mixed" : false;
-  const replacement = firstInline.text.slice(match[0].length);
-  const paragraphIndex = children.indexOf(firstParagraph!);
-  const firstParagraphChildren = childrenOf(firstParagraph!);
-  const textIndex = firstParagraphChildren.indexOf(firstInline);
-  if (paragraphIndex < 0 || textIndex < 0) return { checked, children };
-  const paragraphChildren = firstParagraphChildren.slice();
-  if (replacement)
-    paragraphChildren[textIndex] = schema.text(replacement, firstInline.marks);
-  else paragraphChildren.splice(textIndex, 1);
-  const updatedParagraph = nodeTypes.paragraph.create(
-    firstParagraph!.attrs,
-    paragraphChildren,
-  );
-  const updated = children.slice();
-  updated[paragraphIndex] = updatedParagraph;
-  return { checked, children: updated };
+  return { checked: marker?.checked ?? null, children };
 }
 
 function parseList(
@@ -1279,6 +1278,7 @@ function parseList(
   offsets?: number[],
   profile: Profile = "github",
   footnotes?: Map<string, FootnoteDefinition>,
+  inlineSourceParser?: InlineSourceParser,
 ): PMNode {
   const items: PMNode[] = [];
   let index = openIndex + 1;
@@ -1289,6 +1289,8 @@ function parseList(
       continue;
     }
     const itemClose = findClosing(tokens, index, "list_item_open", closeIndex);
+    const inline = firstParagraphInline(tokens, index + 1, itemClose);
+    const marker = taskMarkerFor(inline, profile);
     const children = parseBlocks(
       tokens,
       index + 1,
@@ -1297,13 +1299,11 @@ function parseList(
       offsets,
       profile,
       footnotes,
+      inlineSourceParser,
+      marker,
     );
     const content = children.length > 0 ? children : [emptyParagraph()];
-    const task = taskInfo(
-      content,
-      profile,
-      firstParagraphInline(tokens, index + 1, itemClose),
-    );
+    const task = taskInfo(content, marker);
     items.push(
       nodeTypes.list_item.create({ checked: task.checked }, task.children),
     );
@@ -1467,6 +1467,8 @@ function parseBlocks(
   offsets: number[] = [],
   profile: Profile = "github",
   footnotes?: Map<string, FootnoteDefinition>,
+  inlineSourceParser?: InlineSourceParser,
+  taskMarker?: TaskMarker,
 ): PMNode[] {
   const result: PMNode[] = [];
   let index = begin;
@@ -1478,7 +1480,13 @@ function parseBlocks(
         const inline = tokens
           .slice(index + 1, close)
           .find((entry) => entry.type === "inline");
-        result.push(paragraphFromInline(inline, profile, footnotes));
+        result.push(
+          paragraphFromInline(
+            taskInline(inline, taskMarker, inlineSourceParser),
+            profile,
+            footnotes,
+          ),
+        );
         index = close + 1;
         break;
       }
@@ -1509,6 +1517,7 @@ function parseBlocks(
               offsets,
               profile,
               footnotes,
+              inlineSourceParser,
             ),
           ),
         );
@@ -1527,6 +1536,7 @@ function parseBlocks(
             offsets,
             profile,
             footnotes,
+            inlineSourceParser,
           ),
         );
         index = close + 1;
@@ -1544,6 +1554,7 @@ function parseBlocks(
             offsets,
             profile,
             footnotes,
+            inlineSourceParser,
           ),
         );
         index = close + 1;
@@ -1917,7 +1928,12 @@ function parseInternal(
   // need masking to prevent their interior from becoming separate blocks.
   const maskedSource = maskRanges(source, details);
   const parserSource = maskEscapedDollars(maskedSource);
-  const tokens = md.parse(parserSource, {}) as unknown as MarkdownToken[];
+  const env: Record<string, unknown> = {};
+  const tokens = md.parse(parserSource, env) as unknown as MarkdownToken[];
+  const parseInlineSource: InlineSourceParser = (inlineSource) =>
+    (md.parseInline(inlineSource, env) as unknown as MarkdownToken[]).find(
+      (token) => token.type === "inline",
+    );
   const offsets = lineOffsets(parserSource);
   const roots = tokens
     .map((token, index) => (isRootStart(token) ? index : -1))
@@ -2007,6 +2023,7 @@ function parseInternal(
       offsets,
       profile,
       footnoteMap,
+      parseInlineSource,
     );
     let node =
       parsed[0] ??

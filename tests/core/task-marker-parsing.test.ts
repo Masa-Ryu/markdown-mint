@@ -87,6 +87,7 @@ describe("task marker parsing", () => {
     ["code span", "- `[x] code`"],
     ["strong text", "- **[x] bold** text"],
     ["emphasized text", "- *[x] emphasis* text"],
+    ["an inline link", "- [x](https://example.com) linked text"],
     ["text after an image", "- ![image](image.png)[x] after"],
     ["a nested literal list item", "- parent\n  - \\[x\\] nested literal"],
     ["a marker on a later paragraph", "- first\n\n  [x] second"],
@@ -103,10 +104,43 @@ describe("task marker parsing", () => {
     expect(listItems(snapshot.doc)[0]?.attrs.checked).toBeNull();
   });
 
-  it("does not treat a reference link label as a task marker", () => {
-    const source = "[x]: https://example.com\n\n- [x] linked text";
-    const snapshot = parseMarkdown(source, "github");
+  it.each([
+    ["without a reference definition", "- [x] linked text"],
+    [
+      "with a same-label reference definition",
+      "[x]: https://example.com\n\n- [x] linked text",
+    ],
+  ] as const)(
+    "recognizes a raw task marker before inline reference resolution (%s)",
+    (_name, source) => {
+      const snapshot = parseMarkdown(source, "github");
+      const item = listItems(snapshot.doc)[0]!;
 
-    expect(listItems(snapshot.doc)[0]?.attrs.checked).toBeNull();
+      expect(item.attrs.checked).toBe(true);
+      expect(item.textContent).toBe("linked text");
+    },
+  );
+
+  it("preserves a reference link in a task body after round-trip editing", () => {
+    const source =
+      "[x]: https://example.com\n[ref]: https://reference.example\n\n- [x] linked [ref]";
+    const snapshot = parseMarkdown(source, "github");
+    const original = listItems(snapshot.doc)[0]!;
+    const originalLink = original
+      .firstChild!.content.child(1)
+      .marks.find((mark) => mark.type.name === "link");
+
+    expect(original.attrs.checked).toBe(true);
+    expect(originalLink?.attrs.href).toBe("https://reference.example");
+
+    const edited = replaceText(snapshot.doc, "linked", "changed");
+    const serialized = serializeMarkdown(edited, snapshot);
+    const reparsed = listItems(reparse(serialized, "github"))[0]!;
+    const reparsedLink = reparsed
+      .firstChild!.content.child(1)
+      .marks.find((mark) => mark.type.name === "link");
+
+    expect(reparsed.attrs.checked).toBe(true);
+    expect(reparsedLink?.attrs.href).toBe("https://reference.example");
   });
 });
