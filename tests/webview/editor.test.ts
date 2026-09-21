@@ -3628,6 +3628,48 @@ describe("sync safety", () => {
     app.destroy();
   });
 
+  it("uses the acknowledged snapshot as the next recovery base", () => {
+    const messages: unknown[] = [];
+    let recoveryState: unknown;
+    const { app } = makeApp("base", {
+      postMessage: (message) => messages.push(message),
+      getState: () => recoveryState,
+      setState: (next) => {
+        recoveryState = next;
+      },
+    });
+
+    app.view.dispatch(app.view.state.tr.insertText(" A"));
+    const first = messages.filter(isEditMessage).at(-1)! as unknown as {
+      markdown: string;
+      operationId: string;
+    };
+    expect(first.operationId).toBeDefined();
+
+    app.receiveDocument({
+      protocolVersion: PROTOCOL_VERSION,
+      type: "document",
+      markdown: first.markdown,
+      version: 2,
+      profile: "github",
+      operationId: first.operationId,
+      reason: "ack",
+    });
+    expect(recoveryState).toEqual({});
+
+    app.view.dispatch(app.view.state.tr.insertText(" B"));
+    const second = messages.filter(isEditMessage).at(-1)!;
+    expect(recoveryState).toMatchObject({
+      recoveryBaseMarkdown: first.markdown,
+      recoveryBaseVersion: 2,
+      recoveryDraft: (second as { markdown: string }).markdown,
+    });
+    expect(
+      (recoveryState as { recoveryBaseMarkdown: string }).recoveryBaseMarkdown,
+    ).not.toBe("base");
+    app.destroy();
+  });
+
   it("applies a newer acknowledgement broadcast from another panel", () => {
     const source = makeApp("base");
     const end = TextSelection.atEnd(source.app.view.state.doc);

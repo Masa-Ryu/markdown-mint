@@ -117,14 +117,11 @@ function diffHunks(
     prefixLength += 1;
   }
 
-  let baseEnd = base.length;
-  let variantEnd = variant.length;
-  while (baseEnd > prefixLength && variantEnd > prefixLength) {
-    if (!consumeWork(budget)) return undefined;
-    if (base[baseEnd - 1] !== variant[variantEnd - 1]) break;
-    baseEnd -= 1;
-    variantEnd -= 1;
-  }
+  // Keep the full suffix in Myers. Trimming a repeated-line suffix can change
+  // which base occurrence is treated as unchanged, turning a conflict at one
+  // insertion position into two apparently independent edits.
+  const baseEnd = base.length;
+  const variantEnd = variant.length;
 
   const simpleReplacement = simpleReplacementHunk(
     base,
@@ -199,6 +196,72 @@ function simpleReplacementHunk(
     variantLength > MAX_SIMPLE_REPLACEMENT_PROBE_LINES
   )
     return null;
+
+  // A small base side can still pair with a large insertion. If the only
+  // shared lines are a unique, contiguous suffix, that suffix is an
+  // unambiguous snake and the changed range can be returned directly. Do not
+  // use this shortcut for repeated suffix lines: their occurrence may be the
+  // alignment that a conservative merge must leave in conflict.
+  let suffixLength = 0;
+  while (baseEnd - suffixLength > start && variantEnd - suffixLength > start) {
+    if (!consumeWork(budget)) return undefined;
+    if (
+      base[baseEnd - suffixLength - 1] !==
+      variant[variantEnd - suffixLength - 1]
+    )
+      break;
+    suffixLength += 1;
+  }
+  if (suffixLength > 0) {
+    const baseCounts = new Map<string, number>();
+    const variantCounts = new Map<string, number>();
+    for (let index = start; index < baseEnd; index += 1) {
+      if (!consumeWork(budget)) return undefined;
+      const value = base[index];
+      if (value !== undefined)
+        baseCounts.set(value, (baseCounts.get(value) ?? 0) + 1);
+    }
+    for (let index = start; index < variantEnd; index += 1) {
+      if (!consumeWork(budget)) return undefined;
+      const value = variant[index];
+      if (value !== undefined)
+        variantCounts.set(value, (variantCounts.get(value) ?? 0) + 1);
+    }
+    const uniqueSuffix = Array.from(
+      { length: suffixLength },
+      (_, index) => base[baseEnd - suffixLength + index],
+    ).every(
+      (value) =>
+        value !== undefined &&
+        baseCounts.get(value) === 1 &&
+        variantCounts.get(value) === 1,
+    );
+    if (uniqueSuffix) {
+      const middleBaseEnd = baseEnd - suffixLength;
+      const middleVariantEnd = variantEnd - suffixLength;
+      const middleValues = new Set<string>();
+      for (let index = start; index < middleBaseEnd; index += 1) {
+        if (!consumeWork(budget)) return undefined;
+        const value = base[index];
+        if (value !== undefined) middleValues.add(value);
+      }
+      let sharedMiddleLine = false;
+      for (let index = start; index < middleVariantEnd; index += 1) {
+        if (!consumeWork(budget)) return undefined;
+        const value = variant[index];
+        if (value !== undefined && middleValues.has(value)) {
+          sharedMiddleLine = true;
+          break;
+        }
+      }
+      if (!sharedMiddleLine)
+        return {
+          start,
+          end: middleBaseEnd,
+          replacement: variant.slice(start, middleVariantEnd),
+        };
+    }
+  }
 
   const larger = baseLength >= variantLength ? base : variant;
   const largerStart = start;

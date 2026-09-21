@@ -6,6 +6,12 @@ function numberedLines(prefix: string, count: number): string[] {
 }
 
 describe("three-way Markdown merge budgets", () => {
+  it("keeps repeated-line insertions at one base position in conflict", () => {
+    expect(
+      mergeMarkdownSnapshots("A\n", "A\nB\n", "B\nA\nA\n"),
+    ).toBeUndefined();
+  });
+
   it("finishes broad 250, 500 and 1000 line edits on the safe conflict path", () => {
     for (const count of [250, 500, 1_000]) {
       const baseLines = numberedLines("line", count);

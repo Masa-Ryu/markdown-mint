@@ -2213,7 +2213,6 @@ export class SyncController {
     return (
       this.pending?.baseMarkdown ??
       this.queued?.baseMarkdown ??
-      this.lastAcknowledged?.baseMarkdown ??
       this.blockedConflict?.baseMarkdown ??
       this.authoritativeMarkdown
     );
@@ -2223,7 +2222,6 @@ export class SyncController {
     return (
       this.pending?.baseVersion ??
       this.queued?.baseVersion ??
-      this.lastAcknowledged?.baseVersion ??
       this.blockedConflict?.baseVersion ??
       this.authoritativeVersion
     );
