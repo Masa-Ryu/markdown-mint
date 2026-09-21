@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.5.3
+## 0.5.4
 
 - Preserve direct table-control handle DOM during ordinary cell edits, reuse
   one cell-rectangle measurement for row and column geometry, and coalesce
@@ -9,6 +9,12 @@
 - Add a reproducible real-Webview 100x10 table-controls benchmark reporting
   edit latency, cell-rectangle queries, handle replacements, and synchronized
   Markdown output.
+
+## 0.5.3
+
+- Follow VS Code icon foreground colors for toolbar and table icons across
+  light, dark, and high-contrast themes while preserving semantic delete-color
+  accents.
 
 ## 0.5.2
 

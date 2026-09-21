@@ -8,19 +8,19 @@
   <!-- columns -->
   <path
     d="M4.5 2.5V13.5"
-    stroke="#1E2A38"
+    stroke="currentColor"
     stroke-width="1.4"
     stroke-linecap="round"
   />
   <path
     d="M8 2.5V13.5"
-    stroke="#1E2A38"
+    stroke="currentColor"
     stroke-width="1.4"
     stroke-linecap="round"
   />
   <path
     d="M11.5 2.5V13.5"
-    stroke="#1E2A38"
+    stroke="currentColor"
     stroke-width="1.4"
     stroke-linecap="round"
   />
