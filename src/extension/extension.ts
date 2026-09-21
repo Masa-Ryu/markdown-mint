@@ -101,6 +101,7 @@ interface DocumentState {
   eol: vscode.EndOfLine;
   profile: MarkdownProfile;
   queue: Promise<void>;
+  queueDepth: number;
   readonly panels: Set<PanelSession>;
   readonly pending: Map<string, PendingEdit>;
   pendingCommand?: PendingCommand;
@@ -297,6 +298,9 @@ export class MarkdownMintEditorProvider
       this.output,
       vscode.workspace.onDidChangeTextDocument((event) =>
         this.onDocumentChanged(event),
+      ),
+      vscode.workspace.onDidCloseTextDocument((document) =>
+        this.onDocumentClosed(document),
       ),
       vscode.workspace.onDidChangeConfiguration((event) =>
         this.onConfigurationChanged(event),
@@ -505,6 +509,7 @@ export class MarkdownMintEditorProvider
     ) {
       this.previewPanels.delete(session.state.key);
     }
+    this.releaseStateIfUnused(session.state);
   }
 
   private getOrCreateState(document: vscode.TextDocument): DocumentState {
@@ -519,6 +524,7 @@ export class MarkdownMintEditorProvider
         eol: document.eol,
         profile: this.profileFor(document.uri),
         queue: Promise.resolve(),
+        queueDepth: 0,
         panels: new Set(),
         pending: new Map(),
       };
@@ -533,8 +539,11 @@ export class MarkdownMintEditorProvider
 
   private onDocumentChanged(event: vscode.TextDocumentChangeEvent): void {
     if (!isMarkdownDocument(event.document)) return;
-    const existingState = this.states.get(documentKey(event.document.uri));
-    const state = existingState ?? this.getOrCreateState(event.document);
+    const state = this.states.get(documentKey(event.document.uri));
+    // Source-only edits do not need a provider-owned snapshot. A state is
+    // created by a panel or an explicit queued operation, then retained while
+    // that owner is still active.
+    if (!state) return;
     const previousVersion = state.version;
     const previousText = state.document.getText();
     const previousEol = state.eol;
@@ -548,6 +557,7 @@ export class MarkdownMintEditorProvider
       previousText === text &&
       previousEol === event.document.eol
     ) {
+      this.releaseStateIfUnused(state);
       return;
     }
     const pending = [...state.pending.values()].find(
@@ -568,6 +578,7 @@ export class MarkdownMintEditorProvider
         reason: pending.action === "edit" ? "ack" : pending.action,
         operationId: pending.operationId,
       });
+      this.releaseStateIfUnused(state);
       return;
     }
 
@@ -625,6 +636,26 @@ export class MarkdownMintEditorProvider
           ? "redo"
           : "external";
     this.broadcastDocument(state, { reason });
+    this.releaseStateIfUnused(state);
+  }
+
+  private onDocumentClosed(document: vscode.TextDocument): void {
+    if (!isMarkdownDocument(document)) return;
+    const state = this.states.get(documentKey(document.uri));
+    if (!state) return;
+    this.releaseStateIfUnused(state);
+  }
+
+  private releaseStateIfUnused(state: DocumentState): void {
+    if (this.states.get(state.key) !== state) return;
+    if (
+      state.panels.size > 0 ||
+      state.pending.size > 0 ||
+      state.pendingCommand !== undefined ||
+      state.queueDepth > 0
+    )
+      return;
+    this.states.delete(state.key);
   }
 
   private onConfigurationChanged(event: vscode.ConfigurationChangeEvent): void {
@@ -661,12 +692,11 @@ export class MarkdownMintEditorProvider
     const edits: vscode.TextEdit[] = [];
     const before = document.getText();
     const version = document.version;
-    const state = this.getOrCreateState(document);
+    const profile =
+      this.states.get(documentKey(document.uri))?.profile ??
+      this.profileFor(document.uri);
     try {
-      const formatter = await this.formatterOptions(
-        document.uri,
-        state.profile,
-      );
+      const formatter = await this.formatterOptions(document.uri, profile);
       if (formatter.ignored) {
         this.reportFormatSkip(
           document,
@@ -674,7 +704,7 @@ export class MarkdownMintEditorProvider
         );
         return edits;
       }
-      await this.validateMarkdown(before, state.profile, true);
+      await this.validateMarkdown(before, profile, true);
       const formatted = await this.callFormat(before, {
         ...formatter.options,
       });
@@ -682,7 +712,7 @@ export class MarkdownMintEditorProvider
         this.reportFormatSkip(document, "The formatted Markdown is too large.");
         return edits;
       }
-      await this.validateMarkdown(formatted, state.profile, true);
+      await this.validateMarkdown(formatted, profile, true);
       if (document.version !== version) return edits;
       const change = minimalChange(document, formatted);
       if (change)
@@ -2292,10 +2322,17 @@ export class MarkdownMintEditorProvider
   }
 
   private enqueue<T>(state: DocumentState, task: () => Promise<T>): Promise<T> {
+    state.queueDepth += 1;
     const next = state.queue.then(task, task);
     state.queue = next.then(
-      () => undefined,
-      () => undefined,
+      () => {
+        state.queueDepth -= 1;
+        this.releaseStateIfUnused(state);
+      },
+      () => {
+        state.queueDepth -= 1;
+        this.releaseStateIfUnused(state);
+      },
     );
     return next;
   }

@@ -254,9 +254,13 @@ const vscode = vi.hoisted(() => {
 
   const documentUri = Uri.file("/workspace/docs/manual.md");
   const document = new TextDocument(documentUri, "# Original");
+  const documents = new Map<string, TextDocument>([
+    [document.uri.toString(), document],
+  ]);
   let workspaceFolder: { uri: Uri; name: string; index: number } | undefined;
   const textDocumentListeners: Array<(event: TextDocumentChangeEvent) => void> =
     [];
+  const closeDocumentListeners: Array<(value: TextDocument) => void> = [];
   const saveListeners: Array<
     (event: {
       document: TextDocument;
@@ -280,6 +284,8 @@ const vscode = vi.hoisted(() => {
   const redoTexts: string[] = [];
   let applyEditMode: "success" | "false" | "reject" | "reject-after-change" =
     "success";
+  let applyEditGate: Promise<void> | undefined;
+  let releaseApplyEditGate: (() => void) | undefined;
   let openTextDocumentError: Error | undefined;
   const panel = new WebviewPanel();
   const outputLines: string[] = [];
@@ -393,6 +399,15 @@ const vscode = vi.hoisted(() => {
         if (index >= 0) textDocumentListeners.splice(index, 1);
       });
     },
+    onDidCloseTextDocument(
+      listener: (value: TextDocument) => void,
+    ): Disposable {
+      closeDocumentListeners.push(listener);
+      return new Disposable(() => {
+        const index = closeDocumentListeners.indexOf(listener);
+        if (index >= 0) closeDocumentListeners.splice(index, 1);
+      });
+    },
     onWillSaveTextDocument(
       listener: (event: {
         document: TextDocument;
@@ -421,17 +436,23 @@ const vscode = vi.hoisted(() => {
     ): Promise<TextDocument> {
       if (value instanceof Uri && openTextDocumentError)
         throw openTextDocumentError;
-      if (value instanceof Uri) return document;
+      if (value instanceof Uri) {
+        const existing = documents.get(value.toString());
+        if (!existing) throw new Error(`test document is not open: ${value}`);
+        return existing;
+      }
       const draft = new TextDocument(
         Uri.parse("untitled:recovery.md"),
         value.content,
         1,
         "recovery.md",
       );
+      documents.set(draft.uri.toString(), draft);
       workspace.textDocuments.push(draft);
       return draft;
     },
     async applyEdit(edit: WorkspaceEdit): Promise<boolean> {
+      if (applyEditGate) await applyEditGate;
       if (applyEditMode === "false") return false;
       if (applyEditMode === "reject") throw new Error("injected apply failure");
       for (const entry of edit.entries) {
@@ -551,10 +572,45 @@ const vscode = vi.hoisted(() => {
       return new Disposable();
     },
   };
+  const emitDocumentChange = (
+    value: TextDocument,
+    options: { reason?: number; contentChanges?: readonly unknown[] } = {},
+  ): void => {
+    for (const listener of textDocumentListeners)
+      listener({
+        document: value,
+        contentChanges: options.contentChanges ?? [{}],
+        ...(options.reason === undefined ? {} : { reason: options.reason }),
+      });
+  };
+  const createDocument = (
+    filePath: string,
+    text = "# Original",
+  ): TextDocument => {
+    const value = new TextDocument(Uri.file(filePath), text);
+    documents.set(value.uri.toString(), value);
+    workspace.textDocuments.push(value);
+    return value;
+  };
+  const closeDocument = (value: TextDocument): void => {
+    const index = workspace.textDocuments.indexOf(value);
+    if (index >= 0) workspace.textDocuments.splice(index, 1);
+    for (const listener of closeDocumentListeners) listener(value);
+  };
+  const reopenDocument = (
+    filePath: string,
+    text = "# Reopened",
+    version = 1,
+  ): TextDocument => {
+    const uri = Uri.file(filePath);
+    const value = new TextDocument(uri, text, version);
+    documents.set(uri.toString(), value);
+    workspace.textDocuments.push(value);
+    return value;
+  };
   const emitExternal = (value: string): void => {
     document.replaceText(value);
-    for (const listener of textDocumentListeners)
-      listener({ document, contentChanges: [{}] });
+    emitDocumentChange(document);
   };
   const emitDirtyState = (): void => {
     document.isDirty = !document.isDirty;
@@ -573,8 +629,7 @@ const vscode = vi.hoisted(() => {
   };
   const emitNativeHistory = (reason: number, value: string): void => {
     document.replaceText(value);
-    for (const listener of textDocumentListeners)
-      listener({ document, reason, contentChanges: [{}] });
+    emitDocumentChange(document, { reason });
   };
   const emitConfiguration = (section: string): void => {
     for (const listener of configurationListeners)
@@ -596,6 +651,12 @@ const vscode = vi.hoisted(() => {
     return result === undefined ? undefined : await result;
   };
   const reset = (): void => {
+    releaseApplyEditGate?.();
+    releaseApplyEditGate = undefined;
+    applyEditGate = undefined;
+    documents.clear();
+    documents.set(document.uri.toString(), document);
+    workspace.textDocuments.splice(0, workspace.textDocuments.length, document);
     document.reset("# Original");
     document.save = TextDocument.prototype.save.bind(document);
     document.eol = 1;
@@ -641,6 +702,10 @@ const vscode = vi.hoisted(() => {
     __state: {
       document,
       panel,
+      createDocument,
+      closeDocument,
+      reopenDocument,
+      emitDocumentChange,
       emitExternal,
       emitDirtyState,
       emitEolChange,
@@ -656,6 +721,16 @@ const vscode = vi.hoisted(() => {
       commandCalls,
       openExternalCalls,
       findFilesCalls,
+      blockApplyEdit(): void {
+        applyEditGate = new Promise<void>((resolve) => {
+          releaseApplyEditGate = resolve;
+        });
+      },
+      releaseApplyEdit(): void {
+        releaseApplyEditGate?.();
+        releaseApplyEditGate = undefined;
+        applyEditGate = undefined;
+      },
       get openExternalResult(): boolean {
         return openExternalResult;
       },
@@ -721,6 +796,14 @@ async function flush(): Promise<void> {
   await new Promise<void>((resolve) => setTimeout(resolve, 0));
 }
 
+function stateCount(provider: object): number {
+  return (
+    provider as unknown as {
+      states: Map<string, unknown>;
+    }
+  ).states.size;
+}
+
 describe("MarkdownMintEditorProvider", () => {
   it("allows KaTeX style attributes without broadening script or network policy", () => {
     const policy = webviewContentSecurityPolicy("vscode-resource:", "nonce");
@@ -731,6 +814,145 @@ describe("MarkdownMintEditorProvider", () => {
     expect(policy).toContain("connect-src 'none'");
     expect(policy).not.toContain("script-src 'unsafe-inline'");
     expect(policy).not.toContain("unsafe-eval");
+  });
+
+  it("does not retain source-only documents and releases closed editor state", async () => {
+    vscode.__state.reset();
+    const provider = new MarkdownMintEditorProvider(context() as never);
+
+    for (let index = 0; index < 100; index += 1) {
+      const document = vscode.__state.createDocument(
+        `/workspace/docs/source-only-${index}.md`,
+      );
+      document.replaceText(`# Source-only ${index}`);
+      vscode.__state.emitDocumentChange(document);
+      vscode.__state.closeDocument(document);
+    }
+
+    expect(stateCount(provider)).toBe(0);
+
+    await provider.resolveCustomTextEditor(
+      vscode.__state.document as never,
+      vscode.__state.panel as never,
+      {} as never,
+    );
+    expect(stateCount(provider)).toBe(1);
+
+    vscode.__state.closeDocument(vscode.__state.document);
+    expect(stateCount(provider)).toBe(1);
+
+    vscode.__state.panel.dispose();
+    expect(stateCount(provider)).toBe(0);
+
+    const reopened = vscode.__state.reopenDocument(
+      "/workspace/docs/manual.md",
+      "# Reopened source",
+      7,
+    );
+    const reopenedPanel = new vscode.WebviewPanel();
+    await provider.resolveCustomTextEditor(
+      reopened as never,
+      reopenedPanel as never,
+      {} as never,
+    );
+    reopenedPanel.webview.receive({ protocolVersion: 1, type: "ready" });
+    await flush();
+    expect(reopenedPanel.webview.messages).toContainEqual(
+      expect.objectContaining({
+        type: "document",
+        markdown: "# Reopened source",
+        version: 7,
+      }),
+    );
+    vscode.__state.emitConfiguration("markdownMint.profile");
+    expect(reopenedPanel.webview.messages.at(-1)).toEqual(
+      expect.objectContaining({ type: "document", profile: "github" }),
+    );
+
+    provider.dispose();
+    expect(stateCount(provider)).toBe(0);
+    reopenedPanel.dispose();
+  });
+
+  it("keeps the shared state for remaining panels when one panel closes", async () => {
+    vscode.__state.reset();
+    const provider = new MarkdownMintEditorProvider(context() as never);
+    const firstPanel = vscode.__state.panel;
+    const secondPanel = new vscode.WebviewPanel();
+    const document = vscode.__state.document;
+
+    await provider.resolveCustomTextEditor(
+      document as never,
+      firstPanel as never,
+      {} as never,
+    );
+    await provider.resolveCustomTextEditor(
+      document as never,
+      secondPanel as never,
+      {} as never,
+    );
+    firstPanel.webview.receive({ protocolVersion: 1, type: "ready" });
+    secondPanel.webview.receive({ protocolVersion: 1, type: "ready" });
+    await flush();
+
+    vscode.__state.emitExternal("# Shared update");
+    expect(secondPanel.webview.messages.at(-1)).toEqual(
+      expect.objectContaining({
+        type: "document",
+        reason: "external",
+        markdown: "# Shared update",
+      }),
+    );
+
+    firstPanel.dispose();
+    expect(stateCount(provider)).toBe(1);
+    vscode.__state.emitExternal("# Remaining panel");
+    expect(secondPanel.webview.messages.at(-1)).toEqual(
+      expect.objectContaining({
+        type: "document",
+        reason: "external",
+        markdown: "# Remaining panel",
+      }),
+    );
+
+    secondPanel.dispose();
+    expect(stateCount(provider)).toBe(0);
+    provider.dispose();
+  });
+
+  it("retains a pending edit until the queue finishes after the final panel closes", async () => {
+    vscode.__state.reset();
+    const provider = new MarkdownMintEditorProvider(context() as never);
+    const document = vscode.__state.document;
+    await provider.resolveCustomTextEditor(
+      document as never,
+      vscode.__state.panel as never,
+      {} as never,
+    );
+    vscode.__state.panel.webview.receive({ protocolVersion: 1, type: "ready" });
+    await flush();
+
+    vscode.__state.blockApplyEdit();
+    vscode.__state.panel.webview.receive({
+      protocolVersion: 1,
+      type: "edit",
+      baseVersion: document.version,
+      operationId: "edit:pending-close",
+      markdown: "# Pending edit",
+    });
+    await flush();
+    expect(stateCount(provider)).toBe(1);
+
+    vscode.__state.panel.dispose();
+    vscode.__state.closeDocument(document);
+    expect(stateCount(provider)).toBe(1);
+
+    vscode.__state.releaseApplyEdit();
+    await flush();
+    await flush();
+    expect(document.getText()).toBe("# Pending edit");
+    expect(stateCount(provider)).toBe(0);
+    provider.dispose();
   });
 
   it("applies a validated edit and acknowledges the resulting TextDocument version", async () => {
@@ -1908,6 +2130,7 @@ describe("MarkdownMintEditorProvider", () => {
     document.replaceText("# Unfinished");
     const edits = await vscode.__state.runSave();
     expect(Array.isArray(edits)).toBe(true);
+    expect(stateCount(provider)).toBe(0);
     provider.dispose();
   });
 
