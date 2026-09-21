@@ -262,7 +262,7 @@ export interface EditorAppOptions {
   hostUndo?: boolean;
 }
 
-interface RecoveryState {
+interface RecoverySnapshot {
   documentId?: string;
   recoveryDraft?: string;
   recoveryBaseMarkdown?: string;
@@ -273,6 +273,16 @@ interface RecoveryState {
   recoveryDocument?: unknown;
   /** True when recoveryDocument is newer PM state from a serializer failure. */
   recoveryDocumentPending?: boolean;
+}
+
+interface RecoveryState extends RecoverySnapshot {
+  /**
+   * A structured recovery which could not be auto-applied. Keep this separate
+   * from the current draft so later edits cannot replace the original input.
+   * The value is intentionally unknown at the storage boundary: malformed
+   * persisted data must be retained rather than normalized away.
+   */
+  pendingRecovery?: unknown;
 }
 
 type StructuredRecoveryKind = "pending" | "not-pending" | "legacy-ambiguous";
@@ -2548,8 +2558,21 @@ export class MarkdownEditorApp {
   private authoritativeProfile: DocumentProfile;
   private authoritativeVersion: number;
   private documentId: string | undefined;
+  /**
+   * Recovery state which was present at startup but could not be auto-applied.
+   * The next persistence write moves it to `pendingRecovery` before replacing
+   * the root-level current draft.
+   */
+  private recoveryStateToPreserve: RecoveryState | null = null;
   private readonly compatibilityEl: HTMLElement;
   private readonly previewEl: HTMLElement;
+  private pendingRecoveryButton: HTMLButtonElement | null = null;
+  private pendingRecoveryDialog: HTMLDialogElement | null = null;
+  private pendingRecoveryText: HTMLTextAreaElement | null = null;
+  private pendingRecoveryOpenButton: HTMLButtonElement | null = null;
+  private pendingRecoveryOperationId: string | undefined;
+  private pendingRecoveryOperationIdentity: string | undefined;
+  private pendingRecoveryInvokingButton: HTMLButtonElement | null = null;
   private clipboardAvailable = false;
   private readonly pendingClipboard = new Map<
     string,
@@ -3219,10 +3242,22 @@ export class MarkdownEditorApp {
       });
       if (this.mode !== "preview") this.scheduleDerivedViews(initial.markdown);
     }
+    this.refreshPendingRecoveryAction();
     this.postReady();
   }
 
   destroy(): void {
+    if (this.pendingRecoveryDialog?.open)
+      this.closePendingRecoveryDialog(false);
+    this.pendingRecoveryButton?.remove();
+    this.pendingRecoveryButton = null;
+    this.pendingRecoveryDialog?.remove();
+    this.pendingRecoveryDialog = null;
+    this.pendingRecoveryText = null;
+    this.pendingRecoveryOpenButton = null;
+    this.pendingRecoveryOperationId = undefined;
+    this.pendingRecoveryOperationIdentity = undefined;
+    this.pendingRecoveryInvokingButton = null;
     this.clearTableDeletePreview();
     this.clearTableStructureSelection(false);
     this.tableControls?.destroy();
@@ -10608,6 +10643,15 @@ export class MarkdownEditorApp {
       this.clipboardAvailable = message.clipboardAvailable === true;
       this.receivePreview(message);
     } else if (message.type === "edit-rejected") {
+      if (message.operationId === this.pendingRecoveryOperationId) {
+        this.pendingRecoveryOperationId = undefined;
+        this.pendingRecoveryOperationIdentity = undefined;
+        this.notifyHost(
+          "warning",
+          "The pending recovery draft was kept because it could not be opened separately.",
+        );
+        return;
+      }
       if (this.sync.inflight?.operationId !== message.operationId) return;
       // A valid rejection must capture native Alert text before attempting a
       // rebase that might replace its NodeView. Successful reconciliation below
@@ -10659,6 +10703,21 @@ export class MarkdownEditorApp {
       this.setNotice(message.message, "error");
     } else if (message.type === "save-result") {
       this.handleSaveResult(message);
+    } else if (message.type === "recovery-opened") {
+      if (message.operationId !== this.pendingRecoveryOperationId) return;
+      this.pendingRecoveryOperationId = undefined;
+      const expectedIdentity = this.pendingRecoveryOperationIdentity;
+      this.pendingRecoveryOperationIdentity = undefined;
+      if (!expectedIdentity) {
+        this.notifyHost(
+          "warning",
+          "The pending recovery draft was kept because its open request could not be verified.",
+        );
+        return;
+      }
+      // Opening a separate copy is the explicit recovery decision. The host
+      // has confirmed the copy before the retained pending slot is consumed.
+      this.discardPendingRecovery(expectedIdentity);
     } else if (message.type === "clipboard-result") {
       this.resolveClipboard(message);
     } else if (message.type === "workspace-file-search-result") {
@@ -10675,6 +10734,15 @@ export class MarkdownEditorApp {
         )
       )
         return;
+      if (message.operationId === this.pendingRecoveryOperationId) {
+        this.pendingRecoveryOperationId = undefined;
+        this.pendingRecoveryOperationIdentity = undefined;
+        this.notifyHost(
+          "warning",
+          "The pending recovery draft was kept because it could not be opened separately.",
+        );
+        return;
+      }
       if (
         this.pendingProfile?.operationId &&
         this.pendingProfile.operationId === message.operationId
@@ -10798,7 +10866,10 @@ export class MarkdownEditorApp {
   receiveDocument(message: DocumentMessage): void {
     this.clearWorkspaceFileSearch();
     this.clipboardAvailable = message.clipboardAvailable === true;
-    if (message.documentId) this.documentId = message.documentId;
+    if (message.documentId) {
+      this.documentId = message.documentId;
+      this.refreshPendingRecoveryAction();
+    }
     if (message.reason === "save") {
       this.receiveSaveSnapshot(message);
       return;
@@ -11423,15 +11494,54 @@ export class MarkdownEditorApp {
     includeDocument = false,
   ): void {
     if (!this.vscode?.setState) return;
+    const previousValue = this.vscode.getState?.();
+    const previous = this.recoveryStateRecord(previousValue);
+    if (previousValue !== undefined && !previous) {
+      // `setState` replaces the whole persisted value. Do not destroy an
+      // unrecognized value just because the current draft needs an update.
+      this.notifyHost(
+        "warning",
+        "Recovery storage contains an invalid value and was left untouched.",
+      );
+      return;
+    }
+    const hasPendingRecovery =
+      previous !== undefined &&
+      Object.prototype.hasOwnProperty.call(previous, "pendingRecovery");
+    let pendingRecovery = hasPendingRecovery
+      ? previous?.pendingRecovery
+      : undefined;
+    if (this.recoveryStateToPreserve) {
+      const preserved = this.recoverySnapshotWithoutPending(
+        this.recoveryStateToPreserve,
+      );
+      if (!hasPendingRecovery) pendingRecovery = preserved;
+      else if (!this.sameRecoverySnapshot(pendingRecovery, preserved)) {
+        // There is only one pending slot. Keeping the old state and refusing
+        // this write is safer than silently deleting either unrecovered draft.
+        this.notifyHost(
+          "warning",
+          "A previous recovery draft is still waiting for an explicit decision; new recovery data was not discarded.",
+        );
+        return;
+      }
+    }
     const state: RecoveryState = {
+      ...(previous ?? {}),
       recoveryDraft: markdown,
       recoveryBaseMarkdown: baseMarkdown,
       recoveryBaseVersion: baseVersion,
       recoveryVersion: this.version,
       recoveryProfile: this.profile,
       recoveryTimestamp: Date.now(),
-      ...(this.documentId ? { documentId: this.documentId } : {}),
     };
+    delete state.documentId;
+    delete state.recoveryDocument;
+    delete state.recoveryDocumentPending;
+    if (this.documentId) state.documentId = this.documentId;
+    if (hasPendingRecovery) state.pendingRecovery = pendingRecovery;
+    else if (this.recoveryStateToPreserve)
+      state.pendingRecovery = pendingRecovery;
     if (includeDocument) {
       state.recoveryDocumentPending = this.serializationError !== null;
       try {
@@ -11441,7 +11551,99 @@ export class MarkdownEditorApp {
         // not JSON serializable.
       }
     }
-    this.vscode.setState(state satisfies RecoveryState);
+    if (!this.setRecoveryState(state)) return;
+    this.recoveryStateToPreserve = null;
+    this.refreshPendingRecoveryAction();
+  }
+
+  private setRecoveryState(state: RecoveryState): boolean {
+    if (!this.vscode?.setState) return false;
+    try {
+      this.vscode.setState(state);
+      return true;
+    } catch {
+      this.notifyHost(
+        "warning",
+        "Recovery storage could not be updated; the retained draft was kept.",
+      );
+      return false;
+    }
+  }
+
+  /**
+   * Move a root recovery which cannot be applied automatically into the one
+   * persisted pending slot. A pre-existing pending slot is never replaced;
+   * in that overflow case the root recovery remains protected by
+   * recoveryStateToPreserve until the existing slot is explicitly resolved.
+   */
+  private promoteRecoveryToPending(saved: RecoveryState): boolean {
+    if (Object.prototype.hasOwnProperty.call(saved, "pendingRecovery"))
+      return false;
+    const pending = this.recoverySnapshotWithoutPending(saved);
+    if (!this.recoveryStateHasData(pending)) return false;
+    const next: RecoveryState = {
+      ...saved,
+      pendingRecovery: pending,
+    };
+    delete next.recoveryDraft;
+    delete next.recoveryBaseMarkdown;
+    delete next.recoveryBaseVersion;
+    delete next.recoveryVersion;
+    delete next.recoveryProfile;
+    delete next.recoveryTimestamp;
+    delete next.recoveryDocument;
+    delete next.recoveryDocumentPending;
+    delete next.documentId;
+    if (this.documentId !== undefined) next.documentId = this.documentId;
+    if (!this.setRecoveryState(next)) return false;
+    this.recoveryStateToPreserve = null;
+    this.refreshPendingRecoveryAction();
+    return true;
+  }
+
+  private preserveRecoveryState(saved: RecoveryState): void {
+    this.recoveryStateToPreserve = saved;
+    if (!this.promoteRecoveryToPending(saved))
+      this.refreshPendingRecoveryAction();
+  }
+
+  private recoveryStateRecord(value: unknown): RecoveryState | undefined {
+    return typeof value === "object" && value !== null && !Array.isArray(value)
+      ? (value as RecoveryState)
+      : undefined;
+  }
+
+  private recoveryStateHasData(saved: RecoveryState): boolean {
+    return [
+      "recoveryDraft",
+      "recoveryBaseMarkdown",
+      "recoveryBaseVersion",
+      "recoveryVersion",
+      "recoveryProfile",
+      "recoveryTimestamp",
+      "recoveryDocument",
+      "recoveryDocumentPending",
+    ].some((key) => Object.prototype.hasOwnProperty.call(saved, key));
+  }
+
+  private recoverySnapshotWithoutPending(
+    saved: RecoveryState,
+  ): RecoverySnapshot {
+    const { pendingRecovery: _pendingRecovery, ...snapshot } = saved;
+    return snapshot;
+  }
+
+  private sameRecoverySnapshot(
+    value: unknown,
+    expected: RecoverySnapshot,
+  ): boolean {
+    const actual = this.recoveryStateRecord(value);
+    if (!actual) return false;
+    try {
+      return JSON.stringify(actual) === JSON.stringify(expected);
+    } catch {
+      return false;
+    }
   }
 
   private persistRecoveryAfterAcknowledgement(
@@ -11476,8 +11678,8 @@ export class MarkdownEditorApp {
   }
 
   private structuredRecoveryKind(saved: RecoveryState): StructuredRecoveryKind {
-    if (saved.recoveryDocument === undefined) return "not-pending";
     if (saved.recoveryDocumentPending === true) return "pending";
+    if (saved.recoveryDocument === undefined) return "not-pending";
     if (saved.recoveryDocumentPending === false) return "not-pending";
     return "legacy-ambiguous";
   }
@@ -11507,11 +11709,26 @@ export class MarkdownEditorApp {
       saved.recoveryBaseVersion > this.authoritativeVersion
     )
       return undefined;
+    return this.recoverySourceSnapshot(
+      saved.recoveryBaseMarkdown,
+      saved.recoveryProfile,
+    );
+  }
+
+  private recoverySourceSnapshot(
+    markdown: unknown,
+    profileValue: unknown,
+  ): unknown | undefined {
+    if (typeof markdown !== "string") return undefined;
+    const profile =
+      profileValue === "github" ||
+      profileValue === "gitlab" ||
+      profileValue === "commonmark"
+        ? profileValue
+        : undefined;
+    if (!profile) return undefined;
     try {
-      const parsed = this.core.parseMarkdown(
-        this.authoritativeMarkdown,
-        this.profile,
-      );
+      const parsed = this.core.parseMarkdown(markdown, profile);
       const snapshot = parsed.snapshot ?? parsed;
       if (
         typeof snapshot !== "object" ||
@@ -11520,7 +11737,7 @@ export class MarkdownEditorApp {
           "source" in snapshot &&
           typeof (snapshot as { source?: unknown }).source === "string"
         ) ||
-        (snapshot as { source: string }).source !== this.authoritativeMarkdown
+        (snapshot as { source: string }).source !== markdown
       )
         return undefined;
       return snapshot;
@@ -11529,27 +11746,92 @@ export class MarkdownEditorApp {
     }
   }
 
+  /**
+   * Materialize a pending recovery without changing the current editor,
+   * profile, or authoritative host snapshot. Structured recovery stores the
+   * latest PM document separately from its Markdown companion, so the PM JSON
+   * must be serialized with a snapshot parsed from its recorded base source.
+   */
+  private materializePendingRecoveryMarkdown(
+    pending: RecoverySnapshot,
+  ): string | null {
+    const fail = (message: string): null => {
+      this.notifyHost(
+        "error",
+        `The pending recovery draft could not be materialized: ${message}`,
+      );
+      return null;
+    };
+    const hasStructuredRecovery =
+      pending.recoveryDocumentPending === true ||
+      (pending.recoveryDocumentPending === undefined &&
+        pending.recoveryDocument !== undefined);
+    if (!hasStructuredRecovery) {
+      return typeof pending.recoveryDraft === "string"
+        ? pending.recoveryDraft
+        : fail("its Markdown companion is missing.");
+    }
+    if (pending.recoveryDocument === undefined)
+      return fail("its structured document is missing.");
+    const snapshot = this.recoverySourceSnapshot(
+      pending.recoveryBaseMarkdown,
+      pending.recoveryProfile,
+    );
+    if (snapshot === undefined)
+      return fail("its recovery base or profile is not valid.");
+    try {
+      const document = PMNode.fromJSON(this.schema, pending.recoveryDocument);
+      return this.core.serializeMarkdown(document, snapshot);
+    } catch (error) {
+      return fail(
+        error instanceof Error
+          ? error.message
+          : "its structured document could not be serialized.",
+      );
+    }
+  }
+
   private restoreRecoveryState(): boolean {
-    const saved = this.vscode?.getState?.() as RecoveryState | undefined;
-    if (!saved || typeof saved.recoveryDraft !== "string") return false;
-    if (!this.recoveryBelongsToCurrentDocument(saved)) return false;
+    const saved = this.recoveryStateRecord(this.vscode?.getState?.());
+    if (!saved || typeof saved.recoveryDraft !== "string") {
+      if (saved && this.recoveryStateHasData(saved))
+        this.preserveRecoveryState(saved);
+      return false;
+    }
+    if (!this.recoveryBelongsToCurrentDocument(saved)) {
+      this.preserveRecoveryState(saved);
+      return false;
+    }
     const recoveryKind = this.structuredRecoveryKind(saved);
-    if (recoveryKind === "legacy-ambiguous") return false;
+    if (
+      recoveryKind === "legacy-ambiguous" ||
+      (recoveryKind === "pending" && saved.recoveryDocument === undefined)
+    ) {
+      this.preserveRecoveryState(saved);
+      return false;
+    }
     // A structured recovery snapshot may contain newer PM input than its
     // Markdown companion. Validate its provenance before considering either
     // representation saved; a changed base/profile must remain recoverable.
-    if (!this.recoveryMetadataMatchesCurrent(saved)) return false;
+    if (!this.recoveryMetadataMatchesCurrent(saved)) {
+      this.preserveRecoveryState(saved);
+      return false;
+    }
     if (
       recoveryKind === "not-pending" &&
       saved.recoveryDraft === this.currentMarkdown()
     ) {
+      this.recoveryStateToPreserve = null;
       this.clearRecoveryIfSaved();
       return false;
     }
     // Recovery is automatic only when the draft records the exact
     // authoritative document it was based on. A changed document is left in
     // storage for diagnostics/host-side recovery, never silently overwritten.
-    return this.restoreRecoveryDraft(saved, recoveryKind);
+    this.recoveryStateToPreserve = null;
+    const restored = this.restoreRecoveryDraft(saved, recoveryKind);
+    if (!restored) this.preserveRecoveryState(saved);
+    return restored;
   }
 
   private restoreRecoveryDraft(
@@ -11661,7 +11943,7 @@ export class MarkdownEditorApp {
 
   private clearRecoveryIfSaved(): void {
     if (this.serializationError) return;
-    const saved = this.vscode?.getState?.() as RecoveryState | undefined;
+    const saved = this.recoveryStateRecord(this.vscode?.getState?.());
     if (
       !saved ||
       typeof saved.recoveryDraft !== "string" ||
@@ -11670,7 +11952,214 @@ export class MarkdownEditorApp {
       saved.recoveryDraft !== this.currentMarkdown()
     )
       return;
-    this.vscode?.setState?.({});
+    const next: RecoveryState = {};
+    if (Object.prototype.hasOwnProperty.call(saved, "pendingRecovery"))
+      next.pendingRecovery = saved.pendingRecovery;
+    if (!this.setRecoveryState(next)) return;
+    this.recoveryStateToPreserve = null;
+    this.refreshPendingRecoveryAction();
+  }
+
+  private pendingRecoverySnapshot(): RecoverySnapshot | null {
+    const saved = this.recoveryStateRecord(this.vscode?.getState?.());
+    if (
+      !saved ||
+      !Object.prototype.hasOwnProperty.call(saved, "pendingRecovery")
+    )
+      return null;
+    const pending = this.recoveryStateRecord(saved.pendingRecovery);
+    if (!pending) return null;
+    const hasStructuredRecovery =
+      pending.recoveryDocumentPending === true ||
+      (pending.recoveryDocumentPending === undefined &&
+        pending.recoveryDocument !== undefined);
+    if (!hasStructuredRecovery && typeof pending.recoveryDraft !== "string")
+      return null;
+    return pending;
+  }
+
+  private refreshPendingRecoveryAction(): void {
+    const pending = this.pendingRecoverySnapshot();
+    if (!pending) {
+      if (this.pendingRecoveryDialog?.open)
+        this.closePendingRecoveryDialog(false);
+      this.pendingRecoveryButton?.remove();
+      this.pendingRecoveryButton = null;
+      return;
+    }
+    if (this.pendingRecoveryButton?.isConnected) return;
+    const toolbar = this.root.querySelector<HTMLElement>(".mm-toolbar-primary");
+    if (!toolbar) return;
+    const button = makeElement("button", {
+      type: "button",
+      class: "mm-tool-button mm-pending-recovery-button",
+      "data-testid": "pending-recovery-button",
+      "aria-label": "Review pending recovered draft",
+      "data-tooltip": "Review pending recovered draft",
+    }) as HTMLButtonElement;
+    button.textContent = "Review draft";
+    button.addEventListener("mousedown", (event) => event.preventDefault());
+    button.addEventListener("click", () => this.openPendingRecoveryDialog());
+    const sourceButton = toolbar.querySelector(".mm-source-button");
+    if (sourceButton) toolbar.insertBefore(button, sourceButton);
+    else toolbar.append(button);
+    this.pendingRecoveryButton = button;
+  }
+
+  private openPendingRecoveryDialog(): void {
+    const pending = this.pendingRecoverySnapshot();
+    if (!pending) return;
+    const dialog = this.ensurePendingRecoveryDialog();
+    const markdown = this.materializePendingRecoveryMarkdown(pending);
+    this.pendingRecoveryText!.value =
+      markdown ??
+      "This pending recovery draft could not be materialized safely. Keep it for later or discard it.";
+    if (this.pendingRecoveryOpenButton)
+      this.pendingRecoveryOpenButton.disabled = markdown === null;
+    this.pendingRecoveryInvokingButton = this.pendingRecoveryButton;
+    this.openDialog(dialog);
+    this.pendingRecoveryText?.focus({ preventScroll: true });
+  }
+
+  private ensurePendingRecoveryDialog(): HTMLDialogElement {
+    if (this.pendingRecoveryDialog) return this.pendingRecoveryDialog;
+    const ownerDocument = this.root.ownerDocument;
+    const dialog = ownerDocument.createElement("dialog");
+    dialog.className = "mm-input-dialog mm-pending-recovery-dialog";
+    dialog.setAttribute("aria-labelledby", "mm-pending-recovery-title");
+    const form = ownerDocument.createElement("form");
+    form.className = "mm-dialog-form";
+    form.addEventListener("submit", (event) => event.preventDefault());
+    const title = ownerDocument.createElement("h2");
+    title.id = "mm-pending-recovery-title";
+    title.textContent = "Review pending recovered draft";
+    const help = ownerDocument.createElement("p");
+    help.textContent =
+      "This draft was not applied automatically. Keep it until you choose what to do.";
+    this.pendingRecoveryText = ownerDocument.createElement("textarea");
+    this.pendingRecoveryText.className = "mm-pending-recovery-text";
+    this.pendingRecoveryText.readOnly = true;
+    this.pendingRecoveryText.setAttribute(
+      "aria-label",
+      "Pending recovered Markdown draft",
+    );
+    this.pendingRecoveryText.setAttribute("spellcheck", "false");
+    const actions = ownerDocument.createElement("div");
+    actions.className = "mm-dialog-actions";
+    const keep = ownerDocument.createElement("button");
+    keep.type = "button";
+    keep.dataset.testid = "pending-recovery-keep";
+    keep.textContent = "Keep for later";
+    keep.addEventListener("click", () => this.closePendingRecoveryDialog(true));
+    const discard = ownerDocument.createElement("button");
+    discard.type = "button";
+    discard.dataset.testid = "pending-recovery-discard";
+    discard.textContent = "Discard draft";
+    discard.addEventListener("click", () => {
+      this.closePendingRecoveryDialog(true);
+      this.discardPendingRecovery();
+    });
+    const open = ownerDocument.createElement("button");
+    open.type = "button";
+    open.className = "mm-dialog-primary";
+    open.dataset.testid = "pending-recovery-open";
+    open.textContent = "Open separate copy";
+    open.addEventListener("click", () => {
+      this.closePendingRecoveryDialog(true);
+      this.sendPendingRecoveryToHost();
+    });
+    this.pendingRecoveryOpenButton = open;
+    actions.append(keep, discard, open);
+    form.append(title, help, this.pendingRecoveryText, actions);
+    dialog.append(form);
+    this.root.append(dialog);
+    this.registerCleanModalCancelBehavior(dialog, () =>
+      this.closePendingRecoveryDialog(true),
+    );
+    this.pendingRecoveryDialog = dialog;
+    return dialog;
+  }
+
+  private closePendingRecoveryDialog(restoreFocus: boolean): void {
+    const dialog = this.pendingRecoveryDialog;
+    if (!dialog) return;
+    const invokingButton = this.pendingRecoveryInvokingButton;
+    this.pendingRecoveryInvokingButton = null;
+    this.closeDialog(dialog);
+    if (restoreFocus && invokingButton?.isConnected)
+      invokingButton.focus({ preventScroll: true });
+  }
+
+  private recoverySnapshotIdentity(
+    snapshot: RecoverySnapshot,
+  ): string | undefined {
+    try {
+      const identity = JSON.stringify(snapshot);
+      return typeof identity === "string" ? identity : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  private discardPendingRecovery(expectedIdentity?: string): void {
+    const saved = this.recoveryStateRecord(this.vscode?.getState?.());
+    if (
+      !saved ||
+      !Object.prototype.hasOwnProperty.call(saved, "pendingRecovery")
+    )
+      return;
+    if (expectedIdentity !== undefined) {
+      const pending = this.recoveryStateRecord(saved.pendingRecovery);
+      if (
+        !pending ||
+        this.recoverySnapshotIdentity(pending) !== expectedIdentity
+      ) {
+        this.notifyHost(
+          "warning",
+          "The pending recovery draft was kept because it changed while the copy was opening.",
+        );
+        return;
+      }
+    }
+    const { pendingRecovery: _pendingRecovery, ...current } = saved;
+    if (!this.setRecoveryState(current)) return;
+    if (expectedIdentity === undefined) {
+      this.pendingRecoveryOperationId = undefined;
+      this.pendingRecoveryOperationIdentity = undefined;
+    }
+    if (this.recoveryStateToPreserve && this.recoveryStateHasData(current)) {
+      this.recoveryStateToPreserve = current;
+      if (this.promoteRecoveryToPending(current)) return;
+      this.refreshPendingRecoveryAction();
+      return;
+    }
+    this.recoveryStateToPreserve = null;
+    this.refreshPendingRecoveryAction();
+  }
+
+  private sendPendingRecoveryToHost(): void {
+    const pending = this.pendingRecoverySnapshot();
+    if (!pending || !this.vscode) return;
+    const markdown = this.materializePendingRecoveryMarkdown(pending);
+    if (markdown === null) return;
+    const identity = this.recoverySnapshotIdentity(pending);
+    if (!identity) {
+      this.notifyHost(
+        "error",
+        "The pending recovery draft could not be verified before opening separately.",
+      );
+      return;
+    }
+    const operationId = newOperationId();
+    this.pendingRecoveryOperationId = operationId;
+    this.pendingRecoveryOperationIdentity = identity;
+    this.vscode.postMessage({
+      protocolVersion: PROTOCOL_VERSION,
+      type: "recoverDraft",
+      baseVersion: this.version,
+      operationId,
+      markdown,
+    });
   }
 
   private handleCopy(view: EditorView, event: ClipboardEvent): boolean {
