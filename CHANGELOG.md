@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.5.5
+## 0.5.6
 
 - Coalesce visible Preview refreshes per animation frame and debounce
   compatibility diagnostics during typing bursts with a one-second maximum
