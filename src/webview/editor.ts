@@ -275,6 +275,8 @@ interface RecoveryState {
   recoveryDocumentPending?: boolean;
 }
 
+type StructuredRecoveryKind = "pending" | "not-pending" | "legacy-ambiguous";
+
 interface DerivedViewsOptions {
   renderPreview?: boolean;
   refreshCompatibility?: boolean;
@@ -11435,14 +11437,11 @@ export class MarkdownEditorApp {
     return saved.recoveryVersion === this.version;
   }
 
-  private hasStructuredRecovery(saved: RecoveryState): boolean {
-    // States written before recoveryDocumentPending was introduced are
-    // treated as structured so an upgrade cannot discard an in-flight PM
-    // snapshot. New parser/conflict snapshots explicitly opt out.
-    return (
-      saved.recoveryDocument !== undefined &&
-      saved.recoveryDocumentPending !== false
-    );
+  private structuredRecoveryKind(saved: RecoveryState): StructuredRecoveryKind {
+    if (saved.recoveryDocument === undefined) return "not-pending";
+    if (saved.recoveryDocumentPending === true) return "pending";
+    if (saved.recoveryDocumentPending === false) return "not-pending";
+    return "legacy-ambiguous";
   }
 
   private recoveryMetadataMatchesCurrent(saved: RecoveryState): boolean {
@@ -11456,13 +11455,14 @@ export class MarkdownEditorApp {
     const saved = this.vscode?.getState?.() as RecoveryState | undefined;
     if (!saved || typeof saved.recoveryDraft !== "string") return false;
     if (!this.recoveryBelongsToCurrentDocument(saved)) return false;
-    const hasStructuredRecovery = this.hasStructuredRecovery(saved);
+    const recoveryKind = this.structuredRecoveryKind(saved);
+    if (recoveryKind === "legacy-ambiguous") return false;
     // A structured recovery snapshot may contain newer PM input than its
     // Markdown companion. Validate its provenance before considering either
     // representation saved; a changed base/profile must remain recoverable.
     if (!this.recoveryMetadataMatchesCurrent(saved)) return false;
     if (
-      !hasStructuredRecovery &&
+      recoveryKind === "not-pending" &&
       saved.recoveryDraft === this.currentMarkdown()
     ) {
       this.clearRecoveryIfSaved();
@@ -11471,22 +11471,23 @@ export class MarkdownEditorApp {
     // Recovery is automatic only when the draft records the exact
     // authoritative document it was based on. A changed document is left in
     // storage for diagnostics/host-side recovery, never silently overwritten.
-    return this.restoreRecoveryDraft(saved, hasStructuredRecovery);
+    return this.restoreRecoveryDraft(saved, recoveryKind);
   }
 
   private restoreRecoveryDraft(
     saved: RecoveryState,
-    hasStructuredRecovery = this.hasStructuredRecovery(saved),
+    recoveryKind = this.structuredRecoveryKind(saved),
   ): boolean {
     const draft = saved.recoveryDraft;
     if (draft === undefined) return false;
+    if (recoveryKind === "legacy-ambiguous") return false;
     const profile = saved.recoveryProfile ?? this.profile;
     let editorDoc: PMNode | undefined;
     let snapshot: unknown;
     let starterState: StarterPluginState | undefined;
     let restoredStructuredDocument = false;
     const persistedStructuredDocument =
-      hasStructuredRecovery && saved.recoveryDocument !== undefined;
+      recoveryKind === "pending" && saved.recoveryDocument !== undefined;
     if (persistedStructuredDocument) {
       try {
         editorDoc = PMNode.fromJSON(this.schema, saved.recoveryDocument);
@@ -11583,7 +11584,7 @@ export class MarkdownEditorApp {
       !saved ||
       typeof saved.recoveryDraft !== "string" ||
       !this.recoveryBelongsToCurrentDocument(saved) ||
-      this.hasStructuredRecovery(saved) ||
+      this.structuredRecoveryKind(saved) !== "not-pending" ||
       saved.recoveryDraft !== this.currentMarkdown()
     )
       return;

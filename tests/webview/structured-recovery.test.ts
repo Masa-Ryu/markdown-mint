@@ -183,6 +183,80 @@ describe("structured serializer recovery", () => {
     },
   );
 
+  it.each([
+    ["same as the host source", "host source"],
+    ["different from the host source", "stale recovery source"],
+  ])(
+    "does not auto-restore ambiguous legacy recovery when recoveryDraft is %s",
+    (_description, recoveryDraft) => {
+      const legacyDocument = parseMarkdown(
+        "OLD PM CONTENT",
+        "github",
+      ).doc.toJSON();
+      const legacyState = {
+        recoveryDraft,
+        recoveryBaseMarkdown: "host source",
+        recoveryBaseVersion: 1,
+        recoveryVersion: 1,
+        recoveryProfile: "github" as const,
+        recoveryDocument: legacyDocument,
+        documentId: "file:///workspace/doc.md",
+      };
+      const state = { value: legacyState as unknown };
+      const messages: unknown[] = [];
+      const restored = createApp(state, createCore(), messages, {
+        markdown: "host source",
+      });
+
+      expect(restored.view.state.doc.textContent).toContain("host source");
+      expect(restored.view.state.doc.textContent).not.toContain(
+        "OLD PM CONTENT",
+      );
+      expect(editMessages(messages)).toHaveLength(0);
+      expect(state.value).toEqual(legacyState);
+
+      restored.receiveDocument({
+        protocolVersion: PROTOCOL_VERSION,
+        type: "document",
+        markdown: "host source",
+        version: 2,
+        profile: "github",
+        documentId: "file:///workspace/doc.md",
+        reason: "external",
+      });
+      expect(state.value).toEqual(legacyState);
+    },
+  );
+
+  it("uses recoveryDraft for non-structured recovery when pending is false", () => {
+    const legacyDocument = parseMarkdown(
+      "OLD PM CONTENT",
+      "github",
+    ).doc.toJSON();
+    const state = {
+      value: {
+        recoveryDraft: "recovered source",
+        recoveryBaseMarkdown: "host source",
+        recoveryBaseVersion: 1,
+        recoveryVersion: 1,
+        recoveryProfile: "github" as const,
+        recoveryDocument: legacyDocument,
+        recoveryDocumentPending: false,
+        documentId: "file:///workspace/doc.md",
+      } as unknown,
+    };
+    const messages: unknown[] = [];
+    const restored = createApp(state, createCore(), messages, {
+      markdown: "host source",
+    });
+
+    expect(restored.view.state.doc.textContent).toContain("recovered source");
+    expect(restored.view.state.doc.textContent).not.toContain("OLD PM CONTENT");
+    const edits = editMessages(messages);
+    expect(edits).toHaveLength(1);
+    expect(edits[0]?.markdown).toContain("recovered source");
+  });
+
   it("keeps the structured draft after a second serializer failure", () => {
     const state = { value: undefined as unknown };
     const initialMessages: unknown[] = [];
