@@ -4269,6 +4269,7 @@ describe("table clipboard integration", () => {
     for (const html of [
       '<table><tr><td colspan="0">A</td></tr></table>',
       "<table><tr><td>A<table><tr><td>B</td></tr></table></td></tr></table>",
+      '<table><thead><tr><th rowspan="2">H</th><th>J</th></tr></thead><tbody><tr><td>A</td><td>B</td></tr></tbody></table>',
     ]) {
       const { app, root, messages } = makeApp("Before");
       const paragraph = root.querySelector<HTMLElement>(".ProseMirror > p")!;
@@ -4287,6 +4288,28 @@ describe("table clipboard integration", () => {
       );
       app.destroy();
     }
+
+    const inside = makeApp("| H1 | H2 |\n| --- | --- |\n| old1 | old2 |");
+    const bodyCell = inside.root.querySelector<HTMLElement>("tbody td")!;
+    selectTableCellText(inside.app, bodyCell, 1);
+    const before = inside.app.view.state.doc;
+    const beforeSelection = inside.app.view.state.selection;
+    const event = dispatchPaste(inside.app, {
+      "text/html":
+        '<table><thead><tr><th rowspan="2">H</th><th>J</th></tr></thead><tbody><tr><td>A</td><td>B</td></tr></tbody></table>',
+    });
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(inside.app.view.state.doc).toBe(before);
+    expect(inside.app.view.state.selection).toBe(beforeSelection);
+    expect(inside.messages.filter(isEditMessage)).toHaveLength(0);
+    expect(inside.messages).toContainEqual(
+      expect.objectContaining({
+        type: "notify",
+        level: "warning",
+      }),
+    );
+    inside.app.destroy();
   });
 
   it("keeps TSV ahead of HTML inside a table and treats multiline prose as native text", () => {
