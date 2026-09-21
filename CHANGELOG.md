@@ -5,6 +5,8 @@
 - Preserve zero-based and nine-digit ordered-list starts when editing and
   serializing lists, including nested lists, without emitting invalid
   ten-digit markers.
+- Preserve backslashes and literal character-reference text in link and image
+  titles across Rich edits, including table cells and repeated serialization.
 
 ## 0.5.0
 
