@@ -583,6 +583,11 @@ export function configureMarkdownIt(
     "markdown_mint_math_inline",
     markdownMintMathInline,
   );
+  md.inline.ruler.before(
+    "backticks",
+    "markdown_mint_space_only_code_span",
+    markdownMintSpaceOnlyCodeSpan,
+  );
   return md;
 }
 
@@ -623,6 +628,50 @@ function markdownMintMathInline(state: StateInline, silent: boolean): boolean {
   }
   state.pos += match[0]!.length;
   return true;
+}
+
+/**
+ * Preserve CommonMark's all-space code spans before markdown-it's backtick
+ * rule applies its general one-space trim. That rule uses /^ (.+) $/, which
+ * incorrectly strips two spaces from an all-space span of three or more
+ * spaces. Only the affected all-space case is claimed here; every other
+ * code-span shape remains on markdown-it's existing path.
+ */
+function markdownMintSpaceOnlyCodeSpan(
+  state: StateInline,
+  silent: boolean,
+): boolean {
+  const start = state.pos;
+  if (state.src.charCodeAt(start) !== 0x60) return false;
+
+  let markerEnd = start + 1;
+  while (markerEnd < state.posMax && state.src.charCodeAt(markerEnd) === 0x60)
+    markerEnd += 1;
+  const marker = state.src.slice(start, markerEnd);
+
+  let search = markerEnd;
+  while ((search = state.src.indexOf("`", search)) !== -1) {
+    let closerEnd = search + 1;
+    while (closerEnd < state.posMax && state.src.charCodeAt(closerEnd) === 0x60)
+      closerEnd += 1;
+    if (closerEnd - search !== marker.length) {
+      search = closerEnd;
+      continue;
+    }
+
+    const content = state.src
+      .slice(markerEnd, search)
+      .replace(/\r\n|\r|\n/g, " ");
+    if (!/^ {3,}$/.test(content)) return false;
+    if (!silent) {
+      const token = state.push("code_inline", "code", 0);
+      token.markup = marker;
+      token.content = content;
+    }
+    state.pos = closerEnd;
+    return true;
+  }
+  return false;
 }
 
 function markdownMintMathBlock(
@@ -2292,6 +2341,7 @@ function serializeCodeSpan(value: string, table = false): string {
   const content = value.replace(/\r\n|\r|\n/g, " ");
   const fence = codeFenceFor(content, "`");
   const protectedContent = table ? content.replace(/\|/g, "\\|") : content;
+  if (/^ +$/.test(content)) return `${fence}${protectedContent}${fence}`;
   if (fence === "`" && !/^\s|\s$|`/.test(content))
     return `\`${protectedContent}\``;
   return `${fence} ${protectedContent} ${fence}`;

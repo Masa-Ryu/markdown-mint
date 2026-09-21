@@ -65,6 +65,54 @@ function replaceText(doc: PMNode, value: string, replacement: string): PMNode {
   ).doc;
 }
 
+function inlineCodeDocument(values: readonly string[]): PMNode {
+  const content: PMNode[] = [schema.text("Before")];
+  values.forEach((value, index) => {
+    content.push(schema.text(index === 0 ? " " : " and "));
+    content.push(schema.text(value, [schema.marks.code!.create()]));
+  });
+  content.push(schema.text(" after"));
+  return schema.topNodeType.create(null, [
+    schema.nodes.paragraph!.create(null, content),
+  ]);
+}
+
+function tableWithInlineCode(value: string): PMNode {
+  const cellAttrs = {
+    colspan: 1,
+    rowspan: 1,
+    colwidth: null,
+    alignment: null,
+  };
+  const code = schema.nodes.table_cell!.create(
+    cellAttrs,
+    schema.nodes.paragraph!.create(null, [
+      schema.text(value, [schema.marks.code!.create()]),
+    ]),
+  );
+  return schema.topNodeType.create(null, [
+    schema.nodes.table!.create(null, [
+      schema.nodes.table_row!.create(null, [
+        schema.nodes.table_header!.create(
+          cellAttrs,
+          schema.nodes.paragraph!.create(null, schema.text("text")),
+        ),
+        schema.nodes.table_header!.create(
+          cellAttrs,
+          schema.nodes.paragraph!.create(null, schema.text("code")),
+        ),
+      ]),
+      schema.nodes.table_row!.create(null, [
+        schema.nodes.table_cell!.create(
+          cellAttrs,
+          schema.nodes.paragraph!.create(null, schema.text("KEEP")),
+        ),
+        code,
+      ]),
+    ]),
+  ]);
+}
+
 function mathAtoms(doc: PMNode): PMNode[] {
   const atoms: PMNode[] = [];
   doc.descendants((node) => {
@@ -84,6 +132,15 @@ function rawInlineAtoms(doc: PMNode, kind?: string): PMNode[] {
       atoms.push(node);
   });
   return atoms;
+}
+
+function codeMarkTexts(doc: PMNode): string[] {
+  const values: string[] = [];
+  doc.descendants((node) => {
+    if (node.isText && node.marks.some((mark) => mark.type.name === "code"))
+      values.push(node.text ?? "");
+  });
+  return values;
 }
 
 describe("Markdown core", () => {
@@ -498,6 +555,94 @@ describe("Markdown core", () => {
     expect(serialized).toContain("| a\\|b | `x\\|y` |");
     expect(serialized).toContain("`x\\|y`");
   });
+
+  it.each(["github", "gitlab", "commonmark"] as const)(
+    "preserves space-only inline code after a neighboring edit (%s)",
+    (profile) => {
+      for (const count of [1, 2, 3]) {
+        const value = " ".repeat(count);
+        const changed = replaceText(
+          inlineCodeDocument([value]),
+          "Before",
+          "Changed",
+        );
+        const serialized = serializeMarkdown(changed);
+        const reparsed = reparseMarkdown(serialized, profile);
+
+        expect(serialized).toBe(`Changed \`${value}\` after`);
+        expect(codeMarkTexts(reparsed.doc)).toEqual([value]);
+        expect(reparsed.doc.eq(changed)).toBe(true);
+      }
+    },
+  );
+
+  it.each(["github", "gitlab", "commonmark"] as const)(
+    "keeps inline code padding and backtick contents after a neighboring edit (%s)",
+    (profile) => {
+      const changed = replaceText(
+        inlineCodeDocument([" a", "a ", " a ", "a`b"]),
+        "Before",
+        "Changed",
+      );
+      const serialized = serializeMarkdown(changed);
+      const reparsed = reparseMarkdown(serialized, profile);
+
+      expect(codeMarkTexts(reparsed.doc)).toEqual([" a", "a ", " a ", "a`b"]);
+      expect(reparsed.doc.eq(changed)).toBe(true);
+    },
+  );
+
+  it.each(["github", "gitlab", "commonmark"] as const)(
+    "normalizes line endings inside inline code to spaces (%s)",
+    (profile) => {
+      const snapshot = parseMarkdown("Before `a\nb` after\n", profile);
+      expect(codeMarkTexts(snapshot.doc)).toEqual(["a b"]);
+
+      const changed = replaceText(snapshot.doc, "Before", "Changed");
+      const serialized = serializeMarkdown(changed, snapshot);
+      const reparsed = reparseMarkdown(serialized, profile);
+
+      expect(serialized).toContain("Changed `a b` after");
+      expect(codeMarkTexts(reparsed.doc)).toEqual(["a b"]);
+      expect(reparsed.doc.eq(changed)).toBe(true);
+    },
+  );
+
+  it.each(["github", "gitlab"] as const)(
+    "preserves space-only inline code in a table cell after a neighboring edit (%s)",
+    (profile) => {
+      const changed = replaceText(
+        tableWithInlineCode("   "),
+        "KEEP",
+        "CHANGED",
+      );
+      const serialized = serializeMarkdown(changed);
+      const reparsed = reparseMarkdown(serialized, profile);
+
+      expect(serialized).toContain("| CHANGED | `   ` |");
+      expect(codeMarkTexts(reparsed.doc)).toEqual(["   "]);
+      expect(reparsed.doc.eq(changed)).toBe(true);
+    },
+  );
+
+  it.each(["github", "gitlab", "commonmark"] as const)(
+    "does not grow space-only inline code across repeated edits (%s)",
+    (profile) => {
+      let document = inlineCodeDocument(["   "]);
+      let previousLabel = "Before";
+
+      for (const nextLabel of ["Changed", "Final", "Done"]) {
+        const changed = replaceText(document, previousLabel, nextLabel);
+        const serialized = serializeMarkdown(changed);
+        const snapshot = reparseMarkdown(serialized, profile);
+
+        expect(codeMarkTexts(snapshot.doc)).toEqual(["   "]);
+        expect(snapshot.doc.eq(changed)).toBe(true);
+        document = snapshot.doc;
+        previousLabel = nextLabel;
+      }
+    },
+  );
 
   it.each(["github", "gitlab"] as const)(
     "preserves an image alt pipe when another table cell changes (%s)",
