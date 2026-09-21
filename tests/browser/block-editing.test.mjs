@@ -1824,6 +1824,29 @@ async function testMergedHtmlTablePaste(page) {
     ["", "D", "E", ""],
   ]);
   assert.match((await saved(page)).markdown, /\| A \| B \|/);
+
+  const crossingGroupHtml =
+    '<table><thead><tr><th rowspan="2">H</th><th>J</th></tr></thead><tbody><tr><td>A</td><td>B</td></tr></tbody></table>';
+  await load(page, source);
+  await caret(page, `${rich} > p:first-child`, -1);
+  const before = await saved(page);
+  await page.evaluate((markup) => {
+    const clipboardData = new DataTransfer();
+    clipboardData.setData("text/html", markup);
+    const event = new ClipboardEvent("paste", {
+      bubbles: true,
+      cancelable: true,
+      clipboardData,
+    });
+    const editor = document.querySelector(".mm-rich-panel .ProseMirror");
+    if (!editor) throw new Error("Rich Editor was not rendered");
+    editor.dispatchEvent(event);
+    if (!event.defaultPrevented)
+      throw new Error("Crossing row-group paste was not rejected");
+  }, crossingGroupHtml);
+  await expectSource(page, source);
+  const after = await saved(page);
+  assert.equal(after.edits, before.edits);
 }
 
 async function testNestedBlockquoteTableNavigation(page) {

@@ -151,6 +151,35 @@ describe("table clipboard parsing", () => {
     });
   });
 
+  it("keeps rowspans within HTML row groups", () => {
+    expect(
+      parseClipboardHtml(
+        '<table><thead><tr><th rowspan="2">H</th><th>J</th></tr><tr><th>K</th></tr></thead><tbody><tr><td>A</td><td>B</td></tr></tbody><tbody><tr><td>C</td><td>D</td></tr></tbody><tfoot><tr><td>F</td><td>G</td></tr></tfoot></table>',
+      ),
+    ).toMatchObject({
+      values: [
+        ["H", "J"],
+        ["", "K"],
+        ["A", "B"],
+        ["C", "D"],
+        ["F", "G"],
+      ],
+      rows: 5,
+      columns: 2,
+    });
+
+    for (const html of [
+      '<table><thead><tr><th rowspan="2">H</th><th>J</th></tr></thead><tbody><tr><td>A</td><td>B</td></tr></tbody></table>',
+      '<table><tbody><tr><td rowspan="2">A</td><td>B</td></tr></tbody><tbody><tr><td>C</td><td>D</td></tr></tbody></table>',
+      '<table><tbody><tr><td rowspan="2">A</td><td>B</td></tr></tbody><tfoot><tr><td>C</td><td>D</td></tr></tfoot></table>',
+    ]) {
+      expect(parseClipboardHtmlWithStatus(html)).toEqual({
+        matrix: null,
+        failure: "malformed",
+      });
+    }
+  });
+
   it("rejects malformed, nested, and over-budget HTML table layouts", () => {
     for (const html of [
       '<table><tr><td colspan="0">A</td></tr></table>',

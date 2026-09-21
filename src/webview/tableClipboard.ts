@@ -295,67 +295,90 @@ function parseClipboardHtmlResult(value: string): ClipboardMatrixParseResult {
     if (!htmlRows.length) return failure("malformed");
     if (htmlRows.length > MAX_CLIPBOARD_DIMENSION) return failure("too-large");
 
+    type HtmlRowGroup = {
+      parent: Element;
+      rows: HTMLTableRowElement[];
+    };
+    const htmlRowGroups: HtmlRowGroup[] = [];
+    for (const row of htmlRows) {
+      const parent = row.parentElement ?? table;
+      const previous = htmlRowGroups[htmlRowGroups.length - 1];
+      if (!previous || previous.parent !== parent)
+        htmlRowGroups.push({ parent, rows: [row] });
+      else previous.rows.push(row);
+    }
+
     // HTML tables are laid out on a logical grid. Keep the occupied positions
     // explicit so a later cell cannot slide left through a rowspan/colspan.
+    // A rowspan cannot cross an HTML row-group boundary. Supporting implicit
+    // rows at the end of a group would require reproducing the full HTML table
+    // model, so reject that layout instead of reserving the next group's slots.
     const grid: Array<Array<string | undefined>> = Array.from(
       { length: htmlRows.length },
       () => [],
     );
     let columns = 0;
-    for (const [rowIndex, row] of htmlRows.entries()) {
-      const cells = Array.from(row.children).filter(
-        (child): child is HTMLTableCellElement =>
-          child.tagName === "TH" || child.tagName === "TD",
-      );
-      if (!cells.length) return failure("malformed");
+    let rowIndex = 0;
+    for (const group of htmlRowGroups) {
+      const groupEnd = rowIndex + group.rows.length;
+      for (const row of group.rows) {
+        const cells = Array.from(row.children).filter(
+          (child): child is HTMLTableCellElement =>
+            child.tagName === "TH" || child.tagName === "TD",
+        );
+        if (!cells.length) return failure("malformed");
 
-      const currentRow = grid[rowIndex];
-      if (!currentRow) return failure("malformed");
-      let column = 0;
-      for (const cell of cells) {
-        const rowSpan = readHtmlSpan(cell, "rowspan");
-        if (rowSpan.failure) return failure(rowSpan.failure);
-        const columnSpan = readHtmlSpan(cell, "colspan");
-        if (columnSpan.failure) return failure(columnSpan.failure);
+        const currentRow = grid[rowIndex];
+        if (!currentRow) return failure("malformed");
+        let column = 0;
+        for (const cell of cells) {
+          const rowSpan = readHtmlSpan(cell, "rowspan");
+          if (rowSpan.failure) return failure(rowSpan.failure);
+          const columnSpan = readHtmlSpan(cell, "colspan");
+          if (columnSpan.failure) return failure(columnSpan.failure);
 
-        const spanColumns = columnSpan.span;
-        const spanRows = rowSpan.span;
-        if (!spanColumns || !spanRows) return failure("malformed");
+          const spanColumns = columnSpan.span;
+          const spanRows = rowSpan.span;
+          if (!spanColumns || !spanRows) return failure("malformed");
+          if (rowIndex + spanRows > groupEnd) return failure("malformed");
 
-        // Find the first contiguous range that is free in this row. Existing
-        // entries here are reservations created by rowspans from earlier rows.
-        while (true) {
-          while (currentRow[column] !== undefined) column += 1;
-          const endColumn = column + spanColumns;
-          if (endColumn > MAX_CLIPBOARD_DIMENSION) return failure("too-large");
-          const occupied = currentRow.findIndex(
-            (entry, index) =>
-              index >= column && index < endColumn && entry !== undefined,
-          );
-          if (occupied < 0) break;
-          column = occupied + 1;
-        }
-
-        const endColumn = column + spanColumns;
-        columns = Math.max(columns, endColumn);
-        if (htmlRows.length > Math.floor(MAX_CLIPBOARD_CELLS / columns))
-          return failure("too-large");
-
-        const endRow = Math.min(htmlRows.length, rowIndex + spanRows);
-        const text = extractText(cell);
-        for (let targetRow = rowIndex; targetRow < endRow; targetRow += 1) {
-          for (
-            let targetColumn = column;
-            targetColumn < endColumn;
-            targetColumn += 1
-          ) {
-            const target = grid[targetRow];
-            if (!target) return failure("malformed");
-            target[targetColumn] =
-              targetRow === rowIndex && targetColumn === column ? text : "";
+          // Find the first contiguous range that is free in this row. Existing
+          // entries here are reservations created by rowspans from earlier rows.
+          while (true) {
+            while (currentRow[column] !== undefined) column += 1;
+            const endColumn = column + spanColumns;
+            if (endColumn > MAX_CLIPBOARD_DIMENSION)
+              return failure("too-large");
+            const occupied = currentRow.findIndex(
+              (entry, index) =>
+                index >= column && index < endColumn && entry !== undefined,
+            );
+            if (occupied < 0) break;
+            column = occupied + 1;
           }
+
+          const endColumn = column + spanColumns;
+          columns = Math.max(columns, endColumn);
+          if (htmlRows.length > Math.floor(MAX_CLIPBOARD_CELLS / columns))
+            return failure("too-large");
+
+          const endRow = rowIndex + spanRows;
+          const text = extractText(cell);
+          for (let targetRow = rowIndex; targetRow < endRow; targetRow += 1) {
+            for (
+              let targetColumn = column;
+              targetColumn < endColumn;
+              targetColumn += 1
+            ) {
+              const target = grid[targetRow];
+              if (!target) return failure("malformed");
+              target[targetColumn] =
+                targetRow === rowIndex && targetColumn === column ? text : "";
+            }
+          }
+          column = endColumn;
         }
-        column = endColumn;
+        rowIndex += 1;
       }
     }
 
