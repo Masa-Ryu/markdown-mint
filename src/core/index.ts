@@ -3006,46 +3006,66 @@ function referenceLabel(value: string): string {
     .toLowerCase();
 }
 
-function referenceDefinitions(value: string): ReferenceDefinitionSnapshot[] {
+type ReferenceRule = (
+  state: StateBlock,
+  startLine: number,
+  endLine: number,
+  silent: boolean,
+) => boolean;
+
+/**
+ * Collect the exact source ranges accepted by markdown-it's reference block
+ * rule. Reference definitions do not produce tokens, so scanning the rendered
+ * block slices cannot distinguish multiline titles, code contents, or nested
+ * container source from an actual definition.
+ */
+function referenceDefinitions(
+  value: string,
+  profile: Profile = "github",
+): ReferenceDefinitionSnapshot[] {
+  if (!value || !/\][ \t]*:/.test(value)) return [];
+
+  const md = createMarkdownIt(profile);
+  const referenceRule = md.block.ruler
+    .getRules("")
+    .find((rule) => rule.name === "reference") as ReferenceRule | undefined;
+  if (!referenceRule) return [];
+
+  const offsets = lineOffsets(value);
   const result: ReferenceDefinitionSnapshot[] = [];
-  const pattern = /^[ \t]{0,3}\[([^\]\r\n]+)\]:[^\r\n]*(?:\r\n|\n|\r|$)/gm;
-  let match: RegExpExecArray | null;
-  while ((match = pattern.exec(value)) != null) {
-    const source = match[0].replace(/(?:\r\n|\n|\r)$/, "");
-    const label = referenceLabel(match[1] ?? "");
-    if (
-      label &&
-      !label.startsWith("^") &&
-      !result.some((entry) => entry.label === label)
-    )
-      result.push({ label, source });
-  }
+  md.block.ruler.at(
+    "reference",
+    (
+      state: StateBlock,
+      startLine: number,
+      endLine: number,
+      silent: boolean,
+    ) => {
+      const knownLabels = new Set(
+        Object.keys(state.env.references ?? Object.create(null)),
+      );
+      const accepted = referenceRule(state, startLine, endLine, silent);
+      if (!accepted || silent) return accepted;
+
+      const references = state.env.references ?? Object.create(null);
+      const start = offsets[startLine] ?? 0;
+      const end = offsets[state.line] ?? value.length;
+      const source = value.slice(start, end).replace(/(?:\r\n|\n|\r)$/, "");
+      for (const label of Object.keys(references)) {
+        if (knownLabels.has(label) || label.startsWith("^")) continue;
+        result.push({ label: referenceLabel(label), source });
+      }
+      return accepted;
+    },
+  );
+  md.parse(value, {});
   return result;
 }
 
 function previousReferenceDefinitions(
   previous: MarkdownSnapshot,
 ): ReferenceDefinitionSnapshot[] {
-  const sources = [previous.leading ?? ""];
-  for (const block of previous.blocks ?? []) {
-    // Definitions embedded in code and opaque atoms are literal content, not
-    // reference definitions.  Everything else can contain a valid definition
-    // in its source slice, including the separator after a paragraph.
-    if (
-      block.node.type.name !== "code_block" &&
-      block.node.type.name !== "raw_block"
-    )
-      sources.push(block.source);
-  }
-  sources.push(previous.trailing ?? "");
-  const result: ReferenceDefinitionSnapshot[] = [];
-  for (const source of sources) {
-    for (const definition of referenceDefinitions(source)) {
-      if (!result.some((entry) => entry.label === definition.label))
-        result.push(definition);
-    }
-  }
-  return result;
+  return referenceDefinitions(previous.source, previous.profile);
 }
 
 function preserveReferenceDefinitions(
@@ -3055,11 +3075,16 @@ function preserveReferenceDefinitions(
 ): string {
   const definitions = previousReferenceDefinitions(previous);
   if (definitions.length === 0) return output;
-  const existing = new Set(
-    referenceDefinitions(output).map((definition) => definition.label),
+  const existing = new Map(
+    referenceDefinitions(output, previous.profile).map((definition) => [
+      definition.label,
+      toLineEnding(definition.source, ending),
+    ]),
   );
   const missing = definitions.filter(
-    (definition) => !existing.has(definition.label),
+    (definition) =>
+      existing.get(definition.label) !==
+      toLineEnding(definition.source, ending),
   );
   if (missing.length === 0) return output;
   const insertion = `${missing.map((definition) => toLineEnding(definition.source, ending)).join(ending)}${ending}${ending}`;
