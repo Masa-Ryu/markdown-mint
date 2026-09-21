@@ -129,10 +129,88 @@ describe("table clipboard parsing", () => {
     ).toMatchObject({
       values: [
         ["A", "B"],
-        ["C", ""],
+        ["", "C"],
       ],
       rows: 2,
       columns: 2,
+    });
+  });
+
+  it("preserves logical positions for mixed rowspans and colspans", () => {
+    expect(
+      parseClipboardHtml(
+        '<table><tr><th rowspan="2">A</th><td colspan="2">B</td><td>C</td></tr><tr><td>D</td><td colspan="2">E</td></tr></table>',
+      ),
+    ).toMatchObject({
+      values: [
+        ["A", "B", "", "C"],
+        ["", "D", "E", ""],
+      ],
+      rows: 2,
+      columns: 4,
+    });
+  });
+
+  it("rejects overlapping spans instead of moving cells to later columns", () => {
+    for (const html of [
+      '<table><tbody><tr><td>A</td><td rowspan="2">B</td></tr><tr><td colspan="2">C</td><td>D</td></tr></tbody></table>',
+      '<table><tbody><tr><td rowspan="2">A</td><td>B</td><td rowspan="2">C</td></tr><tr><td colspan="2">D</td></tr></tbody></table>',
+    ]) {
+      expect(parseClipboardHtmlWithStatus(html)).toEqual({
+        matrix: null,
+        failure: "malformed",
+      });
+    }
+  });
+
+  it("keeps rowspans within HTML row groups", () => {
+    expect(
+      parseClipboardHtml(
+        '<table><thead><tr><th rowspan="2">H</th><th>J</th></tr><tr><th>K</th></tr></thead><tbody><tr><td>A</td><td>B</td></tr></tbody><tbody><tr><td>C</td><td>D</td></tr></tbody><tfoot><tr><td>F</td><td>G</td></tr></tfoot></table>',
+      ),
+    ).toMatchObject({
+      values: [
+        ["H", "J"],
+        ["", "K"],
+        ["A", "B"],
+        ["C", "D"],
+        ["F", "G"],
+      ],
+      rows: 5,
+      columns: 2,
+    });
+
+    for (const html of [
+      '<table><thead><tr><th rowspan="2">H</th><th>J</th></tr></thead><tbody><tr><td>A</td><td>B</td></tr></tbody></table>',
+      '<table><tbody><tr><td rowspan="2">A</td><td>B</td></tr></tbody><tbody><tr><td>C</td><td>D</td></tr></tbody></table>',
+      '<table><tbody><tr><td rowspan="2">A</td><td>B</td></tr></tbody><tfoot><tr><td>C</td><td>D</td></tr></tfoot></table>',
+    ]) {
+      expect(parseClipboardHtmlWithStatus(html)).toEqual({
+        matrix: null,
+        failure: "malformed",
+      });
+    }
+  });
+
+  it("rejects malformed, nested, and over-budget HTML table layouts", () => {
+    for (const html of [
+      '<table><tr><td colspan="0">A</td></tr></table>',
+      '<table><tr><td rowspan="1.5">A</td></tr></table>',
+      "<table><tr><td>A<table><tr><td>B</td></tr></table></td></tr></table>",
+    ]) {
+      expect(parseClipboardHtmlWithStatus(html)).toEqual({
+        matrix: null,
+        failure: "malformed",
+      });
+    }
+
+    const oversized = `<table>${Array.from(
+      { length: 101 },
+      () => '<tr><td colspan="100">cell</td></tr>',
+    ).join("")}</table>`;
+    expect(parseClipboardHtmlWithStatus(oversized)).toEqual({
+      matrix: null,
+      failure: "too-large",
     });
   });
 
