@@ -1317,6 +1317,109 @@ $$
     }
   });
 
+  it.each([
+    {
+      name: "multiline definition in the middle with LF",
+      source:
+        'Delete this paragraph.\n\n[ref]:\n  https://example.com/target\n  "Keep this title"\n\n[ref]\n',
+      expected:
+        '[ref]:\n  https://example.com/target\n  "Keep this title"\n\n[ref]\n',
+      ending: "\n",
+    },
+    {
+      name: "definition after a deleted code block with CRLF",
+      source:
+        '```text\r\nDelete this code block only.\r\n```\r\n\r\n[ref]: https://example.com/target "Keep this title"\r\n\r\nA [link][ref].\r\n',
+      expected:
+        '[ref]: https://example.com/target "Keep this title"\r\n\r\nA [link][ref].\r\n',
+      ending: "\r\n",
+    },
+    {
+      name: "definition at the start with two uses",
+      source:
+        '[ref]: https://example.com/target "Keep this title"\n\nDelete this paragraph.\n\n[ref] and [ref]\n',
+      expected:
+        '[ref]: https://example.com/target "Keep this title"\n\n[ref] and [ref]\n',
+      ending: "\n",
+    },
+    {
+      name: "definition at the end",
+      source:
+        'Delete this paragraph.\n\nA [link][ref].\n\n[ref]: https://example.com/target "Keep this title"\n',
+      expected:
+        'A [link][ref].\n\n[ref]: https://example.com/target "Keep this title"\n',
+      ending: "\n",
+    },
+  ])("preserves $name", ({ source, expected, ending }) => {
+    const snapshot = parseMarkdown(source);
+    expect(serializeMarkdown(snapshot.doc, snapshot)).toBe(source);
+    const changed = removeTopLevel(snapshot, 0);
+    const serialized = serializeMarkdown(changed, snapshot);
+
+    expect(serialized).toBe(expected);
+    expect(serialized.match(/\[ref\]:/g)).toHaveLength(1);
+    expect(serialized.match(new RegExp(ending, "g"))?.length).toBe(
+      expected.match(new RegExp(ending, "g"))?.length,
+    );
+
+    const reparsed = reparseMarkdown(serialized);
+    expect(reparsed.doc.eq(changed)).toBe(true);
+    const link = childrenOf(reparsed.doc.firstChild!).find(
+      (node) => node.marks.length > 0,
+    );
+    expect(link?.marks[0]?.attrs.href).toBe("https://example.com/target");
+    expect(link?.marks[0]?.attrs.title).toBe("Keep this title");
+    expect(serializeMarkdown(reparsed.doc, reparsed)).toBe(expected);
+  });
+
+  it("does not rescue reference-looking text from fenced code in containers", () => {
+    for (const source of [
+      "- item\n\n  ```markdown\n  [x]: https://example.com/not-a-definition\n  ```\n\n[x]\n",
+      "> ```markdown\n> [x]: https://example.com/not-a-definition\n> ```\n\n[x]\n",
+    ]) {
+      const snapshot = parseMarkdown(source);
+      const changed = removeTopLevel(snapshot, 0);
+      const serialized = serializeMarkdown(changed, snapshot);
+
+      expect(serialized).not.toContain("https://example.com/not-a-definition");
+      const reparsed = reparseMarkdown(serialized);
+      expect(reparsed.doc.lastChild?.firstChild?.marks).toHaveLength(0);
+    }
+  });
+
+  it("retains every line of a multiline reference title", () => {
+    const source =
+      'Delete this paragraph.\n\n[ref]: https://example.com/target "\nKeep\nthis title\n"\n\n[ref]\n';
+    const snapshot = parseMarkdown(source);
+    const changed = removeTopLevel(snapshot, 0);
+
+    const serialized = serializeMarkdown(changed, snapshot);
+    expect(serialized).toBe(
+      '[ref]: https://example.com/target "\nKeep\nthis title\n"\n\n[ref]\n',
+    );
+    expect(reparseMarkdown(serialized).doc.eq(changed)).toBe(true);
+  });
+
+  it("keeps the first valid definition when a later duplicate survives", () => {
+    const source =
+      'Delete this paragraph.\n\n[ref]: https://example.com/first "first"\n\nKeep [ref].\n\n[ref]: https://example.com/second "second"\n';
+    const snapshot = parseMarkdown(source);
+    const changed = removeTopLevel(snapshot, 0);
+    const serialized = serializeMarkdown(changed, snapshot);
+
+    expect(
+      serialized.indexOf("https://example.com/first"),
+    ).toBeGreaterThanOrEqual(0);
+    expect(serialized.indexOf("https://example.com/first")).toBeLessThan(
+      serialized.indexOf("https://example.com/second"),
+    );
+    const link = childrenOf(reparseMarkdown(serialized).doc.firstChild!).find(
+      (node) => node.marks.length > 0,
+    );
+    expect(link?.marks[0]?.attrs.href).toBe("https://example.com/first");
+    expect(link?.marks[0]?.attrs.title).toBe("first");
+  });
+
   it("keeps duplicate block source slices valid when blocks are moved", () => {
     const snapshot = parseMarkdown("A\n\nB\n\nA\n");
     const original: PMNode[] = [];
