@@ -286,6 +286,8 @@ const vscode = vi.hoisted(() => {
     "success";
   let applyEditGate: Promise<void> | undefined;
   let releaseApplyEditGate: (() => void) | undefined;
+  let historyCommandGate: Promise<void> | undefined;
+  let releaseHistoryCommandGate: (() => void) | undefined;
   let openTextDocumentError: Error | undefined;
   const panel = new WebviewPanel();
   const outputLines: string[] = [];
@@ -535,6 +537,8 @@ const vscode = vi.hoisted(() => {
       if (command === "vscode.openWith" && openWithError) {
         throw openWithError;
       }
+      if ((command === "undo" || command === "redo") && historyCommandGate)
+        await historyCommandGate;
       if (command === "undo" && previousTexts.length) {
         redoTexts.push(document.getText());
         document.replaceText(previousTexts.pop() ?? document.getText());
@@ -654,6 +658,9 @@ const vscode = vi.hoisted(() => {
     releaseApplyEditGate?.();
     releaseApplyEditGate = undefined;
     applyEditGate = undefined;
+    releaseHistoryCommandGate?.();
+    releaseHistoryCommandGate = undefined;
+    historyCommandGate = undefined;
     documents.clear();
     documents.set(document.uri.toString(), document);
     workspace.textDocuments.splice(0, workspace.textDocuments.length, document);
@@ -730,6 +737,16 @@ const vscode = vi.hoisted(() => {
         releaseApplyEditGate?.();
         releaseApplyEditGate = undefined;
         applyEditGate = undefined;
+      },
+      blockHistoryCommand(): void {
+        historyCommandGate = new Promise<void>((resolve) => {
+          releaseHistoryCommandGate = resolve;
+        });
+      },
+      releaseHistoryCommand(): void {
+        releaseHistoryCommandGate?.();
+        releaseHistoryCommandGate = undefined;
+        historyCommandGate = undefined;
       },
       get openExternalResult(): boolean {
         return openExternalResult;
@@ -951,6 +968,38 @@ describe("MarkdownMintEditorProvider", () => {
     await flush();
     await flush();
     expect(document.getText()).toBe("# Pending edit");
+    expect(stateCount(provider)).toBe(0);
+    provider.dispose();
+  });
+
+  it("releases state when a pending undo fails after the panel closes", async () => {
+    vscode.__state.reset();
+    const provider = new MarkdownMintEditorProvider(context() as never);
+    const document = vscode.__state.document;
+    await provider.resolveCustomTextEditor(
+      document as never,
+      vscode.__state.panel as never,
+      {} as never,
+    );
+    vscode.__state.panel.webview.receive({ protocolVersion: 1, type: "ready" });
+    await flush();
+
+    vscode.__state.blockHistoryCommand();
+    vscode.__state.panel.webview.receive({
+      protocolVersion: 1,
+      type: "undo",
+      baseVersion: document.version,
+      operationId: "undo:closed-panel",
+    });
+    await flush();
+    expect(stateCount(provider)).toBe(1);
+
+    vscode.__state.panel.dispose();
+    vscode.__state.openTextDocumentError = new Error("injected reopen failure");
+    vscode.__state.releaseHistoryCommand();
+    await flush();
+    await flush();
+
     expect(stateCount(provider)).toBe(0);
     provider.dispose();
   });

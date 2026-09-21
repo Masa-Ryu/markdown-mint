@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.1
+
+- Release provider-owned Markdown document state after panels and documents
+  close or queued operations settle, avoiding accumulation from Source-only
+  changes while preserving pending edits and multi-panel synchronization.
+
 ## 0.5.0
 
 - Preserve structured recovery drafts in a separate pending slot when the

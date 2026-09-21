@@ -943,8 +943,10 @@ export class MarkdownMintEditorProvider
         if (
           (message.type === "undo" || message.type === "redo") &&
           state.pendingCommand?.operationId === message.operationId
-        )
+        ) {
           delete state.pendingCommand;
+          this.releaseStateIfUnused(state);
+        }
         this.post(session, this.errorMessage(failure, message.operationId));
         return;
       case "recoverDraft":
