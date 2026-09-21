@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.4.2
+
+- Preserve structured recovery snapshots after serializer failures, including
+  when the saved ProseMirror document cannot be restored, without overwriting
+  or synchronizing stale Markdown fallback.
+- Keep the authoritative document displayed while retaining the pending
+  structured recovery for a later or explicit recovery attempt.
+
 ## 0.4.0
 
 - Add direct row and column table controls based on the visible cell grid,
