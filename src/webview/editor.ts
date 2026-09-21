@@ -11570,6 +11570,43 @@ export class MarkdownEditorApp {
     }
   }
 
+  /**
+   * Move a root recovery which cannot be applied automatically into the one
+   * persisted pending slot. A pre-existing pending slot is never replaced;
+   * in that overflow case the root recovery remains protected by
+   * recoveryStateToPreserve until the existing slot is explicitly resolved.
+   */
+  private promoteRecoveryToPending(saved: RecoveryState): boolean {
+    if (Object.prototype.hasOwnProperty.call(saved, "pendingRecovery"))
+      return false;
+    const pending = this.recoverySnapshotWithoutPending(saved);
+    if (!this.recoveryStateHasData(pending)) return false;
+    const next: RecoveryState = {
+      ...saved,
+      pendingRecovery: pending,
+    };
+    delete next.recoveryDraft;
+    delete next.recoveryBaseMarkdown;
+    delete next.recoveryBaseVersion;
+    delete next.recoveryVersion;
+    delete next.recoveryProfile;
+    delete next.recoveryTimestamp;
+    delete next.recoveryDocument;
+    delete next.recoveryDocumentPending;
+    delete next.documentId;
+    if (this.documentId !== undefined) next.documentId = this.documentId;
+    if (!this.setRecoveryState(next)) return false;
+    this.recoveryStateToPreserve = null;
+    this.refreshPendingRecoveryAction();
+    return true;
+  }
+
+  private preserveRecoveryState(saved: RecoveryState): void {
+    this.recoveryStateToPreserve = saved;
+    if (!this.promoteRecoveryToPending(saved))
+      this.refreshPendingRecoveryAction();
+  }
+
   private recoveryStateRecord(value: unknown): RecoveryState | undefined {
     return typeof value === "object" && value !== null && !Array.isArray(value)
       ? (value as RecoveryState)
@@ -11578,7 +11615,6 @@ export class MarkdownEditorApp {
 
   private recoveryStateHasData(saved: RecoveryState): boolean {
     return [
-      "documentId",
       "recoveryDraft",
       "recoveryBaseMarkdown",
       "recoveryBaseVersion",
@@ -11759,11 +11795,11 @@ export class MarkdownEditorApp {
     const saved = this.recoveryStateRecord(this.vscode?.getState?.());
     if (!saved || typeof saved.recoveryDraft !== "string") {
       if (saved && this.recoveryStateHasData(saved))
-        this.recoveryStateToPreserve = saved;
+        this.preserveRecoveryState(saved);
       return false;
     }
     if (!this.recoveryBelongsToCurrentDocument(saved)) {
-      this.recoveryStateToPreserve = saved;
+      this.preserveRecoveryState(saved);
       return false;
     }
     const recoveryKind = this.structuredRecoveryKind(saved);
@@ -11771,14 +11807,14 @@ export class MarkdownEditorApp {
       recoveryKind === "legacy-ambiguous" ||
       (recoveryKind === "pending" && saved.recoveryDocument === undefined)
     ) {
-      this.recoveryStateToPreserve = saved;
+      this.preserveRecoveryState(saved);
       return false;
     }
     // A structured recovery snapshot may contain newer PM input than its
     // Markdown companion. Validate its provenance before considering either
     // representation saved; a changed base/profile must remain recoverable.
     if (!this.recoveryMetadataMatchesCurrent(saved)) {
-      this.recoveryStateToPreserve = saved;
+      this.preserveRecoveryState(saved);
       return false;
     }
     if (
@@ -11794,7 +11830,7 @@ export class MarkdownEditorApp {
     // storage for diagnostics/host-side recovery, never silently overwritten.
     this.recoveryStateToPreserve = null;
     const restored = this.restoreRecoveryDraft(saved, recoveryKind);
-    if (!restored) this.recoveryStateToPreserve = saved;
+    if (!restored) this.preserveRecoveryState(saved);
     return restored;
   }
 
@@ -12090,6 +12126,12 @@ export class MarkdownEditorApp {
     if (expectedIdentity === undefined) {
       this.pendingRecoveryOperationId = undefined;
       this.pendingRecoveryOperationIdentity = undefined;
+    }
+    if (this.recoveryStateToPreserve && this.recoveryStateHasData(current)) {
+      this.recoveryStateToPreserve = current;
+      if (this.promoteRecoveryToPending(current)) return;
+      this.refreshPendingRecoveryAction();
+      return;
     }
     this.recoveryStateToPreserve = null;
     this.refreshPendingRecoveryAction();

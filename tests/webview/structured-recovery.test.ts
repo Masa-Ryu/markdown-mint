@@ -412,9 +412,11 @@ describe("structured serializer recovery", () => {
     expect(restored.view.state.doc.textContent).not.toContain("NEW INPUT");
     expect(editMessages(messages)).toHaveLength(0);
     expect(state.value).toMatchObject({
-      recoveryDraft: source,
-      recoveryDocument: expect.any(Object),
-      recoveryDocumentPending: true,
+      pendingRecovery: {
+        recoveryDraft: source,
+        recoveryDocument: expect.any(Object),
+        recoveryDocumentPending: true,
+      },
     });
     restored.destroy();
     apps.splice(apps.indexOf(restored), 1);
@@ -999,9 +1001,11 @@ describe("structured serializer recovery", () => {
       expect(restored.view.state.doc.textContent).toBe("old");
       expect(editMessages(messages)).toHaveLength(0);
       expect(state.value).toMatchObject({
-        recoveryDraft,
-        recoveryDocument: invalidRecoveryDocument,
-        recoveryDocumentPending: true,
+        pendingRecovery: {
+          recoveryDraft,
+          recoveryDocument: invalidRecoveryDocument,
+          recoveryDocumentPending: true,
+        },
       });
       appendText(restored, " NEXT");
       expect(state.value).toMatchObject({
@@ -1044,7 +1048,8 @@ describe("structured serializer recovery", () => {
         "OLD PM CONTENT",
       );
       expect(editMessages(messages)).toHaveLength(0);
-      expect(state.value).toEqual(legacyState);
+      expect(state.value).toMatchObject({ pendingRecovery: legacyState });
+      expect(state.value).not.toHaveProperty("recoveryDraft");
 
       appendText(restored, " NEXT");
       expect(state.value).toMatchObject({
@@ -1187,8 +1192,31 @@ describe("structured serializer recovery", () => {
       expect(unchanged.view.state.doc.textContent).not.toContain("NEW INPUT");
       expect(editMessages(messages)).toHaveLength(0);
       expect(state.value).toMatchObject({
-        recoveryDocument: expect.any(Object),
+        pendingRecovery: {
+          recoveryDocument: expect.any(Object),
+          recoveryDocumentPending: true,
+        },
       });
+      const reviewButton = unchanged.root.querySelector<HTMLButtonElement>(
+        "[data-testid='pending-recovery-button']",
+      );
+      expect(reviewButton).not.toBeNull();
+      const currentText = unchanged.view.state.doc.textContent;
+      reviewButton!.click();
+      const dialog = unchanged.root.querySelector<HTMLDialogElement>(
+        ".mm-pending-recovery-dialog",
+      );
+      expect(
+        dialog?.querySelector<HTMLTextAreaElement>(".mm-pending-recovery-text")
+          ?.value,
+      ).toContain("NEW INPUT");
+      expect(unchanged.view.state.doc.textContent).toBe(currentText);
+      dialog
+        ?.querySelector<HTMLButtonElement>(
+          "[data-testid='pending-recovery-keep']",
+        )
+        ?.click();
+      expect(editMessages(messages)).toHaveLength(0);
       appendText(unchanged, " NEXT");
       expect(editMessages(messages)).toHaveLength(1);
       expect(state.value).toMatchObject({
@@ -1199,4 +1227,59 @@ describe("structured serializer recovery", () => {
       });
     },
   );
+
+  it("does not overwrite an existing pending slot while promoting a held root recovery", () => {
+    const rootRecovery = {
+      documentId: "file:///workspace/doc.md",
+      recoveryDraft: "root draft",
+      recoveryBaseMarkdown: "old",
+      recoveryBaseVersion: 1,
+      recoveryProfile: "github" as const,
+      recoveryDocument: parseMarkdown("old ROOT INPUT", "github").doc.toJSON(),
+      recoveryDocumentPending: true,
+    };
+    const existingPending = {
+      documentId: "file:///workspace/other.md",
+      recoveryDraft: "existing pending",
+      recoveryBaseMarkdown: "pending base",
+      recoveryBaseVersion: 5,
+      recoveryProfile: "github" as const,
+      recoveryDocument: parseMarkdown(
+        "existing pending",
+        "github",
+      ).doc.toJSON(),
+      recoveryDocumentPending: true,
+    };
+    const state = {
+      value: {
+        ...rootRecovery,
+        pendingRecovery: existingPending,
+      },
+    } as { value: unknown };
+    const app = createApp(state, createCore(), [], {
+      markdown: "external",
+      version: 2,
+    });
+
+    expect(state.value).toMatchObject({
+      recoveryDraft: "root draft",
+      recoveryDocument: rootRecovery.recoveryDocument,
+      pendingRecovery: existingPending,
+    });
+    const button = app.root.querySelector<HTMLButtonElement>(
+      "[data-testid='pending-recovery-button']",
+    );
+    expect(button).not.toBeNull();
+    button!.click();
+    app.root
+      .querySelector<HTMLButtonElement>(
+        "[data-testid='pending-recovery-discard']",
+      )
+      ?.click();
+
+    expect(state.value).toMatchObject({
+      pendingRecovery: rootRecovery,
+    });
+    expect(state.value).not.toHaveProperty("recoveryDraft");
+  });
 });

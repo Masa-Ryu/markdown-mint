@@ -1551,13 +1551,18 @@ current editor, profile, or authoritative host snapshot. The review text must
 therefore represent the materialized PM document rather than its potentially
 stale `recoveryDraft` companion.
 
-Pending recovery remains reviewable and explicitly discardable even when its
-`documentId` differs from the current editor; document identity gates automatic
-restore only. If materialization fails, the pending slot is retained, the
-separate-copy action is disabled, and an explanatory error is reported. A
-successful separate-copy response consumes only the exact pending snapshot
-that was sent for that operation, so a replacement pending recovery cannot be
-deleted by a late host response.
+As soon as automatic recovery is declined, a root recovery is promoted to the
+pending slot when that slot is free, so review does not depend on another edit
+to the current document. If a pending slot is already occupied, it is never
+overwritten; the root recovery remains protected until the existing slot is
+explicitly resolved, after which it can be promoted. Pending recovery remains
+reviewable and explicitly discardable even when its `documentId` differs from
+the current editor; document identity gates automatic restore only. If
+materialization fails, the pending slot is retained, the separate-copy action
+is disabled, and an explanatory error is reported. A successful separate-copy
+response consumes only the exact pending snapshot that was sent for that
+operation, so a replacement pending recovery cannot be deleted by a late host
+response.
 
 ## Explicit limits
 
