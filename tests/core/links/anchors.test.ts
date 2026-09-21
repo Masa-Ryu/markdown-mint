@@ -17,6 +17,15 @@ function renderedHeadingIds(html: string): string[] {
   );
 }
 
+function renderedHeadingTexts(html: string): string[] {
+  const root = document.createElement("div");
+  root.innerHTML = html;
+  return Array.from(
+    root.querySelectorAll("h1,h2,h3,h4,h5,h6"),
+    (heading) => heading.textContent ?? "",
+  );
+}
+
 describe("profile-aware heading anchors", () => {
   it.each<Profile>(["github", "gitlab", "commonmark"])(
     "keeps Unicode and uses document-wide final-id collision handling in %s",
@@ -80,6 +89,46 @@ describe("profile-aware heading anchors", () => {
       collectHeadingAnchors(snapshot, "gitlab").map((anchor) => anchor.id),
     ).toEqual(["a--b", "a---b"]);
   });
+
+  it.each<Profile>(["github", "gitlab", "commonmark"])(
+    "uses rendered text for Markdown inside safe HTML pairs in %s",
+    (profile) => {
+      const source = [
+        "# _Hi_",
+        "# <strong>_Hi_</strong>",
+        "# <strong><em>_Hi_</em></strong>",
+        "# <strong>`a_b`</strong>",
+        "# <strong>a_b</strong>",
+        "# <strong>\\_literal\\_</strong>",
+      ].join("\n\n");
+      const snapshot = parseMarkdown(source, profile);
+      const anchors = collectHeadingAnchors(snapshot, profile);
+      const rendered = renderMarkdownDocument(snapshot.doc, profile, snapshot);
+
+      expect(
+        anchors.map(({ displayText, id }) => ({ displayText, id })),
+      ).toEqual([
+        { displayText: "Hi", id: "hi" },
+        { displayText: "Hi", id: "hi-1" },
+        { displayText: "Hi", id: "hi-2" },
+        { displayText: "a_b", id: "a_b" },
+        { displayText: "a_b", id: "a_b-1" },
+        { displayText: "_literal_", id: "_literal_" },
+      ]);
+      expect(renderedHeadingTexts(rendered)).toEqual([
+        "Hi",
+        "Hi",
+        "Hi",
+        "a_b",
+        "a_b",
+        "_literal_",
+      ]);
+      expect(renderedHeadingIds(rendered)).toEqual(
+        anchors.map((anchor) => anchor.id),
+      );
+      expect(new Set(renderedHeadingIds(rendered)).size).toBe(anchors.length);
+    },
+  );
 
   it("does not reuse an inherited anchor map from another profile", () => {
     const snapshot = parseMarkdown("# A  B", "gitlab");

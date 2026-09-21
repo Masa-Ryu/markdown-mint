@@ -95,6 +95,11 @@ export function headingDisplayText(node: PMNode): string {
         // (`:thumbsup:` -> `thumbsup`), even though the rendered heading shows
         // the corresponding emoji glyph.
         output += source.slice(1, -1) || source;
+      else if (
+        kind === "html-pair" &&
+        typeof child.attrs.displayText === "string"
+      )
+        output += child.attrs.displayText;
       else if (kind !== "html-comment")
         output += source.replace(/<[^>]*>/g, "");
     } else output += headingDisplayText(child);

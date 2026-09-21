@@ -224,6 +224,8 @@ const rawInlineSpec: NodeSpec = {
   attrs: {
     source: { default: "" },
     kind: { default: "unknown" },
+    // Safe HTML pairs retain the tokenized visible text for heading anchors.
+    displayText: { default: null },
   },
   parseDOM: [
     {
@@ -875,8 +877,17 @@ function inlineHtmlTag(source: string): InlineHtmlTag | null {
   return { name, closing: Boolean(match[1]), void: name === "br" };
 }
 
-function rawInline(source: string, kind: string, marks: Mark[] = []): PMNode {
-  return nodeTypes.raw_inline.create({ source, kind }, null, marks);
+function rawInline(
+  source: string,
+  kind: string,
+  marks: Mark[] = [],
+  displayText: string | null = null,
+): PMNode {
+  return nodeTypes.raw_inline.create(
+    { source, kind, displayText },
+    null,
+    marks,
+  );
 }
 
 const footnoteNodeMetadata = new WeakMap<PMNode, FootnoteDefinition[]>();
@@ -894,7 +905,13 @@ function footnoteRawInline(
 }
 
 function inlineTokenSource(token: MarkdownToken): string | null {
-  if (token.type === "text" || token.type === "html_inline")
+  if (
+    token.type === "text" ||
+    token.type === "html_inline" ||
+    token.type === "entity" ||
+    token.type === "escape" ||
+    token.type === "html_entity"
+  )
     return literalTokenText(token);
   if (token.type === "softbreak") return "\n";
   if (token.type === "em_open" || token.type === "em_close")
@@ -939,14 +956,50 @@ function findInlineHtmlPair(
   return -1;
 }
 
+interface InlineHtmlPairSource {
+  source: string;
+  body: string;
+  end: number;
+}
+
+/** Keep escaped Markdown source intact while grouping safe HTML pairs. */
+function findInlineHtmlPairSource(
+  source: string,
+  openingSource: string,
+  openingName: string,
+  openingStart: number,
+): InlineHtmlPairSource | undefined {
+  if (openingStart < 0) return undefined;
+  const tagPattern = /<\/?[a-z][a-z0-9-]*(?:\s[^>]*)?>/gi;
+  tagPattern.lastIndex = openingStart + openingSource.length;
+  let depth = 1;
+  let match: RegExpExecArray | null;
+  while ((match = tagPattern.exec(source)) != null) {
+    const tag = inlineHtmlTag(match[0]!);
+    if (!tag || tag.name !== openingName || tag.void) continue;
+    if (tag.closing) depth -= 1;
+    else depth += 1;
+    if (depth !== 0) continue;
+    const end = match.index + match[0]!.length;
+    return {
+      source: source.slice(openingStart, end),
+      body: source.slice(openingStart + openingSource.length, match.index),
+      end,
+    };
+  }
+  return undefined;
+}
+
 function parseInline(
   children: MarkdownToken[] | null | undefined,
   profile: Profile = "github",
   footnotes?: Map<string, FootnoteDefinition>,
+  sourceText = "",
 ): PMNode[] {
   if (!children || children.length === 0) return [];
   const output: PMNode[] = [];
   const markStack: Mark[] = [];
+  let sourceCursor = 0;
   const emitText = (value: string): void => {
     const restored = restoreEscapedDollars(value);
     if (restored) output.push(schema.text(restored, markStack));
@@ -1112,6 +1165,10 @@ function parseInline(
       case "html_inline": {
         const source = literalTokenText(child);
         const tag = inlineHtmlTag(source);
+        const sourceStart = sourceText.indexOf(source, sourceCursor);
+        const consumedEnd =
+          sourceStart >= 0 ? sourceStart + source.length : sourceCursor;
+        let pairedSource: InlineHtmlPairSource | undefined;
         if (/^<br\s*\/?>(?:\s*)$/i.test(source.trim())) {
           output.push(nodeTypes.hard_break.create());
         } else if (/^<!--[\s\S]*-->$/.test(source.trim())) {
@@ -1137,7 +1194,29 @@ function parseInline(
               parts.push(part);
             }
             if (parts.length > 0) {
-              output.push(rawInline(parts.join(""), "html-pair", markStack));
+              pairedSource = findInlineHtmlPairSource(
+                sourceText,
+                source,
+                tag.name,
+                sourceStart,
+              );
+              const inlineContent = parseInline(
+                children.slice(index + 1, closingIndex),
+                profile,
+                footnotes,
+                pairedSource?.body,
+              );
+              const displayText = headingDisplayText(
+                nodeTypes.paragraph.create(null, inlineContent),
+              );
+              output.push(
+                rawInline(
+                  pairedSource?.source ?? parts.join(""),
+                  "html-pair",
+                  markStack,
+                  displayText,
+                ),
+              );
               index = closingIndex;
             } else {
               output.push(rawInline(source, "html-allowed", markStack));
@@ -1148,6 +1227,7 @@ function parseInline(
         } else {
           output.push(rawInline(source, "html", markStack));
         }
+        sourceCursor = pairedSource?.end ?? consumedEnd;
         break;
       }
       case "math_inline":
@@ -1190,7 +1270,12 @@ function paragraphFromInline(
   profile: Profile = "github",
   footnotes?: Map<string, FootnoteDefinition>,
 ): PMNode {
-  const content = parseInline(token?.children, profile, footnotes);
+  const content = parseInline(
+    token?.children,
+    profile,
+    footnotes,
+    token?.content ?? "",
+  );
   return nodeTypes.paragraph.create(
     null,
     content.length > 0 ? content : Fragment.empty,
@@ -1461,7 +1546,12 @@ function parseBlocks(
           1,
           Math.min(6, Number.parseInt((token.tag ?? "h1").slice(1), 10) || 1),
         );
-        const content = parseInline(inline?.children, profile, footnotes);
+        const content = parseInline(
+          inline?.children,
+          profile,
+          footnotes,
+          inline?.content ?? "",
+        );
         result.push(nodeTypes.heading.create({ level }, content));
         index = close + 1;
         break;
