@@ -50,6 +50,10 @@ import {
   type SaveResultMessage,
   type WorkspaceFileSearchResultMessage,
 } from "../shared/protocol";
+import {
+  editorPerformanceBenchmarkEnabled,
+  measureEditorPerformance,
+} from "../shared/performanceBenchmark";
 import { isWorkspaceFileSearchQuery } from "../shared/workspaceFileSearch";
 import {
   createStarterPlugin,
@@ -4016,6 +4020,14 @@ export class MarkdownEditorApp {
   }
 
   private dispatchTransaction(tr: Transaction): boolean {
+    if (!editorPerformanceBenchmarkEnabled)
+      return this.dispatchTransactionInternal(tr);
+    return measureEditorPerformance("editor.dispatchTransaction", () =>
+      this.dispatchTransactionInternal(tr),
+    );
+  }
+
+  private dispatchTransactionInternal(tr: Transaction): boolean {
     const oldSelection = this.view.state.selection;
     const rootTransientMeta = tr.getMeta(TRANSIENT_BLANK_META) as
       TransientBlankTransactionMeta | undefined;
@@ -4031,7 +4043,11 @@ export class MarkdownEditorApp {
       !this.spreadsheetPasteWithinMarkdownLimit(tr, committedTransient)
     )
       return false;
-    const applied = this.view.state.applyTransaction(tr);
+    const applied = editorPerformanceBenchmarkEnabled
+      ? measureEditorPerformance("editor.applyTransaction", () =>
+          this.view.state.applyTransaction(tr),
+        )
+      : this.view.state.applyTransaction(tr);
     const transactions = applied.transactions;
     const editTarget = this.profileFeatureEditTarget;
     if (editTarget && editTarget.document === this.view.state.doc) {

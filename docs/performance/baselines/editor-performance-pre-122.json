@@ -1,0 +1,1176 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-09-22T00:40:42.764Z",
+  "packageVersion": "0.5.5",
+  "gitCommit": "6f9d73323360db7c65eccd77e2e6d5f44f43d342",
+  "measurement": {
+    "webview": "The packaged src/webview/main.ts bundle built for Chromium",
+    "instrumentation": "Explicit benchmark-only hook; production build disables it",
+    "sampleCounts": {
+      "edit": 20,
+      "startup": 3,
+      "preview": 3,
+      "typingBurstEdits": 30
+    },
+    "latencyDefinition": "Elapsed browser time from immediately before a real Playwright keyboard/pointer action until the Rich Editor DOM reflects the edit",
+    "percentiles": ["p50", "p95", "max"]
+  },
+  "environment": {
+    "platform": "darwin-arm64",
+    "operatingSystem": "Darwin 25.6.0",
+    "cpu": "Apple M1 Pro",
+    "logicalCpuCount": 10,
+    "nodeVersion": "v24.5.0",
+    "chromiumVersion": "153.0.8010.12",
+    "viewport": {
+      "width": 1280,
+      "height": 900,
+      "deviceScaleFactor": 1
+    }
+  },
+  "scenarios": [
+    {
+      "id": "small-normal",
+      "category": "ordinary",
+      "profile": "github",
+      "metadata": {
+        "bytes": 174,
+        "lines": 8,
+        "topLevelBlocks": 4
+      },
+      "startup": {
+        "sampleCount": 3,
+        "editorReadyMilliseconds": {
+          "sampleCount": 3,
+          "p50": 176,
+          "p95": 198.4100000003353,
+          "max": 200.90000000037253
+        },
+        "inputAcceptedMilliseconds": {
+          "sampleCount": 3,
+          "p50": 292.3999999985099,
+          "p95": 312.11000000052155,
+          "max": 314.30000000074506
+        },
+        "inputAcceptedSamplesMilliseconds": [
+          314.30000000074506, 292.3999999985099, 272.80000000074506
+        ],
+        "metrics": {
+          "core.inspectCompatibility": {
+            "callCount": 5,
+            "totalMilliseconds": 2.099999997764826,
+            "perCallMilliseconds": {
+              "sampleCount": 5,
+              "p50": 0.2999999988824129,
+              "p95": 0.6800000008195639,
+              "max": 0.7000000011175871
+            }
+          },
+          "core.parseMarkdown": {
+            "callCount": 11,
+            "totalMilliseconds": 18.5,
+            "perCallMilliseconds": {
+              "sampleCount": 11,
+              "p50": 1.799999998882413,
+              "p95": 3.9500000001862645,
+              "max": 4
+            }
+          },
+          "core.serializeMarkdown": {
+            "callCount": 3,
+            "totalMilliseconds": 2.800000000745058,
+            "perCallMilliseconds": {
+              "sampleCount": 3,
+              "p50": 0.900000000372529,
+              "p95": 0.9900000000372529,
+              "max": 1
+            }
+          },
+          "editor.applyTransaction": {
+            "callCount": 5,
+            "totalMilliseconds": 0.9000000040978193,
+            "perCallMilliseconds": {
+              "sampleCount": 5,
+              "p50": 0.2000000011175871,
+              "p95": 0.30000000074505806,
+              "max": 0.30000000074505806
+            }
+          },
+          "editor.dispatchTransaction": {
+            "callCount": 5,
+            "totalMilliseconds": 9.600000003352761,
+            "perCallMilliseconds": {
+              "sampleCount": 5,
+              "p50": 2.5,
+              "p95": 3.000000001490116,
+              "max": 3.100000001490116
+            }
+          }
+        }
+      },
+      "preview": {
+        "sampleCount": 3,
+        "previewReadyMilliseconds": {
+          "sampleCount": 3,
+          "p50": 167.30000000074506,
+          "p95": 170.45000000074506,
+          "max": 170.80000000074506
+        },
+        "metrics": {
+          "core.inspectCompatibility": {
+            "callCount": 6,
+            "totalMilliseconds": 1.0000000037252903,
+            "perCallMilliseconds": {
+              "sampleCount": 6,
+              "p50": 0.2000000011175871,
+              "p95": 0.2750000008381903,
+              "max": 0.30000000074505806
+            }
+          },
+          "core.parseMarkdown": {
+            "callCount": 18,
+            "totalMilliseconds": 16.299999998882413,
+            "perCallMilliseconds": {
+              "sampleCount": 18,
+              "p50": 0,
+              "p95": 3.529999999888241,
+              "max": 3.699999999254942
+            }
+          },
+          "core.renderMarkdown": {
+            "callCount": 6,
+            "totalMilliseconds": 1.3999999985098839,
+            "perCallMilliseconds": {
+              "sampleCount": 6,
+              "p50": 0.24999999906867743,
+              "p95": 0.30000000074505806,
+              "max": 0.30000000074505806
+            }
+          },
+          "core.renderMarkdownDocument": {
+            "callCount": 6,
+            "totalMilliseconds": 1.0999999977648258,
+            "perCallMilliseconds": {
+              "sampleCount": 6,
+              "p50": 0.19999999925494194,
+              "p95": 0.27499999944120646,
+              "max": 0.2999999988824129
+            }
+          }
+        }
+      },
+      "edits": {
+        "normalText": {
+          "sampleCount": 20,
+          "latencyMilliseconds": {
+            "sampleCount": 20,
+            "p50": 3.3500000005587935,
+            "p95": 10.069999998994197,
+            "max": 43.70000000111759
+          },
+          "latencySamplesMilliseconds": [
+            43.70000000111759, 8.299999998882413, 3, 3.200000001117587,
+            3.099999999627471, 3.099999999627471, 4, 3.5, 4.099999999627471,
+            3.600000001490116, 3.5, 3, 3.5, 3.5, 2.899999998509884,
+            2.900000000372529, 3, 3.100000001490116, 3, 3.5
+          ],
+          "sourceUpdatedEverySample": true,
+          "metrics": {
+            "core.inspectCompatibility": {
+              "callCount": 20,
+              "totalMilliseconds": 9.300000002607703,
+              "perCallMilliseconds": {
+                "sampleCount": 20,
+                "p50": 0.40000000037252903,
+                "p95": 0.7049999993294478,
+                "max": 0.8000000007450581
+              }
+            },
+            "core.parseMarkdown": {
+              "callCount": 20,
+              "totalMilliseconds": 8.800000002607703,
+              "perCallMilliseconds": {
+                "sampleCount": 20,
+                "p50": 0.40000000037252903,
+                "p95": 0.7049999993294478,
+                "max": 0.8000000007450581
+              }
+            },
+            "core.serializeMarkdown": {
+              "callCount": 20,
+              "totalMilliseconds": 1.9000000022351742,
+              "perCallMilliseconds": {
+                "sampleCount": 20,
+                "p50": 0.09999999962747097,
+                "p95": 0.13500000145286373,
+                "max": 0.8000000007450581
+              }
+            },
+            "editor.applyTransaction": {
+              "callCount": 20,
+              "totalMilliseconds": 1.9999999962747097,
+              "perCallMilliseconds": {
+                "sampleCount": 20,
+                "p50": 0.09999999962747097,
+                "p95": 0.20500000109896072,
+                "max": 0.30000000074505806
+              }
+            },
+            "editor.dispatchTransaction": {
+              "callCount": 20,
+              "totalMilliseconds": 15.099999999627471,
+              "perCallMilliseconds": {
+                "sampleCount": 20,
+                "p50": 0.6999999992549419,
+                "p95": 1.1699999996460984,
+                "max": 2.5
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "normal-100kb-many-blocks",
+      "category": "ordinary",
+      "profile": "github",
+      "metadata": {
+        "bytes": 102456,
+        "lines": 1553,
+        "topLevelBlocks": 777
+      },
+      "startup": {
+        "sampleCount": 3,
+        "editorReadyMilliseconds": {
+          "sampleCount": 3,
+          "p50": 194.80000000074506,
+          "p95": 195.7899999987334,
+          "max": 195.89999999850988
+        },
+        "inputAcceptedMilliseconds": {
+          "sampleCount": 3,
+          "p50": 312,
+          "p95": 322.8899999996647,
+          "max": 324.09999999962747
+        },
+        "inputAcceptedSamplesMilliseconds": [324.09999999962747, 312, 311],
+        "metrics": {
+          "core.inspectCompatibility": {
+            "callCount": 6,
+            "totalMilliseconds": 20.000000001862645,
+            "perCallMilliseconds": {
+              "sampleCount": 6,
+              "p50": 3.3500000005587935,
+              "p95": 6.250000000931323,
+              "max": 6.300000000745058
+            }
+          },
+          "core.parseMarkdown": {
+            "callCount": 12,
+            "totalMilliseconds": 59.6999999973923,
+            "perCallMilliseconds": {
+              "sampleCount": 12,
+              "p50": 3.6000000005587935,
+              "p95": 12.964999998919664,
+              "max": 13.899999998509884
+            }
+          },
+          "core.serializeMarkdown": {
+            "callCount": 3,
+            "totalMilliseconds": 9.900000000372529,
+            "perCallMilliseconds": {
+              "sampleCount": 3,
+              "p50": 3.300000000745058,
+              "p95": 3.390000000409782,
+              "max": 3.400000000372529
+            }
+          },
+          "editor.applyTransaction": {
+            "callCount": 6,
+            "totalMilliseconds": 2.299999998882413,
+            "perCallMilliseconds": {
+              "sampleCount": 6,
+              "p50": 0.34999999962747097,
+              "p95": 0.8000000002793968,
+              "max": 0.8000000007450581
+            }
+          },
+          "editor.dispatchTransaction": {
+            "callCount": 6,
+            "totalMilliseconds": 27.599999997764826,
+            "perCallMilliseconds": {
+              "sampleCount": 6,
+              "p50": 4.6499999994412065,
+              "p95": 8.225000000093132,
+              "max": 8.400000000372529
+            }
+          }
+        }
+      },
+      "preview": {
+        "sampleCount": 3,
+        "previewReadyMilliseconds": {
+          "sampleCount": 3,
+          "p50": 201.09999999962747,
+          "p95": 206.14000000096857,
+          "max": 206.7000000011176
+        },
+        "metrics": {
+          "core.inspectCompatibility": {
+            "callCount": 6,
+            "totalMilliseconds": 1.299999998882413,
+            "perCallMilliseconds": {
+              "sampleCount": 6,
+              "p50": 0.24999999906867743,
+              "p95": 0.30000000074505806,
+              "max": 0.30000000074505806
+            }
+          },
+          "core.parseMarkdown": {
+            "callCount": 18,
+            "totalMilliseconds": 40.899999998509884,
+            "perCallMilliseconds": {
+              "sampleCount": 18,
+              "p50": 0,
+              "p95": 12.51499999994412,
+              "max": 12.599999999627471
+            }
+          },
+          "core.renderMarkdown": {
+            "callCount": 6,
+            "totalMilliseconds": 2.9999999962747097,
+            "perCallMilliseconds": {
+              "sampleCount": 6,
+              "p50": 0.5,
+              "p95": 0.7999999988824129,
+              "max": 0.7999999988824129
+            }
+          },
+          "core.renderMarkdownDocument": {
+            "callCount": 6,
+            "totalMilliseconds": 2.9999999962747097,
+            "perCallMilliseconds": {
+              "sampleCount": 6,
+              "p50": 0.5,
+              "p95": 0.7999999988824129,
+              "max": 0.7999999988824129
+            }
+          }
+        }
+      },
+      "edits": {
+        "normalText": {
+          "sampleCount": 20,
+          "latencyMilliseconds": {
+            "sampleCount": 20,
+            "p50": 7.5499999998137355,
+            "p95": 16.070000001043088,
+            "max": 23.09999999962747
+          },
+          "latencySamplesMilliseconds": [
+            23.09999999962747, 15.700000001117587, 8.400000000372529,
+            7.599999999627471, 15.099999999627471, 8.099999999627471,
+            6.900000000372529, 6.600000001490116, 7.299999998882413,
+            8.099999999627471, 13.800000000745058, 7.599999999627471,
+            7.800000000745058, 6.800000000745058, 7, 7.5, 6.099999999627471,
+            6.900000000372529, 7.299999998882413, 6.300000000745058
+          ],
+          "sourceUpdatedEverySample": true,
+          "metrics": {
+            "core.inspectCompatibility": {
+              "callCount": 20,
+              "totalMilliseconds": 98.39999999664724,
+              "perCallMilliseconds": {
+                "sampleCount": 20,
+                "p50": 4.799999998882413,
+                "p95": 6.2099999993108215,
+                "max": 6.400000000372529
+              }
+            },
+            "core.parseMarkdown": {
+              "callCount": 20,
+              "totalMilliseconds": 96.89999999664724,
+              "perCallMilliseconds": {
+                "sampleCount": 20,
+                "p50": 4.699999999254942,
+                "p95": 6.114999999664724,
+                "max": 6.400000000372529
+              }
+            },
+            "core.serializeMarkdown": {
+              "callCount": 20,
+              "totalMilliseconds": 17.39999999664724,
+              "perCallMilliseconds": {
+                "sampleCount": 20,
+                "p50": 0.7000000011175871,
+                "p95": 1.1250000000000018,
+                "max": 3.5
+              }
+            },
+            "editor.applyTransaction": {
+              "callCount": 20,
+              "totalMilliseconds": 7.699999995529652,
+              "perCallMilliseconds": {
+                "sampleCount": 20,
+                "p50": 0.34999999962747097,
+                "p95": 0.6099999995902182,
+                "max": 0.7999999988824129
+              }
+            },
+            "editor.dispatchTransaction": {
+              "callCount": 20,
+              "totalMilliseconds": 76.29999999888241,
+              "perCallMilliseconds": {
+                "sampleCount": 20,
+                "p50": 3.5499999998137355,
+                "p95": 5.060000000335278,
+                "max": 8.099999999627471
+              }
+            }
+          }
+        }
+      },
+      "typingBurst": {
+        "editCount": 30,
+        "requestedKeystrokes": 30,
+        "keyboardDelayMilliseconds": 15,
+        "metrics": {
+          "core.inspectCompatibility": {
+            "callCount": 30,
+            "totalMilliseconds": 150.80000000447035,
+            "perCallMilliseconds": {
+              "sampleCount": 30,
+              "p50": 4.699999999254942,
+              "p95": 6.655000001285225,
+              "max": 6.799999998882413
+            }
+          },
+          "core.parseMarkdown": {
+            "callCount": 30,
+            "totalMilliseconds": 147.09999999962747,
+            "perCallMilliseconds": {
+              "sampleCount": 30,
+              "p50": 4.599999999627471,
+              "p95": 6.5549999997951085,
+              "max": 6.699999999254942
+            }
+          },
+          "core.serializeMarkdown": {
+            "callCount": 30,
+            "totalMilliseconds": 26.60000000335276,
+            "perCallMilliseconds": {
+              "sampleCount": 30,
+              "p50": 0.75,
+              "p95": 1.0550000008195637,
+              "max": 4.199999999254942
+            }
+          },
+          "editor.applyTransaction": {
+            "callCount": 30,
+            "totalMilliseconds": 12.199999999254942,
+            "perCallMilliseconds": {
+              "sampleCount": 30,
+              "p50": 0.40000000037252903,
+              "p95": 0.6099999995902174,
+              "max": 0.900000000372529
+            }
+          },
+          "editor.dispatchTransaction": {
+            "callCount": 30,
+            "totalMilliseconds": 120.89999999664724,
+            "perCallMilliseconds": {
+              "sampleCount": 30,
+              "p50": 3.849999999627471,
+              "p95": 4.799999999906868,
+              "max": 9
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "code-heading-footnote-heavy",
+      "category": "ordinary",
+      "profile": "github",
+      "metadata": {
+        "bytes": 36225,
+        "lines": 1002,
+        "topLevelBlocks": 102
+      },
+      "startup": {
+        "sampleCount": 3,
+        "editorReadyMilliseconds": {
+          "sampleCount": 3,
+          "p50": 983.3999999985099,
+          "p95": 998.5199999991804,
+          "max": 1000.1999999992549
+        },
+        "inputAcceptedMilliseconds": {
+          "sampleCount": 3,
+          "p50": 1786.0999999996275,
+          "p95": 1786.3699999986216,
+          "max": 1786.3999999985099
+        },
+        "inputAcceptedSamplesMilliseconds": [
+          1786.3999999985099, 1734.2999999988824, 1786.0999999996275
+        ],
+        "metrics": {
+          "core.inspectCompatibility": {
+            "callCount": 6,
+            "totalMilliseconds": 22.99999999627471,
+            "perCallMilliseconds": {
+              "sampleCount": 6,
+              "p50": 3.799999998882413,
+              "p95": 4.049999999348074,
+              "max": 4.099999999627471
+            }
+          },
+          "core.parseMarkdown": {
+            "callCount": 61512,
+            "totalMilliseconds": 3628.500000031665,
+            "perCallMilliseconds": {
+              "sampleCount": 61512,
+              "p50": 0.09999999962747097,
+              "p95": 0.10000000149011612,
+              "max": 12
+            }
+          },
+          "core.serializeMarkdown": {
+            "callCount": 3,
+            "totalMilliseconds": 15.400000000372529,
+            "perCallMilliseconds": {
+              "sampleCount": 3,
+              "p50": 5,
+              "p95": 5.45,
+              "max": 5.5
+            }
+          },
+          "editor.applyTransaction": {
+            "callCount": 6,
+            "totalMilliseconds": 57.79999999888241,
+            "perCallMilliseconds": {
+              "sampleCount": 6,
+              "p50": 9.399999999441206,
+              "p95": 19.549999999813735,
+              "max": 19.59999999962747
+            }
+          },
+          "editor.dispatchTransaction": {
+            "callCount": 6,
+            "totalMilliseconds": 1969.2000000011176,
+            "perCallMilliseconds": {
+              "sampleCount": 6,
+              "p50": 327.1000000005588,
+              "p95": 657.0499999998137,
+              "max": 658.5999999996275
+            }
+          }
+        }
+      },
+      "preview": {
+        "sampleCount": 3,
+        "previewReadyMilliseconds": {
+          "sampleCount": 3,
+          "p50": 1000,
+          "p95": 1004.5,
+          "max": 1005
+        },
+        "metrics": {
+          "core.inspectCompatibility": {
+            "callCount": 6,
+            "totalMilliseconds": 10.700000002980232,
+            "perCallMilliseconds": {
+              "sampleCount": 6,
+              "p50": 1.800000000745058,
+              "p95": 3.400000000372529,
+              "max": 3.400000000372529
+            }
+          },
+          "core.parseMarkdown": {
+            "callCount": 31518,
+            "totalMilliseconds": 1914.6999999918044,
+            "perCallMilliseconds": {
+              "sampleCount": 31518,
+              "p50": 0.09999999962747097,
+              "p95": 0.10000000149011612,
+              "max": 11.599999999627471
+            }
+          },
+          "core.renderMarkdown": {
+            "callCount": 6,
+            "totalMilliseconds": 69.90000000037253,
+            "perCallMilliseconds": {
+              "sampleCount": 6,
+              "p50": 11.600000000558794,
+              "p95": 23.174999999348074,
+              "max": 23.199999999254942
+            }
+          },
+          "core.renderMarkdownDocument": {
+            "callCount": 6,
+            "totalMilliseconds": 60.000000001862645,
+            "perCallMilliseconds": {
+              "sampleCount": 6,
+              "p50": 9.900000000372529,
+              "p95": 20.024999999906868,
+              "max": 20.09999999962747
+            }
+          }
+        }
+      },
+      "edits": {
+        "normalText": {
+          "sampleCount": 20,
+          "latencyMilliseconds": {
+            "sampleCount": 20,
+            "p50": 640.9500000001863,
+            "p95": 673.2249999985099,
+            "max": 688.8999999985099
+          },
+          "latencySamplesMilliseconds": [
+            672.3999999985099, 688.8999999985099, 652, 643, 644,
+            635.7999999988824, 643.1999999992549, 617, 625.0999999996275,
+            615.2000000011176, 627.2999999988824, 625.3000000007451,
+            639.4000000003725, 637.3000000007451, 645.4000000003725,
+            639.3000000007451, 645.6999999992549, 648.6999999992549,
+            633.1999999992549, 642.5
+          ],
+          "sourceUpdatedEverySample": true,
+          "metrics": {
+            "core.inspectCompatibility": {
+              "callCount": 20,
+              "totalMilliseconds": 53.00000000372529,
+              "perCallMilliseconds": {
+                "sampleCount": 20,
+                "p50": 2.5,
+                "p95": 3.1299999997019774,
+                "max": 3.700000001117587
+              }
+            },
+            "core.parseMarkdown": {
+              "callCount": 204020,
+              "totalMilliseconds": 11248.700000021607,
+              "perCallMilliseconds": {
+                "sampleCount": 204020,
+                "p50": 0,
+                "p95": 0.10000000149011612,
+                "max": 3.599999999627471
+              }
+            },
+            "core.serializeMarkdown": {
+              "callCount": 20,
+              "totalMilliseconds": 46.8000000026077,
+              "perCallMilliseconds": {
+                "sampleCount": 20,
+                "p50": 2.150000000372529,
+                "p95": 3.104999999981375,
+                "max": 5.099999999627471
+              }
+            },
+            "editor.applyTransaction": {
+              "callCount": 20,
+              "totalMilliseconds": 319.90000000037253,
+              "perCallMilliseconds": {
+                "sampleCount": 20,
+                "p50": 15.749999999068677,
+                "p95": 18.724999999348075,
+                "max": 19.200000001117587
+              }
+            },
+            "editor.dispatchTransaction": {
+              "callCount": 20,
+              "totalMilliseconds": 12506.89999999851,
+              "perCallMilliseconds": {
+                "sampleCount": 20,
+                "p50": 626.6999999992549,
+                "p95": 649.0350000003352,
+                "max": 651.5999999996275
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "large-table-100x10",
+      "category": "ordinary",
+      "profile": "github",
+      "metadata": {
+        "bytes": 8420,
+        "lines": 104,
+        "topLevelBlocks": 2,
+        "table": {
+          "bodyRows": 100,
+          "columns": 10
+        }
+      },
+      "startup": {
+        "sampleCount": 3,
+        "editorReadyMilliseconds": {
+          "sampleCount": 3,
+          "p50": 199.19999999925494,
+          "p95": 205.04999999925494,
+          "max": 205.69999999925494
+        },
+        "inputAcceptedMilliseconds": {
+          "sampleCount": 3,
+          "p50": 313.19999999925494,
+          "p95": 333.62999999858437,
+          "max": 335.8999999985099
+        },
+        "inputAcceptedSamplesMilliseconds": [
+          335.8999999985099, 308.19999999925494, 313.19999999925494
+        ],
+        "metrics": {
+          "core.inspectCompatibility": {
+            "callCount": 6,
+            "totalMilliseconds": 14.299999998882413,
+            "perCallMilliseconds": {
+              "sampleCount": 6,
+              "p50": 2.349999999627471,
+              "p95": 3.8250000001862645,
+              "max": 3.900000000372529
+            }
+          },
+          "core.parseMarkdown": {
+            "callCount": 12,
+            "totalMilliseconds": 38.99999999627471,
+            "perCallMilliseconds": {
+              "sampleCount": 12,
+              "p50": 2.5499999998137355,
+              "p95": 7.935000000242144,
+              "max": 8.099999999627471
+            }
+          },
+          "core.serializeMarkdown": {
+            "callCount": 3,
+            "totalMilliseconds": 14.699999997392297,
+            "perCallMilliseconds": {
+              "sampleCount": 3,
+              "p50": 4.899999998509884,
+              "p95": 5.25999999884516,
+              "max": 5.299999998882413
+            }
+          },
+          "editor.applyTransaction": {
+            "callCount": 3,
+            "totalMilliseconds": 5.200000001117587,
+            "perCallMilliseconds": {
+              "sampleCount": 3,
+              "p50": 1.699999999254942,
+              "p95": 1.8800000002607704,
+              "max": 1.900000000372529
+            }
+          },
+          "editor.dispatchTransaction": {
+            "callCount": 3,
+            "totalMilliseconds": 30.200000001117587,
+            "perCallMilliseconds": {
+              "sampleCount": 3,
+              "p50": 10.100000001490116,
+              "p95": 10.460000000149012,
+              "max": 10.5
+            }
+          }
+        }
+      },
+      "preview": {
+        "sampleCount": 3,
+        "previewReadyMilliseconds": {
+          "sampleCount": 3,
+          "p50": 192.80000000074506,
+          "p95": 193.51999999973924,
+          "max": 193.59999999962747
+        },
+        "metrics": {
+          "core.inspectCompatibility": {
+            "callCount": 6,
+            "totalMilliseconds": 1.599999999627471,
+            "perCallMilliseconds": {
+              "sampleCount": 6,
+              "p50": 0.25,
+              "p95": 0.4500000001862645,
+              "max": 0.5
+            }
+          },
+          "core.parseMarkdown": {
+            "callCount": 18,
+            "totalMilliseconds": 28.499999998137355,
+            "perCallMilliseconds": {
+              "sampleCount": 18,
+              "p50": 0,
+              "p95": 7.58999999994412,
+              "max": 8.099999999627471
+            }
+          },
+          "core.renderMarkdown": {
+            "callCount": 6,
+            "totalMilliseconds": 6.699999999254942,
+            "perCallMilliseconds": {
+              "sampleCount": 6,
+              "p50": 1.1000000005587935,
+              "p95": 2.0749999997206032,
+              "max": 2.099999999627471
+            }
+          },
+          "core.renderMarkdownDocument": {
+            "callCount": 6,
+            "totalMilliseconds": 6.599999999627471,
+            "perCallMilliseconds": {
+              "sampleCount": 6,
+              "p50": 1.1000000005587935,
+              "p95": 2.0749999997206032,
+              "max": 2.099999999627471
+            }
+          }
+        }
+      },
+      "edits": {
+        "normalText": {
+          "sampleCount": 20,
+          "latencyMilliseconds": {
+            "sampleCount": 20,
+            "p50": 6.2999999998137355,
+            "p95": 7.625000000279407,
+            "max": 21.399999998509884
+          },
+          "latencySamplesMilliseconds": [
+            21.399999998509884, 6.899999998509884, 6.900000000372529,
+            6.100000001490116, 6.400000000372529, 6.599999999627471,
+            6.700000001117587, 6.200000001117587, 6.5, 6, 5.600000001490116,
+            6.700000001117587, 6.199999999254942, 6.199999999254942,
+            6.200000001117587, 6, 6.400000000372529, 6.399999998509884, 6,
+            5.900000000372529
+          ],
+          "sourceUpdatedEverySample": true,
+          "metrics": {
+            "core.inspectCompatibility": {
+              "callCount": 20,
+              "totalMilliseconds": 46.79999999701977,
+              "perCallMilliseconds": {
+                "sampleCount": 20,
+                "p50": 2.2499999990686774,
+                "p95": 3.2250000011175874,
+                "max": 3.700000001117587
+              }
+            },
+            "core.parseMarkdown": {
+              "callCount": 20,
+              "totalMilliseconds": 45.399999998509884,
+              "perCallMilliseconds": {
+                "sampleCount": 20,
+                "p50": 2.1000000005587935,
+                "p95": 3.0250000000000004,
+                "max": 3.5
+              }
+            },
+            "core.serializeMarkdown": {
+              "callCount": 20,
+              "totalMilliseconds": 3.700000001117587,
+              "perCallMilliseconds": {
+                "sampleCount": 20,
+                "p50": 0.09999999962747097,
+                "p95": 0.29000000106170903,
+                "max": 2
+              }
+            },
+            "editor.applyTransaction": {
+              "callCount": 20,
+              "totalMilliseconds": 16.199999993667006,
+              "perCallMilliseconds": {
+                "sampleCount": 20,
+                "p50": 0.7999999988824129,
+                "p95": 1.2249999992549423,
+                "max": 1.699999999254942
+              }
+            },
+            "editor.dispatchTransaction": {
+              "callCount": 20,
+              "totalMilliseconds": 51.80000000074506,
+              "perCallMilliseconds": {
+                "sampleCount": 20,
+                "p50": 2.4500000001862645,
+                "p95": 2.954999998956921,
+                "max": 5.900000000372529
+              }
+            }
+          }
+        },
+        "tableCell": {
+          "sampleCount": 20,
+          "latencyMilliseconds": {
+            "sampleCount": 20,
+            "p50": 9.75,
+            "p95": 23.324999999720635,
+            "max": 65.60000000149012
+          },
+          "latencySamplesMilliseconds": [
+            65.60000000149012, 20.90000000037253, 13, 8.700000001117587,
+            21.09999999962747, 20, 10.200000001117587, 9.900000000372529,
+            9.899999998509884, 9.5, 9.099999999627471, 9.800000000745058,
+            8.699999999254942, 9.5, 18.59999999962747, 9.400000000372529,
+            9.400000000372529, 9.699999999254942, 9.400000000372529,
+            8.300000000745058
+          ],
+          "sourceUpdatedEverySample": true,
+          "metrics": {
+            "core.inspectCompatibility": {
+              "callCount": 20,
+              "totalMilliseconds": 49.90000000037253,
+              "perCallMilliseconds": {
+                "sampleCount": 20,
+                "p50": 2.300000000745058,
+                "p95": 3.5049999999813735,
+                "max": 3.599999999627471
+              }
+            },
+            "core.parseMarkdown": {
+              "callCount": 20,
+              "totalMilliseconds": 47.899999994784594,
+              "perCallMilliseconds": {
+                "sampleCount": 20,
+                "p50": 2.1000000005587935,
+                "p95": 3.4050000003539025,
+                "max": 3.5
+              }
+            },
+            "core.serializeMarkdown": {
+              "callCount": 20,
+              "totalMilliseconds": 45.900000005960464,
+              "perCallMilliseconds": {
+                "sampleCount": 20,
+                "p50": 2.0499999998137355,
+                "p95": 3.455000000353903,
+                "max": 4.5
+              }
+            },
+            "editor.applyTransaction": {
+              "callCount": 20,
+              "totalMilliseconds": 18.100000001490116,
+              "perCallMilliseconds": {
+                "sampleCount": 20,
+                "p50": 0.7000000011175871,
+                "p95": 1.7199999992735686,
+                "max": 2.099999999627471
+              }
+            },
+            "editor.dispatchTransaction": {
+              "callCount": 20,
+              "totalMilliseconds": 102.49999999813735,
+              "perCallMilliseconds": {
+                "sampleCount": 20,
+                "p50": 4.650000000372529,
+                "p95": 7.079999998584392,
+                "max": 10.5
+              }
+            }
+          }
+        },
+        "tableStructure": {
+          "sampleCount": 20,
+          "operation": "Insert row using the real Rich Editor row-insert control",
+          "latencyMilliseconds": {
+            "sampleCount": 20,
+            "p50": 56.89999999944121,
+            "p95": 66.22000000067055,
+            "max": 74.19999999925494
+          },
+          "latencySamplesMilliseconds": [
+            64.19999999925494, 65.80000000074506, 56.79999999888241,
+            58.40000000037253, 55.5, 56, 57.399999998509884, 74.19999999925494,
+            55.30000000074506, 57.09999999962747, 56.09999999962747, 55.5,
+            55.09999999962747, 56.19999999925494, 58.600000001490116, 62, 57,
+            54.70000000111759, 58, 55.69999999925494
+          ],
+          "metrics": {
+            "core.inspectCompatibility": {
+              "callCount": 20,
+              "totalMilliseconds": 44.79999999701977,
+              "perCallMilliseconds": {
+                "sampleCount": 20,
+                "p50": 1.900000000372529,
+                "p95": 3.315000000782311,
+                "max": 3.600000001490116
+              }
+            },
+            "core.parseMarkdown": {
+              "callCount": 20,
+              "totalMilliseconds": 42.09999999962747,
+              "perCallMilliseconds": {
+                "sampleCount": 20,
+                "p50": 1.800000000745058,
+                "p95": 3.104999999701977,
+                "max": 3.200000001117587
+              }
+            },
+            "core.serializeMarkdown": {
+              "callCount": 20,
+              "totalMilliseconds": 60.69999999925494,
+              "perCallMilliseconds": {
+                "sampleCount": 20,
+                "p50": 2.699999999254942,
+                "p95": 4.730000001098961,
+                "max": 5.300000000745058
+              }
+            },
+            "editor.applyTransaction": {
+              "callCount": 20,
+              "totalMilliseconds": 18.199999999254942,
+              "perCallMilliseconds": {
+                "sampleCount": 20,
+                "p50": 0.8000000007450581,
+                "p95": 1.145000001415611,
+                "max": 2
+              }
+            },
+            "editor.dispatchTransaction": {
+              "callCount": 20,
+              "totalMilliseconds": 360.0999999977648,
+              "perCallMilliseconds": {
+                "sampleCount": 20,
+                "p50": 17.75,
+                "p95": 20.815000000689178,
+                "max": 21.09999999962747
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "stress-table-2000x20",
+      "category": "stress-only",
+      "profile": "github",
+      "metadata": {
+        "bytes": 434328,
+        "lines": 2011,
+        "topLevelBlocks": 4,
+        "table": {
+          "sourceRows": 2002,
+          "columns": -1
+        }
+      },
+      "startup": {
+        "sampleCount": 3,
+        "editorReadyMilliseconds": {
+          "sampleCount": 3,
+          "p50": 1306.6000000014901,
+          "p95": 1377.4300000008195,
+          "max": 1385.300000000745
+        },
+        "inputAcceptedMilliseconds": {
+          "sampleCount": 3,
+          "p50": 40884.20000000112,
+          "p95": 41404.39999999944,
+          "max": 41462.199999999255
+        },
+        "inputAcceptedSamplesMilliseconds": [
+          40884.20000000112, 40674.699999999255, 41462.199999999255
+        ],
+        "metrics": {
+          "core.inspectCompatibility": {
+            "callCount": 6,
+            "totalMilliseconds": 434.9999999962747,
+            "perCallMilliseconds": {
+              "sampleCount": 6,
+              "p50": 61.14999999944121,
+              "p95": 158.5499999988824,
+              "max": 164.39999999850988
+            }
+          },
+          "core.parseMarkdown": {
+            "callCount": 12,
+            "totalMilliseconds": 679.9999999962747,
+            "perCallMilliseconds": {
+              "sampleCount": 12,
+              "p50": 45.39999999944121,
+              "p95": 144.45500000007448,
+              "max": 158.69999999925494
+            }
+          },
+          "core.serializeMarkdown": {
+            "callCount": 3,
+            "totalMilliseconds": 363,
+            "perCallMilliseconds": {
+              "sampleCount": 3,
+              "p50": 120,
+              "p95": 123.6,
+              "max": 124
+            }
+          },
+          "editor.applyTransaction": {
+            "callCount": 6,
+            "totalMilliseconds": 107.49999999813735,
+            "perCallMilliseconds": {
+              "sampleCount": 6,
+              "p50": 16.149999999441206,
+              "p95": 39.9250000002794,
+              "max": 42.30000000074506
+            }
+          },
+          "editor.dispatchTransaction": {
+            "callCount": 6,
+            "totalMilliseconds": 864.0999999959022,
+            "perCallMilliseconds": {
+              "sampleCount": 6,
+              "p50": 141.09999999962747,
+              "p95": 245.79999999934807,
+              "max": 251.09999999962747
+            }
+          }
+        }
+      },
+      "preview": {
+        "sampleCount": 3,
+        "previewReadyMilliseconds": {
+          "sampleCount": 3,
+          "p50": 1353.8999999985099,
+          "p95": 1371.539999999851,
+          "max": 1373.5
+        },
+        "metrics": {
+          "core.inspectCompatibility": {
+            "callCount": 6,
+            "totalMilliseconds": 11.599999999627471,
+            "perCallMilliseconds": {
+              "sampleCount": 6,
+              "p50": 1.900000000372529,
+              "p95": 3.7749999994412065,
+              "max": 3.799999998882413
+            }
+          },
+          "core.parseMarkdown": {
+            "callCount": 18,
+            "totalMilliseconds": 299.79999999701977,
+            "perCallMilliseconds": {
+              "sampleCount": 18,
+              "p50": 0,
+              "p95": 99.14500000104309,
+              "max": 99.39999999850988
+            }
+          },
+          "core.renderMarkdown": {
+            "callCount": 6,
+            "totalMilliseconds": 82.70000000111759,
+            "perCallMilliseconds": {
+              "sampleCount": 6,
+              "p50": 13.650000000372529,
+              "p95": 27.55000000121072,
+              "max": 27.600000001490116
+            }
+          },
+          "core.renderMarkdownDocument": {
+            "callCount": 6,
+            "totalMilliseconds": 82.60000000149012,
+            "perCallMilliseconds": {
+              "sampleCount": 6,
+              "p50": 13.600000000558794,
+              "p95": 27.55000000121072,
+              "max": 27.600000001490116
+            }
+          }
+        }
+      }
+    }
+  ]
+}

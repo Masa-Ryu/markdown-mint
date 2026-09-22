@@ -42,6 +42,7 @@ const extensionOptions = {
   keepNames: true,
   legalComments: "none",
   loader: { ".svg": "text" },
+  define: { __MM_EDITOR_PERFORMANCE_BENCHMARK__: "false" },
 };
 
 const webviewOptions = {
@@ -56,6 +57,7 @@ const webviewOptions = {
   keepNames: true,
   legalComments: "none",
   loader: { ".svg": "text" },
+  define: { __MM_EDITOR_PERFORMANCE_BENCHMARK__: "false" },
 };
 
 const integrationOptions = {

@@ -6,6 +6,12 @@
   footnote fragments and rendered sections, and skip unnecessary NodeView
   rerenders when heading and reference context has not changed.
 
+## 0.5.8
+
+- Add detailed, benchmark-only instrumentation for large-table input phases,
+  TableControls geometry and rendering, direct table validation, and toolbar
+  updates, plus controlled layout-isolation experiments.
+
 ## 0.5.6
 
 - Coalesce visible Preview refreshes per animation frame and debounce
@@ -18,9 +24,9 @@
 - Lazy-load the packaged Mermaid runtime only when a Mermaid diagram or syntax
   validation is first requested, sharing one local nonce-protected load across
   concurrent requests while preserving offline source fallback behavior.
- - Use a lightweight native-preview loader, minify production bundles while
-   keeping watch sourcemaps readable, and add startup/first-use benchmark and
-   package-asset verification coverage.
+- Use a lightweight native-preview loader, minify production bundles while
+  keeping watch sourcemaps readable, and add startup/first-use benchmark and
+  package-asset verification coverage.
 
 ## 0.5.4
 

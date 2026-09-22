@@ -48,6 +48,40 @@ have no `/dist/mermaid.js` resource entry. Native pages load the lightweight
 `dist/mermaid-loader.js` and request the heavy runtime only for Mermaid
 placeholders.
 
+## Editor performance benchmark
+
+Run the repeatable Rich Editor benchmark with:
+
+```sh
+npm run benchmark:editor
+```
+
+The command builds the normal Webview and a second, instrumented copy of the
+same `src/webview/main.ts` bundle. Only that benchmark copy enables the
+performance hook. Chromium then loads it through this real browser harness.
+The JSON report is written to `output/benchmark/editor-performance.json` and a
+short summary is printed to the terminal. No timing thresholds are enforced.
+
+The scenarios cover a small document, approximately 100 KB of normal Markdown
+with many top-level blocks, code/heading/footnote-heavy Markdown, a 100x10
+table, and the existing 2000x20 stress table. The ordinary scenarios include
+real keyboard edits; the 100x10 table also measures a cell edit and row append
+through the Rich Editor controls. A 30-keystroke typing burst records edit,
+parse, compatibility, render, and serialization call counts and total CPU
+time. Each scenario also records startup-to-input and preview-render startup.
+
+The report includes document metadata, raw samples, p50/p95/max, per-call and
+cumulative timings for `parseMarkdown`, `serializeMarkdown`,
+`inspectCompatibility`, and Markdown rendering, plus ProseMirror transaction
+and Rich Editor DOM-edit latency. `inspectCompatibility` includes its nested
+parse time, so those totals overlap and must not be added together. Defaults
+use 20 edit samples and 5 startup/preview samples (3 for the stress-only
+scenario). Set `MM_EDITOR_PERFORMANCE_SAMPLES`,
+`MM_EDITOR_PERFORMANCE_STARTUP_SAMPLES`,
+`MM_EDITOR_PERFORMANCE_PREVIEW_SAMPLES`, or
+`MM_EDITOR_PERFORMANCE_BURST_EDITS` to adjust sample counts. Set
+`MM_EDITOR_PERFORMANCE_EXECUTABLE_PATH` to use a specific Chromium executable.
+
 Run the startup benchmark with:
 
 ```sh

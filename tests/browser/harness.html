@@ -121,7 +121,9 @@
       const fixture = new URLSearchParams(location.search).get('fixture');
       const initialMode = new URLSearchParams(location.search).get('mode');
       if (initialMode === 'preview') document.body.dataset.markdownMintMode = 'preview';
-      let markdown = fixture === 'math'
+      let markdown = typeof window.__markdownMintBenchmarkInitialMarkdown === 'string'
+        ? window.__markdownMintBenchmarkInitialMarkdown
+        : fixture === 'math'
         ? mathFixture
         : fixture === 'mermaid'
           ? mermaidFixture

@@ -17,6 +17,10 @@ import {
 import { addListNodes } from "prosemirror-schema-list";
 import { tableNodes } from "prosemirror-tables";
 import {
+  editorPerformanceBenchmarkEnabled,
+  measureEditorPerformance,
+} from "../shared/performanceBenchmark";
+import {
   renderAdvancedBlock as renderAdvancedBlockHtml,
   renderCodeBlock as renderCodeBlockHtml,
   renderMath as renderMathHtml,
@@ -2487,6 +2491,17 @@ export function parseMarkdown(
   source: string,
   profile: Profile = "github",
 ): MarkdownSnapshot {
+  if (!editorPerformanceBenchmarkEnabled)
+    return parseMarkdownInternal(source, profile);
+  return measureEditorPerformance("core.parseMarkdown", () =>
+    parseMarkdownInternal(source, profile),
+  );
+}
+
+function parseMarkdownInternal(
+  source: string,
+  profile: Profile,
+): MarkdownSnapshot {
   if (latestParse?.source === source && latestParse.profile === profile)
     return latestParse.snapshot;
 
@@ -4121,6 +4136,17 @@ export function serializeMarkdown(
   doc: PMNode,
   previous?: MarkdownSnapshot,
 ): string {
+  if (!editorPerformanceBenchmarkEnabled)
+    return serializeMarkdownInternal(doc, previous);
+  return measureEditorPerformance("core.serializeMarkdown", () =>
+    serializeMarkdownInternal(doc, previous),
+  );
+}
+
+function serializeMarkdownInternal(
+  doc: PMNode,
+  previous?: MarkdownSnapshot,
+): string {
   if (previous?.doc && doc.eq(previous.doc)) return previous.source;
   if (!previous) {
     const metadata = documentMetadata.get(doc);
@@ -5529,6 +5555,18 @@ export function renderMarkdownDocument(
   profile: Profile = "github",
   input?: RenderInput,
 ): string {
+  if (!editorPerformanceBenchmarkEnabled)
+    return renderMarkdownDocumentInternal(doc, profile, input);
+  return measureEditorPerformance("core.renderMarkdownDocument", () =>
+    renderMarkdownDocumentInternal(doc, profile, input),
+  );
+}
+
+function renderMarkdownDocumentInternal(
+  doc: PMNode,
+  profile: Profile,
+  input?: RenderInput,
+): string {
   const state = createRenderState(profile, input ?? doc);
   state.document = doc;
   return (
@@ -5584,6 +5622,14 @@ export function renderMarkdown(
   source: string,
   profile: Profile = "github",
 ): string {
+  if (!editorPerformanceBenchmarkEnabled)
+    return renderMarkdownInternal(source, profile);
+  return measureEditorPerformance("core.renderMarkdown", () =>
+    renderMarkdownInternal(source, profile),
+  );
+}
+
+function renderMarkdownInternal(source: string, profile: Profile): string {
   const snapshot = parseMarkdown(source, profile);
   return renderMarkdownDocument(snapshot.doc, profile, snapshot);
 }
@@ -5597,6 +5643,17 @@ function walk(node: PMNode, visitor: (node: PMNode) => void): void {
 export function inspectCompatibility(
   source: string,
   profile: Profile = "github",
+): CompatibilityDiagnostic[] {
+  if (!editorPerformanceBenchmarkEnabled)
+    return inspectCompatibilityInternal(source, profile);
+  return measureEditorPerformance("core.inspectCompatibility", () =>
+    inspectCompatibilityInternal(source, profile),
+  );
+}
+
+function inspectCompatibilityInternal(
+  source: string,
+  profile: Profile,
 ): CompatibilityDiagnostic[] {
   const snapshot = parseMarkdown(source, profile);
   const diagnostics: CompatibilityDiagnostic[] = [];
