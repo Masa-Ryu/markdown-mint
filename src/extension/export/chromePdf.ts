@@ -140,35 +140,97 @@ function waitForEndpoint(
   });
 }
 
+function processHasExited(process: ChildProcess): boolean {
+  return process.exitCode !== null || process.signalCode !== null;
+}
+
+function waitForProcessExit(
+  process: ChildProcess,
+  timeoutMs: number,
+): Promise<boolean> {
+  if (processHasExited(process)) return Promise.resolve(true);
+  return new Promise<boolean>((resolve) => {
+    let settled = false;
+    const onExit = (): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(true);
+    };
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      if (typeof process.removeListener === "function")
+        process.removeListener("exit", onExit);
+      resolve(processHasExited(process));
+    }, timeoutMs);
+    process.once("exit", onExit);
+  });
+}
+
+function sendTerminationSignal(
+  process: ChildProcess,
+  signal: NodeJS.Signals,
+): void {
+  if (processHasExited(process)) return;
+  let sent: boolean;
+  try {
+    sent = process.kill(signal);
+  } catch (error) {
+    if (processHasExited(process)) return;
+    throw error instanceof Error
+      ? error
+      : new Error(`Could not send ${signal} to the browser process.`);
+  }
+  if (!sent && !processHasExited(process))
+    throw new Error(`Could not send ${signal} to the browser process.`);
+}
+
 async function cleanupProcess(
   process: ChildProcess,
   timeoutMs: number,
 ): Promise<void> {
-  if (process.exitCode !== null || process.signalCode !== null) return;
+  if (processHasExited(process)) return;
+  const terminationTimeoutMs = Math.min(
+    Math.max(1, Math.floor(timeoutMs)),
+    2_000,
+  );
+  const termWait = waitForProcessExit(process, terminationTimeoutMs);
+  let termError: Error | undefined;
   try {
-    process.kill("SIGTERM");
-  } catch {
-    return;
+    sendTerminationSignal(process, "SIGTERM");
+  } catch (error) {
+    termError =
+      error instanceof Error
+        ? error
+        : new Error("Could not terminate the browser process.");
   }
-  await new Promise<void>((resolve) => {
-    const timer = setTimeout(
-      () => {
-        if (process.exitCode === null && process.signalCode === null) {
-          try {
-            process.kill("SIGKILL");
-          } catch {
-            // The process may have exited between the state check and kill.
-          }
-        }
-        resolve();
-      },
-      Math.min(timeoutMs, 2_000),
-    );
-    process.once("exit", () => {
-      clearTimeout(timer);
-      resolve();
-    });
-  });
+  if (termError) {
+    await termWait;
+    throw termError;
+  }
+  if (await termWait) return;
+  if (processHasExited(process)) return;
+
+  const killWait = waitForProcessExit(
+    process,
+    Math.min(terminationTimeoutMs, 1_000),
+  );
+  let killError: Error | undefined;
+  try {
+    sendTerminationSignal(process, "SIGKILL");
+  } catch (error) {
+    killError =
+      error instanceof Error
+        ? error
+        : new Error("Could not forcefully terminate the browser process.");
+  }
+  if (killError) {
+    await killWait;
+    throw killError;
+  }
+  if (!(await killWait))
+    throw new Error("Browser process did not exit after SIGKILL.");
 }
 
 async function readPdfStream(
@@ -201,6 +263,21 @@ async function readPdfStream(
       // Closing an already-consumed stream is harmless during cleanup.
     }
   }
+}
+
+interface PrintToPdfResult {
+  readonly stream?: string;
+  readonly data?: string;
+}
+
+function isTransferModeUnsupportedError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return (
+    /transferMode/i.test(message) &&
+    /(?:not supported|unsupported|unknown|unexpected|invalid|unrecognized|not allowed|not found|does not support)/i.test(
+      message,
+    )
+  );
 }
 
 /** Render standalone HTML with an installed Chrome-family browser over CDP. */
@@ -271,26 +348,30 @@ export async function renderPdfWithChrome(
       { media: "print" },
       sessionId,
     );
-    const printed = await client.send<{
-      stream?: string;
-      data?: string;
-      base64Encoded?: boolean;
-    }>(
-      "Page.printToPDF",
-      {
-        printBackground: true,
-        preferCSSPageSize: true,
-        transferMode: "ReturnAsStream",
-      },
-      sessionId,
-    );
+    const printParams = {
+      printBackground: true,
+      preferCSSPageSize: true,
+    };
+    let printed: PrintToPdfResult;
+    try {
+      printed = await client.send<PrintToPdfResult>(
+        "Page.printToPDF",
+        { ...printParams, transferMode: "ReturnAsStream" },
+        sessionId,
+      );
+    } catch (error) {
+      if (!isTransferModeUnsupportedError(error)) throw error;
+      printed = await client.send<PrintToPdfResult>(
+        "Page.printToPDF",
+        printParams,
+        sessionId,
+      );
+    }
     if (printed.stream)
       return await readPdfStream(client, printed.stream, sessionId);
-    if (printed.data)
-      return new Uint8Array(
-        Buffer.from(printed.data, printed.base64Encoded ? "base64" : "utf8"),
-      );
-    throw new Error("Chrome did not return a PDF stream.");
+    if (printed.data !== undefined)
+      return new Uint8Array(Buffer.from(printed.data, "base64"));
+    throw new Error("Chrome did not return PDF data.");
   } finally {
     if (client) {
       if (targetId) {
