@@ -33,6 +33,11 @@ export interface HeadingAnchorCollectionOptions {
     source: string,
     profile: Profile,
   ) => Pick<MarkdownSnapshot, "doc">;
+  /** Parse a footnote body using a definition-scoped cache when available. */
+  readonly parseFootnote?: (
+    footnote: Pick<FootnoteDefinition, "label" | "content">,
+    profile: Profile,
+  ) => Pick<MarkdownSnapshot, "doc">;
   /** Return the rendered body of a source-backed block, when it has one. */
   readonly fragmentSource?: (
     node: PMNode,
@@ -281,7 +286,9 @@ export function collectHeadingAnchors(
   visit(snapshot.doc, [], 0, "document");
   for (const footnote of options.footnotes ?? []) {
     try {
-      const fragment = options.parseFragment?.(footnote.content, profile);
+      const fragment = options.parseFootnote
+        ? options.parseFootnote(footnote, profile)
+        : options.parseFragment?.(footnote.content, profile);
       if (fragment)
         visit(fragment.doc, [], undefined, headingFootnoteRoot(footnote.label));
     } catch {

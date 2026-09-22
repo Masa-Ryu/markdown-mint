@@ -4455,6 +4455,60 @@ interface RenderState extends RenderContext {
 
 type RenderInput = RenderContext | MarkdownSnapshot | PMNode | undefined;
 
+interface CachedFootnoteFragment {
+  source: string;
+  snapshot: MarkdownSnapshot;
+}
+
+interface CachedDocumentRenderContext {
+  anchors: HeadingAnchor[];
+  anchorMap: ReadonlyMap<string, HeadingAnchor>;
+  footnoteNumbers: ReadonlyMap<string, number>;
+  footnoteReferenceCounts: ReadonlyMap<string, number>;
+  footnoteReferencePrefixes: ReadonlyMap<
+    number,
+    { label: string; number: number; previousCount: number }
+  >;
+  key: string;
+  definitions: Array<{
+    definition: FootnoteDefinition;
+    label: string;
+    source: string;
+    content: string;
+  }>;
+}
+
+const footnoteFragmentSnapshots = new WeakMap<
+  object,
+  Map<Profile, CachedFootnoteFragment>
+>();
+const documentRenderContexts = new WeakMap<
+  PMNode,
+  Map<Profile, CachedDocumentRenderContext>
+>();
+const renderedFootnoteSections = new WeakMap<
+  object,
+  Map<Profile, { key: string; html: string }>
+>();
+
+function cachedFootnoteFragment(
+  definition: Pick<FootnoteDefinition, "label" | "content">,
+  profile: Profile,
+): MarkdownSnapshot {
+  const cacheKey = definition as object;
+  let profiles = footnoteFragmentSnapshots.get(cacheKey);
+  if (!profiles) {
+    profiles = new Map();
+    footnoteFragmentSnapshots.set(cacheKey, profiles);
+  }
+  const source = definition.content;
+  const cached = profiles.get(profile);
+  if (cached?.source === source) return cached.snapshot;
+  const snapshot = parseMarkdown(source, profile);
+  profiles.set(profile, { source, snapshot });
+  return snapshot;
+}
+
 function isSnapshot(value: RenderInput): value is MarkdownSnapshot {
   return Boolean(
     value && typeof value === "object" && "doc" in value && "source" in value,
@@ -4516,6 +4570,8 @@ function collectRenderHeadingAnchors(
   const options: HeadingAnchorCollectionOptions = {
     parseFragment: (source, fragmentProfile) =>
       parseMarkdown(source, fragmentProfile),
+    parseFootnote: (definition, fragmentProfile) =>
+      cachedFootnoteFragment(definition, fragmentProfile),
     fragmentSource: sourceBackedFragment,
     footnotes,
   };
@@ -4526,6 +4582,152 @@ function headingAnchorMap(
   anchors: readonly HeadingAnchor[],
 ): ReadonlyMap<string, HeadingAnchor> {
   return new Map(anchors.map((anchor) => [anchor.occurrenceId, anchor]));
+}
+
+function documentFootnotes(document: PMNode): FootnoteDefinition[] {
+  let footnotes = documentMetadata.get(document)?.footnotes ?? [];
+  if (footnotes.length === 0) {
+    document.descendants((node) => {
+      const nodeFootnotes = footnoteNodeMetadata.get(node);
+      if (nodeFootnotes && nodeFootnotes.length > 0) {
+        footnotes = nodeFootnotes;
+        return false;
+      }
+      return true;
+    });
+  }
+  return footnotes;
+}
+
+function documentFootnoteReferences(
+  document: PMNode,
+  definitions: readonly FootnoteDefinition[],
+): {
+  labels: string[];
+  numbers: Map<string, number>;
+  counts: Map<string, number>;
+  prefixes: Map<
+    number,
+    { label: string; number: number; previousCount: number }
+  >;
+} {
+  const labels: string[] = [];
+  const definitionLabels = new Set(
+    definitions.map((definition) => definition.label),
+  );
+  const numbers = new Map<string, number>();
+  const counts = new Map<string, number>();
+  const prefixes = new Map<
+    number,
+    { label: string; number: number; previousCount: number }
+  >();
+  document.descendants((node, position) => {
+    if (node.type.name !== "raw_inline") return;
+    const kind = String(node.attrs.kind ?? "");
+    if (kind !== "footnote_ref" && kind !== "footnote_anchor") return;
+    const label = footnoteLabelFromSource(String(node.attrs.source ?? ""));
+    labels.push(label);
+    if (!definitionLabels.has(label)) return;
+    let number = numbers.get(label);
+    if (number === undefined) {
+      number = numbers.size + 1;
+      numbers.set(label, number);
+    }
+    const previousCount = counts.get(label) ?? 0;
+    prefixes.set(position, { label, number, previousCount });
+    counts.set(label, previousCount + 1);
+  });
+  return { labels, numbers, counts, prefixes };
+}
+
+function matchesCachedDefinitions(
+  cached: CachedDocumentRenderContext,
+  footnotes: readonly FootnoteDefinition[],
+): boolean {
+  return (
+    cached.definitions.length === footnotes.length &&
+    cached.definitions.every(
+      (entry, index) =>
+        entry.definition === footnotes[index] &&
+        entry.label === footnotes[index]!.label &&
+        entry.source === footnotes[index]!.source &&
+        entry.content === footnotes[index]!.content,
+    )
+  );
+}
+
+function collectDocumentRenderContext(
+  document: PMNode,
+  profile: Profile,
+  footnotes: readonly FootnoteDefinition[],
+): CachedDocumentRenderContext {
+  let profiles = documentRenderContexts.get(document);
+  if (!profiles) {
+    profiles = new Map();
+    documentRenderContexts.set(document, profiles);
+  }
+  const cached = profiles.get(profile);
+  if (cached && matchesCachedDefinitions(cached, footnotes)) return cached;
+
+  const references = documentFootnoteReferences(document, footnotes);
+  const activeFootnotes = activeFootnoteDefinitions(
+    footnotes,
+    Array.from(new Set(references.labels)),
+  );
+  const anchors = collectRenderHeadingAnchors(
+    { doc: document },
+    profile,
+    activeFootnotes,
+  );
+  const headingInputs = anchors.map((anchor) => {
+    const heading =
+      anchor.position === undefined
+        ? undefined
+        : document.nodeAt(anchor.position);
+    return [
+      anchor.occurrenceId,
+      anchor.renderRoot,
+      anchor.nodePath,
+      anchor.displayText,
+      anchor.level,
+      anchor.id,
+      heading?.type.name === "heading" ? heading.toJSON() : null,
+    ];
+  });
+  const key = JSON.stringify([
+    profile,
+    references.labels,
+    activeFootnotes.map((definition) => [definition.label, definition.content]),
+    headingInputs,
+  ]);
+  const context: CachedDocumentRenderContext = {
+    anchors,
+    anchorMap: headingAnchorMap(anchors),
+    footnoteNumbers: references.numbers,
+    footnoteReferenceCounts: references.counts,
+    footnoteReferencePrefixes: references.prefixes,
+    key,
+    definitions: footnotes.map((definition) => ({
+      definition,
+      label: definition.label,
+      source: definition.source,
+      content: definition.content,
+    })),
+  };
+  profiles.set(profile, context);
+  return context;
+}
+
+/** Return the semantic heading/footnote context used by document NodeViews. */
+export function documentRenderContextKey(
+  document: PMNode,
+  profile: Profile = "github",
+): string {
+  return collectDocumentRenderContext(
+    document,
+    profile,
+    documentFootnotes(document),
+  ).key;
 }
 
 function createRenderState(profile: Profile, input?: RenderInput): RenderState {
@@ -4544,18 +4746,7 @@ function createRenderState(profile: Profile, input?: RenderInput): RenderState {
     document = input.document ?? input.snapshot?.doc;
     snapshot = input.snapshot;
   }
-  const metadata = document ? documentMetadata.get(document) : undefined;
-  let inheritedFootnotes = metadata?.footnotes ?? [];
-  if (document && inheritedFootnotes.length === 0) {
-    document.descendants((node) => {
-      const nodeFootnotes = footnoteNodeMetadata.get(node);
-      if (nodeFootnotes && nodeFootnotes.length > 0) {
-        inheritedFootnotes = nodeFootnotes;
-        return false;
-      }
-      return true;
-    });
-  }
+  const inheritedFootnotes = document ? documentFootnotes(document) : [];
   const footnotes =
     context.footnotes ?? snapshot?.footnotes ?? inheritedFootnotes;
   const inheritedHeadingAnchors =
@@ -4572,22 +4763,31 @@ function createRenderState(profile: Profile, input?: RenderInput): RenderState {
           lineEnding: "none" as const,
         }
       : undefined);
+  const sharedDocumentContext =
+    document &&
+    inheritedHeadingAnchors === undefined &&
+    !context.footnoteNumbers?.size &&
+    footnotes === inheritedFootnotes
+      ? collectDocumentRenderContext(document, profile, inheritedFootnotes)
+      : undefined;
   const computedAnchors =
     inheritedHeadingAnchors !== undefined
       ? []
-      : anchorSnapshot
-        ? collectRenderHeadingAnchors(
-            anchorSnapshot,
-            profile,
-            activeFootnoteDefinitions(
-              footnotes,
-              referencedFootnoteLabels(
-                document,
-                context.footnoteNumbers?.keys(),
+      : sharedDocumentContext
+        ? []
+        : anchorSnapshot
+          ? collectRenderHeadingAnchors(
+              anchorSnapshot,
+              profile,
+              activeFootnoteDefinitions(
+                footnotes,
+                referencedFootnoteLabels(
+                  document,
+                  context.footnoteNumbers?.keys(),
+                ),
               ),
-            ),
-          )
-        : [];
+            )
+          : [];
   const state: RenderState = {
     // The visual helpers are pure and can be overridden by a host renderer.
     // Put the defaults before the caller context so an injected renderer wins.
@@ -4610,7 +4810,9 @@ function createRenderState(profile: Profile, input?: RenderInput): RenderState {
     headingIds:
       context.headingIds ?? new WeakMap<PMNode, Map<number, string>>(),
     headingAnchors:
-      inheritedHeadingAnchors ?? headingAnchorMap(computedAnchors),
+      inheritedHeadingAnchors ??
+      sharedDocumentContext?.anchorMap ??
+      headingAnchorMap(computedAnchors),
   };
   if (document) state.document = document;
   if (snapshot) state.snapshot = snapshot;
@@ -4672,6 +4874,24 @@ function registerFootnoteReferencesBeforeNode(
 ): void {
   if (!document || document === target) return;
   if (state.nodePosition !== undefined && Number.isFinite(state.nodePosition)) {
+    if (target.type.name === "raw_inline") {
+      const kind = String(target.attrs.kind ?? "");
+      if (kind === "footnote_ref" || kind === "footnote_anchor") {
+        const label = footnoteLabelFromSource(
+          String(target.attrs.source ?? ""),
+        );
+        const prefix = collectDocumentRenderContext(
+          document,
+          state.profile,
+          state.footnotes,
+        ).footnoteReferencePrefixes.get(state.nodePosition);
+        if (prefix?.label === label) {
+          state.footnoteNumbers.set(label, prefix.number);
+          state.footnoteRefs.set(label, prefix.previousCount);
+          return;
+        }
+      }
+    }
     document.descendants((node, position) => {
       // Positions are ordered in document traversal. Once a node starts at or
       // after the target, its descendants and following siblings cannot be
@@ -4944,8 +5164,8 @@ function renderFootnotes(state: RenderState): string {
   if (used.length === 0) return "";
   const items = used
     .map((definition) => {
-      const body = renderSourceFragment(
-        definition.content,
+      const body = renderParsedSourceFragment(
+        cachedFootnoteFragment(definition, state.profile),
         state.profile,
         state,
         {
@@ -5166,6 +5386,29 @@ export function renderFootnotesHtml(
 ): string {
   const state = createRenderState(profile, input ?? doc);
   state.document = doc;
+  const inheritedFootnotes = documentFootnotes(doc);
+  if (
+    state.footnotes === inheritedFootnotes &&
+    (input === undefined || input === doc)
+  ) {
+    const context = collectDocumentRenderContext(
+      doc,
+      profile,
+      inheritedFootnotes,
+    );
+    let profiles = renderedFootnoteSections.get(state.footnotes);
+    if (!profiles) {
+      profiles = new Map();
+      renderedFootnoteSections.set(state.footnotes, profiles);
+    }
+    const cached = profiles.get(profile);
+    if (cached?.key === context.key) return cached.html;
+    state.footnoteNumbers = new Map(context.footnoteNumbers);
+    state.footnoteRefs = new Map(context.footnoteReferenceCounts);
+    const html = renderFootnotes(state);
+    profiles.set(profile, { key: context.key, html });
+    return html;
+  }
   collectFootnoteReferences(doc, state);
   return renderFootnotes(state);
 }
@@ -5175,11 +5418,16 @@ export function collectHeadingAnchors(
   snapshot: MarkdownSnapshot,
   profile: Profile = snapshot.profile ?? "github",
 ): HeadingAnchor[] {
+  const inheritedFootnotes = documentFootnotes(snapshot.doc);
+  const footnotes = snapshot.footnotes ?? inheritedFootnotes;
+  if (footnotes === inheritedFootnotes)
+    return collectDocumentRenderContext(snapshot.doc, profile, footnotes)
+      .anchors;
   return collectRenderHeadingAnchors(
     snapshot,
     profile,
     activeFootnoteDefinitions(
-      snapshot.footnotes ?? [],
+      footnotes,
       referencedFootnoteLabels(snapshot.doc),
     ),
   );
@@ -5190,13 +5438,8 @@ export function headingAnchorIds(
   doc: PMNode,
   profile: Profile = "github",
 ): Array<{ position: number; id: string }> {
-  const footnotes = documentMetadata.get(doc)?.footnotes ?? [];
-  return collectRenderHeadingAnchors(
-    { doc },
-    profile,
-    activeFootnoteDefinitions(footnotes, referencedFootnoteLabels(doc)),
-  )
-    .filter((anchor): anchor is HeadingAnchor & { position: number } =>
+  return collectDocumentRenderContext(doc, profile, documentFootnotes(doc))
+    .anchors.filter((anchor): anchor is HeadingAnchor & { position: number } =>
       Number.isInteger(anchor.position),
     )
     .map((anchor) => ({ position: anchor.position, id: anchor.id }));
@@ -5294,13 +5537,12 @@ export function renderMarkdownDocument(
 }
 
 /** Render an arbitrary Markdown source fragment using the shared renderer. */
-export function renderSourceFragment(
-  source: string,
+function renderParsedSourceFragment(
+  snapshot: MarkdownSnapshot,
   profile: Profile = "github",
   input?: RenderInput,
   fragmentContext?: FragmentRenderContext,
 ): string {
-  const snapshot = parseMarkdown(source, profile);
   const state = createRenderState(profile, input ?? snapshot);
   if (state.footnotes.length === 0 && snapshot.footnotes)
     state.footnotes = snapshot.footnotes;
@@ -5310,6 +5552,21 @@ export function renderSourceFragment(
   return (
     renderChildren(document, state, renderRoot, undefined, "\n", pathPrefix) +
     (input ? "" : renderFootnotes(state))
+  );
+}
+
+/** Render an arbitrary Markdown source fragment using the shared renderer. */
+export function renderSourceFragment(
+  source: string,
+  profile: Profile = "github",
+  input?: RenderInput,
+  fragmentContext?: FragmentRenderContext,
+): string {
+  return renderParsedSourceFragment(
+    parseMarkdown(source, profile),
+    profile,
+    input,
+    fragmentContext,
   );
 }
 

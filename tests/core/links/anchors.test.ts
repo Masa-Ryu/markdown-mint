@@ -1,10 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
+import type { Node as PMNode } from "prosemirror-model";
 import * as anchorModule from "../../../src/core/links/anchors";
 import {
   collectHeadingAnchors,
+  documentRenderContextKey,
   headingAnchorIds,
   parseMarkdown,
+  renderFootnotesHtml,
   renderMarkdownDocument,
+  renderNodeHtml,
+  schema,
   type Profile,
 } from "../../../src/core/index";
 
@@ -209,6 +214,174 @@ describe("profile-aware heading anchors", () => {
         ),
       ).toEqual(["main", "alert-one", "alert-two"]);
       expect(collectSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      collectSpy.mockRestore();
+    }
+  });
+
+  it("shares document render context and caches unchanged footnote fragments", () => {
+    const source = [
+      "# Main",
+      "",
+      "Ordinary paragraph.",
+      "",
+      "References [^first] and [^second].",
+      "",
+      "[^first]: # Footnote heading",
+      "",
+      "[^second]: Second footnote body.",
+    ].join("\n");
+    const snapshot = parseMarkdown(source, "github");
+    const collectSpy = vi.spyOn(anchorModule, "collectHeadingAnchors");
+
+    try {
+      const initialKey = documentRenderContextKey(snapshot.doc, "github");
+      renderMarkdownDocument(snapshot.doc, "github", snapshot);
+      headingAnchorIds(snapshot.doc, "github");
+      renderFootnotesHtml(snapshot.doc, "github", snapshot.doc);
+      let firstReference: Parameters<typeof renderNodeHtml>[0] | undefined;
+      snapshot.doc.descendants((node) => {
+        if (
+          !firstReference &&
+          node.type.name === "raw_inline" &&
+          node.attrs.kind === "footnote_ref"
+        )
+          firstReference = node;
+      });
+      if (firstReference)
+        renderNodeHtml(firstReference, "github", snapshot.doc);
+      expect(collectSpy).toHaveBeenCalledTimes(1);
+
+      const firstOptions = collectSpy.mock.calls[0]?.[2];
+      const firstDefinition = snapshot.footnotes?.[0];
+      expect(firstOptions?.parseFootnote).toBeTypeOf("function");
+      expect(firstDefinition).toBeDefined();
+      const originalFragment = firstOptions!.parseFootnote!(
+        firstDefinition!,
+        "github",
+      );
+
+      const children: PMNode[] = [];
+      snapshot.doc.forEach((node) => children.push(node));
+      children[1] = schema.nodes.paragraph!.create(
+        null,
+        schema.text("Edited paragraph."),
+      );
+      const editedDocument = schema.topNodeType.create(null, children);
+      expect(documentRenderContextKey(editedDocument, "github")).toBe(
+        initialKey,
+      );
+      renderMarkdownDocument(editedDocument, "github");
+      expect(collectSpy).toHaveBeenCalledTimes(2);
+
+      const updatedOptions = collectSpy.mock.calls[1]?.[2];
+      expect(updatedOptions!.parseFootnote!(firstDefinition!, "github")).toBe(
+        originalFragment,
+      );
+      expect(
+        updatedOptions!.parseFootnote!(firstDefinition!, "gitlab"),
+      ).not.toBe(originalFragment);
+
+      const changedHeading = schema.nodes.heading!.create(
+        { level: 1 },
+        schema.text("Changed heading"),
+      );
+      children[0] = changedHeading;
+      const changedDocument = schema.topNodeType.create(null, children);
+      expect(documentRenderContextKey(changedDocument, "github")).not.toBe(
+        initialKey,
+      );
+
+      const reorderedReferences = parseMarkdown(
+        source.replace(
+          "References [^first] and [^second].",
+          "References [^second] and [^first].",
+        ),
+        "github",
+      );
+      expect(
+        documentRenderContextKey(reorderedReferences.doc, "github"),
+      ).not.toBe(initialKey);
+
+      const changedFootnote = parseMarkdown(
+        source.replace("# Footnote heading", "# Updated footnote heading"),
+        "github",
+      );
+      expect(documentRenderContextKey(changedFootnote.doc, "github")).not.toBe(
+        initialKey,
+      );
+    } finally {
+      collectSpy.mockRestore();
+    }
+  });
+
+  it("shares one context for a 100-heading and 100-footnote document", () => {
+    const headings = Array.from(
+      { length: 100 },
+      (_, index) => "# Heading " + (index + 1),
+    );
+    const references = Array.from(
+      { length: 100 },
+      (_, index) =>
+        "Paragraph " + (index + 1) + " [^note-" + (index + 1) + "].",
+    );
+    const definitions = Array.from(
+      { length: 100 },
+      (_, index) =>
+        "[^note-" + (index + 1) + "]: Note body " + (index + 1) + ".",
+    );
+    const snapshot = parseMarkdown(
+      [...headings, "Ordinary paragraph.", ...references, ...definitions].join(
+        "\n\n",
+      ),
+      "github",
+    );
+    const collectSpy = vi.spyOn(anchorModule, "collectHeadingAnchors");
+
+    try {
+      const initialKey = documentRenderContextKey(snapshot.doc, "github");
+      renderMarkdownDocument(snapshot.doc, "github", snapshot);
+      renderFootnotesHtml(snapshot.doc, "github", snapshot.doc);
+      expect(headingAnchorIds(snapshot.doc, "github")).toHaveLength(100);
+
+      const referencesInDocument: Array<{ node: PMNode; position: number }> =
+        [];
+      snapshot.doc.descendants((node, position) => {
+        if (
+          node.type.name === "raw_inline" &&
+          node.attrs.kind === "footnote_ref"
+        )
+          referencesInDocument.push({ node, position });
+      });
+      expect(referencesInDocument).toHaveLength(100);
+      expect(
+        renderNodeHtml(referencesInDocument[0]!.node, "github", {
+          document: snapshot.doc,
+          nodePosition: referencesInDocument[0]!.position,
+        }),
+      ).toContain(">1</a>");
+      expect(
+        renderNodeHtml(referencesInDocument[99]!.node, "github", {
+          document: snapshot.doc,
+          nodePosition: referencesInDocument[99]!.position,
+        }),
+      ).toContain(">100</a>");
+      expect(collectSpy).toHaveBeenCalledTimes(1);
+
+      const children: PMNode[] = [];
+      snapshot.doc.forEach((node) => children.push(node));
+      children[100] = schema.nodes.paragraph!.create(
+        null,
+        schema.text("Ordinary paragraph edited."),
+      );
+      const editedDocument = schema.topNodeType.create(null, children);
+      expect(documentRenderContextKey(editedDocument, "github")).toBe(
+        initialKey,
+      );
+      expect(
+        renderFootnotesHtml(editedDocument, "github", editedDocument),
+      ).toContain("Note body 100.");
+      expect(collectSpy).toHaveBeenCalledTimes(2);
     } finally {
       collectSpy.mockRestore();
     }
