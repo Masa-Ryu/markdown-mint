@@ -35,7 +35,8 @@ Markdown `TextDocument`. When the command starts from the Rich Editor, it first
 passes through that active webview so composition and pending edits are
 acknowledged before the host reads the snapshot. The host validates the version,
 asks for a destination with `showSaveDialog()`, and writes through
-`workspace.fs.writeFile()`; cancelling the dialog performs no write.
+`workspace.fs.writeFile()`; cancelling the dialog performs no write. HTML export
+does not require Chrome, Edge, Chromium, or any browser dependency.
 
 `createExportHtml()` uses the existing profile-aware `renderMarkdown()` output.
 The document embeds the shared renderer stylesheet plus light export overrides,
@@ -57,6 +58,43 @@ tests, and `tests/webview/writing-ux.test.ts`. The generated-HTML Chromium
 smoke suite is `npm run test:browser:html-export`; it checks the export in a
 dark-preference browser, including CSP, Mermaid, images, palette, and all three
 GitLab task states.
+
+## Issue #132 PDF export (0.7.0)
+
+The Export menu offers HTML and PDF. The `Markdown Mint: Export as PDF`
+Command Palette command uses the same current, unsaved Markdown snapshot and
+`createExportHtml()` result as HTML export, then passes that standalone document
+to an installed Chrome-family browser through the Chrome DevTools Protocol. It
+does not maintain a second Markdown renderer. The webview defers PDF requests
+until the latest edit acknowledgement arrives; canceling the save dialog does
+not resolve or launch a browser.
+
+PDF output uses A4 portrait pages, CSS-managed 16 mm margins, white background,
+and printed backgrounds. The renderer waits with bounded timeouts for KaTeX
+fonts, local/data images, and the existing Mermaid `data-mm-mermaid-state` to
+reach `rendered`; a Mermaid rendering failure stops the export with a specific
+error. The browser uses a temporary profile and is closed on success and
+failure; the profile, DevTools connection, and PDF stream are cleaned up on all
+paths. PDF bytes are written with `workspace.fs.writeFile()`, and export does
+not modify Markdown, editor state, profile, or undo history.
+
+Chromium resolution checks
+`markdownMint.export.pdf.chromiumExecutablePath`, then known Chrome, Edge, and
+Chromium locations on macOS, Windows, or Linux. A configured but invalid path is
+reported directly rather than silently falling back. If no browser is
+available, a VS Code modal explains that Chrome, Edge, or Chromium is required
+and offers **Get Chrome**, which opens the official Chrome download page. The
+extension never downloads or installs a browser, and
+`ExtensionContext.globalStorageUri` is not used for PDF browser management.
+Remote SSH, Dev Containers, and WSL need a browser in the extension host
+environment.
+
+The render fixture is `tests/md/pdf-export.md`; the actual Chromium PDF smoke
+suite is `npm run test:browser:pdf-export`. Unit coverage in
+`tests/extension/export/browserDiscovery.test.ts`, `cdpClient.test.ts`, and
+`chromePdf.test.ts` fixes browser priority, OS candidates, CDP request handling,
+PDF settings, timeout paths, and process cleanup. Native extension-host
+acceptance is still a separate check.
 
 ## Issue #124 Mermaid startup performance (0.5.5)
 

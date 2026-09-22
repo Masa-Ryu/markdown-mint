@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import MarkdownIt from "markdown-it";
+import { isHostMessage } from "../../src/shared/protocol";
 
 const vscode = vi.hoisted(() => {
   type Listener = (...args: never[]) => void;
@@ -304,6 +305,7 @@ const vscode = vi.hoisted(() => {
   const panel = new WebviewPanel();
   const outputLines: string[] = [];
   let saveDialogResult: Uri | undefined;
+  let showErrorAction: string | undefined;
   const saveDialogCalls: unknown[] = [];
   const exportWrites: Array<{ uri: Uri; contents: Uint8Array }> = [];
   const userNotifications: Array<{
@@ -363,13 +365,34 @@ const vscode = vi.hoisted(() => {
       userNotifications.push({ level: "warning", message });
       return undefined;
     },
-    async showErrorMessage(message: string): Promise<string | undefined> {
+    async showErrorMessage(
+      message: string,
+      ..._items: unknown[]
+    ): Promise<string | undefined> {
       userNotifications.push({ level: "error", message });
-      return undefined;
+      return showErrorAction;
     },
     async showSaveDialog(options: unknown): Promise<Uri | undefined> {
       saveDialogCalls.push(options);
       return saveDialogResult;
+    },
+    async withProgress<T>(
+      _options: unknown,
+      task: (
+        progress: { report(value: unknown): void },
+        token: {
+          isCancellationRequested: boolean;
+          onCancellationRequested(listener: () => void): Disposable;
+        },
+      ) => Promise<T>,
+    ): Promise<T> {
+      return task(
+        { report: () => undefined },
+        {
+          isCancellationRequested: false,
+          onCancellationRequested: () => new Disposable(),
+        },
+      );
     },
     createOutputChannel(name: string): {
       name: string;
@@ -719,6 +742,7 @@ const vscode = vi.hoisted(() => {
     saveDialogCalls.length = 0;
     exportWrites.length = 0;
     saveDialogResult = undefined;
+    showErrorAction = undefined;
     findFilesCalls.length = 0;
     openExternalResult = true;
     openExternalError = undefined;
@@ -737,6 +761,7 @@ const vscode = vi.hoisted(() => {
     ConfigurationTarget: { Global: 1, Workspace: 2, WorkspaceFolder: 3 },
     WebviewPanel,
     ViewColumn: { Beside: 2 },
+    ProgressLocation: { Notification: 1 },
     window,
     workspace,
     commands,
@@ -832,11 +857,41 @@ const vscode = vi.hoisted(() => {
       set saveDialogResult(value: Uri | undefined) {
         saveDialogResult = value;
       },
+      set showErrorAction(value: string | undefined) {
+        showErrorAction = value;
+      },
     },
   };
 });
 
+const pdfMocks = vi.hoisted(() => {
+  class PdfBrowserExecutableNotFoundError extends Error {
+    public constructor() {
+      super(
+        "PDF export requires Chrome, Edge, or Chromium. Install one of these browsers and try again.",
+      );
+    }
+  }
+  return {
+    PdfBrowserExecutableNotFoundError,
+    resolvePdfBrowserExecutable: vi.fn(
+      async (_options: { configuredPath?: string }) => "/system/chrome",
+    ),
+    renderPdf: vi.fn(
+      async (_html: string, _options: { executablePath: string }) =>
+        new Uint8Array([37, 80, 68, 70, 45, 49, 46, 55]),
+    ),
+  };
+});
+
 vi.mock("vscode", () => vscode);
+vi.mock("../../src/extension/export/browserDiscovery", () => ({
+  PdfBrowserExecutableNotFoundError: pdfMocks.PdfBrowserExecutableNotFoundError,
+  resolvePdfBrowserExecutable: pdfMocks.resolvePdfBrowserExecutable,
+}));
+vi.mock("../../src/extension/export/pdfExport", () => ({
+  renderPdf: pdfMocks.renderPdf,
+}));
 
 const {
   MarkdownMintEditorProvider,
@@ -846,13 +901,40 @@ const {
 
 function context(): {
   extensionUri: unknown;
+  globalStorageUri: unknown;
   subscriptions: unknown[];
 } {
-  return { extensionUri: vscode.Uri.file("/extension"), subscriptions: [] };
+  return {
+    extensionUri: vscode.Uri.file("/extension"),
+    globalStorageUri: vscode.Uri.file("/globalStorage"),
+    subscriptions: [],
+  };
 }
 
 async function flush(): Promise<void> {
   await new Promise<void>((resolve) => setTimeout(resolve, 0));
+}
+
+function deferred<T>(): {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+} {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((complete) => {
+    resolve = complete;
+  });
+  return { promise, resolve };
+}
+
+async function waitForCondition(
+  condition: () => boolean,
+  description: string,
+): Promise<void> {
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    if (condition()) return;
+    await flush();
+  }
+  throw new Error(`Timed out waiting for ${description}.`);
 }
 
 function stateCount(provider: object): number {
@@ -945,6 +1027,172 @@ describe("MarkdownMintEditorProvider", () => {
     provider.dispose();
   });
 
+  it("exports a PDF from the same HTML pipeline without changing Markdown", async () => {
+    vi.clearAllMocks();
+    vscode.__state.reset();
+    const provider = new MarkdownMintEditorProvider(context() as never);
+    const document = vscode.__state.document;
+    document.replaceText("# Current unsaved PDF draft");
+    vscode.__state.saveDialogResult = vscode.Uri.file(
+      "/workspace/docs/custom.pdf",
+    );
+
+    await provider.exportPdf();
+
+    expect(vscode.__state.saveDialogCalls[0]).toMatchObject({
+      defaultUri: expect.objectContaining({
+        fsPath: "/workspace/docs/manual.pdf",
+      }),
+      filters: { PDF: ["pdf"] },
+    });
+    expect(pdfMocks.resolvePdfBrowserExecutable).toHaveBeenCalledWith({
+      configuredPath: "",
+    });
+    expect(pdfMocks.renderPdf).toHaveBeenCalledWith(
+      expect.stringContaining("Current unsaved PDF draft"),
+      { executablePath: "/system/chrome" },
+    );
+    expect(vscode.__state.exportWrites).toHaveLength(1);
+    expect(vscode.__state.exportWrites[0]?.uri.fsPath).toBe(
+      "/workspace/docs/custom.pdf",
+    );
+    expect(Array.from(vscode.__state.exportWrites[0]!.contents)).toEqual([
+      37, 80, 68, 70, 45, 49, 46, 55,
+    ]);
+    expect(document.getText()).toBe("# Current unsaved PDF draft");
+    expect(document.isDirty).toBe(true);
+    provider.dispose();
+  });
+
+  it("releases the document queue while PDF rendering uses its captured snapshot", async () => {
+    vi.clearAllMocks();
+    vscode.__state.reset();
+    const provider = new MarkdownMintEditorProvider(context() as never);
+    const document = vscode.__state.document;
+    const panel = vscode.__state.panel;
+    vscode.__state.saveDialogResult = vscode.Uri.file(
+      "/workspace/docs/snapshot.pdf",
+    );
+    await provider.resolveCustomTextEditor(
+      document as never,
+      panel as never,
+      {} as never,
+    );
+    panel.webview.receive({ protocolVersion: 1, type: "ready" });
+    await flush();
+
+    const renderGate = deferred<Uint8Array<ArrayBuffer>>();
+    pdfMocks.renderPdf.mockImplementationOnce(() => renderGate.promise);
+    const exportVersion = document.version;
+    panel.webview.receive({
+      protocolVersion: 1,
+      type: "export-pdf",
+      baseVersion: exportVersion,
+      operationId: "pdf:held-render",
+    });
+    await waitForCondition(
+      () => pdfMocks.renderPdf.mock.calls.length === 1,
+      "the held PDF renderer to start",
+    );
+    const exportHtml = pdfMocks.renderPdf.mock.calls[0]?.[0] ?? "";
+    expect(exportHtml).toContain("Original");
+
+    panel.webview.receive({
+      protocolVersion: 1,
+      type: "edit",
+      baseVersion: document.version,
+      operationId: "edit:during-pdf-render",
+      markdown: "# Edited while PDF is rendering",
+    });
+    await waitForCondition(
+      () =>
+        document.getText() === "# Edited while PDF is rendering" &&
+        panel.webview.messages.some(
+          (message) =>
+            isHostMessage(message) &&
+            message.type === "document" &&
+            message.reason === "ack" &&
+            message.operationId === "edit:during-pdf-render",
+        ),
+      "the edit acknowledgement while PDF rendering is held",
+    );
+
+    panel.webview.receive({
+      protocolVersion: 1,
+      type: "save",
+      baseVersion: document.version,
+      operationId: "save:during-pdf-render",
+    });
+    await waitForCondition(
+      () =>
+        panel.webview.messages.some(
+          (message) =>
+            isHostMessage(message) &&
+            message.type === "save-result" &&
+            message.operationId === "save:during-pdf-render" &&
+            message.saved === true,
+        ),
+      "save completion while PDF rendering is held",
+    );
+    expect(document.isDirty).toBe(false);
+    expect(exportHtml).not.toContain("Edited while PDF is rendering");
+    expect(vscode.__state.exportWrites).toHaveLength(0);
+
+    renderGate.resolve(new Uint8Array([37, 80, 68, 70, 45, 49, 46, 55]));
+    await waitForCondition(
+      () => vscode.__state.exportWrites.length === 1,
+      "the held PDF write to finish",
+    );
+    expect(Array.from(vscode.__state.exportWrites[0]!.contents)).toEqual([
+      37, 80, 68, 70, 45, 49, 46, 55,
+    ]);
+    expect(document.getText()).toBe("# Edited while PDF is rendering");
+    provider.dispose();
+  });
+
+  it("does not resolve or launch a browser when the PDF save dialog is cancelled", async () => {
+    vi.clearAllMocks();
+    vscode.__state.reset();
+    const provider = new MarkdownMintEditorProvider(context() as never);
+
+    await provider.exportPdf();
+
+    expect(vscode.__state.saveDialogCalls[0]).toMatchObject({
+      defaultUri: expect.objectContaining({
+        fsPath: "/workspace/docs/manual.pdf",
+      }),
+      filters: { PDF: ["pdf"] },
+    });
+    expect(pdfMocks.resolvePdfBrowserExecutable).not.toHaveBeenCalled();
+    expect(pdfMocks.renderPdf).not.toHaveBeenCalled();
+    expect(vscode.__state.exportWrites).toHaveLength(0);
+    provider.dispose();
+  });
+
+  it("opens the official Chrome page when no system browser is found", async () => {
+    vi.clearAllMocks();
+    vscode.__state.reset();
+    pdfMocks.resolvePdfBrowserExecutable.mockRejectedValueOnce(
+      new pdfMocks.PdfBrowserExecutableNotFoundError(),
+    );
+    vscode.__state.saveDialogResult = vscode.Uri.file(
+      "/workspace/docs/guide.pdf",
+    );
+    vscode.__state.showErrorAction = "Get Chrome";
+    const provider = new MarkdownMintEditorProvider(context() as never);
+
+    await provider.exportPdf();
+
+    expect(pdfMocks.resolvePdfBrowserExecutable).toHaveBeenCalledOnce();
+    expect(pdfMocks.renderPdf).not.toHaveBeenCalled();
+    expect(vscode.__state.exportWrites).toHaveLength(0);
+    expect(
+      vscode.__state.openExternalCalls.map((uri) => uri.toString()),
+    ).toEqual(["https://www.google.com/chrome"]);
+    expect(pdfMocks.renderPdf).not.toHaveBeenCalled();
+    provider.dispose();
+  });
+
   it("routes Command Palette export through the active webview", async () => {
     vscode.__state.reset();
     const provider = new MarkdownMintEditorProvider(context() as never);
@@ -962,6 +1210,29 @@ describe("MarkdownMintEditorProvider", () => {
     expect(vscode.__state.panel.webview.messages).toContainEqual(
       expect.objectContaining({
         type: "export-html-command",
+        operationId: expect.any(String),
+      }),
+    );
+    expect(vscode.__state.saveDialogCalls).toHaveLength(0);
+    provider.dispose();
+  });
+
+  it("routes Command Palette PDF export through the active webview", async () => {
+    vscode.__state.reset();
+    const provider = new MarkdownMintEditorProvider(context() as never);
+    await provider.resolveCustomTextEditor(
+      vscode.__state.document as never,
+      vscode.__state.panel as never,
+      {} as never,
+    );
+    vscode.__state.panel.webview.receive({ protocolVersion: 1, type: "ready" });
+    await flush();
+
+    await provider.exportPdf();
+
+    expect(vscode.__state.panel.webview.messages).toContainEqual(
+      expect.objectContaining({
+        type: "export-pdf-command",
         operationId: expect.any(String),
       }),
     );

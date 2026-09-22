@@ -16,6 +16,7 @@ docs/**
 AGENTS.md
 node_modules/**
 dist/test-extension.js*
+dist/test-pdf-export.js*
 dist/*.map
 sample.md
 assets/**/*.svg

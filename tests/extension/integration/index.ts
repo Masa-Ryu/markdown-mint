@@ -45,6 +45,8 @@ export async function run(): Promise<void> {
     "markdownMint.openPreview",
     "markdownMint.openSource",
     "markdownMint.formatDocument",
+    "markdownMint.exportHtml",
+    "markdownMint.exportPdf",
     OPEN_IN_MINT_COMMAND,
   ]) {
     assert.ok(commands.includes(command), `registered command: ${command}`);

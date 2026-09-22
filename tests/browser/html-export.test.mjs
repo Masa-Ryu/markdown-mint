@@ -122,6 +122,14 @@ try {
       width: image.naturalWidth,
       height: image.naturalHeight,
     }));
+    const codeActions = Array.from(
+      document.querySelectorAll(".mm-code-block-actions"),
+    ).map((actions) => ({
+      display: getComputedStyle(actions).display,
+      buttons: Array.from(actions.querySelectorAll("button")).map(
+        (button) => getComputedStyle(button).display,
+      ),
+    }));
     const svgStyle = svg ? getComputedStyle(svg) : undefined;
     return {
       lightClass:
@@ -152,6 +160,7 @@ try {
           : undefined,
       },
       taskBoxes,
+      codeActions,
       images,
       math: {
         count: document.querySelectorAll(".katex").length,
@@ -179,6 +188,12 @@ try {
   assert.ok(result.math.count >= 2);
   assert.equal(result.math.mainFontLoaded, true);
   assert.equal(result.injectedMarkdownScript, false);
+  assert.deepEqual(result.codeActions, [
+    {
+      display: "none",
+      buttons: ["inline-flex", "inline-flex", "inline-flex"],
+    },
+  ]);
   assert.deepEqual(result.cspViolations, []);
   assert.deepEqual(
     result.images.map(({ alt, width, height }) => ({ alt, width, height })),
