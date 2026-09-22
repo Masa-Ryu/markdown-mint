@@ -1,4 +1,5 @@
 import MarkdownIt from "markdown-it";
+import type MarkdownItToken from "markdown-it/lib/token.mjs";
 import type StateBlock from "markdown-it/lib/rules_block/state_block.mjs";
 import type StateInline from "markdown-it/lib/rules_inline/state_inline.mjs";
 import * as prettier from "prettier/standalone";
@@ -687,6 +688,85 @@ function isAbsoluteLocalFileUrl(value: string): boolean {
   } catch {
     return false;
   }
+}
+
+/** Parse local file destinations only in Markdown image syntax. */
+function markdownMintLocalFileImage(
+  state: StateInline,
+  silent: boolean,
+): boolean {
+  let code: number;
+  let content: string;
+  let pos: number;
+  let result: ReturnType<typeof state.md.helpers.parseLinkDestination>;
+  let title = "";
+  let href = "";
+  const max = state.posMax;
+
+  if (
+    state.src.charCodeAt(state.pos) !== 0x21 ||
+    state.src.charCodeAt(state.pos + 1) !== 0x5b
+  )
+    return false;
+
+  const labelStart = state.pos + 2;
+  const labelEnd = state.md.helpers.parseLinkLabel(state, state.pos + 1, false);
+  if (labelEnd < 0) return false;
+
+  pos = labelEnd + 1;
+  if (pos >= max || state.src.charCodeAt(pos) !== 0x28) return false;
+
+  pos += 1;
+  for (; pos < max; pos += 1) {
+    code = state.src.charCodeAt(pos);
+    if (code !== 0x20 && code !== 0x09 && code !== 0x0a && code !== 0x0d) break;
+  }
+  if (pos >= max) return false;
+
+  result = state.md.helpers.parseLinkDestination(state.src, pos, max);
+  if (!result.ok) return false;
+  href = state.md.normalizeLink(result.str);
+  if (!isAbsoluteLocalFileUrl(href)) return false;
+  pos = result.pos;
+
+  const titleStart = pos;
+  for (; pos < max; pos += 1) {
+    code = state.src.charCodeAt(pos);
+    if (code !== 0x20 && code !== 0x09 && code !== 0x0a && code !== 0x0d) break;
+  }
+
+  result = state.md.helpers.parseLinkTitle(state.src, pos, max);
+  if (pos < max && titleStart !== pos && result.ok) {
+    title = result.str;
+    pos = result.pos;
+    for (; pos < max; pos += 1) {
+      code = state.src.charCodeAt(pos);
+      if (code !== 0x20 && code !== 0x09 && code !== 0x0a && code !== 0x0d)
+        break;
+    }
+  }
+
+  if (pos >= max || state.src.charCodeAt(pos) !== 0x29) return false;
+  pos += 1;
+
+  if (!silent) {
+    content = state.src.slice(labelStart, labelEnd);
+    const tokens: MarkdownItToken[] = [];
+    state.md.inline.parse(content, state.md, state.env, tokens);
+
+    const token = state.push("image", "img", 0);
+    token.attrs = [
+      ["src", href],
+      ["alt", ""],
+    ];
+    token.children = tokens;
+    token.content = content;
+    if (title) token.attrs.push(["title", title]);
+  }
+
+  state.pos = pos;
+  state.posMax = max;
+  return true;
 }
 
 /** Create the parser used by both the PM bridge and host preview adapters. */
@@ -2190,9 +2270,11 @@ function parseInternal(
   const footnoteScan = scanFootnotes(source);
   const md = createMarkdownIt(profile);
   if (allowLocalFileImageUrls) {
-    const defaultValidateLink = md.validateLink.bind(md);
-    md.validateLink = (url) =>
-      isAbsoluteLocalFileUrl(url) || defaultValidateLink(url);
+    md.inline.ruler.before(
+      "image",
+      "markdown_mint_local_file_image",
+      markdownMintLocalFileImage,
+    );
   }
   const details = detectDetails(source, md);
   // Keep footnote definition lines visible to markdown-it so its reference

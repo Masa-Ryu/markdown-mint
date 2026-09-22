@@ -221,6 +221,43 @@ describe("standalone HTML export", () => {
     );
   });
 
+  it("keeps file links and other URL policies identical to the normal renderer", async () => {
+    const fileLinkMarkdown = "[manual](file:///outside/manual.pdf)";
+    const normalFileLink = renderMarkdown(fileLinkMarkdown, "github");
+    const exportedFileLinkHtml = await createExportHtml(
+      exportOptions({ markdown: fileLinkMarkdown }),
+    );
+    const exportedFileLink = exportedFileLinkHtml.match(
+      /<article class="markdown-body">([\s\S]*?)<\/article>/,
+    )?.[1];
+
+    expect(exportedFileLink).toBe(normalFileLink);
+    expect(exportedFileLink).not.toBe("manual");
+    expect(exportedFileLink).toContain("file:///outside/manual.pdf");
+
+    const otherUrlsMarkdown = [
+      "![remote](https://images.example.test/picture.png)",
+      "[remote](https://docs.example.test/manual.pdf)",
+      "[unsafe](javascript:alert(1))",
+    ].join("\n\n");
+    const normalOtherUrls = renderMarkdown(otherUrlsMarkdown, "github");
+    const exportedOtherUrlsHtml = await createExportHtml(
+      exportOptions({ markdown: otherUrlsMarkdown }),
+    );
+    const exportedOtherUrls = exportedOtherUrlsHtml.match(
+      /<article class="markdown-body">([\s\S]*?)<\/article>/,
+    )?.[1];
+
+    expect(exportedOtherUrls).toBe(normalOtherUrls);
+    expect(exportedOtherUrls).toContain(
+      '<img src="https://images.example.test/picture.png"',
+    );
+    expect(exportedOtherUrls).toContain(
+      'href="https://docs.example.test/manual.pdf"',
+    );
+    expect(exportedOtherUrls).not.toContain('href="javascript:');
+  });
+
   it("renders GitLab todo, done, and mixed tasks as static distinct controls", async () => {
     const markdown = ["- [ ] Todo", "- [x] Done", "- [~] In progress"].join(
       "\n",
