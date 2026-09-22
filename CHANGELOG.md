@@ -4,7 +4,10 @@
 
 - Add standalone HTML export from the Rich Editor toolbar and Command Palette,
   using the current unsaved Markdown, the selected profile, embedded local
-  images and KaTeX fonts, and the existing Mermaid runtime when needed.
+  images and KaTeX fonts, and the existing Mermaid runtime when needed. Keep
+  local `file://` image parsing scoped to export, track the active Mint editor,
+  pin Mermaid to the light palette, and render mixed GitLab tasks without the
+  Mermaid bundle.
 
 ## 0.5.7
 

@@ -43,13 +43,20 @@ converts local image references to data URIs, preserves data and HTTPS images
 without fetching them, and inlines KaTeX fonts. It includes the existing
 packaged Mermaid runtime only when a rendered Mermaid placeholder is present;
 the CSP hash authorizes that exact runtime and blocks other script sources.
-The safe core renderer remains responsible for Markdown HTML and link policy.
+An export-only image resolver and parse option allow absolute local `file://`
+image references to reach the resource embedder; the ordinary core/Preview
+renderer keeps its current `safeUrl()` policy. Export HTML pins both document
+roots to `vscode-light`. GitLab mixed-task checkboxes use static CSS so their
+appearance does not depend on the optional Mermaid runtime.
 
 Export failures use VS Code error notifications. Export reads the current
 unsaved source without editing the document, changing its profile, or touching
 its undo history. Automated coverage is in
 `tests/extension/export/htmlExport.test.ts`, the extension provider and protocol
-tests, and `tests/webview/writing-ux.test.ts`.
+tests, and `tests/webview/writing-ux.test.ts`. The generated-HTML Chromium
+smoke suite is `npm run test:browser:html-export`; it checks the export in a
+dark-preference browser, including CSP, Mermaid, images, palette, and all three
+GitLab task states.
 
 ## Issue #124 Mermaid startup performance (0.5.5)
 

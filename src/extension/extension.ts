@@ -529,6 +529,8 @@ export class MarkdownMintEditorProvider
     if (panelWithViewState.onDidChangeViewState) {
       session.disposables.push(
         panelWithViewState.onDidChangeViewState(() => {
+          if (session.mode === "editor" && session.panel.active)
+            this.lastDocumentUri = session.state.uri;
           if (session.mode === "preview" && this.previewPanelVisible(session))
             this.requestPreviewRender(session);
         }),

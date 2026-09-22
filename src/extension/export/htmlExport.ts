@@ -5,6 +5,7 @@ import { renderMarkdown } from "../../core/index";
 import type { MarkdownProfile } from "../../shared/protocol";
 import {
   embedMarkdownImages,
+  exportLocalImageUrl,
   loadExportMermaidRuntime,
   loadExportStylesheet,
 } from "./exportResources";
@@ -46,7 +47,9 @@ export async function createExportHtml({
   extensionUri: providedExtensionUri,
 }: CreateExportHtmlOptions): Promise<string> {
   const extensionUri = extensionRootUri(providedExtensionUri);
-  const renderedHtml = renderMarkdown(markdown, profile);
+  const renderedHtml = renderMarkdown(markdown, profile, {
+    resolveImageUrl: exportLocalImageUrl,
+  });
   const [html, stylesheet] = await Promise.all([
     embedMarkdownImages(renderedHtml, documentUri),
     loadExportStylesheet(extensionUri),
@@ -69,7 +72,7 @@ export async function createExportHtml({
   ].join("; ");
 
   return `<!doctype html>
-<html lang="en">
+<html lang="en" class="vscode-light">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -77,7 +80,7 @@ export async function createExportHtml({
   <title>${escapeHtml(title)}</title>
   <style>${stylesheet}</style>
 </head>
-<body>
+<body class="vscode-light">
   <article class="markdown-body">${html}</article>${
     mermaidRuntime ? `\n  <script>${mermaidRuntime}</script>` : ""
   }

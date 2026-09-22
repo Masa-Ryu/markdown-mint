@@ -71,6 +71,25 @@ function mimeTypeForImage(uri: vscode.Uri): string | undefined {
   return IMAGE_MIME_TYPES[path.posix.extname(uri.path).toLowerCase()];
 }
 
+/** Allow only local absolute file URLs through the export renderer's image hook. */
+export function exportLocalImageUrl(value: unknown): string | undefined {
+  const source = String(value ?? "");
+  try {
+    const parsed = new URL(source);
+    if (
+      parsed.protocol !== "file:" ||
+      (parsed.hostname !== "" && parsed.hostname !== "localhost") ||
+      parsed.username !== "" ||
+      parsed.password !== "" ||
+      !parsed.pathname.startsWith("/")
+    )
+      return undefined;
+    return source;
+  } catch {
+    return undefined;
+  }
+}
+
 function isSafeDataImage(source: string): boolean {
   return /^data:image\/(?:apng|avif|bmp|gif|jpeg|png|svg\+xml|tiff?|webp|x-icon)(?:;[^,]*)?,/i.test(
     source,

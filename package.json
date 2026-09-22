@@ -172,7 +172,8 @@
     "test:extension": "npm run compile && npm run build && node scripts/test-extension.mjs",
     "verify:package": "npm run build && node scripts/verify-package.mjs",
     "package": "npm run build && vsce package --no-dependencies && node scripts/verify-package.mjs && node scripts/verify-vsix.mjs",
-    "test:browser:blocks": "npm run build:webview && node tests/browser/block-editing.test.mjs"
+    "test:browser:blocks": "npm run build:webview && node tests/browser/block-editing.test.mjs",
+    "test:browser:html-export": "npm run build && node tests/browser/html-export.test.mjs"
   },
   "dependencies": {
     "highlight.js": "^11.12.0",

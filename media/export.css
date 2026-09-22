@@ -1,5 +1,7 @@
 :root {
   color-scheme: light;
+  --vscode-background: #ffffff;
+  --vscode-editor-background: #ffffff;
   --vscode-foreground: #1f2328;
   --vscode-editor-foreground: #1f2328;
   --vscode-textLink-foreground: #0969da;
@@ -57,6 +59,39 @@ body {
 .markdown-body pre,
 .markdown-body code {
   background-color: #f6f8fa;
+}
+
+.markdown-body li.task-list-item > input[type="checkbox"][disabled] {
+  appearance: none;
+  box-sizing: border-box;
+  width: 1em;
+  height: 1em;
+  padding: 0;
+  border: 1px solid #57606a;
+  border-radius: 3px;
+  opacity: 1;
+  background: #ffffff;
+  vertical-align: middle;
+}
+
+.markdown-body li.task-list-item > input[type="checkbox"][disabled]:checked {
+  border-color: #0969da;
+  background-color: #0969da;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='m3 8 3.2 3.2L13 4.5' fill='none' stroke='white' stroke-width='2'/%3E%3C/svg%3E");
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: 100% 100%;
+}
+
+.markdown-body
+  li.task-list-item
+  > input[type="checkbox"][data-task-state="mixed"] {
+  border-color: #0969da;
+  background-color: #0969da;
+  background-image: linear-gradient(#ffffff, #ffffff);
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: 55% 2px;
 }
 
 /* The shared renderer emits these controls for VS Code preview enhancers. */

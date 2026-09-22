@@ -66,6 +66,20 @@ be compared at the same viewport and font settings.
 The native fixture supplies a small dark-theme variable sheet because a standalone
 browser tab does not receive VS Code's injected `--vscode-*` theme variables.
 
+## Standalone HTML export smoke suite
+
+Run the generated-HTML Chromium check with:
+
+```sh
+npm run test:browser:html-export
+```
+
+The test builds a temporary standalone export through `createExportHtml()`,
+opens that exact file in Chromium with a dark OS preference, and verifies the
+light Mermaid palette, CSP-authorized Mermaid SVG rendering, local and data
+images, GitLab mixed task state, and the absence of console, page, or CSP
+errors. Temporary files are removed after the run.
+
 Open `http://127.0.0.1:4173/native.html?fixture=mermaid` to run the same
 Mermaid flowchart and sequence placeholders through the native preview script.
 Its `window.__markdownMintNative.metrics().mermaid` result reports node anchors,

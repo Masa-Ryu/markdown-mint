@@ -238,6 +238,18 @@ const vscode = vi.hoisted(() => {
     public active = true;
     public viewColumn = 2;
     private disposeListener: Listener | undefined;
+    private readonly viewStateListeners: Array<() => void> = [];
+    public onDidChangeViewState(listener: () => void): Disposable {
+      this.viewStateListeners.push(listener);
+      return new Disposable(() => {
+        const index = this.viewStateListeners.indexOf(listener);
+        if (index >= 0) this.viewStateListeners.splice(index, 1);
+      });
+    }
+    public setActive(active: boolean): void {
+      this.active = active;
+      for (const listener of this.viewStateListeners) listener();
+    }
     public onDidDispose(listener: Listener): Disposable {
       this.disposeListener = listener;
       return new Disposable(() => {
@@ -953,6 +965,56 @@ describe("MarkdownMintEditorProvider", () => {
         operationId: expect.any(String),
       }),
     );
+    expect(vscode.__state.saveDialogCalls).toHaveLength(0);
+    provider.dispose();
+  });
+
+  it("routes Command Palette export to the active Mint document after tab switches", async () => {
+    vscode.__state.reset();
+    const provider = new MarkdownMintEditorProvider(context() as never);
+    const documentA = vscode.__state.createDocument(
+      "/workspace/docs/A.md",
+      "# A",
+    );
+    const documentB = vscode.__state.createDocument(
+      "/workspace/docs/B.md",
+      "# B",
+    );
+    const panelA = new vscode.WebviewPanel();
+    await provider.resolveCustomTextEditor(
+      documentA as never,
+      panelA as never,
+      {} as never,
+    );
+    panelA.webview.receive({ protocolVersion: 1, type: "ready" });
+    await flush();
+    panelA.setActive(false);
+
+    const panelB = new vscode.WebviewPanel();
+    await provider.resolveCustomTextEditor(
+      documentB as never,
+      panelB as never,
+      {} as never,
+    );
+    panelB.webview.receive({ protocolVersion: 1, type: "ready" });
+    await flush();
+    panelB.setActive(false);
+    panelA.setActive(true);
+
+    await provider.exportHtml();
+
+    expect(panelA.webview.messages).toContainEqual(
+      expect.objectContaining({
+        type: "export-html-command",
+        operationId: expect.any(String),
+      }),
+    );
+    expect(
+      panelB.webview.messages.filter(
+        (message) =>
+          (message as { type?: string }).type === "export-html-command",
+      ),
+    ).toHaveLength(0);
     expect(vscode.__state.saveDialogCalls).toHaveLength(0);
     provider.dispose();
   });

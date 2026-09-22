@@ -110,7 +110,7 @@ beforeEach(() => {
       return asBytes(".markdown-body { color: var(--vscode-foreground); }");
     if (uri.path.endsWith("/media/export.css"))
       return asBytes(
-        ":root { color-scheme: light; --mm-document-min-width: 0px; }",
+        ':root { color-scheme: light; --vscode-background: #ffffff; --vscode-editor-background: #ffffff; --mm-document-min-width: 0px; } .markdown-body input[type=checkbox][data-task-state="mixed"] { background-image: linear-gradient(#fff, #fff); } .markdown-body input[type=checkbox]:checked { background-image: url(data:image/svg+xml,check); }',
       );
     if (uri.path.endsWith("/dist/katex/katex.css"))
       return asBytes(
@@ -137,6 +137,10 @@ describe("standalone HTML export", () => {
         `<article class="markdown-body">${renderMarkdown(markdown, profile)}</article>`,
       );
       expect(html).toContain("color-scheme: light");
+      expect(html).toContain('<html lang="en" class="vscode-light">');
+      expect(html).toContain('<body class="vscode-light">');
+      expect(html).toContain("--vscode-background: #ffffff");
+      expect(html).toContain("--vscode-editor-background: #ffffff");
       expect(html).toContain("min-width: 0px");
       expect(html).toContain("data:font/woff2;base64,Zm9udC1kYXRh");
       expect(html).toContain("script-src 'none'");
@@ -202,6 +206,41 @@ describe("standalone HTML export", () => {
       `data:image/svg+xml;base64,${Buffer.from("<svg></svg>").toString("base64")}`,
     );
     expect(stubs.readFile).toHaveBeenCalledTimes(3);
+  });
+
+  it("resolves a Markdown file URI through createExportHtml into a data image", async () => {
+    const markdown = "![absolute](file:///outside/picture.jpeg)";
+    expect(renderMarkdown(markdown, "github")).not.toContain("<img");
+    const html = await createExportHtml(exportOptions({ markdown }));
+
+    expect(renderMarkdown(markdown, "github")).not.toContain("<img");
+    expect(html).toContain("data:image/jpeg;base64,BAU=");
+    expect(html).toContain('src="data:image/jpeg;base64,BAU=" alt="absolute"');
+    expect(stubs.readFile).toHaveBeenCalledWith(
+      expect.objectContaining({ path: "/outside/picture.jpeg" }),
+    );
+  });
+
+  it("renders GitLab todo, done, and mixed tasks as static distinct controls", async () => {
+    const markdown = ["- [ ] Todo", "- [x] Done", "- [~] In progress"].join(
+      "\n",
+    );
+    const html = await createExportHtml(
+      exportOptions({ markdown, profile: "gitlab" }),
+    );
+
+    expect(html).toContain('<input type="checkbox" disabled> ');
+    expect(html).toContain('<input type="checkbox" disabled checked> ');
+    expect(html).toContain(
+      '<input type="checkbox" disabled data-task-state="mixed" aria-checked="mixed"> ',
+    );
+    expect(html).toContain("Todo");
+    expect(html).toContain("Done");
+    expect(html).toContain("In progress");
+    expect(html).toContain('[data-task-state="mixed"]');
+    expect(html).toContain(":checked");
+    expect(html).toContain("script-src 'none'");
+    expect(html).not.toContain("globalThis.markdownMintMermaid");
   });
 
   it("keeps data and HTTPS images without network fetches", async () => {
