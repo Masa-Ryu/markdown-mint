@@ -5,6 +5,35 @@ export interface PerformanceBenchmarkRecorder {
 
 export interface PerformanceBenchmarkOptions {
   disableTableControls?: boolean;
+  disableTableEditing?: boolean;
+  disableSpellcheck?: boolean;
+}
+
+export interface PerformanceBenchmarkSelectionEvent {
+  at: number;
+  from: number;
+  to: number;
+  head: number;
+  anchor: number;
+  empty: boolean;
+}
+
+export interface PerformanceBenchmarkEditorApi {
+  setTableCellSelection(
+    row: number,
+    column: number,
+    edge: "start" | "end",
+  ): {
+    startedAt: number;
+    dispatchStartedAt: number;
+    completedAt: number;
+    selectionPreparationMs: number;
+    dispatchMs: number;
+    position: number;
+    selectionFrom: number;
+    selectionTo: number;
+    selectionHead: number;
+  };
 }
 
 declare global {
@@ -13,6 +42,9 @@ declare global {
     PerformanceBenchmarkRecorder | undefined;
   var __markdownMintPerformanceBenchmarkOptions:
     PerformanceBenchmarkOptions | undefined;
+  var __markdownMintBenchmarkPmSelectionChanges:
+    PerformanceBenchmarkSelectionEvent[] | undefined;
+  var __markdownMintBenchmarkEditor: PerformanceBenchmarkEditorApi | undefined;
 }
 
 export function tableControlsDisabledForBenchmark(): boolean {
@@ -20,6 +52,22 @@ export function tableControlsDisabledForBenchmark(): boolean {
   return (
     globalThis.__markdownMintPerformanceBenchmarkOptions
       ?.disableTableControls === true
+  );
+}
+
+export function tableEditingDisabledForBenchmark(): boolean {
+  if (!__MM_EDITOR_PERFORMANCE_BENCHMARK__) return false;
+  return (
+    globalThis.__markdownMintPerformanceBenchmarkOptions
+      ?.disableTableEditing === true
+  );
+}
+
+export function spellcheckDisabledForBenchmark(): boolean {
+  if (!__MM_EDITOR_PERFORMANCE_BENCHMARK__) return false;
+  return (
+    globalThis.__markdownMintPerformanceBenchmarkOptions?.disableSpellcheck ===
+    true
   );
 }
 

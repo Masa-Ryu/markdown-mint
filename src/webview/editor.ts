@@ -53,6 +53,8 @@ import {
 import {
   measureEditorPerformance,
   recordEditorPerformanceDuration,
+  spellcheckDisabledForBenchmark,
+  tableEditingDisabledForBenchmark,
 } from "../shared/performanceBenchmark";
 import { isWorkspaceFileSearchQuery } from "../shared/workspaceFileSearch";
 import {
@@ -3021,7 +3023,7 @@ export class MarkdownEditorApp {
       dispatchTransaction: (tr) => this.dispatchTransaction(tr),
       attributes: {
         class: "ProseMirror mm-document-content",
-        spellcheck: "true",
+        spellcheck: spellcheckDisabledForBenchmark() ? "false" : "true",
         "data-testid": "rich-editor",
       },
       nodeViews: {
@@ -3187,6 +3189,7 @@ export class MarkdownEditorApp {
         this.handleTableControlDelete(selection, target),
       onEscape: () => this.clearTableStructureSelection(true),
     });
+    this.installPerformanceBenchmarkEditorApi();
     // The initial document came from the host, so it is already the current
     // serialized snapshot even when the starter plugin adds a virtual node.
     this.serializedDocument = this.view.state.doc;
@@ -3398,7 +3401,7 @@ export class MarkdownEditorApp {
       createRenderingPlugin(() => this.profile),
       this.imageImport.plugin,
       keymap(this.createKeymap()),
-      tableEditing(),
+      ...(tableEditingDisabledForBenchmark() ? [] : [tableEditing()]),
       createTableNumberingPlugin(),
       keymap(baseKeymap),
       new Plugin({
@@ -4020,10 +4023,18 @@ export class MarkdownEditorApp {
   }
 
   private dispatchTransaction(tr: Transaction): boolean {
-    if (__MM_EDITOR_PERFORMANCE_BENCHMARK__)
-      return measureEditorPerformance("editor.dispatchTransaction", () =>
-        this.dispatchTransactionInternal(tr),
+    if (__MM_EDITOR_PERFORMANCE_BENCHMARK__) {
+      const apply = () => this.dispatchTransactionInternal(tr);
+      const measuredApply =
+        !tr.docChanged && tr.selectionSet
+          ? () =>
+              measureEditorPerformance("editor.selectionOnlyTransaction", apply)
+          : apply;
+      return measureEditorPerformance(
+        "editor.dispatchTransaction",
+        measuredApply,
       );
+    }
     return this.dispatchTransactionInternal(tr);
   }
 
@@ -4077,6 +4088,19 @@ export class MarkdownEditorApp {
     }
 
     this.view.updateState(applied.state);
+    if (
+      __MM_EDITOR_PERFORMANCE_BENCHMARK__ &&
+      applied.state.selection !== oldSelection
+    ) {
+      globalThis.__markdownMintBenchmarkPmSelectionChanges?.push({
+        at: performance.now(),
+        from: this.view.state.selection.from,
+        to: this.view.state.selection.to,
+        head: this.view.state.selection.head,
+        anchor: this.view.state.selection.anchor,
+        empty: this.view.state.selection.empty,
+      });
+    }
     if (committedTransient && applied.transactions.length > 0)
       this.transientBlanks = null;
 
@@ -9425,6 +9449,61 @@ export class MarkdownEditorApp {
       explicitTableAt(this.view.state.doc, target.tablePos) === target.table &&
       this.view.nodeDOM(target.tablePos) === target.tableElement
     );
+  }
+
+  private installPerformanceBenchmarkEditorApi(): void {
+    if (!__MM_EDITOR_PERFORMANCE_BENCHMARK__) return;
+    globalThis.__markdownMintBenchmarkEditor = {
+      setTableCellSelection: (row, column, edge) => {
+        const startedAt = performance.now();
+        const state = this.view.state;
+        const found: { position: number; table: PMNode | null } = {
+          position: -1,
+          table: null,
+        };
+        state.doc.descendants((node, position) => {
+          if (node.type.spec.tableRole !== "table") return true;
+          found.position = position;
+          found.table = node;
+          return false;
+        });
+        if (found.position < 0 || !found.table)
+          throw new Error("No table is available for benchmark selection");
+
+        const table = found.table;
+        const map = TableMap.get(table);
+        const cellPosition = this.directCellPosition(
+          state.doc,
+          found.position,
+          row,
+          column,
+        );
+        const cell = table.nodeAt(map.positionAt(row, column, table));
+        if (cellPosition === null || !cell)
+          throw new Error("Benchmark table cell is out of range");
+
+        const resolvedPosition =
+          edge === "end" ? cellPosition + cell.nodeSize - 2 : cellPosition + 1;
+        const selection = TextSelection.near(
+          state.doc.resolve(resolvedPosition),
+          edge === "end" ? -1 : 1,
+        );
+        const dispatchStartedAt = performance.now();
+        this.dispatchTransaction(state.tr.setSelection(selection));
+        const completedAt = performance.now();
+        return {
+          startedAt,
+          dispatchStartedAt,
+          completedAt,
+          selectionPreparationMs: dispatchStartedAt - startedAt,
+          dispatchMs: completedAt - dispatchStartedAt,
+          position: cellPosition,
+          selectionFrom: this.view.state.selection.from,
+          selectionTo: this.view.state.selection.to,
+          selectionHead: this.view.state.selection.head,
+        };
+      },
+    };
   }
 
   private directCellPosition(
