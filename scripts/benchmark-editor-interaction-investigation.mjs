@@ -1195,6 +1195,10 @@ function reportMarkdown(report) {
   );
   const pos = condition("A_currentRealClickEnd")?.posAtCoords;
   const traces = investigation.chromeTraces;
+  const inputTraceScope = traces.scope;
+  const firstPostReflectionTask = inputTraceScope?.postReflectionLongTasks
+    ?.slice()
+    .sort((a, b) => b.duration - a.duration)[0];
   const traceLines = Object.entries(traces)
     .filter(([phase]) => phase !== "scope")
     .map(([phase, trace]) => {
@@ -1209,10 +1213,10 @@ function reportMarkdown(report) {
       const scopeDescription = window
         ? `; input window ${window.startMarker} → ${window.endMarker} (${ms(window.durationMs)}; ${window.eventsDiscardedOutsideInputWindow} outside events clipped)`
         : "";
-      const postReflection = window?.postReflectionLongestEvents?.[0];
-      const postDescription = postReflection
-        ? `; largest post-reflection event ${postReflection.name} (${ms(postReflection.durationMs)}, ${postReflection.category})`
-        : "";
+      const postDescription =
+        phase === "input" && firstPostReflectionTask
+          ? `; PerformanceObserver post-reflection Long Task ${ms(firstPostReflectionTask.duration)} (outside the clipped input window)`
+          : "";
       return `- ${phase}: ${descriptions.length ? descriptions.join("; ") : "no task event found"}; ${trace.eventCount} trace events${scopeDescription}${postDescription}`;
     });
   const categoryMaxima = {};
@@ -1276,10 +1280,6 @@ function reportMarkdown(report) {
       `Chromium's click trace contains two ${ms(traces.click.longestTasks[0].durationMs)} / ${ms(traces.click.longestTasks[1]?.durationMs)} RunTask long tasks; their dominant nested events are ${traces.click.longestTasks[0].longestChild?.name ?? "not identified"} and ${traces.click.longestTasks[1]?.longestChild?.name ?? "not identified"}. Both span lifecycle paint/compositing.`,
     );
   const currentLongTasks = condition("A_currentRealClickEnd")?.longTasks;
-  const inputTraceScope = traces.scope;
-  const firstPostReflectionTask = inputTraceScope?.postReflectionLongTasks
-    ?.slice()
-    .sort((a, b) => b.duration - a.duration)[0];
   if (currentLongTasks)
     conclusion.push(
       `PerformanceObserver recorded ${currentLongTasks.count} long tasks (${ms(currentLongTasks.totalDurationMs)} total, ${ms(currentLongTasks.longestMs)} longest) across current click/End/input runs.`,
@@ -1289,7 +1289,7 @@ function reportMarkdown(report) {
     inputTraceScope?.domReflectionAt != null
   )
     conclusion.push(
-      `In the traced typing sample, the DOM mutation occurred ${ms(inputTraceScope.domReflectionAt - inputTraceScope.inputStartedAt)} after keydown. The largest subsequent Long Task lasted ${ms(firstPostReflectionTask?.duration)}; the input trace separately records its post-reflection UpdateLifecycle event.`,
+      `In the traced typing sample, the DOM mutation occurred ${ms(inputTraceScope.domReflectionAt - inputTraceScope.inputStartedAt)} after keydown. A separate PerformanceObserver Long Task began after that mutation and lasted ${ms(firstPostReflectionTask?.duration)}; it is outside the clipped input trace window and accounts for the longer Playwright typing roundtrip (${ms(p50("A_currentRealClickEnd", "inputActionAndWaitMs"))}).`,
     );
   return `# Issue #119 interaction investigation
 
@@ -1329,7 +1329,7 @@ Selection-only transaction during current click sequence: ${currentClickSelectio
 
 Real End: p50/p95/max ${ms(currentEnd)} / ${ms(condition("F_realEndOnly")?.timings.realOrSyntheticEndMs?.p95)} / ${ms(condition("F_realEndOnly")?.timings.realOrSyntheticEndMs?.max)} after setting the start caret directly in the target cell. In the uninterrupted current click sequence, click → End complete is ${ms(p50("A_currentRealClickEnd", "clickToCaretReadyMs"))}.
 
-KeyboardEvent dispatch only: ${ms(p50("G_keyboardEventDispatch", "realOrSyntheticEndMs"))}; diagnostic only and does not reproduce native editing behavior.
+KeyboardEvent dispatch only: ${ms(p50("G_keyboardEventDispatch", "syntheticKeyboardEventMs"))} in-page synchronous dispatch (${ms(p50("G_keyboardEventDispatch", "realOrSyntheticEndMs"))} Playwright evaluate roundtrip); diagnostic only and does not reproduce native editing behavior.
 
 Direct PM end: p50 ${ms(directEnd)}; first follow-up DOM-selection probe confirmed the target after ${ms(p50("H_directPmEnd", "domSelectionSyncWaitMs"))} (same probe-availability caveat as above).
 
@@ -1345,7 +1345,7 @@ Selection-only transaction: End-only samples recorded ${endOnlySelectionOnly?.ca
 
 ## Chromium trace
 
-Trace scope: one separate traced run for each of click, End, and input; trace overhead is excluded from the three-sample condition summaries. Input trace events are clipped at the TypingCommand::InsertText completion marker aligned with the DOM mutation observer. The trace flush can also capture later work; its largest post-reflection event is reported separately. Raw trace files were not committed; summaries are in the JSON.
+Trace scope: one separate traced run for each of click, End, and input; trace overhead is excluded from the three-sample condition summaries. Input trace events are clipped at the TypingCommand::InsertText completion marker aligned with the DOM mutation observer. PerformanceObserver tasks after that boundary are reported separately. Raw trace files were not committed; summaries are in the JSON.
 
 Longest tasks:
 
