@@ -1,6 +1,7 @@
 export interface PerformanceBenchmarkRecorder {
   record(name: string, durationMilliseconds: number): void;
   count?(name: string, value: number): void;
+  reset?(): void;
 }
 
 export interface PerformanceBenchmarkOptions {
@@ -11,11 +12,17 @@ export interface PerformanceBenchmarkOptions {
 
 export interface PerformanceBenchmarkSelectionEvent {
   at: number;
+  phase: string;
   from: number;
   to: number;
   head: number;
   anchor: number;
   empty: boolean;
+}
+
+export interface PerformanceBenchmarkSelectionTransactionEvent {
+  phase: string;
+  durationMs: number;
 }
 
 export interface PerformanceBenchmarkEditorApi {
@@ -44,7 +51,10 @@ declare global {
     PerformanceBenchmarkOptions | undefined;
   var __markdownMintBenchmarkPmSelectionChanges:
     PerformanceBenchmarkSelectionEvent[] | undefined;
+  var __markdownMintBenchmarkSelectionOnlyTransactions:
+    PerformanceBenchmarkSelectionTransactionEvent[] | undefined;
   var __markdownMintBenchmarkEditor: PerformanceBenchmarkEditorApi | undefined;
+  var __mmInteractionPhase: string | undefined;
 }
 
 export function tableControlsDisabledForBenchmark(): boolean {

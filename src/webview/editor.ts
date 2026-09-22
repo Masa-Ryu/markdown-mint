@@ -4025,14 +4025,32 @@ export class MarkdownEditorApp {
   private dispatchTransaction(tr: Transaction): boolean {
     if (__MM_EDITOR_PERFORMANCE_BENCHMARK__) {
       const apply = () => this.dispatchTransactionInternal(tr);
-      const measuredApply =
-        !tr.docChanged && tr.selectionSet
-          ? () =>
-              measureEditorPerformance("editor.selectionOnlyTransaction", apply)
-          : apply;
+      const selectionOnly = !tr.docChanged && tr.selectionSet;
+      const measuredApply = selectionOnly
+        ? () => {
+            const startedAt = performance.now();
+            try {
+              return apply();
+            } finally {
+              globalThis.__markdownMintBenchmarkSelectionOnlyTransactions?.push(
+                {
+                  phase: globalThis.__mmInteractionPhase ?? "unknown",
+                  durationMs: performance.now() - startedAt,
+                },
+              );
+            }
+          }
+        : apply;
+      const measuredSelectionOnly = selectionOnly
+        ? () =>
+            measureEditorPerformance(
+              "editor.selectionOnlyTransaction",
+              measuredApply,
+            )
+        : measuredApply;
       return measureEditorPerformance(
         "editor.dispatchTransaction",
-        measuredApply,
+        measuredSelectionOnly,
       );
     }
     return this.dispatchTransactionInternal(tr);
@@ -4094,6 +4112,7 @@ export class MarkdownEditorApp {
     ) {
       globalThis.__markdownMintBenchmarkPmSelectionChanges?.push({
         at: performance.now(),
+        phase: globalThis.__mmInteractionPhase ?? "unknown",
         from: this.view.state.selection.from,
         to: this.view.state.selection.to,
         head: this.view.state.selection.head,

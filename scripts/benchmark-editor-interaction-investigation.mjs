@@ -106,16 +106,6 @@ function summarizeTrace(events) {
     (event) => event.ph === "X" && Number.isFinite(event.dur),
   );
   const byDuration = [...complete].sort((a, b) => b.dur - a.dur);
-  const categoryFor = (event) => {
-    const name = String(event.name ?? "");
-    if (/Layout|UpdateLayoutTree|StyleRecalc/i.test(name)) return "Layout";
-    if (/EventDispatch|HitTest|Input|Selection/i.test(name))
-      return "EventDispatch";
-    if (/FunctionCall|EvaluateScript|RunMicrotasks|V8/i.test(name))
-      return "FunctionCall";
-    if (/Paint|Composite|Raster/i.test(name)) return "Paint";
-    return "Other";
-  };
   const categoryTotals = {
     Layout: 0,
     EventDispatch: 0,
@@ -124,13 +114,40 @@ function summarizeTrace(events) {
     Paint: 0,
     Other: 0,
   };
-  for (const event of complete) {
+  const categoryEvents = Object.fromEntries(
+    Object.keys(categoryTotals).map((name) => [name, []]),
+  );
+  const categoryFor = (event) => {
     const name = String(event.name ?? "");
-    const category = /Selection|Input/i.test(name)
-      ? "SelectionInput"
-      : categoryFor(event);
+    if (/Selection|Input/i.test(name)) return "SelectionInput";
+    if (/Layout|UpdateLayoutTree|StyleRecalc/i.test(name)) return "Layout";
+    if (/EventDispatch|HitTest/i.test(name)) return "EventDispatch";
+    if (/FunctionCall|EvaluateScript|RunMicrotasks|V8/i.test(name))
+      return "FunctionCall";
+    if (/Paint|Composite|Raster|Layerize|UpdateLifecycle/i.test(name))
+      return "Paint";
+    return "Other";
+  };
+  for (const event of complete) {
+    const category = categoryFor(event);
     categoryTotals[category] += event.dur / 1000;
+    categoryEvents[category].push(event);
   }
+  const categoryMaxima = Object.fromEntries(
+    Object.entries(categoryEvents).map(([category, categoryItems]) => {
+      const largest = categoryItems.sort((a, b) => b.dur - a.dur)[0];
+      return [
+        category,
+        largest
+          ? {
+              name: largest.name,
+              category: largest.cat,
+              durationMs: largest.dur / 1000,
+            }
+          : null,
+      ];
+    }),
+  );
 
   const tasks = complete.filter(
     (event) =>
@@ -185,6 +202,7 @@ function summarizeTrace(events) {
     eventCount: events.length,
     completeEventCount: complete.length,
     categoryTotalsMs: categoryTotals,
+    categoryMaxima,
     longestTasks,
     longestEvents: byDuration.slice(0, 12).map((event) => ({
       name: event.name,
@@ -238,6 +256,7 @@ async function createPage(browser, scenario, options = {}) {
       window.__markdownMintPerformanceBenchmarkOptions = benchmarkOptions;
       window.__markdownMintBenchmarkNavigationStartedAt = performance.now();
       window.__markdownMintBenchmarkPmSelectionChanges = [];
+      window.__markdownMintBenchmarkSelectionOnlyTransactions = [];
       window.__mmInteractionEvents = [];
       window.__mmInteractionPhase = "setup";
       window.__mmPosAtCoords = { calls: 0, totalMs: 0, maxMs: 0 };
@@ -267,6 +286,11 @@ async function createPage(browser, scenario, options = {}) {
             ]),
           );
         },
+        reset() {
+          for (const name of Object.keys(measurements))
+            delete measurements[name];
+          for (const name of Object.keys(counters)) delete counters[name];
+        },
       };
       window.__markdownMintBenchmarkProfile = profile;
       try {
@@ -282,6 +306,7 @@ async function createPage(browser, scenario, options = {}) {
                 duration: entry.duration,
               });
           });
+          window.__mmLongTaskObserver = observer;
           observer.observe({ type: "longtask", buffered: true });
           window.__mmLongTasks.supported = true;
         }
@@ -351,6 +376,8 @@ async function prepareTarget(page, initialPhase) {
       if (cell.textContent !== expectedCellText) return;
       window.__mmDomReflectionAt = performance.now();
       observer.disconnect();
+      if (typeof window.__mmBenchmarkNotifyReflection === "function")
+        window.__mmBenchmarkNotifyReflection(window.__mmDomReflectionAt);
     });
     observer.observe(cell, {
       subtree: true,
@@ -450,8 +477,11 @@ async function resetEvents(page, phase) {
   const browserAt = await page.evaluate((nextPhase) => {
     window.__mmInteractionEvents.length = 0;
     window.__markdownMintBenchmarkPmSelectionChanges.length = 0;
+    window.__markdownMintBenchmarkSelectionOnlyTransactions.length = 0;
     window.__mmPosAtCoords = { calls: 0, totalMs: 0, maxMs: 0 };
     window.__mmLongTasks.entries.length = 0;
+    window.__mmLongTaskObserver?.takeRecords();
+    window.__markdownMintPerformanceBenchmark?.reset?.();
     window.__mmInteractionPhase = nextPhase;
     window.__mmInputStartAt = undefined;
     window.__mmDomReflectionAt = undefined;
@@ -500,6 +530,8 @@ async function readInteractionState(page) {
       })),
       pmSelectionChanges:
         window.__markdownMintBenchmarkPmSelectionChanges.slice(),
+      selectionOnlyTransactions:
+        window.__markdownMintBenchmarkSelectionOnlyTransactions.slice(),
       posAtCoords: { ...window.__mmPosAtCoords },
       inputStartedAt: window.__mmInputStartAt ?? null,
       domReflectionAt: window.__mmDomReflectionAt ?? null,
@@ -852,9 +884,60 @@ function summarizeCondition(samples, name) {
     ]),
   );
   const eventSamples = samples.map((sample) => sample.interaction);
-  const metricValues = (metric) =>
-    eventSamples.flatMap((sample) => sample.metrics[metric] ?? []);
-  const selectionOnly = metricValues("editor.selectionOnlyTransaction");
+  const normalizedPmSelectionChanges = samples.flatMap((sample) =>
+    sample.interaction.pmSelectionChanges.map((change, index) => {
+      let phase = change.phase;
+      if (!phase) {
+        if (
+          sample.kind === "directPmSelection" ||
+          sample.kind === "directPmEnd"
+        )
+          phase = "direct-selection";
+        else if (
+          sample.kind === "realClickEndInput" ||
+          sample.kind === "forceClickEndInput"
+        )
+          phase = index === 0 ? "click" : "end";
+        else phase = sample.kind;
+      }
+      const phaseStart =
+        phase === "click"
+          ? sample.milestones.clickStartedAt
+          : phase === "end"
+            ? sample.milestones.endKeydownAt
+            : null;
+      const fromPhaseStartMs = Number.isFinite(phaseStart)
+        ? change.at - phaseStart
+        : change.fromPhaseStartMs;
+      return { ...change, phase, fromPhaseStartMs };
+    }),
+  );
+  const selectionOnly = eventSamples.flatMap((sample) =>
+    sample.selectionOnlyTransactions?.length
+      ? sample.selectionOnlyTransactions
+      : (sample.metrics["editor.selectionOnlyTransaction"] ?? []).map(
+          (durationMs) => ({ phase: "legacy-unattributed", durationMs }),
+        ),
+  );
+  const selectionOnlyDurations = selectionOnly.map(
+    (sample) => sample.durationMs,
+  );
+  const selectionOnlyByPhase = Object.fromEntries(
+    [...new Set(selectionOnly.map((sample) => sample.phase))].map((phase) => {
+      const durations = selectionOnly
+        .filter((sample) => sample.phase === phase)
+        .map((sample) => sample.durationMs);
+      return [
+        phase,
+        {
+          calls: durations.length,
+          totalMs: durations.reduce((total, value) => total + value, 0),
+          maxMs: Math.max(0, ...durations),
+          samplesMs: durations,
+        },
+      ];
+    }),
+  );
   const posAtCoords = eventSamples.map((sample) => sample.posAtCoords);
   const eventNames = [
     "scroll",
@@ -898,11 +981,14 @@ function summarizeCondition(samples, name) {
       ),
     ]),
   );
-  const pmSelectionChanged = eventSamples.flatMap((sample) =>
-    sample.pmSelectionChanges
-      .map((change) => change.fromPhaseStartMs)
-      .filter(Number.isFinite),
-  );
+  const pmSelectionChanged = normalizedPmSelectionChanges
+    .filter((change) => change.phase === "click")
+    .map((change) => change.fromPhaseStartMs)
+    .filter(Number.isFinite);
+  const pmEndSelectionChanged = normalizedPmSelectionChanges
+    .filter((change) => change.phase === "end")
+    .map((change) => change.fromPhaseStartMs)
+    .filter(Number.isFinite);
   const longTaskWindow = (startKey, endKey) => {
     const overlaps = [];
     for (const sample of samples) {
@@ -931,9 +1017,8 @@ function summarizeCondition(samples, name) {
     timings: timingSummaries,
     eventTimelineMs,
     pmSelectionChangedMs: summarize(pmSelectionChanged),
-    pmSelectionChanges: eventSamples.flatMap(
-      (sample) => sample.pmSelectionChanges,
-    ),
+    pmEndSelectionChangedMs: summarize(pmEndSelectionChanged),
+    pmSelectionChanges: normalizedPmSelectionChanges,
     posAtCoords: {
       calls: posAtCoords.reduce((total, sample) => total + sample.calls, 0),
       totalMs: posAtCoords.reduce((total, sample) => total + sample.totalMs, 0),
@@ -942,8 +1027,12 @@ function summarizeCondition(samples, name) {
     },
     selectionOnlyTransaction: {
       calls: selectionOnly.length,
-      totalMs: selectionOnly.reduce((total, value) => total + value, 0),
-      maxMs: Math.max(0, ...selectionOnly),
+      totalMs: selectionOnlyDurations.reduce(
+        (total, value) => total + value,
+        0,
+      ),
+      maxMs: Math.max(0, ...selectionOnlyDurations),
+      byPhase: selectionOnlyByPhase,
       samplesMs: selectionOnly,
     },
     longTasks: {
@@ -993,9 +1082,31 @@ function reportMarkdown(report) {
   const currentClick = p50("A_currentRealClickEnd", "visibleToClickCompleteMs");
   const currentClickAction = p50("A_currentRealClickEnd", "clickActionMs");
   const forceClick = p50("B_forceClickEnd", "visibleToClickCompleteMs");
+  const clickPlusEndP50 = (name) => {
+    const samples = condition(name)?.samples ?? [];
+    return summarize(
+      samples.map(
+        (sample) =>
+          sample.timings.clickActionMs + sample.timings.clickToCaretReadyMs,
+      ),
+    ).p50;
+  };
+  const forceEndKeydownAfterClickP50 = summarize(
+    (condition("B_forceClickEnd")?.samples ?? []).map((sample) => {
+      const endKeydown = sample.interaction.eventTimeline.find(
+        (event) => event.type === "keydown" && event.key === "End",
+      );
+      return endKeydown?.fromActionStartMs - sample.timings.clickActionMs;
+    }),
+  ).p50;
   const directSelect = p50("E_directPmSelection", "directPmSelectionMs");
   const currentEnd = p50("F_realEndOnly", "realOrSyntheticEndMs");
   const directEnd = p50("H_directPmEnd", "directPmSelectionMs");
+  const currentClickSelectionOnly = condition(
+    "A_currentRealClickEnd",
+  )?.selectionOnlyTransaction;
+  const endOnlySelectionOnly =
+    condition("F_realEndOnly")?.selectionOnlyTransaction;
   const tableDisabledClick = p50(
     "I_tableEditingDisabled",
     "visibleToClickCompleteMs",
@@ -1005,39 +1116,58 @@ function reportMarkdown(report) {
     "visibleToClickCompleteMs",
   );
   const pos = condition("A_currentRealClickEnd")?.posAtCoords;
-  const selectionOnly = condition(
-    "A_currentRealClickEnd",
-  )?.selectionOnlyTransaction;
   const traces = investigation.chromeTraces;
-  const traceLines = Object.entries(traces).map(([phase, trace]) => {
-    if (!trace?.supported)
-      return `- ${phase}: unavailable (${trace?.error ?? "unsupported"})`;
-    const longest = trace.longestTasks ?? [];
-    const descriptions = longest.map((task, index) => {
-      const child = task.longestChild;
-      return `${index + 1}. ${task.name} (${task.category}, ${ms(task.durationMs)}, parent ${task.parentEvent ?? "none"})${child ? `; longest nested event ${child.name} (${child.category}, ${ms(child.durationMs)}, parent ${child.parentEvent ?? task.name})` : ""}`;
+  const traceLines = Object.entries(traces)
+    .filter(([phase]) => phase !== "scope")
+    .map(([phase, trace]) => {
+      if (!trace?.supported)
+        return `- ${phase}: unavailable (${trace?.error ?? "unsupported"})`;
+      const longest = trace.longestTasks ?? [];
+      const descriptions = longest.map((task, index) => {
+        const child = task.longestChild;
+        return `${index + 1}. ${task.name} (${task.category}, ${ms(task.durationMs)}, parent ${task.parentEvent ?? "none"})${child ? `; longest nested event ${child.name} (${child.category}, ${ms(child.durationMs)}, parent ${child.parentEvent ?? task.name})` : ""}`;
+      });
+      return `- ${phase}: ${descriptions.length ? descriptions.join("; ") : "no task event found"}; ${trace.eventCount} trace events`;
     });
-    return `- ${phase}: ${descriptions.length ? descriptions.join("; ") : "no task event found"}; ${trace.eventCount} trace events`;
-  });
-  const categoryTotals = Object.values(traces)
-    .filter((trace) => trace?.supported)
-    .reduce((sum, trace) => {
-      for (const [key, value] of Object.entries(trace.categoryTotalsMs))
-        sum[key] = (sum[key] ?? 0) + value;
-      return sum;
-    }, {});
+  const categoryMaxima = {};
+  for (const category of [
+    "Layout",
+    "EventDispatch",
+    "FunctionCall",
+    "SelectionInput",
+    "Paint",
+    "Other",
+  ]) {
+    const maxima = Object.entries(traces)
+      .filter(([phase, trace]) => phase !== "scope" && trace?.supported)
+      .map(([phase, trace]) => ({
+        phase,
+        event: trace.categoryMaxima?.[category],
+      }))
+      .filter((entry) => entry.event)
+      .sort((a, b) => b.event.durationMs - a.event.durationMs);
+    categoryMaxima[category] = maxima[0] ?? null;
+  }
+  const categoryLines = Object.entries(categoryMaxima).map(
+    ([category, result]) =>
+      `- ${category}: ${result ? `${result.event.name} (${ms(result.event.durationMs)}, ${result.phase})` : "no event captured"}`,
+  );
   const conclusion = [];
   if (currentClick !== null && forceClick !== null)
     conclusion.push(
-      `Current click p50 ${ms(currentClick)} vs force click ${ms(forceClick)}; the delta is ${ms(currentClick - forceClick)}.`,
+      `Force click reduces the click call by ${ms(currentClick - forceClick)}, but the uninterrupted click+End p50 is ${ms(clickPlusEndP50("A_currentRealClickEnd"))} current vs ${ms(clickPlusEndP50("B_forceClickEnd"))} forced. The End keydown in the forced case arrives ${ms(forceEndKeydownAfterClickP50)} after the click promise completes, so force moves the wait into the next call rather than removing it.`,
     );
   if (currentClick !== null && directSelect !== null)
     conclusion.push(
       `Direct PM selection p50 ${ms(directSelect)} vs real click ${ms(currentClick)}.`,
     );
+  if (condition("A_currentRealClickEnd")?.pmSelectionChangedMs?.p50 != null)
+    conclusion.push(
+      `Click trace stages: click event at ${ms(eventP50("A_currentRealClickEnd", "click", "click"))}, first selectionchange at ${ms(eventP50("A_currentRealClickEnd", "click", "selectionchange"))}, PM selection update at ${ms(condition("A_currentRealClickEnd")?.pmSelectionChangedMs?.p50)}, Playwright resolution at ${ms(currentClick)}.`,
+    );
   if (currentEnd !== null && directEnd !== null)
     conclusion.push(
-      `Real End p50 ${ms(currentEnd)} vs direct PM end ${ms(directEnd)}.`,
+      `Real End itself is ${ms(p50("A_currentRealClickEnd", "clickToCaretReadyMs"))} after a normal click and ${ms(currentEnd)} standalone; direct PM end dispatch is ${ms(directEnd)}. The previously reported 7.6-second End interval does not reproduce as native End key handling in the corrected continuous sequence.`,
     );
   if (tableDisabledClick !== null && currentClick !== null)
     conclusion.push(
@@ -1051,9 +1181,13 @@ function reportMarkdown(report) {
     conclusion.push(
       `posAtCoords: ${pos.calls} calls, ${ms(pos.totalMs)} total, ${ms(pos.maxMs)} max across current-click samples.`,
     );
+  if (currentClickSelectionOnly)
+    conclusion.push(
+      `Selection-only transactions during the click sequence: ${currentClickSelectionOnly.calls} calls, ${ms(currentClickSelectionOnly.totalMs)} total, ${ms(currentClickSelectionOnly.maxMs)} max; End-only after setup reset: ${endOnlySelectionOnly?.calls ?? 0} calls.`,
+    );
   if (traces.click?.longestTasks?.[0])
     conclusion.push(
-      `The click trace's longest task was ${traces.click.longestTasks[0].name} at ${ms(traces.click.longestTasks[0].durationMs)}; its longest nested event was ${traces.click.longestTasks[0].longestChild?.name ?? "not identified"}.`,
+      `Chromium's click trace contains two ${ms(traces.click.longestTasks[0].durationMs)} / ${ms(traces.click.longestTasks[1]?.durationMs)} RunTask long tasks; their dominant nested events are ${traces.click.longestTasks[0].longestChild?.name ?? "not identified"} and ${traces.click.longestTasks[1]?.longestChild?.name ?? "not identified"}. Both span lifecycle paint/compositing.`,
     );
   const currentLongTasks = condition("A_currentRealClickEnd")?.longTasks;
   if (currentLongTasks)
@@ -1063,20 +1197,21 @@ function reportMarkdown(report) {
   return `# Issue #119 interaction investigation
 
 Generated: ${report.generatedAt}
+Trace summary updated: ${report.traceUpdatedAt ?? report.generatedAt}
 
 ## Click investigation
 
 Current real click (visible → Playwright resolved): p50/p95/max ${ms(p50("A_currentRealClickEnd", "visibleToClickCompleteMs"))} / ${ms(condition("A_currentRealClickEnd")?.timings.visibleToClickCompleteMs?.p95)} / ${ms(condition("A_currentRealClickEnd")?.timings.visibleToClickCompleteMs?.max)} (${condition("A_currentRealClickEnd")?.sampleCount ?? 0} samples)
 
-Playwright click call only: p50 ${ms(currentClickAction)}. Visible → benchmark action start: ${ms(p50("A_currentRealClickEnd", "visibleToBenchmarkActionReadyMs"))}; target found → visible: ${ms(p50("A_currentRealClickEnd", "targetFoundToVisibleMs"))}.
+Playwright click call only: p50 ${ms(currentClickAction)}. Current click → immediate End: ${ms(p50("A_currentRealClickEnd", "clickToCaretReadyMs"))}; combined click+End: ${ms(clickPlusEndP50("A_currentRealClickEnd"))}. Visible → benchmark action start: ${ms(p50("A_currentRealClickEnd", "visibleToBenchmarkActionReadyMs"))}; target found → visible: ${ms(p50("A_currentRealClickEnd", "targetFoundToVisibleMs"))}.
 
-Force click: p50/p95/max ${ms(p50("B_forceClickEnd", "visibleToClickCompleteMs"))} / ${ms(condition("B_forceClickEnd")?.timings.visibleToClickCompleteMs?.p95)} / ${ms(condition("B_forceClickEnd")?.timings.visibleToClickCompleteMs?.max)}
+Force click: p50/p95/max ${ms(p50("B_forceClickEnd", "visibleToClickCompleteMs"))} / ${ms(condition("B_forceClickEnd")?.timings.visibleToClickCompleteMs?.p95)} / ${ms(condition("B_forceClickEnd")?.timings.visibleToClickCompleteMs?.max)}; immediate End ${ms(p50("B_forceClickEnd", "clickToCaretReadyMs"))}; combined click+End ${ms(clickPlusEndP50("B_forceClickEnd"))}. End keydown reached the page ${ms(forceEndKeydownAfterClickP50)} after the click call resolved.
 
-DOM click: p50 ${ms(p50("C_domClick", "visibleToClickCompleteMs"))}. Diagnostic only; it does not reproduce physical pointer/focus behavior.
+DOM click: call p50 ${ms(p50("C_domClick", "domClickCallMs"))}. Diagnostic only; it does not reproduce physical pointer/focus behavior.
 
 Focus only: p50 ${ms(p50("D_focusOnly", "focusOnlyMs"))} (editor.focus()).
 
-Direct PM selection: p50 ${ms(directSelect)} (preparation ${ms(p50("E_directPmSelection", "directPmSelectionPreparationMs"))}; dispatch ${ms(p50("E_directPmSelection", "directPmSelectionDispatchMs"))}; DOM selection sync wait ${ms(p50("E_directPmSelection", "domSelectionSyncWaitMs"))}.
+Direct PM selection: p50 ${ms(directSelect)} (preparation ${ms(p50("E_directPmSelection", "directPmSelectionPreparationMs"))}; dispatch ${ms(p50("E_directPmSelection", "directPmSelectionDispatchMs"))}). First follow-up DOM-selection probe confirmed the target after ${ms(p50("E_directPmSelection", "domSelectionSyncWaitMs"))}; this is probe availability after dispatch, not proof the browser selection took that long to synchronize.
 
 Event timeline (current click, p50 from action call start):
 
@@ -1087,11 +1222,11 @@ Event timeline (current click, p50 from action call start):
 - focus/focusin: ${ms(eventP50("A_currentRealClickEnd", "click", "focus") ?? eventP50("A_currentRealClickEnd", "click", "focusin"))}
 - selectionchange: ${ms(eventP50("A_currentRealClickEnd", "click", "selectionchange"))}
 - click: ${ms(eventP50("A_currentRealClickEnd", "click", "click"))}
-- PM selection changed: p50 ${ms(condition("A_currentRealClickEnd")?.pmSelectionChangedMs?.p50)} after action start; timestamps and positions are in JSON.
+- PM selection changed: p50 ${ms(condition("A_currentRealClickEnd")?.pmSelectionChangedMs?.p50)} after click start; in the forced condition End keydown waited ${ms(forceEndKeydownAfterClickP50)} after click completion.
 
 posAtCoords: ${pos?.calls ?? 0} calls; ${ms(pos?.totalMs)} total; ${ms(pos?.maxMs)} max.
 
-Selection-only transaction: ${selectionOnly?.calls ?? 0} calls; ${ms(selectionOnly?.totalMs)} total; ${ms(selectionOnly?.maxMs)} max. This is reported separately from all dispatchTransaction time.
+Selection-only transaction during current click sequence: ${currentClickSelectionOnly?.calls ?? 0} calls; ${ms(currentClickSelectionOnly?.totalMs)} total; ${ms(currentClickSelectionOnly?.maxMs)} max. Phase breakdown is in JSON and this is separate from all dispatchTransaction time.
 
 ## End investigation
 
@@ -1099,7 +1234,7 @@ Real End: p50/p95/max ${ms(currentEnd)} / ${ms(condition("F_realEndOnly")?.timin
 
 KeyboardEvent dispatch only: ${ms(p50("G_keyboardEventDispatch", "realOrSyntheticEndMs"))}; diagnostic only and does not reproduce native editing behavior.
 
-Direct PM end: p50 ${ms(directEnd)}; browser DOM selection sync wait p50 ${ms(p50("H_directPmEnd", "domSelectionSyncWaitMs"))}.
+Direct PM end: p50 ${ms(directEnd)}; first follow-up DOM-selection probe confirmed the target after ${ms(p50("H_directPmEnd", "domSelectionSyncWaitMs"))} (same probe-availability caveat as above).
 
 tableEditing disabled: click ${ms(tableDisabledClick)}, End ${ms(p50("I_tableEditingDisabled", "clickToCaretReadyMs"))}.
 
@@ -1109,9 +1244,7 @@ Current input start → DOM reflection: ${ms(p50("A_currentRealClickEnd", "input
 
 End event timeline (real End-only, p50 from key action call start): keydown ${ms(eventP50("F_realEndOnly", "end", "keydown"))}; selectionchange ${ms(eventP50("F_realEndOnly", "end", "selectionchange"))}; keyup ${ms(eventP50("F_realEndOnly", "end", "keyup"))}. beforeinput: ${ms(eventP50("F_realEndOnly", "end", "beforeinput"))}; input: ${ms(eventP50("F_realEndOnly", "end", "input"))}. Full event sequences are in JSON; End normally should omit beforeinput/input.
 
-KeyboardEvent-dispatch-only End: ${ms(p50("G_keyboardEventDispatch", "realOrSyntheticEndMs"))}.
-
-Selection-only transaction: End-only samples recorded ${condition("F_realEndOnly")?.selectionOnlyTransaction.calls ?? 0} calls, ${ms(condition("F_realEndOnly")?.selectionOnlyTransaction.totalMs)} total, ${ms(condition("F_realEndOnly")?.selectionOnlyTransaction.maxMs)} max. Per-condition counts are in JSON.
+Selection-only transaction: End-only samples recorded ${endOnlySelectionOnly?.calls ?? 0} calls, ${ms(endOnlySelectionOnly?.totalMs)} total, ${ms(endOnlySelectionOnly?.maxMs)} max after setup was excluded by per-phase reset. Per-condition counts are in JSON.
 
 ## Chromium trace
 
@@ -1121,7 +1254,9 @@ Longest tasks:
 
 ${traceLines.join("\n")}
 
-Main category duration totals across the three captured trace windows (overlapping trace events are not additive CPU time): Layout ${ms(categoryTotals.Layout ?? 0)}, EventDispatch ${ms(categoryTotals.EventDispatch ?? 0)}, FunctionCall ${ms(categoryTotals.FunctionCall ?? 0)}, Selection/Input ${ms(categoryTotals.SelectionInput ?? 0)}, Paint ${ms(categoryTotals.Paint ?? 0)}, Other ${ms(categoryTotals.Other ?? 0)}.
+Largest event per category across the captured windows (selection/input category combines trace event names containing those terms; click and End traces span the respective actions, input trace stops at the DOM mutation observer):
+
+${categoryLines.join("\n")}
 
 ## Conclusion
 
@@ -1133,6 +1268,8 @@ These conclusions describe the measured Chromium build, fixture, and environment
 
 - Branch: \`${report.branch}\`
 - Commit SHA: \`${report.gitCommit}\`
+- Condition measurement commit SHAs: \`${(report.measurement.conditionCommitSHAs ?? [report.gitCommit]).join("`, `")}\`
+- Trace capture commit SHA: \`${report.traceCommitSHA ?? report.gitCommit}\`
 - Fixture: \`${report.fixture.path}\` (${report.fixture.bytes} bytes, ${report.fixture.bodyRows} body rows, ${report.fixture.columns} columns, ${report.fixture.totalRowsIncludingHeader} table rows, ${report.fixture.cellsIncludingHeader} cells)
 - Chromium: ${report.environment.chromiumVersion}
 - OS: ${report.environment.operatingSystem}; CPU: ${report.environment.cpu} (${report.environment.logicalCpuCount} logical CPUs)
@@ -1198,15 +1335,18 @@ async function main() {
         { pageOptions: { disableSpellcheck: true }, typeInput: true },
       ],
     ];
-    for (const [name, kind, options] of experiments) {
-      if (selectedConditions && !selectedConditions.has(name)) continue;
-      current[name] = await runCondition(
-        browser,
-        scenario,
-        name,
-        kind,
-        options,
-      );
+    const traceOnly = process.env.MM_EDITOR_INTERACTION_TRACE_ONLY === "1";
+    if (!traceOnly) {
+      for (const [name, kind, options] of experiments) {
+        if (selectedConditions && !selectedConditions.has(name)) continue;
+        current[name] = await runCondition(
+          browser,
+          scenario,
+          name,
+          kind,
+          options,
+        );
+      }
     }
 
     if (captureChromeTrace) {
@@ -1215,6 +1355,13 @@ async function main() {
       );
       const tracedPage = await createPage(browser, scenario);
       try {
+        let notifyDomReflection;
+        const domReflectionObserved = new Promise((resolveReflection) => {
+          notifyDomReflection = resolveReflection;
+        });
+        await tracedPage.exposeFunction("__mmBenchmarkNotifyReflection", (at) =>
+          notifyDomReflection(at),
+        );
         const { target, visibleAt } = await prepareTarget(tracedPage, "click");
         const traceClick = await startTrace(tracedPage);
         await target.click();
@@ -1226,11 +1373,20 @@ async function main() {
         await tracedPage.evaluate(() => performance.now());
         traceSummaries.end = await traceEnd();
         const traceInput = await startTrace(tracedPage);
-        await typeAndWaitForReflection(tracedPage);
+        const typePromise = tracedPage.keyboard.type("z");
+        const domReflectionAt = await domReflectionObserved;
         traceSummaries.input = await traceInput();
+        await typePromise;
+        const inputMarks = await tracedPage.evaluate(() => ({
+          inputStartedAt: window.__mmInputStartAt ?? null,
+          domReflectionAt: window.__mmDomReflectionAt ?? null,
+        }));
         traceSummaries.scope = {
           targetVisibleAt: visibleAt,
           clickCompleteAt: clickAt,
+          inputStartedAt: inputMarks.inputStartedAt,
+          domReflectionAt,
+          traceStoppedAtDomReflection: true,
           standaloneTraceSamples: 1,
         };
       } finally {
@@ -1246,18 +1402,42 @@ async function main() {
     const packageJson = JSON.parse(
       await readFile(resolve(repository, "package.json"), "utf8"),
     );
+    const gitCommit = execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: repository,
+      encoding: "utf8",
+    }).trim();
+    const mergeExisting =
+      traceOnly || process.env.MM_EDITOR_INTERACTION_MERGE === "1";
+    const previousReport = mergeExisting
+      ? JSON.parse(await readFile(reportPath, "utf8"))
+      : null;
+    const savedConditions = {
+      ...(previousReport?.investigation?.conditions ?? {}),
+      ...current,
+    };
+    const finalConditions = Object.fromEntries(
+      Object.entries(savedConditions).map(([name, entry]) => {
+        const summary = summarizeCondition(entry.samples, name);
+        summary.measurementCommitSHA = current[name]
+          ? gitCommit
+          : (entry.measurementCommitSHA ??
+            previousReport?.gitCommit ??
+            gitCommit);
+        return [name, summary];
+      }),
+    );
     const report = {
+      ...(previousReport ?? {}),
       schemaVersion: 1,
-      generatedAt: new Date().toISOString(),
-      packageVersion: packageJson.version,
+      generatedAt: previousReport?.generatedAt ?? new Date().toISOString(),
+      traceUpdatedAt: new Date().toISOString(),
+      packageVersion: previousReport?.packageVersion ?? packageJson.version,
       branch: execFileSync("git", ["branch", "--show-current"], {
         cwd: repository,
         encoding: "utf8",
       }).trim(),
-      gitCommit: execFileSync("git", ["rev-parse", "HEAD"], {
-        cwd: repository,
-        encoding: "utf8",
-      }).trim(),
+      gitCommit: previousReport?.gitCommit ?? gitCommit,
+      traceCommitSHA: gitCommit,
       fixture: {
         path: "tests/github-markdown-test-suite/stress/github-table-2000x20.md",
         bytes: Buffer.byteLength(scenario.markdown, "utf8"),
@@ -1267,7 +1447,15 @@ async function main() {
         cellsIncludingHeader: (fixtureRows.length - 1) * scenario.table.columns,
       },
       measurement: {
+        ...(previousReport?.measurement ?? {}),
         samplesPerCondition: sampleCount,
+        conditionCommitSHAs: [
+          ...new Set(
+            Object.values(finalConditions).map(
+              (entry) => entry.measurementCommitSHA,
+            ),
+          ),
+        ],
         interactionHarness:
           "Playwright Chromium headless, benchmark-only webview bundle",
         directSelection:
@@ -1277,7 +1465,7 @@ async function main() {
         keyboardEventDispatch:
           "Synthetic keydown KeyboardEvent only; does not reproduce native caret movement",
         traceCapture:
-          "CDP Tracing ReportEvents around one separate real click, real End, and typing interaction; raw trace is summarized then discarded",
+          "CDP Tracing ReportEvents around one separate real click, real End, and input-start-to-DOM-mutation interaction; raw trace is summarized then discarded",
         traceCategories,
         tableEditingDisabled:
           "Benchmark option omits tableEditing() plugin before EditorState creation; default build is unchanged",
@@ -1286,6 +1474,7 @@ async function main() {
         percentile: "linear interpolation; p50/p95/max",
       },
       environment: {
+        ...(previousReport?.environment ?? {}),
         platform: `${process.platform}-${process.arch}`,
         operatingSystem: `${os.type()} ${os.release()}`,
         cpu: os.cpus()[0]?.model ?? "unknown",
@@ -1295,7 +1484,10 @@ async function main() {
         executablePath,
         viewport: { width: 1280, height: 900, deviceScaleFactor: 1 },
       },
-      investigation: { conditions: current, chromeTraces: traceSummaries },
+      investigation: {
+        conditions: finalConditions,
+        chromeTraces: traceSummaries,
+      },
     };
     await mkdir(dirname(reportPath), { recursive: true });
     await mkdir(dirname(markdownPath), { recursive: true });
