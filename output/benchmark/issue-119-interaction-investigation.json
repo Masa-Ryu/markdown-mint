@@ -28,7 +28,7 @@
     "tableEditingDisabled": "Benchmark option omits tableEditing() plugin before EditorState creation; default build is unchanged",
     "spellcheckDisabled": "Benchmark option sets only the editor contenteditable spellcheck attribute to false",
     "percentile": "linear interpolation; p50/p95/max",
-    "paintInstrumentationCommitSHA": "e87be434c8f8c89a92ebaec7f0f8c12d96e0a55b",
+    "paintInstrumentationCommitSHA": "4d84c3d6cdd8e9d3535da28812617044952fb628",
     "captureWorkingTreeDirty": true,
     "paintCaptureBaseCommitSHA": "c099a327e4f4c2f6e4c7b0b3b116e393438802e4",
     "cssInvestigationCommitSHA": "e87be434c8f8c89a92ebaec7f0f8c12d96e0a55b",

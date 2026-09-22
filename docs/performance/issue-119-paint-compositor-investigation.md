@@ -190,7 +190,7 @@ This report contains measurements only. No permanent CSS, table, ProseMirror, or
 ## Conditions and environment
 
 - Branch: codex/issue-119-editor-performance
-- Measurement base commit SHA: c099a327e4f4c2f6e4c7b0b3b116e393438802e4; instrumentation commit SHA: e87be434c8f8c89a92ebaec7f0f8c12d96e0a55b.
+- Measurement base commit SHA: c099a327e4f4c2f6e4c7b0b3b116e393438802e4; instrumentation commit SHA: 4d84c3d6cdd8e9d3535da28812617044952fb628.
 - Capture source note: Only derived aggregation and report labels were corrected after timing capture; browser interaction paths and captured measurements were unchanged.
 - Fixture: tests/github-markdown-test-suite/stress/github-table-2000x20.md; 2000 body rows × 20 columns; 434328 bytes; 40020 body/header cells.
 - Chromium: 153.0.8010.12; OS: Darwin 25.6.0; CPU: Apple M1 Pro (10 logical CPUs); Node v24.5.0.
