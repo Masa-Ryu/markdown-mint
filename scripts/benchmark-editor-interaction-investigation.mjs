@@ -101,8 +101,85 @@ function summarize(values) {
   };
 }
 
-function summarizeTrace(events) {
-  const complete = events.filter(
+function summarizeTrace(events, phase) {
+  let scopedEvents = events;
+  let traceWindow = null;
+  if (phase === "input") {
+    const insertText = events
+      .filter(
+        (event) =>
+          event.ph === "X" && event.name === "TypingCommand::InsertText",
+      )
+      .sort((a, b) => b.ts - a.ts)[0];
+    if (insertText) {
+      const windowEnd = insertText.ts + insertText.dur;
+      const keydown = events
+        .filter(
+          (event) =>
+            event.name === "EventDispatch" &&
+            event.ts <= insertText.ts &&
+            JSON.stringify(event.args ?? {})
+              .toLowerCase()
+              .includes("keydown"),
+        )
+        .sort((a, b) => b.ts - a.ts)[0];
+      const windowStart = keydown?.ts ?? insertText.ts;
+      const rawCount = events.length;
+      const eventsClippedAtBoundary = events.filter(
+        (event) =>
+          event.ph === "X" &&
+          Number.isFinite(event.dur) &&
+          event.ts < windowEnd &&
+          event.ts + event.dur > windowEnd,
+      ).length;
+      const postReflectionLongestEvents = events
+        .filter(
+          (event) =>
+            event.ph === "X" &&
+            Number.isFinite(event.dur) &&
+            event.ts >= windowEnd,
+        )
+        .sort((a, b) => b.dur - a.dur)
+        .slice(0, 5)
+        .map((event) => ({
+          name: event.name,
+          category: event.cat,
+          durationMs: event.dur / 1000,
+        }));
+      scopedEvents = events.flatMap((event) => {
+        if (!Number.isFinite(event.ts)) return [];
+        const eventStart = event.ts;
+        const eventEnd = Number.isFinite(event.dur)
+          ? event.ts + event.dur
+          : event.ts;
+        if (eventEnd <= windowStart || eventStart >= windowEnd) return [];
+        if (event.ph !== "X" || !Number.isFinite(event.dur)) return [event];
+        const clippedStart = Math.max(eventStart, windowStart);
+        const clippedEnd = Math.min(eventEnd, windowEnd);
+        return clippedEnd > clippedStart
+          ? [{ ...event, ts: clippedStart, dur: clippedEnd - clippedStart }]
+          : [];
+      });
+      traceWindow = {
+        startMarker: keydown
+          ? "keydown EventDispatch"
+          : "TypingCommand fallback",
+        endMarker: "TypingCommand::InsertText completion",
+        durationMs: (windowEnd - windowStart) / 1000,
+        eventsDiscardedOutsideInputWindow: rawCount - scopedEvents.length,
+        eventsClippedAtInputWindowEnd: eventsClippedAtBoundary,
+        insertTextEventDurationMs: insertText.dur / 1000,
+        postReflectionLongestEvents,
+      };
+    } else {
+      traceWindow = {
+        startMarker: null,
+        endMarker: null,
+        error: "TypingCommand::InsertText trace marker was not found",
+      };
+    }
+  }
+  const complete = scopedEvents.filter(
     (event) => event.ph === "X" && Number.isFinite(event.dur),
   );
   const byDuration = [...complete].sort((a, b) => b.dur - a.dur);
@@ -199,8 +276,9 @@ function summarizeTrace(events) {
       };
     });
   return {
-    eventCount: events.length,
+    eventCount: scopedEvents.length,
     completeEventCount: complete.length,
+    ...(traceWindow ? { traceWindow } : {}),
     categoryTotalsMs: categoryTotals,
     categoryMaxima,
     longestTasks,
@@ -213,7 +291,7 @@ function summarizeTrace(events) {
   };
 }
 
-async function startTrace(page) {
+async function startTrace(page, phase) {
   const session = await page.context().newCDPSession(page);
   const events = [];
   let traceError;
@@ -239,7 +317,7 @@ async function startTrace(page) {
     return {
       supported: true,
       categories: traceCategories,
-      ...summarizeTrace(events),
+      ...summarizeTrace(events, phase),
     };
   };
 }
@@ -1127,7 +1205,15 @@ function reportMarkdown(report) {
         const child = task.longestChild;
         return `${index + 1}. ${task.name} (${task.category}, ${ms(task.durationMs)}, parent ${task.parentEvent ?? "none"})${child ? `; longest nested event ${child.name} (${child.category}, ${ms(child.durationMs)}, parent ${child.parentEvent ?? task.name})` : ""}`;
       });
-      return `- ${phase}: ${descriptions.length ? descriptions.join("; ") : "no task event found"}; ${trace.eventCount} trace events`;
+      const window = trace.traceWindow;
+      const scopeDescription = window
+        ? `; input window ${window.startMarker} → ${window.endMarker} (${ms(window.durationMs)}; ${window.eventsDiscardedOutsideInputWindow} outside events clipped)`
+        : "";
+      const postReflection = window?.postReflectionLongestEvents?.[0];
+      const postDescription = postReflection
+        ? `; largest post-reflection event ${postReflection.name} (${ms(postReflection.durationMs)}, ${postReflection.category})`
+        : "";
+      return `- ${phase}: ${descriptions.length ? descriptions.join("; ") : "no task event found"}; ${trace.eventCount} trace events${scopeDescription}${postDescription}`;
     });
   const categoryMaxima = {};
   for (const category of [
@@ -1190,9 +1276,20 @@ function reportMarkdown(report) {
       `Chromium's click trace contains two ${ms(traces.click.longestTasks[0].durationMs)} / ${ms(traces.click.longestTasks[1]?.durationMs)} RunTask long tasks; their dominant nested events are ${traces.click.longestTasks[0].longestChild?.name ?? "not identified"} and ${traces.click.longestTasks[1]?.longestChild?.name ?? "not identified"}. Both span lifecycle paint/compositing.`,
     );
   const currentLongTasks = condition("A_currentRealClickEnd")?.longTasks;
+  const inputTraceScope = traces.scope;
+  const firstPostReflectionTask = inputTraceScope?.postReflectionLongTasks
+    ?.slice()
+    .sort((a, b) => b.duration - a.duration)[0];
   if (currentLongTasks)
     conclusion.push(
       `PerformanceObserver recorded ${currentLongTasks.count} long tasks (${ms(currentLongTasks.totalDurationMs)} total, ${ms(currentLongTasks.longestMs)} longest) across current click/End/input runs.`,
+    );
+  if (
+    inputTraceScope?.inputStartedAt != null &&
+    inputTraceScope?.domReflectionAt != null
+  )
+    conclusion.push(
+      `In the traced typing sample, the DOM mutation occurred ${ms(inputTraceScope.domReflectionAt - inputTraceScope.inputStartedAt)} after keydown. The largest subsequent Long Task lasted ${ms(firstPostReflectionTask?.duration)}; the input trace separately records its post-reflection UpdateLifecycle event.`,
     );
   return `# Issue #119 interaction investigation
 
@@ -1248,13 +1345,13 @@ Selection-only transaction: End-only samples recorded ${endOnlySelectionOnly?.ca
 
 ## Chromium trace
 
-Trace scope: one separate traced run for each of click, End, and input; trace overhead is excluded from the three-sample condition summaries. Raw trace files were not committed; the top three tasks and largest nested trace event summaries are stored in the JSON.
+Trace scope: one separate traced run for each of click, End, and input; trace overhead is excluded from the three-sample condition summaries. Input trace events are clipped at the TypingCommand::InsertText completion marker aligned with the DOM mutation observer. The trace flush can also capture later work; its largest post-reflection event is reported separately. Raw trace files were not committed; summaries are in the JSON.
 
 Longest tasks:
 
 ${traceLines.join("\n")}
 
-Largest event per category across the captured windows (selection/input category combines trace event names containing those terms; click and End traces span the respective actions, input trace stops at the DOM mutation observer):
+Largest event per category in each measured window (selection/input category combines trace event names containing those terms; the input window is keydown → DOM mutation):
 
 ${categoryLines.join("\n")}
 
@@ -1363,16 +1460,16 @@ async function main() {
           notifyDomReflection(at),
         );
         const { target, visibleAt } = await prepareTarget(tracedPage, "click");
-        const traceClick = await startTrace(tracedPage);
+        const traceClick = await startTrace(tracedPage, "click");
         await target.click();
         const clickAt = await tracedPage.evaluate(() => performance.now());
         traceSummaries.click = await traceClick();
         await resetEvents(tracedPage, "end");
-        const traceEnd = await startTrace(tracedPage);
+        const traceEnd = await startTrace(tracedPage, "end");
         await tracedPage.keyboard.press("End");
         await tracedPage.evaluate(() => performance.now());
         traceSummaries.end = await traceEnd();
-        const traceInput = await startTrace(tracedPage);
+        const traceInput = await startTrace(tracedPage, "input");
         const typePromise = tracedPage.keyboard.type("z");
         const domReflectionAt = await domReflectionObserved;
         traceSummaries.input = await traceInput();
@@ -1380,13 +1477,24 @@ async function main() {
         const inputMarks = await tracedPage.evaluate(() => ({
           inputStartedAt: window.__mmInputStartAt ?? null,
           domReflectionAt: window.__mmDomReflectionAt ?? null,
+          longTasks: window.__mmLongTasks.entries.slice(),
         }));
+        const postReflectionLongTasks = inputMarks.longTasks.filter(
+          (task) => task.startTime >= domReflectionAt,
+        );
         traceSummaries.scope = {
           targetVisibleAt: visibleAt,
           clickCompleteAt: clickAt,
           inputStartedAt: inputMarks.inputStartedAt,
           domReflectionAt,
-          traceStoppedAtDomReflection: true,
+          traceEndRequestedAtDomReflection: true,
+          longTasksOverlappingInputStartToDomReflection:
+            inputMarks.longTasks.filter(
+              (task) =>
+                task.startTime < domReflectionAt &&
+                task.startTime + task.duration > inputMarks.inputStartedAt,
+            ),
+          postReflectionLongTasks,
           standaloneTraceSamples: 1,
         };
       } finally {
