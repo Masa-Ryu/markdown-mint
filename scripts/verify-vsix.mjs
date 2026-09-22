@@ -48,6 +48,7 @@ const forbiddenPrefixes = [
 const forbiddenEntries = entries.filter(
   (entry) =>
     forbiddenPrefixes.some((prefix) => entry.startsWith(prefix)) ||
+    entry.startsWith("extension/dist/test-") ||
     entry.endsWith(".svg") ||
     entry.endsWith("demo1.gif"),
 );

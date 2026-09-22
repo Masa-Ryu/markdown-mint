@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import MarkdownIt from "markdown-it";
+import { isHostMessage } from "../../src/shared/protocol";
 
 const vscode = vi.hoisted(() => {
   type Listener = (...args: never[]) => void;
@@ -920,6 +921,28 @@ async function flush(): Promise<void> {
   await new Promise<void>((resolve) => setTimeout(resolve, 0));
 }
 
+function deferred<T>(): {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+} {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((complete) => {
+    resolve = complete;
+  });
+  return { promise, resolve };
+}
+
+async function waitForCondition(
+  condition: () => boolean,
+  description: string,
+): Promise<void> {
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    if (condition()) return;
+    await flush();
+  }
+  throw new Error(`Timed out waiting for ${description}.`);
+}
+
 function stateCount(provider: object): number {
   return (
     provider as unknown as {
@@ -1045,6 +1068,183 @@ describe("MarkdownMintEditorProvider", () => {
     ]);
     expect(document.getText()).toBe("# Current unsaved PDF draft");
     expect(document.isDirty).toBe(true);
+    provider.dispose();
+  });
+
+  it("releases the document queue while PDF rendering uses its captured snapshot", async () => {
+    vi.clearAllMocks();
+    vscode.__state.reset();
+    const provider = new MarkdownMintEditorProvider(context() as never);
+    const document = vscode.__state.document;
+    const panel = vscode.__state.panel;
+    vscode.__state.saveDialogResult = vscode.Uri.file(
+      "/workspace/docs/snapshot.pdf",
+    );
+    await provider.resolveCustomTextEditor(
+      document as never,
+      panel as never,
+      {} as never,
+    );
+    panel.webview.receive({ protocolVersion: 1, type: "ready" });
+    await flush();
+
+    const renderGate = deferred<Uint8Array<ArrayBuffer>>();
+    pdfMocks.renderPdf.mockImplementationOnce(() => renderGate.promise);
+    const exportVersion = document.version;
+    panel.webview.receive({
+      protocolVersion: 1,
+      type: "export-pdf",
+      baseVersion: exportVersion,
+      operationId: "pdf:held-render",
+    });
+    await waitForCondition(
+      () => pdfMocks.renderPdf.mock.calls.length === 1,
+      "the held PDF renderer to start",
+    );
+    const exportHtml = pdfMocks.renderPdf.mock.calls[0]?.[0] ?? "";
+    expect(exportHtml).toContain("Original");
+
+    panel.webview.receive({
+      protocolVersion: 1,
+      type: "edit",
+      baseVersion: document.version,
+      operationId: "edit:during-pdf-render",
+      markdown: "# Edited while PDF is rendering",
+    });
+    await waitForCondition(
+      () =>
+        document.getText() === "# Edited while PDF is rendering" &&
+        panel.webview.messages.some(
+          (message) =>
+            isHostMessage(message) &&
+            message.type === "document" &&
+            message.reason === "ack" &&
+            message.operationId === "edit:during-pdf-render",
+        ),
+      "the edit acknowledgement while PDF rendering is held",
+    );
+
+    panel.webview.receive({
+      protocolVersion: 1,
+      type: "save",
+      baseVersion: document.version,
+      operationId: "save:during-pdf-render",
+    });
+    await waitForCondition(
+      () =>
+        panel.webview.messages.some(
+          (message) =>
+            isHostMessage(message) &&
+            message.type === "save-result" &&
+            message.operationId === "save:during-pdf-render" &&
+            message.saved === true,
+        ),
+      "save completion while PDF rendering is held",
+    );
+    expect(document.isDirty).toBe(false);
+    expect(exportHtml).not.toContain("Edited while PDF is rendering");
+    expect(vscode.__state.exportWrites).toHaveLength(0);
+
+    renderGate.resolve(new Uint8Array([37, 80, 68, 70, 45, 49, 46, 55]));
+    await waitForCondition(
+      () => vscode.__state.exportWrites.length === 1,
+      "the held PDF write to finish",
+    );
+    expect(Array.from(vscode.__state.exportWrites[0]!.contents)).toEqual([
+      37, 80, 68, 70, 45, 49, 46, 55,
+    ]);
+    expect(document.getText()).toBe("# Edited while PDF is rendering");
+    provider.dispose();
+  });
+
+  it("releases the document queue while managed Chromium installation is held", async () => {
+    vi.clearAllMocks();
+    vscode.__state.reset();
+    const provider = new MarkdownMintEditorProvider(context() as never);
+    const document = vscode.__state.document;
+    const panel = vscode.__state.panel;
+    vscode.__state.saveDialogResult = vscode.Uri.file(
+      "/workspace/docs/install-wait.pdf",
+    );
+    vscode.__state.showErrorAction = "Install managed Chromium";
+    await provider.resolveCustomTextEditor(
+      document as never,
+      panel as never,
+      {} as never,
+    );
+    panel.webview.receive({ protocolVersion: 1, type: "ready" });
+    await flush();
+
+    const installGate = deferred<string>();
+    pdfMocks.resolveChromiumExecutable.mockRejectedValueOnce(
+      new pdfMocks.ChromiumExecutableNotFoundError(),
+    );
+    pdfMocks.installManagedChromium.mockImplementationOnce(
+      () => installGate.promise,
+    );
+    panel.webview.receive({
+      protocolVersion: 1,
+      type: "export-pdf",
+      baseVersion: document.version,
+      operationId: "pdf:held-install",
+    });
+    await waitForCondition(
+      () => pdfMocks.installManagedChromium.mock.calls.length === 1,
+      "managed Chromium installation to start",
+    );
+
+    panel.webview.receive({
+      protocolVersion: 1,
+      type: "edit",
+      baseVersion: document.version,
+      operationId: "edit:during-pdf-install",
+      markdown: "# Edited while Chromium installs",
+    });
+    await waitForCondition(
+      () =>
+        document.getText() === "# Edited while Chromium installs" &&
+        panel.webview.messages.some(
+          (message) =>
+            isHostMessage(message) &&
+            message.type === "document" &&
+            message.reason === "ack" &&
+            message.operationId === "edit:during-pdf-install",
+        ),
+      "the edit acknowledgement while installation is held",
+    );
+
+    panel.webview.receive({
+      protocolVersion: 1,
+      type: "save",
+      baseVersion: document.version,
+      operationId: "save:during-pdf-install",
+    });
+    await waitForCondition(
+      () =>
+        panel.webview.messages.some(
+          (message) =>
+            isHostMessage(message) &&
+            message.type === "save-result" &&
+            message.operationId === "save:during-pdf-install" &&
+            message.saved === true,
+        ),
+      "save completion while installation is held",
+    );
+    expect(document.isDirty).toBe(false);
+    expect(pdfMocks.renderPdf).not.toHaveBeenCalled();
+
+    installGate.resolve("/managed/chrome");
+    await waitForCondition(
+      () => vscode.__state.exportWrites.length === 1,
+      "PDF creation after managed Chromium installation",
+    );
+    expect(pdfMocks.renderPdf).toHaveBeenCalledWith(
+      expect.stringContaining("Original"),
+      { executablePath: "/managed/chrome" },
+    );
+    expect(pdfMocks.renderPdf.mock.calls[0]?.[0]).not.toContain(
+      "Edited while Chromium installs",
+    );
     provider.dispose();
   });
 

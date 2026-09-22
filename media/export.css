@@ -95,7 +95,7 @@ body {
 }
 
 /* The shared renderer emits these controls for VS Code preview enhancers. */
-.mm-code-block-actions {
+.markdown-body .mm-code-block-actions {
   display: none;
 }
 
@@ -139,6 +139,90 @@ body {
   .markdown-body .katex-display,
   .markdown-body .markdown-alert {
     break-inside: avoid;
+  }
+
+  .markdown-body .mm-code-block {
+    min-width: 0;
+    overflow: visible;
+    break-inside: auto;
+    page-break-inside: auto;
+  }
+
+  .markdown-body .mm-code-block-body {
+    min-width: 0;
+    break-inside: auto;
+    page-break-inside: auto;
+  }
+
+  .markdown-body pre,
+  .markdown-body .mm-code-block-pre {
+    min-width: 0 !important;
+    max-width: 100% !important;
+    overflow: visible !important;
+    white-space: pre-wrap !important;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+    break-inside: auto;
+    page-break-inside: auto;
+    widows: 2;
+    orphans: 2;
+  }
+
+  .markdown-body .mm-code-block-pre code {
+    display: block;
+    min-width: 0 !important;
+    max-width: 100% !important;
+    white-space: pre-wrap !important;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+
+  /* The screen line-number gutter cannot account for wrapped visual rows. */
+  .markdown-body .mm-code-block .mm-code-line-numbers {
+    display: none;
+  }
+
+  .markdown-body .mm-code-block-body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .markdown-body .mm-code-block .mm-code-block-pre {
+    grid-column: 1;
+  }
+
+  .markdown-body .mm-code-line-numbers {
+    min-width: 3.2em;
+    overflow: visible;
+  }
+
+  .markdown-body table {
+    display: table;
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
+    overflow: visible;
+    table-layout: fixed;
+    break-inside: auto;
+    page-break-inside: auto;
+  }
+
+  .markdown-body thead {
+    display: table-header-group;
+  }
+
+  .markdown-body tfoot {
+    display: table-footer-group;
+  }
+
+  .markdown-body tr {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
+  .markdown-body th,
+  .markdown-body td {
+    overflow-wrap: anywhere;
+    word-break: break-word;
   }
 
   .markdown-body a {

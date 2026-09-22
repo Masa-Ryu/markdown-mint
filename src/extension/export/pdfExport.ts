@@ -7,53 +7,46 @@ export interface PdfExportOptions {
   readonly timeoutMs?: number;
 }
 
+function documentResourcesScript(timeoutMs: number): string {
+  return `(() => {
+    const timeout = ${Math.floor(timeoutMs)};
+    const withTimeout = (promise, label) => Promise.race([
+      promise,
+      new Promise((_resolve, reject) => {
+        window.setTimeout(() => reject(new Error("Timed out waiting for " + label + ".")), timeout);
+      }),
+    ]);
+    return (async () => {
+      await withTimeout(document.fonts.ready, "KaTeX fonts");
+      const images = Array.from(document.images).filter((image) => {
+        const source = image.getAttribute("src") || "";
+        return !/^https?:\\/\\//i.test(source);
+      });
+      await withTimeout(Promise.all(images.map(async (image) => {
+        if (!image.complete) {
+          await new Promise((resolve, reject) => {
+            image.addEventListener("load", () => resolve(), { once: true });
+            image.addEventListener("error", () => reject(new Error("An embedded or local image failed to load.")), { once: true });
+          });
+        }
+        if (image.naturalWidth === 0) throw new Error("An embedded or local image failed to load.");
+        if (typeof image.decode === "function") await image.decode();
+      })), "local images");
+    })();
+  })()`;
+}
+
+const mermaidReadinessExpression = `Array.from(document.querySelectorAll('[data-mm-mermaid="true"]')).every((diagram) => ["rendered", "failed"].includes(diagram.dataset.mmMermaidState || ""))`;
+const failedMermaidCountExpression = `Array.from(document.querySelectorAll('[data-mm-mermaid="true"]')).filter((diagram) => diagram.dataset.mmMermaidState !== "rendered").length`;
+
 async function waitForDocumentResources(
   page: Page,
   timeoutMs: number,
 ): Promise<void> {
   try {
-    await page.evaluate(async (timeout) => {
-      const withTimeout = <T>(promise: Promise<T>, label: string) =>
-        Promise.race([
-          promise,
-          new Promise<never>((_resolve, reject) => {
-            window.setTimeout(
-              () => reject(new Error(`Timed out waiting for ${label}.`)),
-              timeout,
-            );
-          }),
-        ]);
-
-      await withTimeout(document.fonts.ready, "KaTeX fonts");
-      const images = Array.from(document.images).filter((image) => {
-        const source = image.getAttribute("src") ?? "";
-        // Remote images are left under the source document's normal browser
-        // loading policy; PDF export does not fetch them itself.
-        return !/^https?:\/\//i.test(source);
-      });
-      await withTimeout(
-        Promise.all(
-          images.map(async (image) => {
-            if (!image.complete)
-              await new Promise<void>((resolve, reject) => {
-                image.addEventListener("load", () => resolve(), { once: true });
-                image.addEventListener(
-                  "error",
-                  () =>
-                    reject(
-                      new Error("An embedded or local image failed to load."),
-                    ),
-                  { once: true },
-                );
-              });
-            if (image.naturalWidth === 0)
-              throw new Error("An embedded or local image failed to load.");
-            if (typeof image.decode === "function") await image.decode();
-          }),
-        ),
-        "local images",
-      );
-    }, timeoutMs);
+    // Puppeteer serializes the expression itself. Keeping browser code as a
+    // string prevents esbuild's keepNames wrappers from capturing Node helpers.
+    await page.evaluate(documentResourcesScript(timeoutMs));
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "A document resource failed.";
@@ -68,15 +61,9 @@ async function waitForDocumentResources(
 
 async function waitForMermaid(page: Page, timeoutMs: number): Promise<void> {
   try {
-    await page.waitForFunction(
-      () =>
-        Array.from(
-          document.querySelectorAll<HTMLElement>('[data-mm-mermaid="true"]'),
-        ).every((diagram) =>
-          ["rendered", "failed"].includes(diagram.dataset.mmMermaidState ?? ""),
-        ),
-      { timeout: timeoutMs },
-    );
+    await page.waitForFunction(mermaidReadinessExpression, {
+      timeout: timeoutMs,
+    });
   } catch (error) {
     throw new Error(
       `Timed out waiting for Mermaid diagrams to render within ${timeoutMs} ms.`,
@@ -84,13 +71,9 @@ async function waitForMermaid(page: Page, timeoutMs: number): Promise<void> {
     );
   }
 
-  const failedCount = await page.evaluate(
-    () =>
-      Array.from(
-        document.querySelectorAll<HTMLElement>('[data-mm-mermaid="true"]'),
-      ).filter((diagram) => diagram.dataset.mmMermaidState !== "rendered")
-        .length,
-  );
+  const failedCount = (await page.evaluate(
+    failedMermaidCountExpression,
+  )) as number;
   if (failedCount > 0)
     throw new Error(
       `${failedCount} Mermaid ${failedCount === 1 ? "diagram" : "diagrams"} could not be rendered for PDF export.`,

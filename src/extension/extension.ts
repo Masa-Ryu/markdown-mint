@@ -133,6 +133,13 @@ interface ResourceInfo {
   readonly baseUrl?: string;
 }
 
+interface PdfExportSnapshot {
+  readonly markdown: string;
+  readonly profile: MarkdownProfile;
+  readonly documentUri: vscode.Uri;
+  readonly version: number;
+}
+
 interface CoreParseResult {
   readonly diagnostics?: readonly unknown[];
   readonly errors?: readonly unknown[];
@@ -307,6 +314,7 @@ export class MarkdownMintEditorProvider
   private readonly subscriptions: vscode.Disposable[] = [];
   private readonly output: vscode.OutputChannel;
   private readonly workspaceFileSearch = new WorkspaceFileSearchHost();
+  private pdfExportQueue: Promise<void> = Promise.resolve();
   private lastDocumentUri: vscode.Uri | undefined;
 
   public constructor(private readonly context: vscode.ExtensionContext) {
@@ -495,10 +503,11 @@ export class MarkdownMintEditorProvider
 
     const state = existingState ?? this.getOrCreateState(document);
     try {
-      await this.enqueue(state, async () => {
+      const snapshot = await this.enqueue(state, async () => {
         const current = await this.currentDocument(state);
-        await this.writePdfExport(current, state.profile);
+        return this.pdfExportSnapshot(current, state.profile);
       });
+      await this.enqueuePdfExport(snapshot);
     } catch (error) {
       void vscode.window.showErrorMessage(
         `Markdown Mint: ${errorMessage(error, "PDF export failed.")}`,
@@ -945,9 +954,12 @@ export class MarkdownMintEditorProvider
           );
           return;
         case "export-pdf":
-          await this.enqueue(session.state, () =>
-            this.handlePdfExport(session, message),
-          );
+          {
+            const snapshot = await this.enqueue(session.state, () =>
+              this.handlePdfExport(session, message),
+            );
+            if (snapshot) await this.enqueuePdfExport(snapshot);
+          }
           return;
         case "set-profile":
           await this.enqueue(session.state, () =>
@@ -1641,7 +1653,7 @@ export class MarkdownMintEditorProvider
   private async handlePdfExport(
     session: PanelSession,
     message: ExportPdfMessage,
-  ): Promise<void> {
+  ): Promise<PdfExportSnapshot | undefined> {
     const document = await this.currentDocument(session.state);
     if (document.version !== message.baseVersion) {
       const failure =
@@ -1649,9 +1661,33 @@ export class MarkdownMintEditorProvider
       void vscode.window.showErrorMessage(`Markdown Mint: ${failure}`);
       this.post(session, this.errorMessage(failure, message.operationId));
       this.sendDocumentIfVisible(session, "external");
-      return;
+      return undefined;
     }
-    await this.writePdfExport(document, session.state.profile);
+    return this.pdfExportSnapshot(document, session.state.profile);
+  }
+
+  private pdfExportSnapshot(
+    document: vscode.TextDocument,
+    profile: MarkdownProfile,
+  ): PdfExportSnapshot {
+    return Object.freeze({
+      markdown: document.getText(),
+      profile,
+      documentUri: document.uri,
+      version: document.version,
+    });
+  }
+
+  private enqueuePdfExport(snapshot: PdfExportSnapshot): Promise<void> {
+    const job = this.pdfExportQueue.then(
+      () => this.writePdfExport(snapshot),
+      () => this.writePdfExport(snapshot),
+    );
+    this.pdfExportQueue = job.then(
+      () => undefined,
+      () => undefined,
+    );
+    return job;
   }
 
   private async writeHtmlExport(
@@ -1700,20 +1736,18 @@ export class MarkdownMintEditorProvider
     }
   }
 
-  private async writePdfExport(
-    document: vscode.TextDocument,
-    profile: MarkdownProfile,
-  ): Promise<void> {
-    const sourcePath =
-      document.uri.fsPath || document.uri.path || document.fileName;
-    const markdown = document.getText();
+  private async writePdfExport(snapshot: PdfExportSnapshot): Promise<void> {
+    const sourcePath = snapshot.documentUri.fsPath || snapshot.documentUri.path;
     const sourceName = path.basename(sourcePath || "document.md");
     const title =
       path.basename(sourceName, path.extname(sourceName)) || "document";
     const defaultUri =
-      document.uri.scheme === "file" && document.uri.fsPath
+      snapshot.documentUri.scheme === "file" && snapshot.documentUri.fsPath
         ? vscode.Uri.file(
-            path.join(path.dirname(document.uri.fsPath), `${title}.pdf`),
+            path.join(
+              path.dirname(snapshot.documentUri.fsPath),
+              `${title}.pdf`,
+            ),
           )
         : vscode.Uri.file(`${title}.pdf`);
 
@@ -1724,9 +1758,9 @@ export class MarkdownMintEditorProvider
       });
       if (!destination) return;
       const html = await createExportHtml({
-        markdown,
-        profile,
-        documentUri: document.uri,
+        markdown: snapshot.markdown,
+        profile: snapshot.profile,
+        documentUri: snapshot.documentUri,
         title,
         extensionUri: this.context.extensionUri,
       });

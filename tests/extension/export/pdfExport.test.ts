@@ -77,8 +77,11 @@ describe("renderPdf", () => {
       }),
     ).rejects.toThrow("1 Mermaid diagram could not be rendered");
     expect(puppeteerMocks.page.waitForFunction).toHaveBeenCalledWith(
-      expect.any(Function),
+      expect.any(String),
       { timeout: PDF_EXPORT_TIMEOUT_MS },
+    );
+    expect(puppeteerMocks.page.evaluate).toHaveBeenLastCalledWith(
+      expect.stringContaining("mmMermaidState"),
     );
     expect(puppeteerMocks.page.pdf).not.toHaveBeenCalled();
     expect(puppeteerMocks.browser.close).toHaveBeenCalledOnce();
@@ -92,7 +95,26 @@ describe("renderPdf", () => {
     await expect(
       renderPdf("<html></html>", { executablePath: "/chrome", timeoutMs: 25 }),
     ).rejects.toThrow("PDF export could not prepare document resources");
+    expect(puppeteerMocks.page.evaluate).toHaveBeenCalledWith(
+      expect.stringContaining("document.fonts.ready"),
+    );
     expect(puppeteerMocks.browser.close).toHaveBeenCalledOnce();
+  });
+
+  it("passes only self-contained JavaScript expressions into the browser", async () => {
+    await renderPdf("<html></html>", { executablePath: "/chrome" });
+
+    const evaluateCalls = puppeteerMocks.page.evaluate.mock.calls;
+    expect(evaluateCalls).toHaveLength(2);
+    expect(
+      evaluateCalls.every(([expression]) => typeof expression === "string"),
+    ).toBe(true);
+    expect(puppeteerMocks.page.waitForFunction).toHaveBeenCalledWith(
+      expect.any(String),
+      { timeout: PDF_EXPORT_TIMEOUT_MS },
+    );
+    for (const [expression] of evaluateCalls)
+      expect(expression).not.toMatch(/\b(?:__name|s)\s*\(/);
   });
 
   it("closes Chromium when page setup or PDF generation fails", async () => {

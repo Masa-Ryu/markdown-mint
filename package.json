@@ -182,6 +182,8 @@
     "benchmark:mermaid-startup": "npm run build && node scripts/benchmark-mermaid-startup.mjs",
     "test:watch": "vitest",
     "test:extension": "npm run compile && npm run build && node scripts/test-extension.mjs",
+    "test:extension:pdf": "npm run compile && npm run build && node scripts/test-pdf-export-extension.mjs",
+    "test:extension:pdf:vsix": "node scripts/test-pdf-export-extension.mjs --vsix",
     "verify:package": "npm run build && node scripts/verify-package.mjs",
     "package": "npm run build && vsce package --no-dependencies && node scripts/verify-package.mjs && node scripts/verify-vsix.mjs",
     "test:browser:blocks": "npm run build:webview && node tests/browser/block-editing.test.mjs",
@@ -221,6 +223,7 @@
     "eslint": "^9.29.0",
     "eslint-config-prettier": "^10.1.5",
     "jsdom": "^26.1.0",
+    "pdfjs-dist": "4.10.38",
     "playwright": "^1.63.0",
     "typescript": "^5.8.3",
     "vitest": "^3.2.4"
