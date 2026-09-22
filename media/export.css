@@ -107,10 +107,17 @@ body {
 }
 
 @media print {
+  @page {
+    size: A4 portrait;
+    margin: 16mm;
+  }
+
   html,
   body {
     min-width: 0;
     background: #ffffff !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
   }
 
   body {
@@ -125,9 +132,11 @@ body {
   }
 
   .markdown-body pre,
+  .markdown-body .mm-code-block,
   .markdown-body table,
   .markdown-body img,
-  .markdown-body blockquote,
+  .markdown-body .mm-mermaid,
+  .markdown-body .katex-display,
   .markdown-body .markdown-alert {
     break-inside: avoid;
   }

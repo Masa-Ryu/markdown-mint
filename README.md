@@ -46,6 +46,8 @@ Markdown Mint includes additional tools for working with real-world Markdown doc
 
 ✅Quickly create image references, URLs, and internal links with automatic suggestions and search\.
 
+✅Export Markdown as standalone HTML or A4 PDF from the current document\.
+
 ## Markdown stays Markdown
 
 Markdown Mint does not introduce a proprietary document format.

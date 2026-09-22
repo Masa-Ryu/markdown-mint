@@ -58,6 +58,41 @@ smoke suite is `npm run test:browser:html-export`; it checks the export in a
 dark-preference browser, including CSP, Mermaid, images, palette, and all three
 GitLab task states.
 
+## Issue #132 PDF export (0.7.0)
+
+The Export menu offers HTML and PDF. The `Markdown Mint: Export as PDF`
+Command Palette command uses the same current, unsaved Markdown snapshot and
+`createExportHtml()` result as HTML export, then passes that standalone document
+to Puppeteer's Chromium print engine. It does not maintain a second Markdown
+renderer. The webview defers PDF requests until the latest edit acknowledgement
+arrives; canceling the save dialog does not resolve or launch a browser.
+
+PDF output uses A4 portrait pages, CSS-managed 16 mm margins, white background,
+and printed backgrounds. The renderer waits with bounded timeouts for KaTeX
+fonts, local/data images, and the existing Mermaid `data-mm-mermaid-state` to
+reach `rendered`; a Mermaid rendering failure stops the export with a specific
+error. Puppeteer closes the browser on success and failure. PDF bytes are
+written with `workspace.fs.writeFile()`, and export does not modify Markdown,
+editor state, profile, or undo history.
+
+Chromium resolution checks
+`markdownMint.export.pdf.chromiumExecutablePath`, then known Chrome, Edge, and
+Chromium locations on macOS, Windows, or Linux, then the Markdown Mint managed
+browser in `ExtensionContext.globalStorageUri`. A configured but invalid path
+is reported directly rather than silently falling back. If no browser is
+available, a VS Code modal offers **Install managed Chromium** or **Cancel**;
+the explicit action downloads Chrome for Testing `153.0.8010.12`, pinned in
+`src/extension/export/chromium.ts` and independent from dependency updates.
+Regular extension installation does not fetch a browser, and the VSIX does not
+contain the managed browser binary. Remote SSH, Dev Containers, and WSL need a
+browser in the extension host environment.
+
+The render fixture is `tests/md/pdf-export.md`; the actual Chromium PDF smoke
+suite is `npm run test:browser:pdf-export`. Unit coverage in
+`tests/extension/export/chromium.test.ts` and `pdfExport.test.ts` fixes browser
+priority, OS candidates, install pinning, PDF settings, timeout paths, and
+process cleanup. Native extension-host acceptance is still a separate check.
+
 ## Issue #124 Mermaid startup performance (0.5.5)
 
 The dedicated Webview no longer embeds a loading `<script>` for the packaged

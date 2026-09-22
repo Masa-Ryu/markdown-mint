@@ -28,6 +28,7 @@ const requiredEntries = [
   "extension/dist/mermaid.js",
   "extension/dist/mermaid-loader.js",
   "extension/media/document.css",
+  "extension/media/export.css",
 ];
 for (const entry of requiredEntries) {
   if (!entries.includes(entry)) {
@@ -57,6 +58,12 @@ const unexpectedAssetEntries = entries.filter(
     entry !== extensionIcon,
 );
 forbiddenEntries.push(...unexpectedAssetEntries);
+const embeddedChromiumEntries = entries.filter((entry) =>
+  /(?:^|\/)(?:chrome|chromium|chrome-headless-shell|headless_shell)(?:\.exe)?$/i.test(
+    entry,
+  ),
+);
+forbiddenEntries.push(...embeddedChromiumEntries);
 if (forbiddenEntries.length > 0) {
   throw new Error(
     `VSIX contains repository-only or build-embedded assets:\n${forbiddenEntries.join("\n")}`,

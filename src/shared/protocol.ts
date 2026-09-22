@@ -125,6 +125,12 @@ export interface ExportHtmlCommandMessage {
   readonly operationId: string;
 }
 
+export interface ExportPdfCommandMessage {
+  readonly protocolVersion: typeof PROTOCOL_VERSION;
+  readonly type: "export-pdf-command";
+  readonly operationId: string;
+}
+
 export interface ClipboardWriteMessage {
   readonly protocolVersion: typeof PROTOCOL_VERSION;
   readonly type: "clipboard-write";
@@ -265,6 +271,14 @@ export interface ExportHtmlMessage {
   readonly operationId: string;
 }
 
+export interface ExportPdfMessage {
+  readonly protocolVersion: typeof PROTOCOL_VERSION;
+  readonly type: "export-pdf";
+  /** The TextDocument version the webview has observed after its edits. */
+  readonly baseVersion: number;
+  readonly operationId: string;
+}
+
 export interface SaveResultMessage {
   readonly protocolVersion: typeof PROTOCOL_VERSION;
   readonly type: "save-result";
@@ -312,6 +326,7 @@ export type WebviewMessage =
   | FormatMessage
   | SaveMessage
   | ExportHtmlMessage
+  | ExportPdfMessage
   | PreviewRequestMessage
   | RecoverDraftMessage
   | ClipboardWriteMessage
@@ -330,6 +345,7 @@ export type HostMessage =
   | SaveResultMessage
   | RecoveryOpenedMessage
   | ExportHtmlCommandMessage
+  | ExportPdfCommandMessage
   | ClipboardResultMessage
   | WorkspaceFileSearchResultMessage
   | ImageImportResultMessage
@@ -474,7 +490,10 @@ export function isHostMessage(value: unknown): value is HostMessage {
       typeof value.message === "string" && optionalString(value.operationId)
     );
   }
-  if (value.type === "export-html-command")
+  if (
+    value.type === "export-html-command" ||
+    value.type === "export-pdf-command"
+  )
     return isOperationId(value.operationId);
   return false;
 }
@@ -584,6 +603,15 @@ export function parseWebviewMessage(
         ? {
             protocolVersion: PROTOCOL_VERSION,
             type: "export-html",
+            baseVersion: value.baseVersion,
+            operationId: value.operationId,
+          }
+        : undefined;
+    case "export-pdf":
+      return isVersion(value.baseVersion) && isOperationId(value.operationId)
+        ? {
+            protocolVersion: PROTOCOL_VERSION,
+            type: "export-pdf",
             baseVersion: value.baseVersion,
             operationId: value.operationId,
           }

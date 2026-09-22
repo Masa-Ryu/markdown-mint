@@ -366,11 +366,21 @@ describe("bounded writing controls", () => {
     expect(toolbar.querySelector(".mm-toolbar-primary")?.lastElementChild).toBe(
       sourceButton,
     );
-    const exportButton = toolbar.querySelector<HTMLButtonElement>(
-      '[data-testid="toolbar-export-html"]',
+    const exportMenu = toolbar.querySelector<HTMLDetailsElement>(
+      '[data-testid="toolbar-export-menu"]',
     );
-    expect(exportButton?.getAttribute("aria-label")).toBe("Export as HTML");
-    expect(exportButton?.nextElementSibling).toBe(sourceButton);
+    const exportButton = toolbar.querySelector<HTMLElement>(
+      '[data-testid="toolbar-export"]',
+    );
+    expect(exportButton?.getAttribute("aria-label")).toBe("Export");
+    expect(exportMenu?.nextElementSibling).toBe(sourceButton);
+    expect(
+      toolbar.querySelector('[data-testid="toolbar-export-html"]')?.textContent,
+    ).toBe("HTML");
+    expect(
+      toolbar.querySelector('[data-testid="toolbar-export-pdf"]')?.textContent,
+    ).toBe("PDF");
+    expect(exportMenu?.open).toBe(false);
     expect(sourceButton?.style.marginLeft).toBe("");
     expect(
       toolbar.querySelector<HTMLSelectElement>(".mm-profile-select")?.value,
@@ -426,13 +436,44 @@ describe("bounded writing controls", () => {
     const exportButton = root.querySelector<HTMLButtonElement>(
       '[data-testid="toolbar-export-html"]',
     )!;
+    root.querySelector<HTMLElement>('[data-testid="toolbar-export"]')!.click();
     clickToolbarButton(exportButton);
+    expect(
+      root.querySelector<HTMLDetailsElement>(
+        '[data-testid="toolbar-export-menu"]',
+      )?.open,
+    ).toBe(false);
     expect(messagesOfType(messages, "export-html")).toHaveLength(0);
 
     acknowledgeLastEdit(app, messages, 2);
     expect(messagesOfType(messages, "export-html")).toContainEqual(
       expect.objectContaining({
         type: "export-html",
+        baseVersion: 2,
+      }),
+    );
+  });
+
+  it("waits for the latest edit acknowledgement before requesting PDF export", () => {
+    const { app, root, messages } = makeApp("hello world");
+    const end = app.view.state.doc.content.size - 1;
+    app.view.dispatch(app.view.state.tr.insertText(" updated", end));
+    expect(editMessages(messages).at(-1)?.markdown).toContain(
+      "hello world updated",
+    );
+
+    root.querySelector<HTMLElement>('[data-testid="toolbar-export"]')!.click();
+    clickToolbarButton(
+      root.querySelector<HTMLButtonElement>(
+        '[data-testid="toolbar-export-pdf"]',
+      )!,
+    );
+    expect(messagesOfType(messages, "export-pdf")).toHaveLength(0);
+
+    acknowledgeLastEdit(app, messages, 2);
+    expect(messagesOfType(messages, "export-pdf")).toContainEqual(
+      expect.objectContaining({
+        type: "export-pdf",
         baseVersion: 2,
       }),
     );

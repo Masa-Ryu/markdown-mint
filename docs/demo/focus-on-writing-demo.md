@@ -9,12 +9,12 @@ Write and review release notes without breaking your flow.
 
 ## Rollout status
 
-| Component | Status | Owner |
-| --- | --- | --- |
-| API | Ready | Platform |
-| Web | In progress | Frontend |
-| Docs | Review | DevRel |
-| Web | In progress | Frontend |
+| Component | Status      | Owner    |
+| --------- | ----------- | -------- |
+| API       | Ready       | Platform |
+| Web       | In progress | Frontend |
+| Docs      | Review      | DevRel   |
+| Web       | In progress | Frontend |
 
 ## Release window
 

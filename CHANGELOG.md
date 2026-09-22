@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.7.0
+
+- Add A4 PDF export from the Export menu and Command Palette. Reuse the
+  standalone HTML renderer, wait for fonts, images, and Mermaid diagrams, and
+  print through a pinned headless Chrome for Testing build. Prefer configured
+  or installed browsers; offer managed Chromium installation only after the
+  user explicitly chooses it, and store that browser in extension global
+  storage.
+
 ## 0.6.0
 
 - Add standalone HTML export from the Rich Editor toolbar and Command Palette,
