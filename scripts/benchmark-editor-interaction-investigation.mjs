@@ -337,6 +337,13 @@ async function createPage(browser, scenario, options = {}) {
       window.__markdownMintBenchmarkSelectionOnlyTransactions = [];
       window.__mmInteractionEvents = [];
       window.__mmInteractionPhase = "setup";
+      window.__mmInteractionPhaseStartedAt = Object.create(null);
+      window.__mmInteractionPhaseStarts = {
+        clickStartedAt: undefined,
+        endStartedAt: undefined,
+        inputStartedAt: undefined,
+        directSelectionStartedAt: undefined,
+      };
       window.__mmPosAtCoords = { calls: 0, totalMs: 0, maxMs: 0 };
       window.__mmLongTasks = { supported: false, entries: [] };
       const measurements = Object.create(null);
@@ -452,10 +459,29 @@ async function prepareTarget(page, initialPhase) {
     const expectedCellText = `${cell.textContent ?? ""}z`;
     const observer = new MutationObserver(() => {
       if (cell.textContent !== expectedCellText) return;
-      window.__mmDomReflectionAt = performance.now();
+      const mutationAt = performance.now();
+      window.__mmDomMutationAt = mutationAt;
+      window.__mmDomReflectionAt = mutationAt;
       observer.disconnect();
       if (typeof window.__mmBenchmarkNotifyReflection === "function")
-        window.__mmBenchmarkNotifyReflection(window.__mmDomReflectionAt);
+        window.__mmBenchmarkNotifyReflection(mutationAt);
+      const markIdle = (idleAt) => {
+        window.__mmInputFirstIdleAt = idleAt;
+        window.__mmLongTaskObserver?.takeRecords();
+        window.__mmPostMutationLongTasks = window.__mmLongTasks.entries.filter(
+          (task) =>
+            task.startTime < idleAt &&
+            task.startTime + task.duration > mutationAt,
+        );
+      };
+      if (typeof requestIdleCallback === "function")
+        requestIdleCallback(() => markIdle(performance.now()), {
+          timeout: 30_000,
+        });
+      else
+        requestAnimationFrame(() =>
+          requestAnimationFrame(() => markIdle(performance.now())),
+        );
     });
     observer.observe(cell, {
       subtree: true,
@@ -497,16 +523,28 @@ async function prepareTarget(page, initialPhase) {
               return;
           } else if (!relevant(event)) return;
           const at = performance.now();
-          if (event.type === "keydown" && event.key === "End")
+          if (event.type === "keydown" && event.key === "End") {
             window.__mmInteractionPhase = "end";
-          else if (event.type === "keydown") {
+            window.__mmInteractionPhaseStarts.endStartedAt ??= at;
+            window.__mmInteractionPhaseStartedAt.end ??=
+              window.__mmInteractionPhaseStarts.endStartedAt;
+          } else if (event.type === "keydown") {
             window.__mmInteractionPhase = "input";
             window.__mmInputStartAt ??= at;
+            window.__mmInteractionPhaseStarts.inputStartedAt ??= at;
+            window.__mmInteractionPhaseStartedAt.input ??=
+              window.__mmInteractionPhaseStarts.inputStartedAt;
           }
+          const phase = window.__mmInteractionPhase;
+          const phaseStartedAt =
+            window.__mmInteractionPhaseStartedAt[phase] ?? null;
           window.__mmInteractionEvents.push({
             type,
             at,
-            phase: window.__mmInteractionPhase,
+            phase,
+            phaseStartedAt,
+            fromPhaseStartMs:
+              phaseStartedAt === null ? null : at - phaseStartedAt,
             ...(event instanceof KeyboardEvent ? { key: event.key } : {}),
             ...(event instanceof InputEvent
               ? { inputType: event.inputType, data: event.data }
@@ -561,12 +599,42 @@ async function resetEvents(page, phase) {
     window.__mmLongTaskObserver?.takeRecords();
     window.__markdownMintPerformanceBenchmark?.reset?.();
     window.__mmInteractionPhase = nextPhase;
+    const now = performance.now();
+    window.__mmInteractionPhaseStartedAt = { [nextPhase]: now };
+    window.__mmInteractionPhaseStarts = {
+      clickStartedAt: nextPhase === "click" ? now : undefined,
+      endStartedAt: nextPhase === "end" ? now : undefined,
+      inputStartedAt: nextPhase === "input" ? now : undefined,
+      directSelectionStartedAt:
+        nextPhase === "direct-selection" ? now : undefined,
+    };
     window.__mmInputStartAt = undefined;
     window.__mmDomReflectionAt = undefined;
-    window.__mmActionStartedAt = performance.now();
+    window.__mmDomMutationAt = undefined;
+    window.__mmInputFirstIdleAt = undefined;
+    window.__mmPostMutationLongTasks = [];
+    window.__mmInputCallStartedAt = undefined;
+    window.__mmActionStartedAt = now;
     return window.__mmActionStartedAt;
   }, phase);
   return { browserAt };
+}
+
+async function beginPhase(page, phase) {
+  return page.evaluate((nextPhase) => {
+    const at = performance.now();
+    window.__mmInteractionPhase = nextPhase;
+    window.__mmInteractionPhaseStartedAt[nextPhase] = at;
+    const key = {
+      click: "clickStartedAt",
+      end: "endStartedAt",
+      input: "inputStartedAt",
+      "direct-selection": "directSelectionStartedAt",
+    }[nextPhase];
+    if (key) window.__mmInteractionPhaseStarts[key] = at;
+    if (nextPhase === "input") window.__mmInputCallStartedAt = at;
+    return at;
+  }, phase);
 }
 
 async function readInteractionState(page) {
@@ -607,12 +675,17 @@ async function readInteractionState(page) {
             : event.at - window.__mmActionStartedAt,
       })),
       pmSelectionChanges:
-        window.__markdownMintBenchmarkPmSelectionChanges.slice(),
+        window.__markdownMintBenchmarkPmSelectionChanges?.slice() ?? [],
+      phaseStartedAt: { ...window.__mmInteractionPhaseStartedAt },
+      phaseStarts: { ...window.__mmInteractionPhaseStarts },
       selectionOnlyTransactions:
-        window.__markdownMintBenchmarkSelectionOnlyTransactions.slice(),
+        window.__markdownMintBenchmarkSelectionOnlyTransactions?.slice() ?? [],
       posAtCoords: { ...window.__mmPosAtCoords },
       inputStartedAt: window.__mmInputStartAt ?? null,
+      domMutationAt: window.__mmDomMutationAt ?? null,
       domReflectionAt: window.__mmDomReflectionAt ?? null,
+      inputFirstIdleAt: window.__mmInputFirstIdleAt ?? null,
+      postMutationLongTasks: window.__mmPostMutationLongTasks?.slice() ?? [],
       selectionEventTimes: {
         mousedown: eventTime("mousedown", "click"),
         focus: eventTime("focus", "click") ?? eventTime("focusin", "click"),
@@ -687,10 +760,31 @@ async function typeAndWaitForReflection(page) {
     null,
     { timeout: 120_000 },
   );
-  return page.evaluate(() => ({
-    startedAt: window.__mmInputStartAt,
-    reflectedAt: window.__mmDomReflectionAt,
-  }));
+  await page.waitForFunction(
+    () => typeof window.__mmInputFirstIdleAt === "number",
+    null,
+    { timeout: 120_000 },
+  );
+  return page.evaluate(() => {
+    const tasks = window.__mmPostMutationLongTasks;
+    return {
+      startedAt: window.__mmInputStartAt,
+      callStartedAt: window.__mmInputCallStartedAt ?? null,
+      reflectedAt: window.__mmDomMutationAt,
+      firstIdleAt: window.__mmInputFirstIdleAt,
+      inputToDomMutationMs: window.__mmDomMutationAt - window.__mmInputStartAt,
+      postMutationLongestTaskMs: Math.max(
+        0,
+        ...tasks.map((task) => task.duration),
+      ),
+      postMutationLongTaskTotalMs: tasks.reduce(
+        (total, task) => total + task.duration,
+        0,
+      ),
+      inputToFirstIdleMs: window.__mmInputFirstIdleAt - window.__mmInputStartAt,
+      postMutationLongTasks: tasks,
+    };
+  });
 }
 
 async function collectSample(browser, scenario, kind, options = {}) {
@@ -741,6 +835,7 @@ async function collectSample(browser, scenario, kind, options = {}) {
       timings.clickActionMs = clickCompleteNodeAt - clickStartedNodeAt;
 
       // Keep the real input sequence uninterrupted by page.evaluate probes.
+      const endPhaseStartedAt = await beginPhase(page, "end");
       endStartedNodeAt = performance.now();
       await page.keyboard.press("End");
       caretReadyNodeAt = performance.now();
@@ -748,14 +843,23 @@ async function collectSample(browser, scenario, kind, options = {}) {
       timings.clickToCaretReadyMs = caretReadyNodeAt - clickCompleteNodeAt;
       timings.endActionMs = caretReadyNodeAt - endStartedNodeAt;
       timings.postClickToEndStartMs = endStartedNodeAt - clickCompleteNodeAt;
+      timings.endCallStartedAtBrowser = endPhaseStartedAt;
 
       if (options.typeInput) {
+        await beginPhase(page, "input");
         inputStartedNodeAt = performance.now();
         const reflection = await typeAndWaitForReflection(page);
         domReflectionNodeAt = performance.now();
         timings.inputStartToDomReflectionMs =
           reflection.reflectedAt - reflection.startedAt;
         timings.inputActionAndWaitMs = domReflectionNodeAt - inputStartedNodeAt;
+        timings.inputToDomMutationMs = reflection.inputToDomMutationMs;
+        timings.postMutationLongestTaskMs =
+          reflection.postMutationLongestTaskMs;
+        timings.postMutationLongTaskTotalMs =
+          reflection.postMutationLongTaskTotalMs;
+        timings.inputToFirstIdleMs = reflection.inputToFirstIdleMs;
+        timings.postMutationLongTasks = reflection.postMutationLongTasks;
       }
     } else if (kind === "domClick") {
       clickStartedNodeAt = performance.now();
@@ -848,7 +952,55 @@ async function collectSample(browser, scenario, kind, options = {}) {
       );
       timings.initialDirectSelectionMs =
         initialSelection.completedAt - initialSelection.startedAt;
-      actionClock = await resetEvents(page, "end");
+      const caretBefore = await page.evaluate(() => {
+        const cell = document.querySelector(
+          ".mm-rich-panel .ProseMirror table tbody td",
+        );
+        const selection = getSelection();
+        const anchor = selection?.anchorNode;
+        const anchorElement =
+          anchor instanceof Element ? anchor : anchor?.parentElement;
+        return {
+          pmPosition: window.markdownMint.view.state.selection.head,
+          domAnchorOffset: selection?.anchorOffset ?? null,
+          browserSelectionInCell: Boolean(
+            cell && anchorElement && cell.contains(anchorElement),
+          ),
+          cellTextLength: cell?.textContent?.length ?? null,
+          activeElementIsEditor:
+            document.activeElement ===
+            document.querySelector(".mm-rich-panel .ProseMirror"),
+        };
+      });
+      const endPhaseStartedAt = await page.evaluate(() => {
+        const at = performance.now();
+        window.__mmInteractionEvents.length = 0;
+        window.__markdownMintBenchmarkPmSelectionChanges.length = 0;
+        window.__markdownMintBenchmarkSelectionOnlyTransactions.length = 0;
+        window.__mmPosAtCoords = { calls: 0, totalMs: 0, maxMs: 0 };
+        window.__mmLongTasks.entries.length = 0;
+        window.__mmDomReflectionAt = undefined;
+        window.__mmDomMutationAt = undefined;
+        window.__mmInputFirstIdleAt = undefined;
+        window.__mmPostMutationLongTasks = [];
+        window.__mmLongTaskObserver?.takeRecords();
+        window.__markdownMintPerformanceBenchmark?.reset?.();
+        window.__mmInteractionPhase = "end";
+        window.__mmInteractionPhaseStartedAt = { end: at };
+        window.__mmInteractionPhaseStarts = {
+          clickStartedAt: undefined,
+          endStartedAt: at,
+          inputStartedAt: undefined,
+          directSelectionStartedAt: undefined,
+        };
+        window.__mmActionStartedAt = at;
+        return at;
+      });
+      actionClock = { browserAt: endPhaseStartedAt };
+      caretBefore.selectionDispatchCompletedAt = initialSelection.completedAt;
+      caretBefore.endMeasurementStartedAt = endPhaseStartedAt;
+      timings.selectionDispatchToCaretBaselineMs =
+        endPhaseStartedAt - initialSelection.completedAt;
       endStartedNodeAt = performance.now();
       if (kind === "realEndOnly") await page.keyboard.press("End");
       else {
@@ -870,6 +1022,36 @@ async function collectSample(browser, scenario, kind, options = {}) {
       caretReadyNodeAt = performance.now();
       endCompleted = true;
       timings.realOrSyntheticEndMs = caretReadyNodeAt - endStartedNodeAt;
+      const caretAfter = await page.evaluate(() => {
+        const cell = document.querySelector(
+          ".mm-rich-panel .ProseMirror table tbody td",
+        );
+        const selection = getSelection();
+        const anchor = selection?.anchorNode;
+        const anchorElement =
+          anchor instanceof Element ? anchor : anchor?.parentElement;
+        return {
+          pmPosition: window.markdownMint.view.state.selection.head,
+          domAnchorOffset: selection?.anchorOffset ?? null,
+          browserSelectionInCell: Boolean(
+            cell && anchorElement && cell.contains(anchorElement),
+          ),
+          cellTextLength: cell?.textContent?.length ?? null,
+        };
+      });
+      const successfulCaretMove = Boolean(
+        caretAfter.pmPosition > caretBefore.pmPosition &&
+        caretAfter.domAnchorOffset > (caretBefore.domAnchorOffset ?? -1) &&
+        caretAfter.domAnchorOffset === caretAfter.cellTextLength &&
+        caretAfter.browserSelectionInCell,
+      );
+      timings.endCallStartedAtBrowser = endPhaseStartedAt;
+      timings.successfulEndMs = successfulCaretMove
+        ? timings.realOrSyntheticEndMs
+        : null;
+      timings.caretBefore = caretBefore;
+      timings.caretAfter = caretAfter;
+      timings.successfulCaretMove = successfulCaretMove;
     }
 
     const interaction = await readInteractionState(page);
@@ -879,41 +1061,13 @@ async function collectSample(browser, scenario, kind, options = {}) {
     )
       timings.totalInputAcceptedMs =
         interaction.domReflectionAt - interaction.navigationStartedAt;
-    const clickStartedAt =
-      clickStartedNodeAt === null ? null : (actionClock?.browserAt ?? null);
+    const clickStartedAt = interaction.phaseStarts.clickStartedAt ?? null;
     const endKeydownAt =
       interaction.eventTimeline.find(
         (event) => event.type === "keydown" && event.key === "End",
       )?.at ?? null;
-    const endStartedAt =
-      endStartedNodeAt === null
-        ? null
-        : (endKeydownAt ?? actionClock?.browserAt ?? null);
+    const endStartedAt = interaction.phaseStarts.endStartedAt ?? null;
     const inputStartedAt = interaction.inputStartedAt;
-    interaction.eventTimeline = interaction.eventTimeline.map((event) => {
-      const phaseStart =
-        event.phase === "end"
-          ? (endKeydownAt ?? endStartedAt)
-          : event.phase === "input"
-            ? inputStartedAt
-            : (clickStartedAt ?? actionClock?.browserAt ?? null);
-      return {
-        ...event,
-        fromPhaseStartMs:
-          phaseStart === null || phaseStart === undefined
-            ? null
-            : event.at - phaseStart,
-      };
-    });
-    interaction.pmSelectionChanges = interaction.pmSelectionChanges.map(
-      (change) => ({
-        ...change,
-        fromPhaseStartMs:
-          actionClock?.browserAt === undefined
-            ? null
-            : change.at - actionClock.browserAt,
-      }),
-    );
     const input =
       interaction.inputStartedAt !== null &&
       interaction.domReflectionAt !== null
@@ -932,15 +1086,23 @@ async function collectSample(browser, scenario, kind, options = {}) {
         targetFoundAt: descriptor.foundAt,
         visibleAt,
         clickStartedAt,
+        endStartedAt,
+        inputStartedAt: interaction.phaseStarts.inputStartedAt ?? null,
+        directSelectionStartedAt:
+          interaction.phaseStarts.directSelectionStartedAt ?? null,
         clickCompleteNodeAt,
-        endKeydownAt: endStartedAt,
+        endKeydownAt,
         endCallStartedNodeAt: endStartedNodeAt,
         endCompletedNodeAt: caretReadyNodeAt,
         inputStartAt: input?.startedAt ?? null,
         domReflectionAt: input?.reflectedAt ?? null,
       },
       timings,
-      flags: { clickResolved, endCompleted },
+      flags: {
+        clickResolved,
+        endCompleted,
+        successfulCaretMove: timings.successfulCaretMove ?? null,
+      },
       directSelection,
       domSelectionSync,
       focusPreparationMs,
@@ -958,37 +1120,20 @@ function summarizeCondition(samples, name) {
   const timingSummaries = Object.fromEntries(
     [...keys].map((key) => [
       key,
-      summarize(samples.map((sample) => sample.timings[key])),
+      summarize(
+        samples.map((sample) =>
+          key === "realOrSyntheticEndMs"
+            ? sample.flags.successfulCaretMove === true
+              ? sample.timings[key]
+              : null
+            : sample.timings[key],
+        ),
+      ),
     ]),
   );
   const eventSamples = samples.map((sample) => sample.interaction);
-  const normalizedPmSelectionChanges = samples.flatMap((sample) =>
-    sample.interaction.pmSelectionChanges.map((change, index) => {
-      let phase = change.phase;
-      if (!phase) {
-        if (
-          sample.kind === "directPmSelection" ||
-          sample.kind === "directPmEnd"
-        )
-          phase = "direct-selection";
-        else if (
-          sample.kind === "realClickEndInput" ||
-          sample.kind === "forceClickEndInput"
-        )
-          phase = index === 0 ? "click" : "end";
-        else phase = sample.kind;
-      }
-      const phaseStart =
-        phase === "click"
-          ? sample.milestones.clickStartedAt
-          : phase === "end"
-            ? sample.milestones.endKeydownAt
-            : null;
-      const fromPhaseStartMs = Number.isFinite(phaseStart)
-        ? change.at - phaseStart
-        : change.fromPhaseStartMs;
-      return { ...change, phase, fromPhaseStartMs };
-    }),
+  const pmSelectionChanges = eventSamples.flatMap(
+    (sample) => sample.pmSelectionChanges,
   );
   const selectionOnly = eventSamples.flatMap((sample) =>
     sample.selectionOnlyTransactions?.length
@@ -1046,24 +1191,18 @@ function summarizeCondition(samples, name) {
                 .filter(
                   (event) => event.phase === phase && event.type === eventName,
                 )
-                .map((event) =>
-                  phase === "end" &&
-                  (sample.kind === "realEndOnly" ||
-                    sample.kind === "keyboardEventDispatch")
-                    ? event.fromActionStartMs
-                    : event.fromPhaseStartMs,
-                ),
+                .map((event) => event.fromPhaseStartMs),
             ),
           ),
         ]),
       ),
     ]),
   );
-  const pmSelectionChanged = normalizedPmSelectionChanges
+  const pmSelectionChanged = pmSelectionChanges
     .filter((change) => change.phase === "click")
     .map((change) => change.fromPhaseStartMs)
     .filter(Number.isFinite);
-  const pmEndSelectionChanged = normalizedPmSelectionChanges
+  const pmEndSelectionChanged = pmSelectionChanges
     .filter((change) => change.phase === "end")
     .map((change) => change.fromPhaseStartMs)
     .filter(Number.isFinite);
@@ -1096,7 +1235,20 @@ function summarizeCondition(samples, name) {
     eventTimelineMs,
     pmSelectionChangedMs: summarize(pmSelectionChanged),
     pmEndSelectionChangedMs: summarize(pmEndSelectionChanged),
-    pmSelectionChanges: normalizedPmSelectionChanges,
+    pmSelectionChanges,
+    successfulCaretMove: {
+      successes: samples.filter(
+        (sample) => sample.flags.successfulCaretMove === true,
+      ).length,
+      failures: samples.filter(
+        (sample) => sample.flags.successfulCaretMove === false,
+      ).length,
+      samples: samples.map((sample) => ({
+        successful: sample.flags.successfulCaretMove ?? null,
+        before: sample.timings.caretBefore ?? null,
+        after: sample.timings.caretAfter ?? null,
+      })),
+    },
     posAtCoords: {
       calls: posAtCoords.reduce((total, sample) => total + sample.calls, 0),
       totalMs: posAtCoords.reduce((total, sample) => total + sample.totalMs, 0),
@@ -1333,7 +1485,7 @@ Selection-only transaction during current click sequence: ${currentClickSelectio
 
 ## End investigation
 
-Real End: p50/p95/max ${ms(currentEnd)} / ${ms(condition("F_realEndOnly")?.timings.realOrSyntheticEndMs?.p95)} / ${ms(condition("F_realEndOnly")?.timings.realOrSyntheticEndMs?.max)} after setting the start caret directly in the target cell. In the uninterrupted current click sequence, click → End complete is ${ms(p50("A_currentRealClickEnd", "clickToCaretReadyMs"))}.
+Real End: ${condition("F_realEndOnly")?.successfulCaretMove?.successes ?? 0}/${condition("F_realEndOnly")?.sampleCount ?? 0} trials moved the caret to the cell end. Only successful trials contribute to the p50/p95/max ${ms(currentEnd)} / ${ms(condition("F_realEndOnly")?.timings.realOrSyntheticEndMs?.p95)} / ${ms(condition("F_realEndOnly")?.timings.realOrSyntheticEndMs?.max)}. Unsuccessful trials (including before/after PM position and DOM offset) remain in JSON and are excluded from latency summaries. In the uninterrupted current click sequence, click → End complete is ${ms(p50("A_currentRealClickEnd", "clickToCaretReadyMs"))}.
 
 KeyboardEvent dispatch only: ${ms(p50("G_keyboardEventDispatch", "syntheticKeyboardEventMs"))} in-page synchronous dispatch (${ms(p50("G_keyboardEventDispatch", "realOrSyntheticEndMs"))} Playwright evaluate roundtrip); diagnostic only and does not reproduce native editing behavior.
 
@@ -1343,9 +1495,11 @@ tableEditing disabled: click ${ms(tableDisabledClick)}, End ${ms(p50("I_tableEdi
 
 spellcheck disabled: click ${ms(spellcheckClick)}, End ${ms(p50("J_spellcheckDisabled", "clickToCaretReadyMs"))}, input-to-DOM ${ms(p50("J_spellcheckDisabled", "inputStartToDomReflectionMs"))}.
 
-Current input start → DOM reflection: ${ms(p50("A_currentRealClickEnd", "inputStartToDomReflectionMs"))}; complete navigation → reflected input: ${ms(p50("A_currentRealClickEnd", "totalInputAcceptedMs"))}.
+Current input keydown → DOM mutation: ${ms(p50("A_currentRealClickEnd", "inputToDomMutationMs"))}; after mutation, longest Long Task ${ms(p50("A_currentRealClickEnd", "postMutationLongestTaskMs"))}, cumulative Long Tasks ${ms(p50("A_currentRealClickEnd", "postMutationLongTaskTotalMs"))}, and input → first idle ${ms(p50("A_currentRealClickEnd", "inputToFirstIdleMs"))}. Complete navigation → reflected input: ${ms(p50("A_currentRealClickEnd", "totalInputAcceptedMs"))}. These are separate milestones; DOM mutation alone is not treated as interaction settled.
 
 End event timeline (real End-only, p50 from key action call start): keydown ${ms(eventP50("F_realEndOnly", "end", "keydown"))}; selectionchange ${ms(eventP50("F_realEndOnly", "end", "selectionchange"))}; keyup ${ms(eventP50("F_realEndOnly", "end", "keyup"))}. beforeinput: ${ms(eventP50("F_realEndOnly", "end", "beforeinput"))}; input: ${ms(eventP50("F_realEndOnly", "end", "input"))}. Full event sequences are in JSON; End normally should omit beforeinput/input.
+
+Phase attribution: pointer/keyboard events are timestamped with the browser phase that was active at dispatch. PM selection and selection-only transaction events capture phase and phase-local start inside the transaction path; no post-hoc phase inference is used. Each sample retains clickStartedAt, endStartedAt, inputStartedAt, and directSelectionStartedAt where applicable.
 
 Selection-only transaction: End-only samples recorded ${endOnlySelectionOnly?.calls ?? 0} calls, ${ms(endOnlySelectionOnly?.totalMs)} total, ${ms(endOnlySelectionOnly?.maxMs)} max after setup was excluded by per-phase reset. Per-condition counts are in JSON.
 

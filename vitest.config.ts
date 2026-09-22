@@ -2,6 +2,9 @@ import { defineConfig } from "vitest/config";
 import { fileURLToPath } from "node:url";
 
 export default defineConfig({
+  define: {
+    __MM_EDITOR_PERFORMANCE_BENCHMARK__: "false",
+  },
   resolve: {
     alias: {
       vscode: fileURLToPath(

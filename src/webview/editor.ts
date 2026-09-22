@@ -4024,7 +4024,11 @@ export class MarkdownEditorApp {
 
   private dispatchTransaction(tr: Transaction): boolean {
     if (__MM_EDITOR_PERFORMANCE_BENCHMARK__) {
-      const apply = () => this.dispatchTransactionInternal(tr);
+      const phase = globalThis.__mmInteractionPhase ?? "unknown";
+      const phaseStartedAt =
+        globalThis.__mmInteractionPhaseStartedAt?.[phase] ?? null;
+      const apply = () =>
+        this.dispatchTransactionInternal(tr, { phase, phaseStartedAt });
       const selectionOnly = !tr.docChanged && tr.selectionSet;
       const measuredApply = selectionOnly
         ? () => {
@@ -4034,7 +4038,12 @@ export class MarkdownEditorApp {
             } finally {
               globalThis.__markdownMintBenchmarkSelectionOnlyTransactions?.push(
                 {
-                  phase: globalThis.__mmInteractionPhase ?? "unknown",
+                  phase,
+                  phaseStartedAt,
+                  fromPhaseStartMs:
+                    phaseStartedAt === null
+                      ? null
+                      : performance.now() - phaseStartedAt,
                   durationMs: performance.now() - startedAt,
                 },
               );
@@ -4056,7 +4065,10 @@ export class MarkdownEditorApp {
     return this.dispatchTransactionInternal(tr);
   }
 
-  private dispatchTransactionInternal(tr: Transaction): boolean {
+  private dispatchTransactionInternal(
+    tr: Transaction,
+    benchmarkPhase?: { phase: string; phaseStartedAt: number | null },
+  ): boolean {
     const oldSelection = this.view.state.selection;
     const rootTransientMeta = tr.getMeta(TRANSIENT_BLANK_META) as
       TransientBlankTransactionMeta | undefined;
@@ -4110,9 +4122,17 @@ export class MarkdownEditorApp {
       __MM_EDITOR_PERFORMANCE_BENCHMARK__ &&
       applied.state.selection !== oldSelection
     ) {
+      const phase =
+        benchmarkPhase?.phase ?? globalThis.__mmInteractionPhase ?? "unknown";
+      const phaseStartedAt = benchmarkPhase
+        ? benchmarkPhase.phaseStartedAt
+        : (globalThis.__mmInteractionPhaseStartedAt?.[phase] ?? null);
+      const at = performance.now();
       globalThis.__markdownMintBenchmarkPmSelectionChanges?.push({
-        at: performance.now(),
-        phase: globalThis.__mmInteractionPhase ?? "unknown",
+        at,
+        phase,
+        phaseStartedAt,
+        fromPhaseStartMs: phaseStartedAt === null ? null : at - phaseStartedAt,
         from: this.view.state.selection.from,
         to: this.view.state.selection.to,
         head: this.view.state.selection.head,

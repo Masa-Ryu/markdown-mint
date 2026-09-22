@@ -13,6 +13,8 @@ export interface PerformanceBenchmarkOptions {
 export interface PerformanceBenchmarkSelectionEvent {
   at: number;
   phase: string;
+  phaseStartedAt: number | null;
+  fromPhaseStartMs: number | null;
   from: number;
   to: number;
   head: number;
@@ -22,6 +24,8 @@ export interface PerformanceBenchmarkSelectionEvent {
 
 export interface PerformanceBenchmarkSelectionTransactionEvent {
   phase: string;
+  phaseStartedAt: number | null;
+  fromPhaseStartMs: number | null;
   durationMs: number;
 }
 
@@ -55,6 +59,9 @@ declare global {
     PerformanceBenchmarkSelectionTransactionEvent[] | undefined;
   var __markdownMintBenchmarkEditor: PerformanceBenchmarkEditorApi | undefined;
   var __mmInteractionPhase: string | undefined;
+  var __mmInteractionPhaseStartedAt: Record<string, number> | undefined;
+  var __mmInteractionPhaseStarts:
+    Record<string, number | undefined> | undefined;
 }
 
 export function tableControlsDisabledForBenchmark(): boolean {
