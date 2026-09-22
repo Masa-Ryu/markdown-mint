@@ -1,56 +1,58 @@
 # Issue #119 interaction investigation
 
-Generated: 2026-09-22T10:52:12.739Z
-Trace summary updated: 2026-09-22T11:18:16.804Z
+Generated: 2026-09-22T12:32:50.361Z
+Trace summary updated: 2026-09-22T12:32:50.361Z
 
 ## Click investigation
 
-Current real click (visible → Playwright resolved): p50/p95/max 15694.9 ms / 15742.7 ms / 15748.0 ms (3 samples)
+Current real click (visible → Playwright resolved): p50/p95/max 15210.7 ms / 15453.3 ms / 15480.3 ms (3 samples)
 
-Playwright click call only: p50 15693.5 ms. Current click → immediate End: 98.4 ms; combined click+End: 15790.4 ms. Visible → benchmark action start: 1.4 ms; target found → visible: 55.7 ms.
+Playwright click call only: p50 15209.5 ms. Current click → immediate End: 7567.4 ms; combined click+End: 22732.0 ms. Visible → benchmark action start: 1.2 ms; target found → visible: 51.4 ms.
 
-Force click: p50/p95/max 7963.0 ms / 8004.5 ms / 8009.1 ms; immediate End 7891.0 ms; combined click+End 15852.9 ms. End keydown reached the page 7793.2 ms after the click call resolved.
+Force click: p50/p95/max n/a / n/a / n/a; immediate End n/a; combined click+End n/a. End keydown reached the page n/a after the click call resolved.
 
-DOM click: call p50 0.6 ms. Diagnostic only; it does not reproduce physical pointer/focus behavior.
+DOM click: call p50 n/a. Diagnostic only; it does not reproduce physical pointer/focus behavior.
 
-Focus only: p50 10.8 ms (editor.focus()).
+Focus only: p50 n/a (editor.focus()).
 
-Direct PM selection: p50 128.4 ms (preparation 4.6 ms; dispatch 123.8 ms). First follow-up DOM-selection probe confirmed the target after 7699.8 ms; this is probe availability after dispatch, not proof the browser selection took that long to synchronize.
+Direct PM selection: p50 n/a (preparation n/a; dispatch n/a). First follow-up DOM-selection probe confirmed the target after n/a; this is probe availability after dispatch, not proof the browser selection took that long to synchronize.
 
 Event timeline (current click, p50 from action call start):
 
 - scroll: n/a
-- pointermove: 72.0 ms
-- pointerdown: 200.4 ms
-- mousedown: 200.5 ms
-- focus/focusin: 201.4 ms
-- mouseup: 213.5 ms
-- pointerup: 213.5 ms
-- selectionchange: 7915.3 ms
-- click: 213.7 ms
-- PM selection changed: p50 7916.5 ms after click start; in the forced condition End keydown waited 7793.2 ms after click completion.
+- pointermove: 55.1 ms
+- pointerdown: 182.5 ms
+- mousedown: 182.5 ms
+- focus/focusin: 183.5 ms
+- mouseup: 194.4 ms
+- pointerup: 194.3 ms
+- selectionchange: 7723.6 ms
+- click: 194.6 ms
+- PM selection changed: p50 7724.7 ms after click start; in the forced condition End keydown waited n/a after click completion.
 
-posAtCoords: 3 calls; 1.0 ms total; 0.4 ms max.
+posAtCoords: 3 calls; 0.9 ms total; 0.3 ms max.
 
-Selection-only transaction during current click sequence: 3 calls; 160.3 ms total; 54.8 ms max. Phase breakdown is in JSON and this is separate from all dispatchTransaction time.
+Selection-only transaction during current click sequence: 3 calls; 153.3 ms total; 53.3 ms max. Phase breakdown is in JSON and this is separate from all dispatchTransaction time.
 
 ## End investigation
 
-Real End: p50/p95/max 129.7 ms / 139.7 ms / 140.8 ms after setting the start caret directly in the target cell. In the uninterrupted current click sequence, click → End complete is 98.4 ms.
+Real End: p50/p95/max n/a / n/a / n/a after setting the start caret directly in the target cell. In the uninterrupted current click sequence, click → End complete is 7567.4 ms.
 
-KeyboardEvent dispatch only: 0.6 ms in-page synchronous dispatch (117.7 ms Playwright evaluate roundtrip); diagnostic only and does not reproduce native editing behavior.
+KeyboardEvent dispatch only: n/a in-page synchronous dispatch (n/a Playwright evaluate roundtrip); diagnostic only and does not reproduce native editing behavior.
 
-Direct PM end: p50 41.5 ms; first follow-up DOM-selection probe confirmed the target after 7742.3 ms (same probe-availability caveat as above).
+Direct PM end: p50 n/a; first follow-up DOM-selection probe confirmed the target after n/a (same probe-availability caveat as above).
 
-tableEditing disabled: click 15820.7 ms, End 102.7 ms.
+tableEditing disabled: click n/a, End n/a.
 
-spellcheck disabled: click 15661.0 ms, End 97.9 ms, input-to-DOM 260.1 ms.
+spellcheck disabled: click n/a, End n/a, input-to-DOM n/a.
 
-Current input start → DOM reflection: 255.4 ms; complete navigation → reflected input: 17470.9 ms.
+Current input start → DOM reflection: 255.9 ms; complete navigation → reflected input: 24388.6 ms.
 
-End event timeline (real End-only, p50 from key action call start): keydown 0.0 ms; selectionchange n/a; keyup 1.3 ms. beforeinput: n/a; input: n/a. Full event sequences are in JSON; End normally should omit beforeinput/input.
+End event timeline (real End-only, p50 from key action call start): keydown n/a; selectionchange n/a; keyup n/a. beforeinput: n/a; input: n/a. Full event sequences are in JSON; End normally should omit beforeinput/input.
 
-Selection-only transaction: End-only samples recorded 0 calls, 0.0 ms total, 0.0 ms max after setup was excluded by per-phase reset. Per-condition counts are in JSON.
+Selection-only transaction: End-only samples recorded 0 calls, n/a total, n/a max after setup was excluded by per-phase reset. Per-condition counts are in JSON.
+
+Corrected caret validation from the paint/compositor run: standalone real End moved the caret in 0/3 trials. Each attempt stayed at PM position 146 and DOM anchor offset 0 (target text length 8); the raw action duration p50 was about 102 ms and is excluded from successful End latency. Direct PM end moved 146→154 and DOM offset 0→8 in all 3 trials (dispatch p50 40.4 ms; complete evaluate p50 140.3 ms). See [paint/compositor report](issue-119-paint-compositor-investigation.md) and the `endCorrectness` object in the JSON.
 
 ## Chromium trace
 
@@ -58,42 +60,37 @@ Trace scope: one separate traced run for each of click, End, and input; trace ov
 
 Longest tasks:
 
-- click: 1. RunTask (disabled-by-default-devtools.timeline, 7880.4 ms, parent none); longest nested event WebFrameWidgetImpl::UpdateLifecycle (blink, 7726.8 ms, parent RunTask); 2. RunTask (disabled-by-default-devtools.timeline, 7772.9 ms, parent none); longest nested event WebFrameWidgetImpl::UpdateLifecycle (blink, 7740.4 ms, parent RunTask); 3. RunTask (disabled-by-default-devtools.timeline, 186.0 ms, parent none); longest nested event LatencyInfo.Flow (input,benchmark,latencyInfo, 185.9 ms, parent RunTask); 417592 trace events
-- end: 1. RunTask (disabled-by-default-devtools.timeline, 1.0 ms, parent none); 2. RunTask (disabled-by-default-devtools.timeline, 1.0 ms, parent none); longest nested event LatencyInfo.Flow (input,benchmark,latencyInfo, 0.9 ms, parent RunTask); 3. RunTask (disabled-by-default-devtools.timeline, 0.3 ms, parent none); longest nested event Commit (disabled-by-default-devtools.timeline, 0.1 ms, parent RunTask); 340 trace events
-- input: 1. RunTask (disabled-by-default-devtools.timeline, 0.2 ms, parent none); 2. RunTask (disabled-by-default-devtools.timeline, 0.1 ms, parent none); 3. RunTask (disabled-by-default-devtools.timeline, 0.1 ms, parent none); 1891 trace events; input window keydown EventDispatch → TypingCommand::InsertText completion (290.9 ms; 136236 outside events clipped); PerformanceObserver post-reflection Long Task 7752.0 ms (outside the clipped input window)
+- unavailable: unavailable (Tracing disabled by MM_EDITOR_INTERACTION_TRACE=0)
 
 Largest event per category in each measured window (selection/input category combines trace event names containing those terms; the input window is keydown → DOM mutation):
 
-- Layout: Document::UpdateStyleAndLayout (18.2 ms, input)
-- EventDispatch: EventDispatch (262.9 ms, input)
-- FunctionCall: v8.callFunction (262.9 ms, input)
-- SelectionInput: WebFrameWidgetImpl::HandleInputEvent (185.9 ms, click)
-- Paint: WebFrameWidgetImpl::UpdateLifecycle (7740.4 ms, click)
-- Other: RunTask (7880.4 ms, click)
+- Layout: no event captured
+- EventDispatch: no event captured
+- FunctionCall: no event captured
+- SelectionInput: no event captured
+- Paint: no event captured
+- Other: no event captured
 
 ## Conclusion
 
-- Force click reduces the click call by 7732.0 ms, but the uninterrupted click+End p50 is 15790.4 ms current vs 15852.9 ms forced. The End keydown in the forced case arrives 7793.2 ms after the click promise completes, so force moves the wait into the next call rather than removing it.
-- Direct PM selection p50 128.4 ms vs real click 15694.9 ms.
-- Click trace stages: click event at 213.7 ms, first selectionchange at 7915.3 ms, PM selection update at 7916.5 ms, Playwright resolution at 15694.9 ms.
-- Real End itself is 98.4 ms after a normal click and 129.7 ms standalone; direct PM end dispatch is 41.5 ms. The previously reported 7.6-second End interval does not reproduce as native End key handling in the corrected continuous sequence.
-- tableEditing disabled click p50 15820.7 ms vs current 15694.9 ms.
-- spellcheck disabled click p50 15661.0 ms vs current 15694.9 ms.
-- posAtCoords: 3 calls, 1.0 ms total, 0.4 ms max across current-click samples.
-- Selection-only transactions during the click sequence: 3 calls, 160.3 ms total, 54.8 ms max; End-only after setup reset: 0 calls.
-- Chromium's click trace contains two 7880.4 ms / 7772.9 ms RunTask long tasks; their dominant nested events are WebFrameWidgetImpl::UpdateLifecycle and WebFrameWidgetImpl::UpdateLifecycle. Both span lifecycle paint/compositing.
-- Chromium lifecycle paint/compositing is the dominant measured stage: its largest click event is WebFrameWidgetImpl::UpdateLifecycle at 7740.4 ms, while the largest Layout event across traces is 18.2 ms.
-- PerformanceObserver recorded 27 long tasks (94841.0 ms total, 7912.0 ms longest) across current click/End/input runs.
-- In the traced typing sample, the DOM mutation occurred 290.5 ms after keydown. A separate PerformanceObserver Long Task began after that mutation and lasted 7752.0 ms; it is outside the clipped input trace window and accounts for the longer Playwright typing roundtrip (15959.1 ms).
+- Force click reduces the click call by NaN ms, but the uninterrupted click+End p50 is 22732.0 ms current vs n/a forced. The End keydown in the forced case arrives n/a after the click promise completes, so force moves the wait into the next call rather than removing it.
+- Direct PM selection p50 n/a vs real click 15210.7 ms.
+- Click trace stages: click event at 194.6 ms, first selectionchange at 7723.6 ms, PM selection update at 7724.7 ms, Playwright resolution at 15210.7 ms.
+- The earlier click→End interval was 7567.4 ms, but standalone real End did not move the caret in 0/3 corrected trials; treat that interval as an interaction wait, not a successful caret-move duration. Direct PM end moved to the cell end in 3/3 trials.
+- tableEditing disabled click p50 n/a vs current 15210.7 ms.
+- spellcheck disabled click p50 n/a vs current 15210.7 ms.
+- posAtCoords: 3 calls, 0.9 ms total, 0.3 ms max across current-click samples.
+- Selection-only transactions during the click sequence: 3 calls, 153.3 ms total, 53.3 ms max; End-only after setup reset: 0 calls.
+- PerformanceObserver recorded 26 long tasks (92291.0 ms total, 7981.0 ms longest) across current click/End/input runs.
 
 These conclusions describe the measured Chromium build, fixture, and environment below. They do not establish causes outside these measured paths.
 
 ## Conditions and environment
 
 - Branch: `codex/issue-119-editor-performance`
-- Commit SHA: `64aac441cbbc1b7d8f31ddc7a2691a3281a32406`
-- Condition measurement commit SHAs: `f70f2e6d61b488f821970e309c8cca401c1fde81`, `64aac441cbbc1b7d8f31ddc7a2691a3281a32406`
-- Trace capture commit SHA: `27d8677326ca15cff00ff994a75c863e2b9234e1`
+- Commit SHA: `c099a327e4f4c2f6e4c7b0b3b116e393438802e4`
+- Condition measurement commit SHAs: `c099a327e4f4c2f6e4c7b0b3b116e393438802e4`
+- Trace capture commit SHA: `c099a327e4f4c2f6e4c7b0b3b116e393438802e4`
 - Fixture: `tests/github-markdown-test-suite/stress/github-table-2000x20.md` (434328 bytes, 2000 body rows, 20 columns, 2001 table rows, 40020 cells)
 - Chromium: 153.0.8010.12
 - OS: Darwin 25.6.0; CPU: Apple M1 Pro (10 logical CPUs)
