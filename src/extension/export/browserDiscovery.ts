@@ -51,7 +51,7 @@ function pathCandidates(
         ]
       : BROWSER_NAMES;
   return pathValue
-    .split(platform === "win32" ? ";" : path.delimiter)
+    .split(platform === "win32" ? ";" : ":")
     .filter(Boolean)
     .flatMap((directory) => names.map((name) => join(directory, name)));
 }

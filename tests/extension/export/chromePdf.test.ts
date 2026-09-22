@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { existsSync } from "node:fs";
 
 const chromeMocks = vi.hoisted(() => {
   type Listener = (...args: unknown[]) => void;
@@ -49,14 +50,6 @@ const chromeMocks = vi.hoisted(() => {
   return { Emitter, FakeProcess, process, cdp, spawn: vi.fn() };
 });
 
-vi.mock("node:fs/promises", async (importOriginal) => {
-  const actual = (await importOriginal()) as Record<string, unknown>;
-  return {
-    ...actual,
-    mkdtemp: vi.fn(async () => "/tmp/markdown-mint-pdf-test"),
-    rm: vi.fn(async () => undefined),
-  };
-});
 vi.mock("../../../src/extension/export/browserProcess", () => ({
   launchBrowser: chromeMocks.spawn,
 }));
@@ -137,6 +130,14 @@ describe("Chrome CDP PDF backend", () => {
       ]),
       { stdio: ["ignore", "pipe", "pipe"] },
     );
+    const launchArgs = chromeMocks.spawn.mock.calls[0]?.[1] as string[];
+    const profileArgument = launchArgs.find((argument) =>
+      argument.startsWith("--user-data-dir="),
+    );
+    expect(profileArgument).toBeDefined();
+    expect(
+      existsSync(profileArgument?.slice("--user-data-dir=".length) ?? ""),
+    ).toBe(false);
     expect(chromeMocks.cdp.send).toHaveBeenCalledWith(
       "Page.printToPDF",
       {
@@ -171,6 +172,13 @@ describe("Chrome CDP PDF backend", () => {
         timeoutMs: 5,
       }),
     ).rejects.toThrow("Timed out waiting for Chrome DevTools");
+    const launchArgs = chromeMocks.spawn.mock.calls[0]?.[1] as string[];
+    const profileArgument = launchArgs.find((argument) =>
+      argument.startsWith("--user-data-dir="),
+    );
+    expect(
+      existsSync(profileArgument?.slice("--user-data-dir=".length) ?? ""),
+    ).toBe(false);
   });
 
   it("reports launch, resource, Mermaid, and print failures with cleanup", async () => {
