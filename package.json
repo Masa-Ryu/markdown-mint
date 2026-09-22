@@ -146,7 +146,7 @@
         "markdownMint.export.pdf.chromiumExecutablePath": {
           "type": "string",
           "default": "",
-          "description": "Path to a Chrome, Chromium, or Edge executable used to export PDFs. When empty, Markdown Mint searches this extension host for a browser before offering its pinned managed Chromium.",
+          "description": "Path to a Chrome, Chromium, or Edge executable used to export PDFs. When empty, Markdown Mint searches for an installed browser in the extension host.",
           "scope": "window"
         }
       }
@@ -191,7 +191,6 @@
     "test:browser:pdf-export": "npm run build && node tests/browser/pdf-export.test.mjs"
   },
   "dependencies": {
-    "@puppeteer/browsers": "2.10.13",
     "highlight.js": "^11.12.0",
     "katex": "^0.16.47",
     "markdown-it": "^14.1.0",
@@ -208,7 +207,7 @@
     "prosemirror-tables": "^1.8.1",
     "prosemirror-transform": "^1.10.4",
     "prosemirror-view": "^1.41.0",
-    "puppeteer-core": "24.31.0",
+    "ws": "^8.21.3",
     "yaml": "^2.9.0"
   },
   "devDependencies": {

@@ -865,21 +865,17 @@ const vscode = vi.hoisted(() => {
 });
 
 const pdfMocks = vi.hoisted(() => {
-  class ChromiumExecutableNotFoundError extends Error {
+  class PdfBrowserExecutableNotFoundError extends Error {
     public constructor() {
-      super("PDF export requires Chromium in the extension host environment.");
+      super(
+        "PDF export requires Chrome, Edge, or Chromium. Install one of these browsers and try again.",
+      );
     }
   }
   return {
-    ChromiumExecutableNotFoundError,
-    resolveChromiumExecutable: vi.fn(
-      async (_options: {
-        configuredPath?: string;
-        globalStoragePath: string;
-      }) => "/system/chrome",
-    ),
-    installManagedChromium: vi.fn(
-      async (_globalStoragePath: string) => "/managed/chrome",
+    PdfBrowserExecutableNotFoundError,
+    resolvePdfBrowserExecutable: vi.fn(
+      async (_options: { configuredPath?: string }) => "/system/chrome",
     ),
     renderPdf: vi.fn(
       async (_html: string, _options: { executablePath: string }) =>
@@ -889,11 +885,9 @@ const pdfMocks = vi.hoisted(() => {
 });
 
 vi.mock("vscode", () => vscode);
-vi.mock("../../src/extension/export/chromium", () => ({
-  ChromiumExecutableNotFoundError: pdfMocks.ChromiumExecutableNotFoundError,
-  MANAGED_CHROMIUM_VERSION: "153.0.8010.12",
-  installManagedChromium: pdfMocks.installManagedChromium,
-  resolveChromiumExecutable: pdfMocks.resolveChromiumExecutable,
+vi.mock("../../src/extension/export/browserDiscovery", () => ({
+  PdfBrowserExecutableNotFoundError: pdfMocks.PdfBrowserExecutableNotFoundError,
+  resolvePdfBrowserExecutable: pdfMocks.resolvePdfBrowserExecutable,
 }));
 vi.mock("../../src/extension/export/pdfExport", () => ({
   renderPdf: pdfMocks.renderPdf,
@@ -1051,9 +1045,8 @@ describe("MarkdownMintEditorProvider", () => {
       }),
       filters: { PDF: ["pdf"] },
     });
-    expect(pdfMocks.resolveChromiumExecutable).toHaveBeenCalledWith({
+    expect(pdfMocks.resolvePdfBrowserExecutable).toHaveBeenCalledWith({
       configuredPath: "",
-      globalStoragePath: "/globalStorage",
     });
     expect(pdfMocks.renderPdf).toHaveBeenCalledWith(
       expect.stringContaining("Current unsaved PDF draft"),
@@ -1157,98 +1150,7 @@ describe("MarkdownMintEditorProvider", () => {
     provider.dispose();
   });
 
-  it("releases the document queue while managed Chromium installation is held", async () => {
-    vi.clearAllMocks();
-    vscode.__state.reset();
-    const provider = new MarkdownMintEditorProvider(context() as never);
-    const document = vscode.__state.document;
-    const panel = vscode.__state.panel;
-    vscode.__state.saveDialogResult = vscode.Uri.file(
-      "/workspace/docs/install-wait.pdf",
-    );
-    vscode.__state.showErrorAction = "Install managed Chromium";
-    await provider.resolveCustomTextEditor(
-      document as never,
-      panel as never,
-      {} as never,
-    );
-    panel.webview.receive({ protocolVersion: 1, type: "ready" });
-    await flush();
-
-    const installGate = deferred<string>();
-    pdfMocks.resolveChromiumExecutable.mockRejectedValueOnce(
-      new pdfMocks.ChromiumExecutableNotFoundError(),
-    );
-    pdfMocks.installManagedChromium.mockImplementationOnce(
-      () => installGate.promise,
-    );
-    panel.webview.receive({
-      protocolVersion: 1,
-      type: "export-pdf",
-      baseVersion: document.version,
-      operationId: "pdf:held-install",
-    });
-    await waitForCondition(
-      () => pdfMocks.installManagedChromium.mock.calls.length === 1,
-      "managed Chromium installation to start",
-    );
-
-    panel.webview.receive({
-      protocolVersion: 1,
-      type: "edit",
-      baseVersion: document.version,
-      operationId: "edit:during-pdf-install",
-      markdown: "# Edited while Chromium installs",
-    });
-    await waitForCondition(
-      () =>
-        document.getText() === "# Edited while Chromium installs" &&
-        panel.webview.messages.some(
-          (message) =>
-            isHostMessage(message) &&
-            message.type === "document" &&
-            message.reason === "ack" &&
-            message.operationId === "edit:during-pdf-install",
-        ),
-      "the edit acknowledgement while installation is held",
-    );
-
-    panel.webview.receive({
-      protocolVersion: 1,
-      type: "save",
-      baseVersion: document.version,
-      operationId: "save:during-pdf-install",
-    });
-    await waitForCondition(
-      () =>
-        panel.webview.messages.some(
-          (message) =>
-            isHostMessage(message) &&
-            message.type === "save-result" &&
-            message.operationId === "save:during-pdf-install" &&
-            message.saved === true,
-        ),
-      "save completion while installation is held",
-    );
-    expect(document.isDirty).toBe(false);
-    expect(pdfMocks.renderPdf).not.toHaveBeenCalled();
-
-    installGate.resolve("/managed/chrome");
-    await waitForCondition(
-      () => vscode.__state.exportWrites.length === 1,
-      "PDF creation after managed Chromium installation",
-    );
-    expect(pdfMocks.renderPdf).toHaveBeenCalledWith(
-      expect.stringContaining("Original"),
-      { executablePath: "/managed/chrome" },
-    );
-    expect(pdfMocks.renderPdf.mock.calls[0]?.[0]).not.toContain(
-      "Edited while Chromium installs",
-    );
-    provider.dispose();
-  });
-
-  it("does not resolve or launch Chromium when the PDF save dialog is cancelled", async () => {
+  it("does not resolve or launch a browser when the PDF save dialog is cancelled", async () => {
     vi.clearAllMocks();
     vscode.__state.reset();
     const provider = new MarkdownMintEditorProvider(context() as never);
@@ -1261,58 +1163,33 @@ describe("MarkdownMintEditorProvider", () => {
       }),
       filters: { PDF: ["pdf"] },
     });
-    expect(pdfMocks.resolveChromiumExecutable).not.toHaveBeenCalled();
+    expect(pdfMocks.resolvePdfBrowserExecutable).not.toHaveBeenCalled();
     expect(pdfMocks.renderPdf).not.toHaveBeenCalled();
     expect(vscode.__state.exportWrites).toHaveLength(0);
     provider.dispose();
   });
 
-  it("does not download managed Chromium when its confirmation is cancelled", async () => {
+  it("opens the official Chrome page when no system browser is found", async () => {
     vi.clearAllMocks();
     vscode.__state.reset();
-    pdfMocks.resolveChromiumExecutable.mockRejectedValueOnce(
-      new pdfMocks.ChromiumExecutableNotFoundError(),
+    pdfMocks.resolvePdfBrowserExecutable.mockRejectedValueOnce(
+      new pdfMocks.PdfBrowserExecutableNotFoundError(),
     );
     vscode.__state.saveDialogResult = vscode.Uri.file(
       "/workspace/docs/guide.pdf",
     );
-    vscode.__state.showErrorAction = "Cancel";
+    vscode.__state.showErrorAction = "Get Chrome";
     const provider = new MarkdownMintEditorProvider(context() as never);
 
     await provider.exportPdf();
 
-    expect(pdfMocks.installManagedChromium).not.toHaveBeenCalled();
+    expect(pdfMocks.resolvePdfBrowserExecutable).toHaveBeenCalledOnce();
     expect(pdfMocks.renderPdf).not.toHaveBeenCalled();
     expect(vscode.__state.exportWrites).toHaveLength(0);
-    expect(vscode.__state.userNotifications.at(-1)?.message).toContain(
-      "PDF export requires Chromium",
-    );
-    provider.dispose();
-  });
-
-  it("installs managed Chromium only after the user chooses the install action", async () => {
-    vi.clearAllMocks();
-    vscode.__state.reset();
-    pdfMocks.resolveChromiumExecutable.mockRejectedValueOnce(
-      new pdfMocks.ChromiumExecutableNotFoundError(),
-    );
-    vscode.__state.saveDialogResult = vscode.Uri.file(
-      "/workspace/docs/guide.pdf",
-    );
-    vscode.__state.showErrorAction = "Install managed Chromium";
-    const provider = new MarkdownMintEditorProvider(context() as never);
-
-    await provider.exportPdf();
-
-    expect(pdfMocks.installManagedChromium).toHaveBeenCalledOnce();
-    expect(pdfMocks.installManagedChromium).toHaveBeenCalledWith(
-      "/globalStorage",
-      expect.any(Function),
-    );
-    expect(pdfMocks.renderPdf).toHaveBeenCalledWith(expect.any(String), {
-      executablePath: "/managed/chrome",
-    });
-    expect(vscode.__state.exportWrites).toHaveLength(1);
+    expect(
+      vscode.__state.openExternalCalls.map((uri) => uri.toString()),
+    ).toEqual(["https://www.google.com/chrome"]);
+    expect(pdfMocks.renderPdf).not.toHaveBeenCalled();
     provider.dispose();
   });
 

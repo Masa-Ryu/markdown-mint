@@ -46,11 +46,9 @@ import {
 } from "../shared/protocol";
 import { createExportHtml } from "./export/htmlExport";
 import {
-  ChromiumExecutableNotFoundError,
-  MANAGED_CHROMIUM_VERSION,
-  installManagedChromium,
-  resolveChromiumExecutable,
-} from "./export/chromium";
+  PdfBrowserExecutableNotFoundError,
+  resolvePdfBrowserExecutable,
+} from "./export/browserDiscovery";
 import { renderPdf } from "./export/pdfExport";
 import { classifyLinkNavigation } from "./linkNavigation";
 import { WorkspaceFileSearchHost } from "./workspaceFileSearch";
@@ -1780,44 +1778,26 @@ export class MarkdownMintEditorProvider
   }
 
   private async pdfChromiumExecutablePath(): Promise<string | undefined> {
-    const globalStoragePath = this.context.globalStorageUri.fsPath;
     const configuredPath = vscode.workspace
       .getConfiguration("markdownMint.export.pdf")
       .get<string>("chromiumExecutablePath", "");
     try {
-      return await resolveChromiumExecutable({
+      return await resolvePdfBrowserExecutable({
         configuredPath,
-        globalStoragePath,
       });
     } catch (error) {
-      if (!(error instanceof ChromiumExecutableNotFoundError)) throw error;
+      if (!(error instanceof PdfBrowserExecutableNotFoundError)) throw error;
       const choice = await vscode.window.showErrorMessage(
         error.message,
         { modal: true },
-        "Install managed Chromium",
+        "Get Chrome",
         "Cancel",
       );
-      if (choice !== "Install managed Chromium") return undefined;
-      return vscode.window.withProgress(
-        {
-          location: vscode.ProgressLocation.Notification,
-          title: `Installing Markdown Mint Chromium ${MANAGED_CHROMIUM_VERSION}`,
-          cancellable: false,
-        },
-        async (progress) => {
-          progress.report({ message: "Preparing download…" });
-          return installManagedChromium(
-            globalStoragePath,
-            (downloadedBytes, totalBytes) => {
-              const message =
-                totalBytes > 0
-                  ? `${Math.floor((downloadedBytes / totalBytes) * 100)}%`
-                  : "Downloading…";
-              progress.report({ message });
-            },
-          );
-        },
-      );
+      if (choice === "Get Chrome")
+        await vscode.env.openExternal(
+          vscode.Uri.parse("https://www.google.com/chrome/"),
+        );
+      return undefined;
     }
   }
 

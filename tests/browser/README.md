@@ -90,7 +90,7 @@ npm run test:browser:pdf-export
 ```
 
 The suite uses the Chromium version pinned by the Playwright lockfile, renders
-`tests/md/pdf-export.md` through Puppeteer, and checks the PDF header, output
+`tests/md/pdf-export.md` through the direct Chrome DevTools Protocol backend, and checks the PDF header, output
 size, and multi-page pagination. The fixture includes a local image, long table
 and code block, KaTeX, Mermaid, GitHub Alert, footnote, Japanese, and emoji.
 Temporary browser output is removed after the run.

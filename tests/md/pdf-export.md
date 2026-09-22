@@ -179,25 +179,24 @@ export async function renderMarkdownPdf(markdown: string): Promise<Uint8Array> {
 25  a custom executable path takes precedence when it is valid
 26  a missing custom executable path produces a clear error
 27  system Chrome, Edge, and Chromium are checked in order
-28  the managed Chrome version is fixed in the source tree
-29  managed browser files live in extension global storage
-30  the managed browser binary is excluded from the VSIX
+28  installed Chrome, Edge, and Chromium are checked in order
+29  a missing browser opens the official Chrome download page only after Get Chrome
+30  the extension never downloads or installs a browser
 31  normal extension install does not download a browser
-32  an explicit install action is required for managed Chromium
-33  PDF export is also available from the Command Palette
-34  the editor Export menu offers HTML and PDF
-35  unsent edits wait for their host acknowledgement
-36  remote extension hosts need a browser on the remote machine
-37  this content crosses the first printed page boundary
-38  the browser uses the CSS page size before choosing defaults
-39  printBackground preserves task list check marks
-40  avoid rules keep short structures together when possible
-41  elements taller than a page can still fragment
-42  this content crosses the second printed page boundary
-43  PDF generation does not use a Markdown-specific renderer
-44  there is no second Markdown-to-HTML conversion path
-45  the same HTML snapshot is passed to the PDF backend
-46  conversion errors are surfaced as VS Code notifications
+32  PDF export is also available from the Command Palette
+33  the editor Export menu offers HTML and PDF
+34  unsent edits wait for their host acknowledgement
+35  remote extension hosts need a browser on the remote machine
+36  this content crosses the first printed page boundary
+37  the browser uses the CSS page size before choosing defaults
+38  printBackground preserves task list check marks
+39  avoid rules keep short structures together when possible
+40  elements taller than a page can still fragment
+41  this content crosses the second printed page boundary
+42  PDF generation does not use a Markdown-specific renderer
+43  there is no second Markdown-to-HTML conversion path
+44  the same HTML snapshot is passed to the PDF backend
+45  conversion errors are surfaced as VS Code notifications
 47  failed exports leave source and editor state untouched
 48  temporary browser resources are cleaned up in all paths
 49  the final page ends with regular text rather than clipped content
