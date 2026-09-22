@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.7
+
+- Share document-wide heading and footnote render context, cache unchanged
+  footnote fragments and rendered sections, and skip unnecessary NodeView
+  rerenders when heading and reference context has not changed.
+
 ## 0.5.6
 
 - Coalesce visible Preview refreshes per animation frame and debounce

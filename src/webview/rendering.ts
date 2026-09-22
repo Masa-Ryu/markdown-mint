@@ -39,6 +39,21 @@ interface RenderingPluginState {
 const renderingPluginKey = new PluginKey<RenderingPluginState>(
   "markdown-mint-rendering",
 );
+const documentContextKeys = new WeakMap<PMNode, Map<Profile, string>>();
+
+function documentContextKey(document: PMNode, profile: Profile): string {
+  let profiles = documentContextKeys.get(document);
+  if (!profiles) {
+    profiles = new Map();
+    documentContextKeys.set(document, profiles);
+  }
+  let key = profiles.get(profile);
+  if (key === undefined) {
+    key = core.documentRenderContextKey(document, profile);
+    profiles.set(profile, key);
+  }
+  return key;
+}
 
 function headingDecorations(
   state: EditorState,
@@ -431,6 +446,10 @@ export function createRenderedNodeView(
 ): NodeView {
   let current = node;
   let lastDocument = view.state.doc;
+  let lastProfile = getProfile?.() ?? "github";
+  let lastContextKey = dependsOnDocumentContext(current)
+    ? documentContextKey(lastDocument, lastProfile)
+    : "";
   let disposed = false;
   let enhancer: RenderingEnhancer | undefined;
   const inline = current.type.name === "raw_inline";
@@ -598,19 +617,30 @@ export function createRenderedNodeView(
     dom,
     update: (nextNode) => {
       if (nextNode.type !== current.type) return false;
+      const nextProfile = getProfile?.() ?? "github";
+      const contextDependent =
+        dependsOnDocumentContext(current) || dependsOnDocumentContext(nextNode);
+      const nextContextKey = contextDependent
+        ? documentContextKey(view.state.doc, nextProfile)
+        : "";
       const contextChanged =
-        view.state.doc !== lastDocument &&
-        (dependsOnDocumentContext(current) ||
-          dependsOnDocumentContext(nextNode));
-      const nextHtml = renderHtml(nextNode);
-      const nextEmpty = nextHtml.trim() === "";
+        nextProfile !== lastProfile ||
+        (view.state.doc !== lastDocument &&
+          contextDependent &&
+          nextContextKey !== lastContextKey);
       if (nextNode.eq(current) && !contextChanged) {
         updateEmptyBoundaryMarkers();
         lastDocument = view.state.doc;
+        lastProfile = nextProfile;
+        lastContextKey = nextContextKey;
         return true;
       }
+      const nextHtml = renderHtml(nextNode);
+      const nextEmpty = nextHtml.trim() === "";
       current = nextNode;
       lastDocument = view.state.doc;
+      lastProfile = nextProfile;
+      lastContextKey = nextContextKey;
       dom.dataset.mmRenderedNode = current.type.name;
       updateEditorSemantics();
       if (nextEmpty) {
@@ -670,6 +700,9 @@ export function createAlertNodeView(
   let current = node;
   let lastDocument = view.state.doc;
   let lastProfile = getProfile?.() ?? "github";
+  let lastContextKey = dependsOnDocumentContext(current)
+    ? documentContextKey(lastDocument, lastProfile)
+    : "";
   let lastLocalSource: string | null = null;
   let bodyComposing = false;
   let disposed = false;
@@ -969,10 +1002,15 @@ export function createAlertNodeView(
         return false;
       const nextSource = sourceFor(nextNode);
       const nextProfile = getProfile?.() ?? "github";
+      const contextDependent =
+        dependsOnDocumentContext(current) || dependsOnDocumentContext(nextNode);
+      const nextContextKey = contextDependent
+        ? documentContextKey(view.state.doc, nextProfile)
+        : "";
       const contextChanged =
         view.state.doc !== lastDocument &&
-        (dependsOnDocumentContext(current) ||
-          dependsOnDocumentContext(nextNode));
+        contextDependent &&
+        nextContextKey !== lastContextKey;
       const profileChanged = nextProfile !== lastProfile;
       if (
         !contextChanged &&
@@ -982,6 +1020,7 @@ export function createAlertNodeView(
       ) {
         current = nextNode;
         lastDocument = view.state.doc;
+        lastContextKey = nextContextKey;
         lastLocalSource = null;
         return true;
       }
@@ -989,10 +1028,14 @@ export function createAlertNodeView(
       if (nextNode.eq(current) && !contextChanged && !profileChanged) {
         current = nextNode;
         lastDocument = view.state.doc;
+        lastProfile = nextProfile;
+        lastContextKey = nextContextKey;
         return true;
       }
       current = nextNode;
       lastDocument = view.state.doc;
+      lastProfile = nextProfile;
+      lastContextKey = nextContextKey;
       dom.dataset.mmRenderedNode = current.type.name;
       render();
       return true;
