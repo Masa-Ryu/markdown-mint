@@ -27,6 +27,30 @@ system IME candidate UI remains unverified.
 | Q03 webview security                   | Webviews use a nonce-based strict CSP, bounded `localResourceRoots`, safe image/link rendering, bounded message fields, and no arbitrary command or filesystem bridge.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | Q04 profile and resource limits        | Markdown sources are capped at two million UTF-16 code units, clipboard matrices are capped at 10,000 cells with whole-paste rejection, spreadsheet TSV/HTML payloads reuse the shared clipboard text bound, and final spreadsheet serialization is checked before commit. Operation ids and resource URLs are bounded, and relative local images resolve through scoped webview resources.                                                                                                                                                                                                                                                                                                                                        |
 
+## Issue #131 standalone HTML export (0.6.0)
+
+The toolbar's **Export** button and the `Markdown Mint: Export as HTML`
+Command Palette command produce a self-contained HTML file from the current
+Markdown `TextDocument`. When the command starts from the Rich Editor, it first
+passes through that active webview so composition and pending edits are
+acknowledged before the host reads the snapshot. The host validates the version,
+asks for a destination with `showSaveDialog()`, and writes through
+`workspace.fs.writeFile()`; cancelling the dialog performs no write.
+
+`createExportHtml()` uses the existing profile-aware `renderMarkdown()` output.
+The document embeds the shared renderer stylesheet plus light export overrides,
+converts local image references to data URIs, preserves data and HTTPS images
+without fetching them, and inlines KaTeX fonts. It includes the existing
+packaged Mermaid runtime only when a rendered Mermaid placeholder is present;
+the CSP hash authorizes that exact runtime and blocks other script sources.
+The safe core renderer remains responsible for Markdown HTML and link policy.
+
+Export failures use VS Code error notifications. Export reads the current
+unsaved source without editing the document, changing its profile, or touching
+its undo history. Automated coverage is in
+`tests/extension/export/htmlExport.test.ts`, the extension provider and protocol
+tests, and `tests/webview/writing-ux.test.ts`.
+
 ## Issue #124 Mermaid startup performance (0.5.5)
 
 The dedicated Webview no longer embeds a loading `<script>` for the packaged

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.0
+
+- Add standalone HTML export from the Rich Editor toolbar and Command Palette,
+  using the current unsaved Markdown, the selected profile, embedded local
+  images and KaTeX fonts, and the existing Mermaid runtime when needed.
+
 ## 0.5.7
 
 - Share document-wide heading and footnote render context, cache unchanged
@@ -18,9 +24,9 @@
 - Lazy-load the packaged Mermaid runtime only when a Mermaid diagram or syntax
   validation is first requested, sharing one local nonce-protected load across
   concurrent requests while preserving offline source fallback behavior.
- - Use a lightweight native-preview loader, minify production bundles while
-   keeping watch sourcemaps readable, and add startup/first-use benchmark and
-   package-asset verification coverage.
+- Use a lightweight native-preview loader, minify production bundles while
+  keeping watch sourcemaps readable, and add startup/first-use benchmark and
+  package-asset verification coverage.
 
 ## 0.5.4
 

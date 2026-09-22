@@ -366,6 +366,11 @@ describe("bounded writing controls", () => {
     expect(toolbar.querySelector(".mm-toolbar-primary")?.lastElementChild).toBe(
       sourceButton,
     );
+    const exportButton = toolbar.querySelector<HTMLButtonElement>(
+      '[data-testid="toolbar-export-html"]',
+    );
+    expect(exportButton?.getAttribute("aria-label")).toBe("Export as HTML");
+    expect(exportButton?.nextElementSibling).toBe(sourceButton);
     expect(sourceButton?.style.marginLeft).toBe("");
     expect(
       toolbar.querySelector<HTMLSelectElement>(".mm-profile-select")?.value,
@@ -409,6 +414,28 @@ describe("bounded writing controls", () => {
     ))
       expect(element.closest(".mm-popup-panel")).toBeNull();
     expect(editMessages(messages)).toHaveLength(0);
+  });
+
+  it("waits for the latest edit acknowledgement before requesting HTML export", () => {
+    const { app, root, messages } = makeApp("hello world");
+    const end = app.view.state.doc.content.size - 1;
+    app.view.dispatch(app.view.state.tr.insertText(" updated", end));
+    const pendingEdit = editMessages(messages).at(-1);
+    expect(pendingEdit?.markdown).toContain("hello world updated");
+
+    const exportButton = root.querySelector<HTMLButtonElement>(
+      '[data-testid="toolbar-export-html"]',
+    )!;
+    clickToolbarButton(exportButton);
+    expect(messagesOfType(messages, "export-html")).toHaveLength(0);
+
+    acknowledgeLastEdit(app, messages, 2);
+    expect(messagesOfType(messages, "export-html")).toContainEqual(
+      expect.objectContaining({
+        type: "export-html",
+        baseVersion: 2,
+      }),
+    );
   });
 
   it("uses every supplied SVG asset in the toolbar and contextual menus", () => {

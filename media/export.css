@@ -1,0 +1,104 @@
+:root {
+  color-scheme: light;
+  --vscode-foreground: #1f2328;
+  --vscode-editor-foreground: #1f2328;
+  --vscode-textLink-foreground: #0969da;
+  --vscode-panel-border: #d1d9e0;
+  --vscode-textSeparator-foreground: #d1d9e0;
+  --vscode-descriptionForeground: #59636e;
+  --vscode-textCodeBlock-background: #f6f8fa;
+  --vscode-editorWidget-background: #f6f8fa;
+  --vscode-editor-font-family:
+    ui-monospace, SFMono-Regular, Consolas, monospace;
+  --mm-document-width: 100%;
+  --mm-document-min-width: 0px;
+  --mm-document-max-width: 1024px;
+  --mm-border: #d1d9e0;
+  --mm-muted: #59636e;
+  --mm-code-background: #f6f8fa;
+  --mm-link: #0969da;
+}
+
+html,
+body {
+  min-width: 0;
+  background: #ffffff;
+  color: #1f2328;
+}
+
+body {
+  min-height: 100vh;
+  padding: clamp(16px, 4vw, 40px);
+}
+
+.markdown-body {
+  width: min(100%, 1024px);
+  min-width: 0;
+  max-width: 1024px;
+  margin: 0 auto;
+  padding: 0;
+  color: #1f2328;
+  background: #ffffff;
+}
+
+.markdown-body h1,
+.markdown-body h2,
+.markdown-body h3,
+.markdown-body h4,
+.markdown-body h5,
+.markdown-body h6 {
+  color: #1f2328;
+}
+
+.markdown-body a {
+  color: #0969da;
+}
+
+.markdown-body pre,
+.markdown-body code {
+  background-color: #f6f8fa;
+}
+
+/* The shared renderer emits these controls for VS Code preview enhancers. */
+.mm-code-block-actions {
+  display: none;
+}
+
+.markdown-body table,
+.markdown-body th,
+.markdown-body td,
+.markdown-body hr {
+  border-color: #d1d9e0;
+}
+
+@media print {
+  html,
+  body {
+    min-width: 0;
+    background: #ffffff !important;
+  }
+
+  body {
+    min-height: 0;
+    padding: 0;
+  }
+
+  .markdown-body {
+    width: 100%;
+    max-width: none;
+    padding: 0;
+  }
+
+  .markdown-body pre,
+  .markdown-body table,
+  .markdown-body img,
+  .markdown-body blockquote,
+  .markdown-body .markdown-alert {
+    break-inside: avoid;
+  }
+
+  .markdown-body a {
+    color: inherit;
+    text-decoration: underline;
+  }
+}
