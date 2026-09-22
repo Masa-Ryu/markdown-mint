@@ -1279,6 +1279,10 @@ function reportMarkdown(report) {
     conclusion.push(
       `Chromium's click trace contains two ${ms(traces.click.longestTasks[0].durationMs)} / ${ms(traces.click.longestTasks[1]?.durationMs)} RunTask long tasks; their dominant nested events are ${traces.click.longestTasks[0].longestChild?.name ?? "not identified"} and ${traces.click.longestTasks[1]?.longestChild?.name ?? "not identified"}. Both span lifecycle paint/compositing.`,
     );
+  if (traces.click?.categoryMaxima?.Paint)
+    conclusion.push(
+      `Chromium lifecycle paint/compositing is the dominant measured stage: its largest click event is ${traces.click.categoryMaxima.Paint.name} at ${ms(traces.click.categoryMaxima.Paint.durationMs)}, while the largest Layout event across traces is ${ms(categoryMaxima.Layout?.event.durationMs)}.`,
+    );
   const currentLongTasks = condition("A_currentRealClickEnd")?.longTasks;
   if (currentLongTasks)
     conclusion.push(
@@ -1317,6 +1321,8 @@ Event timeline (current click, p50 from action call start):
 - pointerdown: ${ms(eventP50("A_currentRealClickEnd", "click", "pointerdown"))}
 - mousedown: ${ms(eventP50("A_currentRealClickEnd", "click", "mousedown"))}
 - focus/focusin: ${ms(eventP50("A_currentRealClickEnd", "click", "focus") ?? eventP50("A_currentRealClickEnd", "click", "focusin"))}
+- mouseup: ${ms(eventP50("A_currentRealClickEnd", "click", "mouseup"))}
+- pointerup: ${ms(eventP50("A_currentRealClickEnd", "click", "pointerup"))}
 - selectionchange: ${ms(eventP50("A_currentRealClickEnd", "click", "selectionchange"))}
 - click: ${ms(eventP50("A_currentRealClickEnd", "click", "click"))}
 - PM selection changed: p50 ${ms(condition("A_currentRealClickEnd")?.pmSelectionChangedMs?.p50)} after click start; in the forced condition End keydown waited ${ms(forceEndKeydownAfterClickP50)} after click completion.
