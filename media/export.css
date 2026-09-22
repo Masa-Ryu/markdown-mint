@@ -1,0 +1,139 @@
+:root {
+  color-scheme: light;
+  --vscode-background: #ffffff;
+  --vscode-editor-background: #ffffff;
+  --vscode-foreground: #1f2328;
+  --vscode-editor-foreground: #1f2328;
+  --vscode-textLink-foreground: #0969da;
+  --vscode-panel-border: #d1d9e0;
+  --vscode-textSeparator-foreground: #d1d9e0;
+  --vscode-descriptionForeground: #59636e;
+  --vscode-textCodeBlock-background: #f6f8fa;
+  --vscode-editorWidget-background: #f6f8fa;
+  --vscode-editor-font-family:
+    ui-monospace, SFMono-Regular, Consolas, monospace;
+  --mm-document-width: 100%;
+  --mm-document-min-width: 0px;
+  --mm-document-max-width: 1024px;
+  --mm-border: #d1d9e0;
+  --mm-muted: #59636e;
+  --mm-code-background: #f6f8fa;
+  --mm-link: #0969da;
+}
+
+html,
+body {
+  min-width: 0;
+  background: #ffffff;
+  color: #1f2328;
+}
+
+body {
+  min-height: 100vh;
+  padding: clamp(16px, 4vw, 40px);
+}
+
+.markdown-body {
+  width: min(100%, 1024px);
+  min-width: 0;
+  max-width: 1024px;
+  margin: 0 auto;
+  padding: 0;
+  color: #1f2328;
+  background: #ffffff;
+}
+
+.markdown-body h1,
+.markdown-body h2,
+.markdown-body h3,
+.markdown-body h4,
+.markdown-body h5,
+.markdown-body h6 {
+  color: #1f2328;
+}
+
+.markdown-body a {
+  color: #0969da;
+}
+
+.markdown-body pre,
+.markdown-body code {
+  background-color: #f6f8fa;
+}
+
+.markdown-body li.task-list-item > input[type="checkbox"][disabled] {
+  appearance: none;
+  box-sizing: border-box;
+  width: 1em;
+  height: 1em;
+  padding: 0;
+  border: 1px solid #57606a;
+  border-radius: 3px;
+  opacity: 1;
+  background: #ffffff;
+  vertical-align: middle;
+}
+
+.markdown-body li.task-list-item > input[type="checkbox"][disabled]:checked {
+  border-color: #0969da;
+  background-color: #0969da;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='m3 8 3.2 3.2L13 4.5' fill='none' stroke='white' stroke-width='2'/%3E%3C/svg%3E");
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: 100% 100%;
+}
+
+.markdown-body
+  li.task-list-item
+  > input[type="checkbox"][data-task-state="mixed"] {
+  border-color: #0969da;
+  background-color: #0969da;
+  background-image: linear-gradient(#ffffff, #ffffff);
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: 55% 2px;
+}
+
+/* The shared renderer emits these controls for VS Code preview enhancers. */
+.mm-code-block-actions {
+  display: none;
+}
+
+.markdown-body table,
+.markdown-body th,
+.markdown-body td,
+.markdown-body hr {
+  border-color: #d1d9e0;
+}
+
+@media print {
+  html,
+  body {
+    min-width: 0;
+    background: #ffffff !important;
+  }
+
+  body {
+    min-height: 0;
+    padding: 0;
+  }
+
+  .markdown-body {
+    width: 100%;
+    max-width: none;
+    padding: 0;
+  }
+
+  .markdown-body pre,
+  .markdown-body table,
+  .markdown-body img,
+  .markdown-body blockquote,
+  .markdown-body .markdown-alert {
+    break-inside: avoid;
+  }
+
+  .markdown-body a {
+    color: inherit;
+    text-decoration: underline;
+  }
+}
