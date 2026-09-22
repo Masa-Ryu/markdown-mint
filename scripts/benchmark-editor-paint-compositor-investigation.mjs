@@ -32,6 +32,23 @@ const sampleCount = Math.max(
 );
 const smokeMode = process.env.MM_PAINT_INVESTIGATION_SMOKE === "1";
 const debugStages = process.env.MM_PAINT_INVESTIGATION_DEBUG === "1";
+const cssOnlyMode = process.env.MM_PAINT_INVESTIGATION_CSS_ONLY === "1";
+const cssFullOnlyMode =
+  process.env.MM_PAINT_INVESTIGATION_CSS_FULL_ONLY === "1";
+const cssScreeningSamples = Math.max(
+  1,
+  Number.parseInt(
+    process.env.MM_PAINT_INVESTIGATION_CSS_SCREENING_SAMPLES ?? "1",
+    10,
+  ) || 1,
+);
+const cssConfirmationSamples = Math.max(
+  1,
+  Number.parseInt(
+    process.env.MM_PAINT_INVESTIGATION_CSS_CONFIRMATION_SAMPLES ?? "3",
+    10,
+  ) || 3,
+);
 const traceCategories = [
   "devtools.timeline",
   "blink",
@@ -153,12 +170,17 @@ async function readInputSettlingSummary() {
     const timings = condition?.timings;
     if (!timings) return null;
     return {
-      generatedAt: prior.generatedAt,
-      measurementCommitSHA: prior.gitCommit,
+      generatedAt: prior.traceUpdatedAt ?? prior.generatedAt,
+      measurementCommitSHA:
+        condition.measurementCommitSHA ??
+        prior.traceCommitSHA ??
+        prior.gitCommit,
       inputToDomMutationMs: timings.inputToDomMutationMs?.p50 ?? null,
       postMutationLongestTaskMs: timings.postMutationLongestTaskMs?.p50 ?? null,
       postMutationLongTaskTotalMs:
         timings.postMutationLongTaskTotalMs?.p50 ?? null,
+      tasksOverlappingPostMutationTotalDurationMs:
+        timings.tasksOverlappingPostMutationTotalDurationMs?.p50 ?? null,
       inputToFirstIdleMs: timings.inputToFirstIdleMs?.p50 ?? null,
       inputPhasePmSelectionOffsetsMs: (condition.samples ?? []).map(
         (sample) =>
@@ -522,7 +544,7 @@ async function createEditorPage(browser, scenario) {
       tableRows: table?.rows.length ?? 0,
       columns: table?.rows[0]?.cells.length ?? 0,
       editorClasses: view.dom.className,
-      tableStyle: table
+      initialTableStyle: table
         ? {
             display: getComputedStyle(table).display,
             width: getComputedStyle(table).width,
@@ -537,8 +559,239 @@ async function createEditorPage(browser, scenario) {
   assert.equal(actual.fixtureMatches, true, "Markdown changed during startup");
   page.__navigationStartedAt = actual.navigationStartedAt;
   page.__editorReadyAt = actual.readyAt;
-  page.__editorShape = actual;
+  page.__editorShape = { ...actual, tableStyle: actual.initialTableStyle };
   return page;
+}
+
+async function captureRenderStyleSnapshot(page, target = {}) {
+  return page.evaluate(
+    ({ bodyRow, column }) => {
+      const root =
+        document.querySelector(".mm-rich-panel .ProseMirror") ??
+        document.querySelector("#isolated-editor");
+      const stage =
+        root?.closest(".mm-stage") ?? document.querySelector(".mm-stage");
+      const richPanel =
+        root?.closest(".mm-rich-panel") ??
+        document.querySelector(".mm-rich-panel");
+      const table = root?.querySelector("table");
+      const row = table?.rows[bodyRow ?? 1];
+      const cell = row?.cells[column ?? 0];
+      const paragraph = cell?.querySelector(":scope > p") ?? null;
+      const properties = {
+        stage: [
+          "display",
+          "position",
+          "overflowX",
+          "overflowY",
+          "width",
+          "height",
+          "contain",
+          "contentVisibility",
+          "transform",
+        ],
+        editor: [
+          "display",
+          "position",
+          "overflowX",
+          "overflowY",
+          "width",
+          "height",
+          "contain",
+          "contentVisibility",
+          "transform",
+        ],
+        table: [
+          "display",
+          "position",
+          "width",
+          "minWidth",
+          "maxWidth",
+          "margin",
+          "borderSpacing",
+          "borderCollapse",
+          "overflowX",
+          "overflowY",
+          "boxSizing",
+          "contain",
+          "contentVisibility",
+          "willChange",
+          "transform",
+          "isolation",
+        ],
+        row: [
+          "display",
+          "position",
+          "width",
+          "height",
+          "transform",
+          "willChange",
+        ],
+        cell: [
+          "display",
+          "position",
+          "minWidth",
+          "width",
+          "height",
+          "padding",
+          "paddingTop",
+          "paddingRight",
+          "paddingBottom",
+          "paddingLeft",
+          "border",
+          "borderTopWidth",
+          "borderRightWidth",
+          "borderBottomWidth",
+          "borderLeftWidth",
+          "backgroundColor",
+          "verticalAlign",
+          "overflow",
+          "contain",
+          "contentVisibility",
+          "transform",
+          "willChange",
+        ],
+        paragraph: [
+          "display",
+          "fontFamily",
+          "fontSize",
+          "lineHeight",
+          "whiteSpace",
+          "overflowWrap",
+          "wordBreak",
+          "margin",
+        ],
+      };
+      const styleOf = (element, names) => {
+        if (!element) return null;
+        const computed = getComputedStyle(element);
+        return Object.fromEntries(names.map((name) => [name, computed[name]]));
+      };
+      const rectOf = (element) => {
+        if (!element) return null;
+        const rect = element.getBoundingClientRect();
+        return {
+          top: rect.top,
+          left: rect.left,
+          right: rect.right,
+          bottom: rect.bottom,
+          width: rect.width,
+          height: rect.height,
+        };
+      };
+      const overflowAncestors = [];
+      let ancestor = cell?.parentElement ?? null;
+      while (ancestor) {
+        const computed = getComputedStyle(ancestor);
+        if (
+          computed.overflowX !== "visible" ||
+          computed.overflowY !== "visible"
+        ) {
+          overflowAncestors.push({
+            tagName: ancestor.tagName,
+            id: ancestor.id,
+            className: ancestor.className?.toString?.() ?? "",
+            overflowX: computed.overflowX,
+            overflowY: computed.overflowY,
+            rect: rectOf(ancestor),
+          });
+        }
+        ancestor = ancestor.parentElement;
+      }
+      return {
+        capturedAt: performance.now(),
+        target: { bodyRow: bodyRow ?? 1, column: column ?? 0 },
+        stage: styleOf(stage, properties.stage),
+        richPanel: styleOf(richPanel, properties.editor),
+        editor: styleOf(root, properties.editor),
+        table: styleOf(table, properties.table),
+        tbody: styleOf(table?.tBodies[0], properties.row),
+        row: styleOf(row, properties.row),
+        cell: styleOf(cell, properties.cell),
+        paragraph: styleOf(paragraph, properties.paragraph),
+        overflowAncestors,
+        geometry: {
+          stage: stage
+            ? {
+                scrollTop: stage.scrollTop,
+                scrollLeft: stage.scrollLeft,
+                clientWidth: stage.clientWidth,
+                clientHeight: stage.clientHeight,
+                scrollWidth: stage.scrollWidth,
+                scrollHeight: stage.scrollHeight,
+                rect: rectOf(stage),
+              }
+            : null,
+          table: table
+            ? {
+                scrollWidth: table.scrollWidth,
+                scrollHeight: table.scrollHeight,
+                clientWidth: table.clientWidth,
+                clientHeight: table.clientHeight,
+                rect: rectOf(table),
+              }
+            : null,
+          targetCell: rectOf(cell),
+        },
+      };
+    },
+    { bodyRow: target.bodyRow ?? 1, column: target.column ?? 0 },
+  );
+}
+
+function assertMinimalRenderStyle(snapshot) {
+  const table = snapshot?.table;
+  const cell = snapshot?.cell;
+  assert.equal(
+    table?.display,
+    "table",
+    "Minimal CSS did not set table display",
+  );
+  assert.equal(
+    table?.minWidth,
+    "0px",
+    "Minimal CSS did not clear table min-width",
+  );
+  assert.equal(
+    table?.maxWidth,
+    "none",
+    "Minimal CSS did not clear table max-width",
+  );
+  assert.equal(
+    table?.borderCollapse,
+    "separate",
+    "Minimal CSS did not set separate borders",
+  );
+  assert.equal(
+    table?.overflowX,
+    "visible",
+    "Minimal CSS did not clear table overflow",
+  );
+  assert.equal(
+    cell?.minWidth,
+    "0px",
+    "Minimal CSS did not clear cell min-width",
+  );
+  assert.equal(
+    cell?.paddingTop,
+    "0px",
+    "Minimal CSS did not clear cell padding",
+  );
+  assert.equal(
+    cell?.paddingRight,
+    "0px",
+    "Minimal CSS did not clear cell padding",
+  );
+  assert.equal(
+    cell?.borderTopWidth,
+    "0px",
+    "Minimal CSS did not clear cell border",
+  );
+  assert.equal(
+    cell?.verticalAlign,
+    "middle",
+    "Minimal CSS did not set cell vertical alignment",
+  );
 }
 
 function makeTableHtml(rows) {
@@ -836,6 +1089,50 @@ async function resetClickTelemetry(page) {
   });
 }
 
+async function waitForPaintSettled(page, options = {}) {
+  const timeoutMs = options.timeoutMs ?? 30_000;
+  const quietMs = options.quietMs ?? 500;
+  const startedAt = performance.now();
+  const result = await page.evaluate(
+    ({ timeout, quiet }) =>
+      new Promise((resolveSettled) => {
+        const started = performance.now();
+        let lastActivity = started;
+        let frameCount = 0;
+        const poll = () => {
+          const now = performance.now();
+          const entries = window.__mmPaintLongTasks?.entries ?? [];
+          const lastEntry = entries.at(-1);
+          if (lastEntry)
+            lastActivity = Math.max(
+              lastActivity,
+              lastEntry.startTime + lastEntry.duration,
+            );
+          frameCount += 1;
+          if (
+            frameCount >= 2 &&
+            now - lastActivity >= quiet &&
+            now - started < timeout
+          ) {
+            resolveSettled({ settledAt: now, timedOut: false });
+            return;
+          }
+          if (now - started >= timeout) {
+            resolveSettled({ settledAt: now, timedOut: true });
+            return;
+          }
+          requestAnimationFrame(poll);
+        };
+        requestAnimationFrame(() => requestAnimationFrame(poll));
+      }),
+    { timeout: timeoutMs, quiet: quietMs },
+  );
+  return {
+    ...result,
+    waitedMs: result.settledAt - startedAt,
+  };
+}
+
 async function snapshotInteraction(page, startedAt, clickResolvedAtNode) {
   return page.evaluate(
     ({ actionStart, clickResolvedNode }) => {
@@ -903,7 +1200,9 @@ async function clickSample(page, target, context = {}) {
   await target.click();
   const clickResolvedNodeAt = performance.now();
   if (debugStages) process.stdout.write("    click resolved; stopping trace\n");
-  const trace = await stopTrace(context.saveRaw ? rawTracePath : undefined);
+  const trace = await stopTrace(
+    context.saveRawPath ?? (context.saveRaw ? rawTracePath : undefined),
+  );
   if (debugStages) process.stdout.write("    trace summarized\n");
   const interaction = await snapshotInteraction(
     page,
@@ -931,6 +1230,12 @@ async function makeEditorSample(browser, scenario, options = {}) {
   try {
     if (options.css === "minimal")
       await installCss(page, "minimal", options.minimalCss);
+    if (options.cssText)
+      await installCss(
+        page,
+        options.cssName ?? "css-override",
+        options.cssText,
+      );
     if (options.overlayRemoval) {
       options.overlayRemovalDetails = await page.evaluate(() => {
         const selectors = [
@@ -973,7 +1278,14 @@ async function makeEditorSample(browser, scenario, options = {}) {
     const sample = await clickSample(page, locator, {
       scrollPreparationMs,
       saveRaw: options.saveRaw,
+      saveRawPath: options.saveRawPath,
     });
+    const renderStyle = await captureRenderStyleSnapshot(page, {
+      bodyRow,
+      column: options.column ?? 0,
+    });
+    if (options.css === "minimal" || options.assertMinimalStyle)
+      assertMinimalRenderStyle(renderStyle);
     return {
       mode: "proseMirror",
       bodyRows: scenario.table.bodyRows,
@@ -985,8 +1297,11 @@ async function makeEditorSample(browser, scenario, options = {}) {
       visibleAt: visible.visibleAt,
       scrollPreparationMs,
       css: options.css ?? "current",
+      cssName: options.cssName ?? null,
       overlayRemoval: options.overlayRemovalDetails ?? null,
-      computedTableStyle: page.__editorShape.tableStyle,
+      initialTableStyle: page.__editorShape.initialTableStyle,
+      computedTableStyle: renderStyle.table,
+      renderStyle,
       click: sample,
       repeatedClick: null,
     };
@@ -1007,9 +1322,13 @@ async function makeRepeatSample(browser, scenario, options = {}) {
       scrollPreparationMs,
       saveRaw: options.saveRaw,
     });
+    const firstClickResolvedAt = performance.now();
+    const settled = await waitForPaintSettled(page);
+    const repeatRequestedAt = performance.now();
     const repeat = await clickSample(page, locator, {
       scrollPreparationMs: 0,
     });
+    const repeatResolvedAt = performance.now();
     return {
       bodyRows: scenario.table.bodyRows,
       bodyRow: 1,
@@ -1017,6 +1336,25 @@ async function makeRepeatSample(browser, scenario, options = {}) {
       scrollPreparationMs,
       firstSelectionClick: first,
       repeatSameCellClick: repeat,
+      settle: {
+        firstClickResolvedAt,
+        settledAt: settled.settledAt,
+        settleWaitMs: settled.settledAt - firstClickResolvedAt,
+        repeatClickRequestedAt: repeatRequestedAt,
+        repeatPointerMoveAt:
+          repeat.interaction.eventTimeline.find(
+            (event) => event.type === "pointermove",
+          )?.at ?? null,
+        repeatPointerDownAt:
+          repeat.interaction.eventTimeline.find(
+            (event) => event.type === "pointerdown",
+          )?.at ?? null,
+        repeatClickEventAt:
+          repeat.interaction.eventTimeline.find(
+            (event) => event.type === "click",
+          )?.at ?? null,
+        repeatResolvedAt,
+      },
     };
   } finally {
     await page.close();
@@ -1042,6 +1380,11 @@ async function makeIsolatedSample(
       scrollPreparationMs,
       saveRaw: options.saveRaw === true,
     });
+    const renderStyle = await captureRenderStyleSnapshot(page, {
+      bodyRow: 1,
+      column: 0,
+    });
+    if (options.assertMinimalStyle) assertMinimalRenderStyle(renderStyle);
     return {
       mode,
       bodyRows: scenario.table.bodyRows,
@@ -1049,17 +1392,9 @@ async function makeIsolatedSample(
       target: rowInfo,
       scrollPreparationMs,
       click: sample,
-      computedTableStyle: await page.evaluate(() => {
-        const table = document.querySelector("table");
-        return {
-          display: getComputedStyle(table).display,
-          width: getComputedStyle(table).width,
-          minWidth: getComputedStyle(table).minWidth,
-          maxWidth: getComputedStyle(table).maxWidth,
-          borderCollapse: getComputedStyle(table).borderCollapse,
-          overflowX: getComputedStyle(table).overflowX,
-        };
-      }),
+      initialTableStyle: null,
+      computedTableStyle: renderStyle.table,
+      renderStyle,
     };
   } finally {
     await page.close();
@@ -1102,6 +1437,227 @@ function summarizeClickSamples(samples) {
   };
 }
 
+function summarizeStyleSnapshots(samples) {
+  const snapshots = samples.map((sample) => sample.renderStyle).filter(Boolean);
+  return {
+    sampleCount: snapshots.length,
+    snapshots,
+    currentStyle: snapshots[0] ?? null,
+  };
+}
+
+async function runCssCondition(browser, scenario, condition, options = {}) {
+  const samples = [];
+  for (
+    let index = 0;
+    index < (options.count ?? cssScreeningSamples);
+    index += 1
+  ) {
+    const cssText = conditionCss(condition);
+    process.stdout.write(
+      `  CSS ${condition.name} sample ${index + 1}/${options.count ?? cssScreeningSamples}\n`,
+    );
+    const sample = await makeEditorSample(browser, scenario, {
+      bodyRow: options.bodyRow ?? 1,
+      column: options.column ?? 0,
+      css: condition.isMinimal ? "minimal" : cssText ? "override" : "current",
+      minimalCss,
+      cssName: condition.name,
+      cssText,
+      assertMinimalStyle: options.assertMinimalStyle === true,
+      saveRawPath: options.saveRawPaths?.[index] ?? null,
+      overlayRemoval: options.overlayRemoval,
+    });
+    sample.condition = condition.name;
+    sample.conditionLabel = condition.label;
+    sample.classification = classifyCssCondition(
+      sample.click.trace.maxLifecycleMs?.["PaintArtifactCompositor::Update"],
+    );
+    samples.push(sample);
+  }
+  const summary = summarizeClickSamples(samples);
+  const renderStyles = summarizeStyleSnapshots(samples);
+  return {
+    name: condition.name,
+    label: condition.label,
+    propertyCount: condition.propertyCount ?? null,
+    sampleCount: samples.length,
+    classification: classifyCssCondition(
+      summary.longestPaintArtifactCompositorUpdateMs.p50,
+    ),
+    summary,
+    renderStyles,
+    samples,
+  };
+}
+
+async function installInputProbe(page) {
+  await page.evaluate(() => {
+    const targetPosition = window.__mmPaintTargetPosition;
+    const root = document.querySelector(".mm-rich-panel .ProseMirror");
+    const cell =
+      root?.querySelector("table")?.rows[targetPosition?.row]?.cells[
+        targetPosition?.column
+      ];
+    if (!cell) throw new Error("Input probe target cell is missing");
+    const expected = `${cell.textContent ?? ""}z`;
+    window.__mmInputProbe = {
+      expected,
+      inputEventAt: null,
+      mutationAt: null,
+      idleAt: null,
+      mutationObserver: null,
+      inputListener: null,
+    };
+    const probe = window.__mmInputProbe;
+    probe.inputListener = (event) => {
+      if (event.target !== root && !cell.contains(event.target)) return;
+      probe.inputEventAt ??= performance.now();
+    };
+    probe.mutationObserver = new MutationObserver(() => {
+      if (cell.textContent !== expected || probe.mutationAt !== null) return;
+      probe.mutationAt = performance.now();
+      const settle = () => {
+        probe.idleAt = performance.now();
+      };
+      if (typeof requestIdleCallback === "function")
+        requestIdleCallback(settle, { timeout: 30_000 });
+      else requestAnimationFrame(() => requestAnimationFrame(settle));
+    });
+    document.addEventListener("input", probe.inputListener, true);
+    probe.mutationObserver.observe(cell, {
+      subtree: true,
+      childList: true,
+      characterData: true,
+    });
+  });
+}
+
+async function readInputProbe(page) {
+  await page.waitForFunction(
+    () => typeof window.__mmInputProbe?.mutationAt === "number",
+    null,
+    { timeout: 120_000 },
+  );
+  await page.waitForFunction(
+    () => typeof window.__mmInputProbe?.idleAt === "number",
+    null,
+    { timeout: 120_000 },
+  );
+  return page.evaluate(() => ({
+    expected: window.__mmInputProbe.expected,
+    inputEventAt: window.__mmInputProbe.inputEventAt,
+    mutationAt: window.__mmInputProbe.mutationAt,
+    idleAt: window.__mmInputProbe.idleAt,
+  }));
+}
+
+async function runFullInteractionSample(
+  browser,
+  scenario,
+  condition,
+  options = {},
+) {
+  const page = await createEditorPage(browser, scenario);
+  try {
+    if (condition.isMinimal) await installCss(page, "minimal-full", minimalCss);
+    else if (condition.cssText ?? condition.css)
+      await installCss(
+        page,
+        `${condition.name}-full`,
+        condition.cssText ?? condition.css,
+      );
+    await installInteractionObserver(page);
+    const { locator, rowInfo } = await makeTarget(
+      page,
+      options.bodyRow ?? 1,
+      0,
+    );
+    const visible = await prepareVisible(page, locator);
+    await installInputProbe(page);
+    const click = await clickSample(page, locator, {
+      scrollPreparationMs: visible.scrollCompletedAt - visible.scrollStartedAt,
+    });
+    await page.evaluate(() => {
+      window.__mmPaintLongTasks.entries.length = 0;
+      window.__mmPaintLongTaskObserver?.takeRecords();
+    });
+    const inputStartedAtNode = performance.now();
+    const inputStartedAt = await page.evaluate(() => {
+      const at = performance.now();
+      window.__mmPaintPhase = "input";
+      window.__mmPaintPhaseStartedAt = { input: at };
+      return at;
+    });
+    const traceStop = await startTrace(page);
+    await page.keyboard.type("z");
+    const probe = await readInputProbe(page);
+    const settled = await waitForPaintSettled(page);
+    const trace = await traceStop(options.saveRawPath ?? undefined);
+    const completedAt = performance.now();
+    const renderStyle = await captureRenderStyleSnapshot(page, {
+      bodyRow: options.bodyRow ?? 1,
+      column: 0,
+    });
+    if (condition.isMinimal) assertMinimalRenderStyle(renderStyle);
+    return {
+      condition: condition.name,
+      conditionLabel: condition.label,
+      bodyRow: options.bodyRow ?? 1,
+      target: rowInfo,
+      click,
+      renderStyle,
+      input: {
+        inputStartedAt,
+        inputStartedAtNode,
+        inputEventLatencyMs:
+          probe.inputEventAt === null
+            ? null
+            : probe.inputEventAt - inputStartedAt,
+        inputToDomMutationMs: probe.mutationAt - inputStartedAt,
+        inputToFirstIdleMs: probe.idleAt - inputStartedAt,
+        postMutationSettledWaitMs: probe.idleAt - probe.mutationAt,
+        totalInteractionMs: completedAt - click.clickStartedNodeAt,
+        settled,
+        trace,
+      },
+    };
+  } finally {
+    await page.close();
+  }
+}
+
+function summarizeFullInteractionSamples(samples) {
+  const get = (selector) =>
+    summarize(samples.map(selector).filter(Number.isFinite));
+  return {
+    sampleCount: samples.length,
+    clickLatencyMs: get((sample) => sample.click.clickLatencyMs),
+    selectionchangeLatencyMs: get(
+      (sample) => sample.click.selectionchangeLatencyMs,
+    ),
+    inputEventLatencyMs: get((sample) => sample.input.inputEventLatencyMs),
+    inputToDomMutationMs: get((sample) => sample.input.inputToDomMutationMs),
+    inputToFirstIdleMs: get((sample) => sample.input.inputToFirstIdleMs),
+    totalInteractionMs: get((sample) => sample.input.totalInteractionMs),
+    postMutationLongestUpdateMs: summarize(
+      samples.map(
+        (sample) =>
+          sample.input.trace.maxLifecycleMs?.[
+            "PaintArtifactCompositor::Update"
+          ],
+      ),
+    ),
+    postMutationLongestUpdateMsByTrace: samples.map(
+      (sample) =>
+        sample.input.trace.maxLifecycleMs?.[
+          "PaintArtifactCompositor::Update"
+        ] ?? null,
+    ),
+    samples,
+  };
+}
+
 async function runCondition(
   browser,
   label,
@@ -1139,6 +1695,521 @@ const minimalCss = `
   background: transparent !important;
 }
 `;
+
+const minimalTableCss = `
+.mm-document-content table {
+  box-sizing: border-box !important;
+  display: table !important;
+  width: auto !important;
+  min-width: 0 !important;
+  max-width: none !important;
+  margin: 0 !important;
+  border-spacing: 2px !important;
+  border-collapse: separate !important;
+  overflow-x: visible !important;
+}
+`;
+
+const minimalCellCss = `
+.mm-document-content th,
+.mm-document-content td {
+  box-sizing: border-box !important;
+  min-width: 0 !important;
+  padding: 0 !important;
+  border: 0 !important;
+  vertical-align: middle !important;
+  background: transparent !important;
+}
+`;
+
+const cssGroupConditions = [
+  {
+    name: "groupA_tableScrollFormatting",
+    label: "Group A: table scroll formatting",
+    css: ".mm-document-content table{display:table!important;overflow-x:visible!important}",
+    propertyCount: 2,
+  },
+  {
+    name: "groupB_tableWidthConstraints",
+    label: "Group B: table width constraints",
+    css: ".mm-document-content table{width:auto!important;min-width:0!important;max-width:none!important}",
+    propertyCount: 3,
+  },
+  {
+    name: "groupC_tableScrollAndWidth",
+    label: "Group C: A + B",
+    css: ".mm-document-content table{display:table!important;overflow-x:visible!important;width:auto!important;min-width:0!important;max-width:none!important}",
+    propertyCount: 5,
+  },
+  {
+    name: "groupD_collapsedBorderModel",
+    label: "Group D: separate border model",
+    css: ".mm-document-content table{border-collapse:separate!important;border-spacing:2px!important}",
+    propertyCount: 2,
+  },
+  {
+    name: "groupE_cellBoxModel",
+    label: "Group E: cell box model",
+    css: ".mm-document-content th,.mm-document-content td{min-width:0!important;padding:0!important;border:0!important;vertical-align:middle!important}",
+    propertyCount: 4,
+  },
+  {
+    name: "groupF_headerDecoration",
+    label: "Group F: header background",
+    css: ".mm-document-content th{background:transparent!important}",
+    propertyCount: 1,
+  },
+  {
+    name: "groupG_tableFormattingOnly",
+    label: "Group G: full table formatting only",
+    css: minimalTableCss,
+    propertyCount: 8,
+  },
+  {
+    name: "groupH_cellFormattingOnly",
+    label: "Group H: full cell formatting only",
+    css: minimalCellCss,
+    propertyCount: 5,
+  },
+];
+
+const deltaConditions = [
+  ["displayOnly", ".mm-document-content table{display:table!important}", 1],
+  [
+    "overflowOnly",
+    ".mm-document-content table{overflow-x:visible!important}",
+    1,
+  ],
+  ["widthOnly", ".mm-document-content table{width:auto!important}", 1],
+  [
+    "minMaxWidthOnly",
+    ".mm-document-content table{min-width:0!important;max-width:none!important}",
+    2,
+  ],
+  [
+    "displayPlusOverflow",
+    ".mm-document-content table{display:table!important;overflow-x:visible!important}",
+    2,
+  ],
+  [
+    "displayPlusWidth",
+    ".mm-document-content table{display:table!important;width:auto!important}",
+    2,
+  ],
+  [
+    "overflowPlusWidth",
+    ".mm-document-content table{overflow-x:visible!important;width:auto!important}",
+    2,
+  ],
+  [
+    "displayPlusMinMax",
+    ".mm-document-content table{display:table!important;min-width:0!important;max-width:none!important}",
+    3,
+  ],
+  [
+    "overflowPlusMinMax",
+    ".mm-document-content table{overflow-x:visible!important;min-width:0!important;max-width:none!important}",
+    3,
+  ],
+  [
+    "widthPlusMinMax",
+    ".mm-document-content table{width:auto!important;min-width:0!important;max-width:none!important}",
+    3,
+  ],
+];
+
+const singleMinimalRestorations = [
+  ["tableMargin", ".mm-document-content table{margin:0 0 1em!important}"],
+  ["borderSpacing", ".mm-document-content table{border-spacing:0!important}"],
+  [
+    "headerBackground",
+    ".mm-document-content th{background:var(--mm-code-background)!important}",
+  ],
+];
+
+function classifyCssCondition(updateMs) {
+  if (!Number.isFinite(updateMs)) return "missing";
+  if (updateMs < 500) return "fast";
+  if (updateMs > 3000) return "slow";
+  return "intermediate";
+}
+
+function styleDiff(current, minimal) {
+  const differences = [];
+  for (const section of [
+    "stage",
+    "richPanel",
+    "editor",
+    "table",
+    "tbody",
+    "row",
+    "cell",
+    "paragraph",
+  ]) {
+    const left = current?.[section] ?? {};
+    const right = minimal?.[section] ?? {};
+    for (const key of new Set([...Object.keys(left), ...Object.keys(right)])) {
+      if (left[key] !== right[key])
+        differences.push({
+          section,
+          property: key,
+          current: left[key] ?? null,
+          minimal: right[key] ?? null,
+        });
+    }
+  }
+  return differences;
+}
+
+function conditionCss(condition) {
+  return condition.cssText ?? condition.css ?? null;
+}
+
+function conditionWithCss(condition) {
+  return {
+    ...condition,
+    cssText: conditionCss(condition),
+  };
+}
+
+function summarizeConditionResult(result) {
+  return {
+    name: result.name,
+    label: result.label,
+    propertyCount: result.propertyCount ?? null,
+    classification: result.classification,
+    sampleCount: result.sampleCount,
+    summary: compactClickSummary(result.summary),
+    renderStyle: result.renderStyles?.currentStyle ?? null,
+    traceFiles: result.samples
+      .map((sample) => sample.click.trace.rawFile)
+      .filter(Boolean),
+  };
+}
+
+function compactClickSummary(summary) {
+  if (!summary) return null;
+  const { samples: _samples, ...compact } = summary;
+  return compact;
+}
+
+function compactFullInteractionSummary(summary) {
+  if (!summary) return null;
+  const { samples: _samples, ...compact } = summary;
+  return compact;
+}
+
+async function runDeepCssInvestigation(browser, baseScenario) {
+  const scenario = scenarioForRows(baseScenario, 2000);
+  const current = conditionWithCss({
+    name: "current",
+    label: "Current CSS",
+    propertyCount: 0,
+  });
+  const minimal = conditionWithCss({
+    name: "minimal",
+    label: "Minimal CSS",
+    propertyCount: 13,
+    isMinimal: true,
+    cssText: minimalCss,
+  });
+  const restorations = singleMinimalRestorations.map(([name, css]) =>
+    conditionWithCss({
+      name: `minimalRestore_${name}`,
+      label: `Minimal + restore ${name}`,
+      cssText: `${minimalCss}\n${css}`,
+      base: "minimal",
+      propertyCount: 1,
+    }),
+  );
+  const groups = cssGroupConditions.map((condition) =>
+    conditionWithCss(condition),
+  );
+
+  process.stdout.write(
+    "\nCSS effective-style baseline (Current ×3, Minimal ×3)\n",
+  );
+  const currentBaseline = await runCssCondition(browser, scenario, current, {
+    count: cssConfirmationSamples,
+  });
+  const minimalBaseline = await runCssCondition(browser, scenario, minimal, {
+    count: cssConfirmationSamples,
+    assertMinimalStyle: true,
+  });
+  assert.ok(
+    minimalBaseline.renderStyles.currentStyle,
+    "Minimal CSS did not produce a render style snapshot",
+  );
+  const minimalVerification = {
+    table: minimalBaseline.renderStyles.currentStyle.table,
+    cell: minimalBaseline.renderStyles.currentStyle.cell,
+    geometry: minimalBaseline.renderStyles.currentStyle.geometry,
+    passed: true,
+  };
+
+  const screeningConditions = [...restorations, ...groups];
+  const screening = [];
+  for (const condition of screeningConditions) {
+    const result = await runCssCondition(browser, scenario, condition, {
+      count: cssScreeningSamples,
+    });
+    screening.push(summarizeConditionResult(result));
+  }
+
+  const fastGroup = screening
+    .filter(
+      (result) =>
+        groups.some((condition) => condition.name === result.name) &&
+        result.classification === "fast",
+    )
+    .sort((left, right) => {
+      const count = (value) => value.propertyCount ?? Number.MAX_SAFE_INTEGER;
+      return (
+        count(left) - count(right) ||
+        (left.summary.longestPaintArtifactCompositorUpdateMs.p50 ?? Infinity) -
+          (right.summary.longestPaintArtifactCompositorUpdateMs.p50 ?? Infinity)
+      );
+    });
+
+  const delta = [];
+  if (fastGroup.length) {
+    const fastGroupPropertyCount = fastGroup[0].propertyCount ?? 0;
+    const deltaConditionsToRun = deltaConditions.filter(
+      ([, , propertyCount]) => propertyCount <= fastGroupPropertyCount,
+    );
+    for (const [name, css, propertyCount] of deltaConditionsToRun) {
+      const result = await runCssCondition(
+        browser,
+        scenario,
+        conditionWithCss({
+          name: `delta_${name}`,
+          label: `Delta: ${name}`,
+          cssText: css,
+          base: "current",
+          propertyCount,
+        }),
+        { count: cssScreeningSamples },
+      );
+      delta.push(summarizeConditionResult(result));
+    }
+  }
+
+  const candidatePool = [...screening, ...delta].filter(
+    (result) =>
+      result.classification === "fast" &&
+      result.name !== minimal.name &&
+      result.name !== current.name,
+  );
+  candidatePool.sort((left, right) => {
+    const count = (value) => value.propertyCount ?? Number.MAX_SAFE_INTEGER;
+    return (
+      count(left) - count(right) ||
+      (left.summary.longestPaintArtifactCompositorUpdateMs.p50 ?? Infinity) -
+        (right.summary.longestPaintArtifactCompositorUpdateMs.p50 ?? Infinity)
+    );
+  });
+  const selectedSummary = candidatePool[0] ?? null;
+  const minimumFastCandidates = selectedSummary
+    ? candidatePool.filter(
+        (candidate) =>
+          (candidate.propertyCount ?? Number.MAX_SAFE_INTEGER) ===
+          (selectedSummary.propertyCount ?? Number.MAX_SAFE_INTEGER),
+      )
+    : [];
+  const selectedCondition = selectedSummary
+    ? [
+        ...groups,
+        ...deltaConditions.map(([name, css, propertyCount]) => ({
+          name: `delta_${name}`,
+          label: `Delta: ${name}`,
+          cssText: css,
+          propertyCount,
+        })),
+      ].find((condition) => condition.name === selectedSummary.name)
+    : null;
+
+  let abaConfirmation = null;
+  if (selectedCondition) {
+    const traceBase = "/tmp/markdown-mint-issue119-css";
+    const currentA = await runCssCondition(browser, scenario, current, {
+      count: cssConfirmationSamples,
+      saveRawPaths: [`${traceBase}-current-a.json`],
+    });
+    const candidateB = await runCssCondition(
+      browser,
+      scenario,
+      conditionWithCss(selectedCondition),
+      {
+        count: cssConfirmationSamples,
+        saveRawPaths: [`${traceBase}-candidate.json`],
+      },
+    );
+    const currentAgain = await runCssCondition(browser, scenario, current, {
+      count: cssConfirmationSamples,
+      saveRawPaths: [`${traceBase}-current-b.json`],
+    });
+    const currentSlow =
+      currentA.classification === "slow" &&
+      currentAgain.classification === "slow";
+    const candidateFast = candidateB.classification === "fast";
+    const tracePac = (result) =>
+      result.samples[0]?.click.trace.maxLifecycleMs?.[
+        "PaintArtifactCompositor::Update"
+      ] ?? null;
+    const traceContrast = {
+      currentA: tracePac(currentA),
+      candidate: tracePac(candidateB),
+      currentAgain: tracePac(currentAgain),
+    };
+    abaConfirmation = {
+      selectedCondition,
+      currentA: summarizeConditionResult(currentA),
+      candidate: summarizeConditionResult(candidateB),
+      currentAgain: summarizeConditionResult(currentAgain),
+      traceSummaries: {
+        currentA: currentA.samples[0]?.click.trace ?? null,
+        candidate: candidateB.samples[0]?.click.trace ?? null,
+        currentAgain: currentAgain.samples[0]?.click.trace ?? null,
+      },
+      traceContrast,
+      verdict:
+        currentSlow &&
+        candidateFast &&
+        Number.isFinite(traceContrast.currentA) &&
+        Number.isFinite(traceContrast.candidate) &&
+        Number.isFinite(traceContrast.currentAgain) &&
+        traceContrast.currentA > 3000 &&
+        traceContrast.candidate < 500 &&
+        traceContrast.currentAgain > 3000
+          ? "causal CSS candidate"
+          : "correlated candidate",
+    };
+  }
+
+  const positionVerification = {};
+  if (selectedCondition) {
+    for (const bodyRow of [1, 1000, 2000]) {
+      const currentSamples = [];
+      const candidateSamples = [];
+      for (const conditionSamples of [
+        [current, currentSamples],
+        [conditionWithCss(selectedCondition), candidateSamples],
+      ]) {
+        const [condition, destination] = conditionSamples;
+        const sample = await makeEditorSample(browser, scenario, {
+          bodyRow,
+          cssText: conditionCss(condition),
+          css: condition.isMinimal
+            ? "minimal"
+            : conditionCss(condition)
+              ? "override"
+              : "current",
+          minimalCss,
+          cssName: `${condition.name}_row${bodyRow}`,
+        });
+        destination.push(sample);
+      }
+      positionVerification[`row${bodyRow}`] = {
+        bodyRow,
+        current: compactClickSummary(summarizeClickSamples(currentSamples)),
+        candidate: compactClickSummary(summarizeClickSamples(candidateSamples)),
+        currentGeometry: currentSamples[0]?.renderStyle?.geometry ?? null,
+        candidateGeometry: candidateSamples[0]?.renderStyle?.geometry ?? null,
+      };
+    }
+  }
+
+  let fullInteraction = null;
+  if (selectedCondition) {
+    const currentSamples = [];
+    const candidateSamples = [];
+    for (let index = 0; index < cssConfirmationSamples; index += 1) {
+      process.stdout.write(
+        `  Full interaction Current sample ${index + 1}/${cssConfirmationSamples}\n`,
+      );
+      currentSamples.push(
+        await runFullInteractionSample(browser, scenario, current, {
+          saveRawPath:
+            index === 0
+              ? "/tmp/markdown-mint-issue119-css-current-interaction.json"
+              : undefined,
+        }),
+      );
+      process.stdout.write(
+        `  Full interaction Candidate sample ${index + 1}/${cssConfirmationSamples}\n`,
+      );
+      candidateSamples.push(
+        await runFullInteractionSample(
+          browser,
+          scenario,
+          conditionWithCss(selectedCondition),
+          {
+            saveRawPath:
+              index === 0
+                ? "/tmp/markdown-mint-issue119-css-candidate-interaction.json"
+                : undefined,
+          },
+        ),
+      );
+    }
+    fullInteraction = {
+      current: compactFullInteractionSummary(
+        summarizeFullInteractionSamples(currentSamples),
+      ),
+      candidate: compactFullInteractionSummary(
+        summarizeFullInteractionSamples(candidateSamples),
+      ),
+    };
+  }
+
+  const styleDifferences = styleDiff(
+    currentBaseline.renderStyles.currentStyle,
+    minimalBaseline.renderStyles.currentStyle,
+  );
+  const rawTraceFiles = [
+    ...(abaConfirmation?.currentA?.traceFiles ?? []),
+    ...(abaConfirmation?.candidate?.traceFiles ?? []),
+    ...(abaConfirmation?.currentAgain?.traceFiles ?? []),
+  ];
+  return {
+    generatedAt: new Date().toISOString(),
+    sampleCounts: {
+      screening: cssScreeningSamples,
+      confirmation: cssConfirmationSamples,
+      position: 1,
+      fullInteraction: cssConfirmationSamples,
+    },
+    effectiveStyle: {
+      current: currentBaseline.renderStyles.currentStyle,
+      minimal: minimalBaseline.renderStyles.currentStyle,
+      differences: styleDifferences,
+      minimalVerification,
+    },
+    baseline: {
+      current: summarizeConditionResult(currentBaseline),
+      minimal: summarizeConditionResult(minimalBaseline),
+    },
+    screening,
+    deltaDebugging: {
+      screened: delta,
+      selected: selectedSummary,
+      minimumFastCandidates,
+      minimalReproducingPropertySet: selectedCondition,
+    },
+    candidateCssSnippet: selectedCondition
+      ? conditionCss(selectedCondition)
+      : null,
+    abaConfirmation,
+    positionVerification,
+    fullInteraction,
+    rawTraceFiles,
+    conclusion: abaConfirmation
+      ? abaConfirmation.verdict === "causal CSS candidate"
+        ? `A/B/A confirms ${abaConfirmation.selectedCondition.label} as a causal CSS candidate: Current is slow, the candidate is fast, Current again is slow, and the representative compositor traces change in the same direction.`
+        : `A/B/A did not satisfy all four causal criteria for ${abaConfirmation.selectedCondition.label}; retain it as a correlated candidate.`
+      : "No fast group or delta-debugging candidate was found in the screening run.",
+  };
+}
 
 async function runEndCorrectness(browser, scenario) {
   const results = { realEnd: [], directPmEnd: [] };
@@ -1300,6 +2371,49 @@ function reportMarkdown(report) {
   const deepest = updateEvent?.longestChildren?.[0];
   const fixedLayout = investigation.cssIsolation.fixedLayout ?? null;
   const cssProperties = investigation.cssIsolation.properties ?? [];
+  const cssDeep = investigation.cssIsolationDeep ?? null;
+  const cssDeepResult = (result) => {
+    const summary = result?.summary ?? result;
+    const classification =
+      result?.classification ??
+      classifyCssCondition(
+        summary?.longestPaintArtifactCompositorUpdateMs?.p50,
+      );
+    return result
+      ? `click p50 ${ms(summary?.clickLatencyMs?.p50)}, PAC p50 ${ms(summary?.longestPaintArtifactCompositorUpdateMs?.p50)}, Layerize p50 ${ms(summary?.longestLayerizeMs?.p50)} (${classification})`
+      : "n/a";
+  };
+  const cssScreeningRows =
+    cssDeep?.screening
+      ?.map(
+        (result) =>
+          `| ${result.label} | ${result.propertyCount ?? "n/a"} | ${result.classification} | ${ms(result.summary?.clickLatencyMs?.p50)} | ${ms(result.summary?.longestPaintArtifactCompositorUpdateMs?.p50)} |`,
+      )
+      .join("\n") ?? "| no screening data | | | | |";
+  const cssDeltaRows =
+    cssDeep?.deltaDebugging?.screened
+      ?.map(
+        (result) =>
+          `| ${result.label} | ${result.propertyCount ?? "n/a"} | ${result.classification} | ${ms(result.summary?.clickLatencyMs?.p50)} | ${ms(result.summary?.longestPaintArtifactCompositorUpdateMs?.p50)} |`,
+      )
+      .join("\n") ?? "| no delta data | | | | |";
+  const cssAba = cssDeep?.abaConfirmation;
+  const cssTraceSummary = cssAba?.traceSummaries;
+  const cssPositionRows = cssDeep?.positionVerification
+    ? Object.entries(cssDeep.positionVerification)
+        .map(
+          ([name, value]) =>
+            `| ${name} | ${cssDeepResult(value.current)} | ${cssDeepResult(value.candidate)} |`,
+        )
+        .join("\n")
+    : "| no position data | | |";
+  const cssStyleDiffRows =
+    cssDeep?.effectiveStyle?.differences
+      ?.map(
+        (difference) =>
+          `| ${difference.section} | ${difference.property} | ${difference.current ?? "null"} | ${difference.minimal ?? "null"} |`,
+      )
+      .join("\n") ?? "| no style differences | | |";
   const growth = investigation.growthAnalysis;
   const inputSettling = investigation.inputSettlingSummary;
   const repeatLifecycleTaskDurations =
@@ -1341,7 +2455,7 @@ Generated: ${report.generatedAt}
 
 **End validation:** Real End moved the target-cell caret in ${endSamples.successfulCount}/${endSamples.attemptCount} trials. The first failed sample stayed PM ${endSamples.samples[0]?.before?.pmPosition} / DOM offset ${endSamples.samples[0]?.before?.domAnchorOffset}; direct PM-end validation moved PM ${directPmEnd?.samples?.[0]?.before?.pmPosition}→${directPmEnd?.samples?.[0]?.after?.pmPosition}, DOM ${directPmEnd?.samples?.[0]?.before?.domAnchorOffset}→${directPmEnd?.samples?.[0]?.after?.domAnchorOffset}. The direct caret landed at the end of the 8-character target cell. Absolute PM positions depend on the benchmark document shape. Failed End attempts are excluded from successful-caret latency summaries.
 
-**DOM mutation vs settled:** Companion current-input run (${inputSettling?.generatedAt ?? "no saved run"}) p50: input → DOM mutation ${ms(inputSettling?.inputToDomMutationMs)}, post-mutation longest task ${ms(inputSettling?.postMutationLongestTaskMs)}, post-mutation long-task total ${ms(inputSettling?.postMutationLongTaskTotalMs)}, input → first idle ${ms(inputSettling?.inputToFirstIdleMs)}. DOM mutation therefore did not mean the browser had settled. The idle marker uses requestIdleCallback (or two animation frames when unavailable).
+**DOM mutation vs settled:** Companion current-input run (${inputSettling?.generatedAt ?? "no saved run"}) p50: input → DOM mutation ${ms(inputSettling?.inputToDomMutationMs)}, post-mutation longest task ${ms(inputSettling?.postMutationLongestTaskMs)}, task duration overlapping after mutation ${ms(inputSettling?.tasksOverlappingPostMutationTotalDurationMs)}, legacy post-mutation task total ${ms(inputSettling?.postMutationLongTaskTotalMs)}, input → first idle ${ms(inputSettling?.inputToFirstIdleMs)}. DOM mutation therefore did not mean the browser had settled. The overlap metric clips each task at the mutation timestamp; the legacy total is retained for JSON compatibility. The idle marker uses requestIdleCallback (or two animation frames when unavailable).
 
 ## Scaling
 
@@ -1368,6 +2482,51 @@ ${scalingRows}
 **Minimal CSS:** ${minimal?.sampleCount ?? 0} samples; click p50 ${ms(minimal?.clickLatencyMs?.p50)}; PaintArtifactCompositor::Update p50 ${ms(minimal?.longestPaintArtifactCompositorUpdateMs?.p50)}.
 
 **Relevant properties:** ${investigation.cssIsolation.propertyIsolationStatus}${cssProperties.length ? ` Each restoration was screened once: ${cssProperties.map((entry) => `${entry.property}: click ${ms(entry.summary.clickLatencyMs.p50)}, Update ${ms(entry.summary.longestPaintArtifactCompositorUpdateMs.p50)}, Layerize ${ms(entry.summary.longestLayerizeMs.p50)}`).join("; ")}.` : ""}${fixedLayout ? ` Fixed-layout benchmark-only result: click ${ms(fixedLayout.summary.clickLatencyMs.p50)}, Update ${ms(fixedLayout.summary.longestPaintArtifactCompositorUpdateMs.p50)}; computed table-layout ${fixedLayout.computedTableLayout}.` : ""}
+
+## Effective style verification
+
+${cssDeep ? `**Current:** ${cssDeepResult(cssDeep.baseline?.current)}\n\n**Minimal:** ${cssDeepResult(cssDeep.baseline?.minimal)}\n\nMinimal override assertions: **${cssDeep.effectiveStyle?.minimalVerification?.passed ? "passed" : "not available"}**. The post-override snapshot is stored with stage, rich panel, ProseMirror, table, tbody, target row/cell/paragraph styles, non-visible overflow ancestors, and geometry. Current→Minimal differences: ${cssDeep.effectiveStyle?.differences?.length ?? 0} computed properties.\n\n| node | property | Current | Minimal |\n|---|---|---|---|\n${cssStyleDiffRows}` : "No CSS deep investigation has been run."}
+
+## Current → removal screening
+
+| condition | properties | class | click p50 | PaintArtifactCompositor::Update p50 |
+|---|---:|---|---:|---:|
+${cssScreeningRows}
+
+## Delta debugging
+
+**Slow set:** Current CSS; **fast set:** Minimal CSS and any condition classified below 500 ms.
+**Minimal reproducing property set:** ${cssDeep?.deltaDebugging?.selected ? `${cssDeep.deltaDebugging.selected.label} (${cssDeep.deltaDebugging.selected.propertyCount ?? "n/a"} properties)` : "none found"}. Other singleton fast screenings: ${
+    (cssDeep?.deltaDebugging?.minimumFastCandidates ?? [])
+      .filter(
+        (candidate) =>
+          candidate.name !== cssDeep?.deltaDebugging?.selected?.name,
+      )
+      .map((candidate) => candidate.label)
+      .join(", ") || "none"
+  }; these remain screening results unless separately A/B/A-confirmed.
+
+| delta condition | properties | class | click p50 | PaintArtifactCompositor::Update p50 |
+|---|---:|---|---:|---:|
+${cssDeltaRows}
+
+## A/B/A confirmation
+
+${cssAba ? `**Current:** ${cssDeepResult(cssAba.currentA)}\n\n**Candidate:** ${cssDeepResult(cssAba.candidate)}\n\n**Current again:** ${cssDeepResult(cssAba.currentAgain)}\n\n**Verdict:** **${cssAba.verdict}**. Representative PAC traces: ${ms(cssAba.traceContrast?.currentA)} → ${ms(cssAba.traceContrast?.candidate)} → ${ms(cssAba.traceContrast?.currentAgain)}. Raw trace paths: ${(cssDeep.rawTraceFiles ?? []).map((file) => (typeof file === "string" ? file : file.path)).join(", ") || "none"}.\n\n**Lifecycle trace summary:** Current A UpdateLifecycle ${ms(cssTraceSummary?.currentA?.maxLifecycleMs?.["WebFrameWidgetImpl::UpdateLifecycle"])}, RunPaint ${ms(cssTraceSummary?.currentA?.maxLifecycleMs?.["LocalFrameView::RunPaintLifecyclePhase"])}, push ${ms(cssTraceSummary?.currentA?.maxLifecycleMs?.["LocalFrameView::pushPaintArtifactToCompositor"])}, Layerize ${ms(cssTraceSummary?.currentA?.maxLifecycleMs?.Layerize)}; candidate UpdateLifecycle ${ms(cssTraceSummary?.candidate?.maxLifecycleMs?.["WebFrameWidgetImpl::UpdateLifecycle"])}, RunPaint ${ms(cssTraceSummary?.candidate?.maxLifecycleMs?.["LocalFrameView::RunPaintLifecyclePhase"])}, push ${ms(cssTraceSummary?.candidate?.maxLifecycleMs?.["LocalFrameView::pushPaintArtifactToCompositor"])}, Layerize ${ms(cssTraceSummary?.candidate?.maxLifecycleMs?.Layerize)}; Current again UpdateLifecycle ${ms(cssTraceSummary?.currentAgain?.maxLifecycleMs?.["WebFrameWidgetImpl::UpdateLifecycle"])}.\n\n**VS Code DevTools candidate snippet:** <code>${cssDeep.candidateCssSnippet ?? "none"}</code>.` : "No candidate was eligible for A/B/A confirmation."}
+
+## Position verification
+
+| target | Current | Candidate |
+|---|---|---|
+${cssPositionRows}
+
+## Full interaction verification
+
+${cssDeep?.fullInteraction ? `**Current:** click ${ms(cssDeep.fullInteraction.current.clickLatencyMs?.p50)}, input→DOM ${ms(cssDeep.fullInteraction.current.inputToDomMutationMs?.p50)}, input→first idle ${ms(cssDeep.fullInteraction.current.inputToFirstIdleMs?.p50)}, total ${ms(cssDeep.fullInteraction.current.totalInteractionMs?.p50)}, post-mutation PAC ${ms(cssDeep.fullInteraction.current.postMutationLongestUpdateMs?.p50)}.\n\n**Candidate:** click ${ms(cssDeep.fullInteraction.candidate.clickLatencyMs?.p50)}, input→DOM ${ms(cssDeep.fullInteraction.candidate.inputToDomMutationMs?.p50)}, input→first idle ${ms(cssDeep.fullInteraction.candidate.inputToFirstIdleMs?.p50)}, total ${ms(cssDeep.fullInteraction.candidate.totalInteractionMs?.p50)}, post-mutation PAC ${ms(cssDeep.fullInteraction.candidate.postMutationLongestUpdateMs?.p50)}.` : "Full interaction verification was not run because no candidate was selected."}
+
+## CSS investigation conclusion
+
+${cssDeep?.conclusion ?? "The CSS removal investigation has not been run."}
 
 ## Selection trigger
 
@@ -1609,6 +2768,158 @@ async function main() {
       },
     };
     const investigation = report.paintCompositorInvestigation;
+    if (cssFullOnlyMode) {
+      const previousOutput = JSON.parse(await readFile(reportPath, "utf8"));
+      const deep =
+        previousOutput.paintCompositorInvestigation?.cssIsolationDeep;
+      const selectedCondition =
+        deep?.deltaDebugging?.minimalReproducingPropertySet;
+      assert.ok(
+        selectedCondition,
+        "A selected CSS candidate is required for full-only mode",
+      );
+      const scenario = scenarioForRows(baseScenario, 2000);
+      const current = conditionWithCss({
+        name: "current",
+        label: "Current CSS",
+        propertyCount: 0,
+      });
+      const candidate = conditionWithCss(selectedCondition);
+      const currentSamples = [];
+      const candidateSamples = [];
+      for (let index = 0; index < cssConfirmationSamples; index += 1) {
+        process.stdout.write(
+          `  Full interaction Current sample ${index + 1}/${cssConfirmationSamples}\n`,
+        );
+        currentSamples.push(
+          await runFullInteractionSample(browser, scenario, current, {
+            saveRawPath:
+              index === 0
+                ? "/tmp/markdown-mint-issue119-css-current-interaction.json"
+                : undefined,
+          }),
+        );
+        process.stdout.write(
+          `  Full interaction Candidate sample ${index + 1}/${cssConfirmationSamples}\n`,
+        );
+        candidateSamples.push(
+          await runFullInteractionSample(browser, scenario, candidate, {
+            saveRawPath:
+              index === 0
+                ? "/tmp/markdown-mint-issue119-css-candidate-interaction.json"
+                : undefined,
+          }),
+        );
+      }
+      deep.fullInteraction = {
+        current: compactFullInteractionSummary(
+          summarizeFullInteractionSamples(currentSamples),
+        ),
+        candidate: compactFullInteractionSummary(
+          summarizeFullInteractionSamples(candidateSamples),
+        ),
+      };
+      deep.generatedAt = new Date().toISOString();
+      previousOutput.paintCompositorInvestigation.cssIsolationDeep = deep;
+      previousOutput.measurement.cssFullInvestigationGeneratedAt =
+        deep.generatedAt;
+      previousOutput.measurement.cssFullInvestigationCommitSHA = execFileSync(
+        "git",
+        ["rev-parse", "HEAD"],
+        { cwd: repository, encoding: "utf8" },
+      ).trim();
+      await writeFile(
+        reportPath,
+        `${JSON.stringify(previousOutput, null, 2)}\n`,
+      );
+      const interactionReportPath = resolve(
+        repository,
+        "output/benchmark/issue-119-interaction-investigation.json",
+      );
+      try {
+        const interactionOutput = JSON.parse(
+          await readFile(interactionReportPath, "utf8"),
+        );
+        interactionOutput.paintCompositorInvestigation.cssIsolationDeep = deep;
+        await writeFile(
+          interactionReportPath,
+          `${JSON.stringify(interactionOutput, null, 2)}\n`,
+        );
+      } catch (error) {
+        process.stderr.write(
+          `Could not extend the interaction JSON with full CSS data: ${String(error)}\n`,
+        );
+      }
+      await writeFile(markdownPath, reportMarkdown(previousOutput));
+      process.stdout.write(
+        `\nCSS full-interaction data refreshed: ${reportPath}\nMarkdown: ${markdownPath}\n`,
+      );
+      return;
+    }
+    if (cssOnlyMode) {
+      let previousOutput;
+      try {
+        previousOutput = JSON.parse(await readFile(reportPath, "utf8"));
+      } catch {
+        previousOutput = report;
+      }
+      const deep = await runDeepCssInvestigation(browser, baseScenario);
+      const cssInvestigationCommitSHA = execFileSync(
+        "git",
+        ["rev-parse", "HEAD"],
+        { cwd: repository, encoding: "utf8" },
+      ).trim();
+      previousOutput.paintCompositorInvestigation ??= {};
+      previousOutput.paintCompositorInvestigation.cssIsolationDeep = deep;
+      previousOutput.measurement ??= {};
+      previousOutput.measurement.cssInvestigationGeneratedAt = deep.generatedAt;
+      previousOutput.measurement.cssInvestigationCommitSHA =
+        cssInvestigationCommitSHA;
+      previousOutput.measurement.cssInvestigationChromiumVersion =
+        browser.version();
+      previousOutput.measurement.cssInvestigationRawTraceFiles =
+        deep.rawTraceFiles;
+      previousOutput.environment ??= report.environment;
+      previousOutput.environment.cssInvestigationChromiumVersion =
+        browser.version();
+      await mkdir(dirname(reportPath), { recursive: true });
+      await mkdir(dirname(markdownPath), { recursive: true });
+      await writeFile(
+        reportPath,
+        `${JSON.stringify(previousOutput, null, 2)}\n`,
+      );
+      const interactionReportPath = resolve(
+        repository,
+        "output/benchmark/issue-119-interaction-investigation.json",
+      );
+      try {
+        const interactionOutput = JSON.parse(
+          await readFile(interactionReportPath, "utf8"),
+        );
+        interactionOutput.paintCompositorInvestigation ??= {};
+        interactionOutput.paintCompositorInvestigation.cssIsolationDeep = deep;
+        interactionOutput.measurement ??= {};
+        interactionOutput.measurement.cssInvestigationCommitSHA =
+          cssInvestigationCommitSHA;
+        interactionOutput.measurement.cssInvestigationChromiumVersion =
+          browser.version();
+        await writeFile(
+          interactionReportPath,
+          `${JSON.stringify(interactionOutput, null, 2)}\n`,
+        );
+      } catch (error) {
+        process.stderr.write(
+          `Could not extend the interaction JSON with CSS investigation: ${String(error)}\n`,
+        );
+      }
+      previousOutput.generatedAt = deep.generatedAt;
+      await writeFile(markdownPath, reportMarkdown(previousOutput));
+      process.stdout.write(
+        `\nCSS investigation JSON: ${reportPath}\nExtended interaction JSON: ${interactionReportPath}\nMarkdown: ${markdownPath}\n`,
+      );
+      process.stdout.write(`${deep.conclusion}\n`);
+      return;
+    }
     const byRows = new Map();
     const iterationSizes = smokeMode
       ? [100]
@@ -1635,6 +2946,10 @@ async function main() {
             scrollPreparationMs,
             saveRaw: bodyRows === 2000 && index === 0,
           });
+          const renderStyle = await captureRenderStyleSnapshot(page, {
+            bodyRow: 1,
+            column: 0,
+          });
           const initialSample = {
             mode: "proseMirror",
             bodyRows,
@@ -1643,15 +2958,40 @@ async function main() {
             target: rowInfo,
             editorReadyMs: page.__editorReadyAt - page.__navigationStartedAt,
             scrollPreparationMs,
+            initialTableStyle: page.__editorShape.initialTableStyle,
+            computedTableStyle: renderStyle.table,
+            renderStyle,
             click: first,
-            computedTableStyle: page.__editorShape.tableStyle,
           };
           samples.push(initialSample);
           if (bodyRows === 2000) {
+            const firstClickResolvedAt = performance.now();
+            const settled = await waitForPaintSettled(page);
+            const repeatClickRequestedAt = performance.now();
             const repeat = await clickSample(page, locator);
             repeated.push({
               firstSelectionClick: first,
               repeatSameCellClick: repeat,
+              settle: {
+                firstClickResolvedAt,
+                settledAt: settled.settledAt,
+                settleWaitMs: settled.waitedMs,
+                timedOut: settled.timedOut,
+                repeatClickRequestedAt,
+                repeatPointerMoveAt:
+                  repeat.interaction.eventTimeline.find(
+                    (event) => event.type === "pointermove",
+                  )?.at ?? null,
+                repeatPointerDownAt:
+                  repeat.interaction.eventTimeline.find(
+                    (event) => event.type === "pointerdown",
+                  )?.at ?? null,
+                repeatClickEventAt:
+                  repeat.interaction.eventTimeline.find(
+                    (event) => event.type === "click",
+                  )?.at ?? null,
+                repeatResolvedAt: performance.now(),
+              },
             });
           }
           if (bodyRows === 2000 && index === 0) {

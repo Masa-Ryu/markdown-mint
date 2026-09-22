@@ -767,6 +767,13 @@ async function typeAndWaitForReflection(page) {
   );
   return page.evaluate(() => {
     const tasks = window.__mmPostMutationLongTasks;
+    const mutationAt = window.__mmDomMutationAt;
+    const overlapDuration = (task) => {
+      if (!Number.isFinite(mutationAt)) return 0;
+      const taskStart = task.startTime;
+      const taskEnd = task.startTime + task.duration;
+      return Math.max(0, taskEnd - Math.max(taskStart, mutationAt));
+    };
     return {
       startedAt: window.__mmInputStartAt,
       callStartedAt: window.__mmInputCallStartedAt ?? null,
@@ -781,6 +788,14 @@ async function typeAndWaitForReflection(page) {
         (total, task) => total + task.duration,
         0,
       ),
+      tasksOverlappingPostMutationTotalDurationMs: tasks.reduce(
+        (total, task) => total + overlapDuration(task),
+        0,
+      ),
+      postMutationLongTasksWithOverlap: tasks.map((task) => ({
+        ...task,
+        overlapDurationMs: overlapDuration(task),
+      })),
       inputToFirstIdleMs: window.__mmInputFirstIdleAt - window.__mmInputStartAt,
       postMutationLongTasks: tasks,
     };
@@ -858,6 +873,10 @@ async function collectSample(browser, scenario, kind, options = {}) {
           reflection.postMutationLongestTaskMs;
         timings.postMutationLongTaskTotalMs =
           reflection.postMutationLongTaskTotalMs;
+        timings.tasksOverlappingPostMutationTotalDurationMs =
+          reflection.tasksOverlappingPostMutationTotalDurationMs;
+        timings.postMutationLongTasksWithOverlap =
+          reflection.postMutationLongTasksWithOverlap;
         timings.inputToFirstIdleMs = reflection.inputToFirstIdleMs;
         timings.postMutationLongTasks = reflection.postMutationLongTasks;
       }

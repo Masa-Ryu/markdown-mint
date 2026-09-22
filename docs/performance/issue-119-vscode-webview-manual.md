@@ -11,6 +11,18 @@ The current benchmark machine reported that macOS is locked, so this run could n
 5. In the Performance trace, inspect the click interval and main-thread tasks for `RunTask`, `WebFrameWidgetImpl::UpdateLifecycle`, `LocalFrameView::RunPaintLifecyclePhase`, `LocalFrameView::pushPaintArtifactToCompositor`, `Layerize`, and `PaintArtifactCompositor::Update`. Record the longest task and its nested lifecycle events.
 6. Repeat by clicking `R0001C01` again without changing cells. Compare the first and repeat clicks.
 
+## Candidate CSS A/B check
+
+The headless investigation identified the following benchmark-only candidate. It has not been applied to `media/document.css`:
+
+```css
+.mm-document-content table {
+  overflow-x: visible !important;
+}
+```
+
+To compare it in VS Code, record the Current click first, paste the snippet into the Webview Developer Tools Console, wait for two animation frames, and repeat the same-cell click and Performance recording. Restore the page or reload the document before treating the second result as a separate Current run. Record whether the candidate changes `PaintArtifactCompositor::Update`; do not claim native Webview reproduction or improvement unless these steps are completed in VS Code.
+
 ## Record
 
 | Field                                                  | Value    |

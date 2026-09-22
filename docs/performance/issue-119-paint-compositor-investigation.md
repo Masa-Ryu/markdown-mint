@@ -4,11 +4,11 @@ Generated: 2026-09-22T12:42:13.319Z
 
 ## Measurement corrections
 
-**phase attribution:** Events and PM selection transactions capture the active phase and phase-specific start at dispatch time. clickStartedAt, endStartedAt, inputStartedAt, and directSelectionStartedAt are independent fields; no post-hoc phase guessing is applied. Companion input PM-selection offsets from inputStartedAt were [69.79999999701977,61.899999998509884,7633.30000000447] ms, including one delayed event still classified as input.
+**phase attribution:** Events and PM selection transactions capture the active phase and phase-specific start at dispatch time. clickStartedAt, endStartedAt, inputStartedAt, and directSelectionStartedAt are independent fields; no post-hoc phase guessing is applied. Companion input PM-selection offsets from inputStartedAt were [60.5,7519.0999999940395,7497.399999991059] ms, including one delayed event still classified as input.
 
 **End validation:** Real End moved the target-cell caret in 0/3 trials. The first failed sample stayed PM 146 / DOM offset 0; direct PM-end validation moved PM 146→154, DOM 0→8. The direct caret landed at the end of the 8-character target cell. Absolute PM positions depend on the benchmark document shape. Failed End attempts are excluded from successful-caret latency summaries.
 
-**DOM mutation vs settled:** Companion current-input run (2026-09-22T12:32:50.361Z) p50: input → DOM mutation 255.9 ms, post-mutation longest task 7589.0 ms, post-mutation long-task total 15288.0 ms, input → first idle 15400.6 ms. DOM mutation therefore did not mean the browser had settled. The idle marker uses requestIdleCallback (or two animation frames when unavailable).
+**DOM mutation vs settled:** Companion current-input run (2026-09-22T23:14:01.780Z) p50: input → DOM mutation 278.8 ms, post-mutation longest task 7438.0 ms, task duration overlapping after mutation 7566.2 ms, legacy post-mutation task total 7850.0 ms, input → first idle 7892.6 ms. DOM mutation therefore did not mean the browser had settled. The overlap metric clips each task at the mutation timestamp; the legacy total is retained for JSON compatibility. The idle marker uses requestIdleCallback (or two animation frames when unavailable).
 
 ## Scaling
 
@@ -40,6 +40,108 @@ Generated: 2026-09-22T12:42:13.319Z
 **Minimal CSS:** 3 samples; click p50 488.9 ms; PaintArtifactCompositor::Update p50 20.8 ms.
 
 **Relevant properties:** Minimal CSS reduced the lifecycle pause; none of 9 individually restored properties reproduced it (largest one-sample PaintArtifactCompositor::Update 22.4 ms). A property combination or an untested CSS rule remains unisolated. Each restoration was screened once: display:block: click 531.8 ms, Update 20.4 ms, Layerize 20.4 ms; width:max-content: click 527.3 ms, Update 16.5 ms, Layerize 16.5 ms; min-width:100% + max-width:100%: click 515.2 ms, Update 20.8 ms, Layerize 20.8 ms; border-collapse:collapse: click 534.0 ms, Update 22.4 ms, Layerize 22.4 ms; overflow-x:auto: click 514.3 ms, Update 20.5 ms, Layerize 20.5 ms; cell min-width:5em: click 468.3 ms, Update 22.3 ms, Layerize 22.3 ms; cell padding:7px 10px: click 403.7 ms, Update 13.6 ms, Layerize 13.6 ms; cell border: click 444.8 ms, Update 18.9 ms, Layerize 18.9 ms; vertical-align:top: click 530.4 ms, Update 20.7 ms, Layerize 20.7 ms.
+
+## Effective style verification
+
+**Current:** click p50 8004.6 ms, PAC p50 7398.6 ms, Layerize p50 7398.6 ms (slow)
+
+**Minimal:** click p50 503.7 ms, PAC p50 20.6 ms, Layerize p50 20.6 ms (fast)
+
+Minimal override assertions: **passed**. The post-override snapshot is stored with stage, rich panel, ProseMirror, table, tbody, target row/cell/paragraph styles, non-visible overflow ancestors, and geometry. Current→Minimal differences: 28 computed properties.
+
+| node      | property          | Current                            | Minimal                     |
+| --------- | ----------------- | ---------------------------------- | --------------------------- |
+| richPanel | height            | 119765px                           | 93739.3px                   |
+| editor    | height            | 119765px                           | 93739.3px                   |
+| table     | display           | block                              | table                       |
+| table     | minWidth          | 100%                               | 0px                         |
+| table     | maxWidth          | 100%                               | none                        |
+| table     | margin            | 0px 0px 14px                       | 0px                         |
+| table     | borderSpacing     | 0px                                | 2px                         |
+| table     | borderCollapse    | collapse                           | separate                    |
+| table     | overflowX         | auto                               | visible                     |
+| table     | overflowY         | auto                               | visible                     |
+| tbody     | width             | 1400px                             | 983.25px                    |
+| tbody     | height            | 119600px                           | 93584.9px                   |
+| row       | width             | 1400px                             | 983.25px                    |
+| row       | height            | 59.7812px                          | 44.7812px                   |
+| cell      | minWidth          | 70px                               | 0px                         |
+| cell      | width             | 70px                               | 46.75px                     |
+| cell      | height            | 59.7812px                          | 44.7812px                   |
+| cell      | padding           | 7px 10px                           | 0px                         |
+| cell      | paddingTop        | 7px                                | 0px                         |
+| cell      | paddingRight      | 10px                               | 0px                         |
+| cell      | paddingBottom     | 7px                                | 0px                         |
+| cell      | paddingLeft       | 10px                               | 0px                         |
+| cell      | border            | 1px solid rgba(127, 127, 127, 0.3) | 0px none rgb(212, 212, 212) |
+| cell      | borderTopWidth    | 1px                                | 0px                         |
+| cell      | borderRightWidth  | 1px                                | 0px                         |
+| cell      | borderBottomWidth | 1px                                | 0px                         |
+| cell      | borderLeftWidth   | 1px                                | 0px                         |
+| cell      | verticalAlign     | top                                | middle                      |
+
+## Current → removal screening
+
+| condition                           | properties | class | click p50 | PaintArtifactCompositor::Update p50 |
+| ----------------------------------- | ---------: | ----- | --------: | ----------------------------------: |
+| Minimal + restore tableMargin       |          1 | fast  |  444.6 ms |                             20.3 ms |
+| Minimal + restore borderSpacing     |          1 | fast  |  473.8 ms |                             22.3 ms |
+| Minimal + restore headerBackground  |          1 | fast  |  448.9 ms |                             20.6 ms |
+| Group A: table scroll formatting    |          2 | fast  |  391.5 ms |                             10.8 ms |
+| Group B: table width constraints    |          3 | slow  | 8003.9 ms |                           7353.3 ms |
+| Group C: A + B                      |          5 | fast  |  408.0 ms |                             10.7 ms |
+| Group D: separate border model      |          2 | slow  | 8091.7 ms |                           7420.0 ms |
+| Group E: cell box model             |          4 | fast  |  457.0 ms |                             22.4 ms |
+| Group F: header background          |          1 | slow  | 8060.8 ms |                           7453.8 ms |
+| Group G: full table formatting only |          8 | fast  |  386.1 ms |                              9.5 ms |
+| Group H: full cell formatting only  |          5 | fast  |  456.9 ms |                             21.8 ms |
+
+## Delta debugging
+
+**Slow set:** Current CSS; **fast set:** Minimal CSS and any condition classified below 500 ms.
+**Minimal reproducing property set:** Delta: overflowOnly (1 properties). Other singleton fast screenings: Delta: displayOnly, Minimal + restore tableMargin, Minimal + restore headerBackground, Minimal + restore borderSpacing; these remain screening results unless separately A/B/A-confirmed.
+
+| delta condition            | properties | class | click p50 | PaintArtifactCompositor::Update p50 |
+| -------------------------- | ---------: | ----- | --------: | ----------------------------------: |
+| Delta: displayOnly         |          1 | fast  |  396.7 ms |                             11.2 ms |
+| Delta: overflowOnly        |          1 | fast  |  429.0 ms |                             11.1 ms |
+| Delta: widthOnly           |          1 | slow  | 8028.6 ms |                           7419.4 ms |
+| Delta: minMaxWidthOnly     |          2 | fast  |  393.5 ms |                              5.9 ms |
+| Delta: displayPlusOverflow |          2 | fast  |  396.3 ms |                             10.7 ms |
+| Delta: displayPlusWidth    |          2 | fast  |  389.8 ms |                             10.9 ms |
+| Delta: overflowPlusWidth   |          2 | fast  |  390.1 ms |                             11.0 ms |
+
+## A/B/A confirmation
+
+**Current:** click p50 8000.9 ms, PAC p50 7400.8 ms, Layerize p50 7400.8 ms (slow)
+
+**Candidate:** click p50 391.4 ms, PAC p50 10.7 ms, Layerize p50 10.7 ms (fast)
+
+**Current again:** click p50 8030.4 ms, PAC p50 7418.2 ms, Layerize p50 7418.2 ms (slow)
+
+**Verdict:** **causal CSS candidate**. Representative PAC traces: 7400.8 ms → 10.7 ms → 7418.2 ms. Raw trace paths: /tmp/markdown-mint-issue119-css-current-a.json, /tmp/markdown-mint-issue119-css-candidate.json, /tmp/markdown-mint-issue119-css-current-b.json.
+
+**Lifecycle trace summary:** Current A UpdateLifecycle 7514.2 ms, RunPaint 7496.9 ms, push 7400.8 ms, Layerize 7400.8 ms; candidate UpdateLifecycle 45.4 ms, RunPaint 21.1 ms, push 10.7 ms, Layerize 10.7 ms; Current again UpdateLifecycle 7539.1 ms.
+
+**VS Code DevTools candidate snippet:** <code>.mm-document-content table{overflow-x:visible!important}</code>.
+
+## Position verification
+
+| target  | Current                                                                       | Candidate                                                        |
+| ------- | ----------------------------------------------------------------------------- | ---------------------------------------------------------------- |
+| row1    | click p50 8084.9 ms, PAC p50 7429.1 ms, Layerize p50 7429.1 ms (slow)         | click p50 420.5 ms, PAC p50 10.8 ms, Layerize p50 10.8 ms (fast) |
+| row1000 | click p50 2501.9 ms, PAC p50 1867.7 ms, Layerize p50 1867.7 ms (intermediate) | click p50 424.0 ms, PAC p50 9.7 ms, Layerize p50 9.7 ms (fast)   |
+| row2000 | click p50 650.4 ms, PAC p50 4.9 ms, Layerize p50 9.4 ms (fast)                | click p50 420.3 ms, PAC p50 0.2 ms, Layerize p50 0.3 ms (fast)   |
+
+## Full interaction verification
+
+**Current:** click 7930.5 ms, input→DOM 245.0 ms, input→first idle 15400.8 ms, total 39092.9 ms, post-mutation PAC 7334.8 ms.
+
+**Candidate:** click 401.1 ms, input→DOM 241.7 ms, input→first idle 614.8 ms, total 3203.3 ms, post-mutation PAC 10.4 ms.
+
+## CSS investigation conclusion
+
+A/B/A confirms Delta: overflowOnly as a causal CSS candidate: Current is slow, the candidate is fast, Current again is slow, and the representative compositor traces change in the same direction.
 
 ## Selection trigger
 
@@ -88,7 +190,7 @@ This report contains measurements only. No permanent CSS, table, ProseMirror, or
 ## Conditions and environment
 
 - Branch: codex/issue-119-editor-performance
-- Measurement base commit SHA: c099a327e4f4c2f6e4c7b0b3b116e393438802e4; instrumentation commit SHA: 25a9e06007088f24ed5f4941dd88cf9288cf33e6.
+- Measurement base commit SHA: c099a327e4f4c2f6e4c7b0b3b116e393438802e4; instrumentation commit SHA: e87be434c8f8c89a92ebaec7f0f8c12d96e0a55b.
 - Capture source note: Only derived aggregation and report labels were corrected after timing capture; browser interaction paths and captured measurements were unchanged.
 - Fixture: tests/github-markdown-test-suite/stress/github-table-2000x20.md; 2000 body rows × 20 columns; 434328 bytes; 40020 body/header cells.
 - Chromium: 153.0.8010.12; OS: Darwin 25.6.0; CPU: Apple M1 Pro (10 logical CPUs); Node v24.5.0.
