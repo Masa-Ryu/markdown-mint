@@ -51,8 +51,8 @@ import {
   type WorkspaceFileSearchResultMessage,
 } from "../shared/protocol";
 import {
-  editorPerformanceBenchmarkEnabled,
   measureEditorPerformance,
+  recordEditorPerformanceDuration,
 } from "../shared/performanceBenchmark";
 import { isWorkspaceFileSearchQuery } from "../shared/workspaceFileSearch";
 import {
@@ -4020,11 +4020,11 @@ export class MarkdownEditorApp {
   }
 
   private dispatchTransaction(tr: Transaction): boolean {
-    if (!editorPerformanceBenchmarkEnabled)
-      return this.dispatchTransactionInternal(tr);
-    return measureEditorPerformance("editor.dispatchTransaction", () =>
-      this.dispatchTransactionInternal(tr),
-    );
+    if (__MM_EDITOR_PERFORMANCE_BENCHMARK__)
+      return measureEditorPerformance("editor.dispatchTransaction", () =>
+        this.dispatchTransactionInternal(tr),
+      );
+    return this.dispatchTransactionInternal(tr);
   }
 
   private dispatchTransactionInternal(tr: Transaction): boolean {
@@ -4043,7 +4043,7 @@ export class MarkdownEditorApp {
       !this.spreadsheetPasteWithinMarkdownLimit(tr, committedTransient)
     )
       return false;
-    const applied = editorPerformanceBenchmarkEnabled
+    const applied = __MM_EDITOR_PERFORMANCE_BENCHMARK__
       ? measureEditorPerformance("editor.applyTransaction", () =>
           this.view.state.applyTransaction(tr),
         )
@@ -10450,6 +10450,19 @@ export class MarkdownEditorApp {
     options: { allowReveal?: boolean } = {},
   ): void {
     if (this.destroyed || !this.tableToolbar || !this.view) return;
+    if (__MM_EDITOR_PERFORMANCE_BENCHMARK__) {
+      measureEditorPerformance("editor.updateTableToolbar", () =>
+        this.updateTableToolbarInternal(selection, options),
+      );
+      return;
+    }
+    this.updateTableToolbarInternal(selection, options);
+  }
+
+  private updateTableToolbarInternal(
+    selection: Selection,
+    options: { allowReveal?: boolean },
+  ): void {
     const activePreview = this.tableDeletePreviewAction;
     this.clearTableDeletePreview();
     const updateAlignmentState = (
@@ -10472,7 +10485,15 @@ export class MarkdownEditorApp {
       !this.syncPaused &&
       this.mode === "rich" &&
       this.profile !== "commonmark";
-    const context = canShow ? tableContext(selection) : null;
+    let context: TableContext | null = null;
+    if (canShow) {
+      context = __MM_EDITOR_PERFORMANCE_BENCHMARK__
+        ? measureEditorPerformance(
+            "editor.updateTableToolbar.tableContext",
+            () => tableContext(selection),
+          )
+        : tableContext(selection);
+    }
     if (
       canShow &&
       context &&
@@ -10511,12 +10532,15 @@ export class MarkdownEditorApp {
       this.clearTableDeletePreview();
       updateAlignmentState(null);
       this.tableToolbar.removeAttribute("data-table-pos");
-      this.updateTableNumberingState(null);
+      this.updateTableNumberingStateForToolbar(null);
       return;
     }
 
     // A null alignment is Markdown's default left alignment. Show a pressed
     // state only when every cell in the selected column(s) agrees.
+    const alignmentStartedAt = __MM_EDITOR_PERFORMANCE_BENCHMARK__
+      ? this.view.dom.ownerDocument.defaultView?.performance.now()
+      : undefined;
     const alignments = new Set<"left" | "center" | "right">();
     for (let row = 0; row < context.map.height; row += 1) {
       for (
@@ -10533,13 +10557,35 @@ export class MarkdownEditorApp {
         );
       }
     }
+    if (
+      __MM_EDITOR_PERFORMANCE_BENCHMARK__ &&
+      alignmentStartedAt !== undefined
+    ) {
+      recordEditorPerformanceDuration(
+        "editor.updateTableToolbar.alignmentScan",
+        (this.view.dom.ownerDocument.defaultView?.performance.now() ??
+          alignmentStartedAt) - alignmentStartedAt,
+      );
+    }
     updateAlignmentState(
       alignments.size === 1 ? ([...alignments][0] ?? null) : null,
     );
 
     this.tableToolbar.dataset.tablePos = String(context.tableStart - 1);
-    this.updateTableNumberingState(context);
+    this.updateTableNumberingStateForToolbar(context);
     if (activePreview) this.showTableDeletePreview(activePreview);
+  }
+
+  private updateTableNumberingStateForToolbar(
+    context: TableContext | null,
+  ): void {
+    if (__MM_EDITOR_PERFORMANCE_BENCHMARK__) {
+      measureEditorPerformance("editor.updateTableToolbar.numberingState", () =>
+        this.updateTableNumberingState(context),
+      );
+      return;
+    }
+    this.updateTableNumberingState(context);
   }
 
   private postReady(): void {

@@ -132,7 +132,234 @@ function summarizeHookSamples(samples) {
   );
 }
 
-async function createPage(browser, scenario, mode = "rich") {
+const stressInteractionPhaseNames = [
+  "navigationToEditorReadyMs",
+  "editorReadyToTargetFoundMs",
+  "targetFoundToVisibleMs",
+  "visibleToClickCompleteMs",
+  "clickToCaretReadyMs",
+  "caretReadyToInputStartMs",
+  "inputStartToDomReflectionMs",
+  "totalInputAcceptedMs",
+];
+
+function summarizeStressPhases(samples) {
+  return Object.fromEntries(
+    stressInteractionPhaseNames.map((name) => [
+      name,
+      summarize(samples.map((sample) => sample.interactionPhases[name])),
+    ]),
+  );
+}
+
+function summarizeNamedTiming(samples, name) {
+  const values = samples.flatMap((sample) => sample[name] ?? []);
+  return {
+    calls: values.length,
+    totalMs: values.reduce((total, value) => total + value, 0),
+    maxMs: values.length ? Math.max(...values) : 0,
+  };
+}
+
+function counterValues(samples, name) {
+  return samples.flatMap((sample) => sample[name] ?? []);
+}
+
+function summarizeCounterTotal(samples, name) {
+  const values = counterValues(samples, name);
+  return {
+    total: values.reduce((total, value) => total + value, 0),
+    sampleCount: values.length,
+    maxPerCall: values.length ? Math.max(...values) : 0,
+  };
+}
+
+function summarizeTableControls(metricsSamples, counterSamples) {
+  const operation = (name) => summarizeNamedTiming(metricsSamples, name);
+  const segment = (name) => summarizeNamedTiming(metricsSamples, name);
+  const rowHandleCounts = summarizeCounterTotal(
+    counterSamples,
+    "tableControls.renderTarget.rowHandleCount",
+  );
+  const columnHandleCounts = summarizeCounterTotal(
+    counterSamples,
+    "tableControls.renderTarget.columnHandleCount",
+  );
+  const measuredRows = summarizeCounterTotal(
+    counterSamples,
+    "tableControls.measureLayout.rowsMeasured",
+  );
+  const measuredCells = summarizeCounterTotal(
+    counterSamples,
+    "tableControls.measureLayout.cellsMeasured",
+  );
+  const rectCalls = summarizeCounterTotal(
+    counterSamples,
+    "tableControls.measureLayout.getBoundingClientRectCalls",
+  );
+  const sameNodeScanOrdinals = counterValues(
+    counterSamples,
+    "tableCommands.supportsDirectTableOperations.sameNodeScanOrdinal",
+  );
+  return {
+    update: operation("tableControls.update"),
+    renderTarget: {
+      ...operation("tableControls.renderTarget"),
+      rowHandleCount: rowHandleCounts.maxPerCall,
+      rowHandleCountTotal: rowHandleCounts.total,
+      columnHandleCount: columnHandleCounts.maxPerCall,
+      columnHandleCountTotal: columnHandleCounts.total,
+    },
+    measureLayout: {
+      ...operation("tableControls.measureLayout"),
+      rowsMeasured: measuredRows.total,
+      rowsMeasuredPerLayoutMax: measuredRows.maxPerCall,
+      cellsMeasured: measuredCells.total,
+      cellsMeasuredPerLayoutMax: measuredCells.maxPerCall,
+      getBoundingClientRectCalls: rectCalls.total,
+      getBoundingClientRectCallsPerLayoutMax: rectCalls.maxPerCall,
+      tableAndStageRectMs: segment(
+        "tableControls.measureLayout.tableAndStageRect",
+      ),
+      cellRectCollectionMs: segment(
+        "tableControls.measureLayout.cellRectCollection",
+      ),
+      boundaryCalculationMs: segment(
+        "tableControls.measureLayout.boundaryCalculation",
+      ),
+      controlPositioningMs: segment(
+        "tableControls.measureLayout.controlPositioning",
+      ),
+      presentationUpdateMs: segment(
+        "tableControls.measureLayout.presentationUpdate",
+      ),
+    },
+    supportsDirectTableOperations: {
+      ...operation("tableCommands.supportsDirectTableOperations"),
+      cellsVisited: summarizeCounterTotal(
+        counterSamples,
+        "tableCommands.supportsDirectTableOperations.cellsVisited",
+      ).total,
+      maxSameNodeFullScans: sameNodeScanOrdinals.length
+        ? Math.max(...sameNodeScanOrdinals)
+        : 0,
+      repeatedSameNodeScans: sameNodeScanOrdinals.filter(
+        (ordinal) => ordinal > 1,
+      ).length,
+    },
+    updateTableToolbar: {
+      ...operation("editor.updateTableToolbar"),
+      tableContextMs: segment("editor.updateTableToolbar.tableContext"),
+      alignmentScanMs: segment("editor.updateTableToolbar.alignmentScan"),
+      numberingStateMs: segment("editor.updateTableToolbar.numberingState"),
+    },
+  };
+}
+
+function summarizeLongTaskWindow(samples, startName, endName) {
+  const overlaps = [];
+  for (const sample of samples) {
+    if (!sample.longTasks.supported) continue;
+    const start = sample.milestoneTimes[startName];
+    const end = sample.milestoneTimes[endName];
+    if (start === undefined || end === undefined || end <= start) continue;
+    for (const task of sample.longTasks.entries) {
+      const overlap = Math.max(
+        0,
+        Math.min(task.startTime + task.duration, end) -
+          Math.max(task.startTime, start),
+      );
+      if (overlap > 0) overlaps.push(overlap);
+    }
+  }
+  return {
+    count: overlaps.length,
+    totalDurationMs: overlaps.reduce((total, value) => total + value, 0),
+    longestMs: overlaps.length ? Math.max(...overlaps) : 0,
+  };
+}
+
+function summarizeLongTasks(samples) {
+  const supportedSamples = samples.filter(
+    (sample) => sample.longTasks.supported,
+  ).length;
+  const allTasks = samples.flatMap((sample) =>
+    sample.longTasks.supported ? sample.longTasks.entries : [],
+  );
+  return {
+    observerSupportedSamples: supportedSamples,
+    sampleCount: samples.length,
+    count: allTasks.length,
+    longestMs: allTasks.length
+      ? Math.max(...allTasks.map((task) => task.duration))
+      : 0,
+    totalDurationMs: allTasks.reduce((total, task) => total + task.duration, 0),
+    editorReadyToTargetVisible: summarizeLongTaskWindow(
+      samples,
+      "editorReadyAt",
+      "visibleAt",
+    ),
+    targetVisibleToClickComplete: summarizeLongTaskWindow(
+      samples,
+      "visibleAt",
+      "clickCompleteAt",
+    ),
+    clickCompleteToInputStart: summarizeLongTaskWindow(
+      samples,
+      "clickCompleteAt",
+      "inputStartAt",
+    ),
+    inputStartToDomReflection: summarizeLongTaskWindow(
+      samples,
+      "inputStartAt",
+      "domReflectionAt",
+    ),
+  };
+}
+
+function summarizeStressSamples(samples) {
+  const metrics = samples.map((sample) => sample.metrics);
+  const counters = samples.map((sample) => sample.counters);
+  return {
+    sampleCount: samples.length,
+    totalInputAcceptedMs: summarize(
+      samples.map((sample) => sample.interactionPhases.totalInputAcceptedMs),
+    ),
+    interactionPhases: summarizeStressPhases(samples),
+    tableControls: summarizeTableControls(metrics, counters),
+    longTasks: summarizeLongTasks(samples),
+    tableLayout: samples.map(
+      (sample) => sample.tableLayout?.tableLayout ?? null,
+    ),
+    tableWidth: samples.map((sample) => sample.tableLayout?.tableWidth ?? null),
+  };
+}
+
+function summarizeGeometrySamples(samples) {
+  const metrics = samples.map((sample) => sample.metrics);
+  const counters = samples.map((sample) => sample.counters);
+  return {
+    sampleCount: samples.length,
+    navigationToEditorReadyMs: summarize(
+      samples.map((sample) => sample.navigationToEditorReadyMs),
+    ),
+    editorReadyToTargetFoundMs: summarize(
+      samples.map((sample) => sample.editorReadyToTargetFoundMs),
+    ),
+    targetFoundToGeometryMs: summarize(
+      samples.map((sample) => sample.targetFoundToGeometryMs),
+    ),
+    getBoundingClientRectMs: summarize(
+      samples.map((sample) => sample.getBoundingClientRectMs),
+    ),
+    tableLayout: samples.map((sample) => sample.tableLayout),
+    tableWidth: samples.map((sample) => sample.tableWidth),
+    tableControls: summarizeTableControls(metrics, counters),
+    longTasks: summarizeLongTasks(samples),
+  };
+}
+
+async function createPage(browser, scenario, mode = "rich", options = {}) {
   const page = await browser.newPage({
     viewport: { width: 1280, height: 900 },
     deviceScaleFactor: 1,
@@ -141,21 +368,29 @@ async function createPage(browser, scenario, mode = "rich") {
     scenario.category === "stress-only" ? 120_000 : 30_000,
   );
   await page.addInitScript(
-    ({ initialMarkdown, profile }) => {
+    ({ initialMarkdown, profile, benchmarkOptions }) => {
       window.__markdownMintBenchmarkInitialMarkdown = initialMarkdown;
+      window.__markdownMintPerformanceBenchmarkOptions = benchmarkOptions;
       const phases = Object.create(null);
+      const counters = Object.create(null);
       let activePhase = "startup";
       window.__markdownMintPerformanceBenchmark = {
         record(name, durationMilliseconds) {
           const phase = (phases[activePhase] ??= Object.create(null));
           (phase[name] ??= []).push(durationMilliseconds);
         },
+        count(name, value) {
+          const phase = (counters[activePhase] ??= Object.create(null));
+          (phase[name] ??= []).push(value);
+        },
         setPhase(nextPhase) {
           activePhase = nextPhase;
           phases[activePhase] ??= Object.create(null);
+          counters[activePhase] ??= Object.create(null);
         },
         clearPhase(phaseName) {
           phases[phaseName] = Object.create(null);
+          counters[phaseName] = Object.create(null);
         },
         snapshot(phaseName) {
           const phase = phases[phaseName] ?? {};
@@ -166,17 +401,58 @@ async function createPage(browser, scenario, mode = "rich") {
             ]),
           );
         },
+        counterSnapshot(phaseName) {
+          const phase = counters[phaseName] ?? {};
+          return Object.fromEntries(
+            Object.entries(phase).map(([name, values]) => [
+              name,
+              values.slice(),
+            ]),
+          );
+        },
       };
       window.__markdownMintBenchmarkNavigationStartedAt = performance.now();
       window.__markdownMintBenchmarkProfile = profile;
+      const longTaskEntries = [];
+      let longTaskObserverSupported = false;
+      try {
+        longTaskObserverSupported =
+          typeof PerformanceObserver !== "undefined" &&
+          PerformanceObserver.supportedEntryTypes?.includes("longtask") ===
+            true;
+        if (longTaskObserverSupported) {
+          const observer = new PerformanceObserver((list) => {
+            for (const entry of list.getEntries())
+              longTaskEntries.push({
+                startTime: entry.startTime,
+                duration: entry.duration,
+              });
+          });
+          observer.observe({ type: "longtask", buffered: true });
+        }
+      } catch {
+        longTaskObserverSupported = false;
+      }
+      window.__markdownMintBenchmarkLongTasks = {
+        supported: longTaskObserverSupported,
+        entries: longTaskEntries,
+      };
     },
-    { initialMarkdown: scenario.markdown, profile: scenario.profile },
+    {
+      initialMarkdown: scenario.markdown,
+      profile: scenario.profile,
+      benchmarkOptions: {
+        disableTableControls: options.disableTableControls === true,
+      },
+    },
   );
   const params = new URLSearchParams();
   if (mode === "preview") params.set("mode", "preview");
+  if (options.fixedLayout) params.set("experimentalFixedLayout", "1");
   await page.goto(`${baseUrl}/${params.size ? `?${params}` : ""}`, {
     waitUntil: "domcontentloaded",
   });
+  let editorReadyAt;
   if (mode === "preview") {
     await page.waitForFunction(
       () =>
@@ -185,14 +461,25 @@ async function createPage(browser, scenario, mode = "rich") {
         document.querySelector('[data-testid="preview-content"]')
           .childElementCount > 0,
     );
+    editorReadyAt = await page.evaluate(() => performance.now());
   } else {
-    await page.waitForFunction(
-      () =>
+    const readyHandle = await page.waitForFunction(() => {
+      const ready =
         window.markdownMint?.initialized === true &&
         window.markdownMint.view?.dom?.isContentEditable === true &&
-        !window.markdownMint.view.dom.closest('[data-panel="rich"]').hidden,
-    );
+        !window.markdownMint.view.dom.closest('[data-panel="rich"]').hidden;
+      return ready ? performance.now() : false;
+    });
+    editorReadyAt = await readyHandle.jsonValue();
+    await readyHandle.dispose();
   }
+  const navigationStartedAt = await page.evaluate(
+    () => window.__markdownMintBenchmarkNavigationStartedAt,
+  );
+  page.__markdownMintBenchmarkTimes = {
+    navigationStartedAt,
+    editorReadyAt,
+  };
   const initial = await page.evaluate(() => ({
     appMarkdown: window.markdownMint.sourceEl.value,
     hostMarkdown: window.__markdownMintHarness.document.markdown,
@@ -300,6 +587,245 @@ async function collectStartupSample(browser, scenario) {
   } finally {
     await page.close();
   }
+}
+
+async function collectStressInputSample(browser, scenario, options = {}) {
+  const page = await createPage(browser, scenario, "rich", options);
+  try {
+    const { navigationStartedAt, editorReadyAt } =
+      page.__markdownMintBenchmarkTimes;
+    const target = page.locator(`${richEditor} table tbody td`).first();
+    const targetState = await target.evaluate((element) => {
+      const table = element.closest("table");
+      const row = element.parentElement;
+      const before = element.textContent ?? "";
+      const targetDescriptor = {
+        table,
+        rowIndex: row?.rowIndex ?? -1,
+        cellIndex: element.cellIndex,
+        expected: `${before}z`,
+      };
+      window.__markdownMintBenchmarkTargetDescriptor = targetDescriptor;
+      const observer = new MutationObserver(() => {
+        const current =
+          targetDescriptor.table?.rows[targetDescriptor.rowIndex]?.cells[
+            targetDescriptor.cellIndex
+          ];
+        if (current?.textContent !== targetDescriptor.expected) return;
+        window.__markdownMintBenchmarkDomReflectionAt = performance.now();
+        observer.disconnect();
+      });
+      if (table)
+        observer.observe(table, {
+          subtree: true,
+          childList: true,
+          characterData: true,
+        });
+      return { before, targetFoundAt: performance.now() };
+    });
+    await target.waitFor({ state: "visible" });
+    const visibleAt = await page.evaluate(() => performance.now());
+    await target.click();
+    const clickCompleteAt = await page.evaluate(() => performance.now());
+    await page.keyboard.press("End");
+    const caretReadyAt = await page.evaluate(() => performance.now());
+    const inputStartAt = await page.evaluate(() => {
+      const startedAt = performance.now();
+      window.__markdownMintBenchmarkInputStartAt = startedAt;
+      return startedAt;
+    });
+    await page.keyboard.type("z");
+    const reflectionHandle = await page.waitForFunction(() => {
+      const reflectedAt = window.__markdownMintBenchmarkDomReflectionAt;
+      return typeof reflectedAt === "number" ? reflectedAt : false;
+    });
+    const domReflectionAt = await reflectionHandle.jsonValue();
+    await reflectionHandle.dispose();
+
+    const interactionPhases = {
+      navigationToEditorReadyMs: editorReadyAt - navigationStartedAt,
+      editorReadyToTargetFoundMs: targetState.targetFoundAt - editorReadyAt,
+      targetFoundToVisibleMs: visibleAt - targetState.targetFoundAt,
+      visibleToClickCompleteMs: clickCompleteAt - visibleAt,
+      clickToCaretReadyMs: caretReadyAt - clickCompleteAt,
+      caretReadyToInputStartMs: inputStartAt - caretReadyAt,
+      inputStartToDomReflectionMs: domReflectionAt - inputStartAt,
+      totalInputAcceptedMs: domReflectionAt - navigationStartedAt,
+    };
+
+    await waitForHostSync(page);
+    await waitForCompatibility(page, "startup");
+    await page.evaluate(
+      () =>
+        new Promise((resolveFrame) =>
+          requestAnimationFrame(() => requestAnimationFrame(resolveFrame)),
+        ),
+    );
+    const [metrics, counters, longTasks, tableLayout] = await page.evaluate(
+      () => {
+        const table = document.querySelector(
+          ".mm-rich-panel .ProseMirror table",
+        );
+        return [
+          window.__markdownMintPerformanceBenchmark.snapshot("startup"),
+          window.__markdownMintPerformanceBenchmark.counterSnapshot("startup"),
+          {
+            ...window.__markdownMintBenchmarkLongTasks,
+            entries: window.__markdownMintBenchmarkLongTasks.entries.slice(),
+          },
+          table
+            ? {
+                tableLayout: getComputedStyle(table).tableLayout,
+                tableWidth: getComputedStyle(table).width,
+              }
+            : null,
+        ];
+      },
+    );
+    return {
+      editorReadyMilliseconds: interactionPhases.navigationToEditorReadyMs,
+      inputAcceptedMilliseconds: interactionPhases.totalInputAcceptedMs,
+      interactionPhases,
+      milestoneTimes: {
+        navigationStartedAt,
+        editorReadyAt,
+        targetFoundAt: targetState.targetFoundAt,
+        visibleAt,
+        clickCompleteAt,
+        caretReadyAt,
+        inputStartAt,
+        domReflectionAt,
+      },
+      metrics,
+      counters,
+      longTasks,
+      tableLayout,
+    };
+  } finally {
+    await page.close();
+  }
+}
+
+async function collectGeometryOnlySample(browser, scenario) {
+  const page = await createPage(browser, scenario, "rich", {
+    disableTableControls: true,
+  });
+  try {
+    const { navigationStartedAt, editorReadyAt } =
+      page.__markdownMintBenchmarkTimes;
+    const geometry = await page.evaluate(() => {
+      const target = document.querySelector(
+        ".mm-rich-panel .ProseMirror table tbody td",
+      );
+      const targetFoundAt = performance.now();
+      const rectStartedAt = performance.now();
+      target?.getBoundingClientRect();
+      const rectCompletedAt = performance.now();
+      const table = target?.closest("table");
+      const style = table ? getComputedStyle(table) : null;
+      return {
+        targetFoundAt,
+        rectStartedAt,
+        rectCompletedAt,
+        tableLayout: style?.tableLayout ?? null,
+        tableWidth: style?.width ?? null,
+      };
+    });
+    await page.evaluate(
+      () =>
+        new Promise((resolveFrame) =>
+          requestAnimationFrame(() => requestAnimationFrame(resolveFrame)),
+        ),
+    );
+    const [metrics, counters, longTasks] = await page.evaluate(() => [
+      window.__markdownMintPerformanceBenchmark.snapshot("startup"),
+      window.__markdownMintPerformanceBenchmark.counterSnapshot("startup"),
+      {
+        ...window.__markdownMintBenchmarkLongTasks,
+        entries: window.__markdownMintBenchmarkLongTasks.entries.slice(),
+      },
+    ]);
+    return {
+      navigationToEditorReadyMs: editorReadyAt - navigationStartedAt,
+      editorReadyToTargetFoundMs: geometry.targetFoundAt - editorReadyAt,
+      targetFoundToGeometryMs:
+        geometry.rectCompletedAt - geometry.targetFoundAt,
+      getBoundingClientRectMs:
+        geometry.rectCompletedAt - geometry.rectStartedAt,
+      tableLayout: geometry.tableLayout,
+      tableWidth: geometry.tableWidth,
+      milestoneTimes: {
+        navigationStartedAt,
+        editorReadyAt,
+        targetFoundAt: geometry.targetFoundAt,
+        visibleAt: undefined,
+        clickCompleteAt: undefined,
+        inputStartAt: undefined,
+      },
+      metrics,
+      counters,
+      longTasks,
+    };
+  } finally {
+    await page.close();
+  }
+}
+
+async function runStressIsolationExperiments(
+  browser,
+  scenario,
+  currentSamples,
+) {
+  const tableControlsDisabledSamples = [];
+  const geometryOnlySamples = [];
+  const fixedLayoutSamples = [];
+  for (let index = 0; index < 3; index += 1) {
+    process.stdout.write(`  TableControls disabled sample ${index + 1}/3...\n`);
+    tableControlsDisabledSamples.push(
+      await collectStressInputSample(browser, scenario, {
+        disableTableControls: true,
+      }),
+    );
+  }
+  for (let index = 0; index < 3; index += 1) {
+    process.stdout.write(`  Geometry-only sample ${index + 1}/3...\n`);
+    geometryOnlySamples.push(
+      await collectGeometryOnlySample(browser, scenario),
+    );
+  }
+  for (let index = 0; index < 3; index += 1) {
+    process.stdout.write(
+      `  Experimental fixed-layout sample ${index + 1}/3...\n`,
+    );
+    fixedLayoutSamples.push(
+      await collectStressInputSample(browser, scenario, { fixedLayout: true }),
+    );
+  }
+  return {
+    current: {
+      condition: { css: "current", tableControls: "enabled" },
+      ...summarizeStressSamples(currentSamples),
+    },
+    tableControlsDisabled: {
+      condition: { css: "current", tableControls: "disabled" },
+      ...summarizeStressSamples(tableControlsDisabledSamples),
+    },
+    geometryOnly: {
+      condition: {
+        css: "current",
+        tableControls: "disabled",
+        action: "one target-cell getBoundingClientRect() after editorReady",
+      },
+      ...summarizeGeometrySamples(geometryOnlySamples),
+    },
+    experimentalFixedLayout: {
+      condition: {
+        css: "benchmark-only .mm-document-content table { table-layout: fixed; }",
+        tableControls: "enabled",
+      },
+      ...summarizeStressSamples(fixedLayoutSamples),
+    },
+  };
 }
 
 async function runInputSamples(browser, scenario, targetName) {
@@ -563,6 +1089,25 @@ function printSummary(report) {
     process.stdout.write(
       `  Preview render startup: p50/p95/max ${ms(scenario.preview.previewReadyMilliseconds.p50)} / ${ms(scenario.preview.previewReadyMilliseconds.p95)} / ${ms(scenario.preview.previewReadyMilliseconds.max)} ms; render calls ${scenario.preview.metrics["core.renderMarkdown"]?.callCount ?? 0}\n`,
     );
+    if (scenario.isolationExperiments) {
+      const phases = scenario.startup.interactionPhases;
+      process.stdout.write("  Stress input phases (p50):\n");
+      for (const name of stressInteractionPhaseNames)
+        process.stdout.write(`    ${name}: ${ms(phases[name].p50)} ms\n`);
+      const current = scenario.isolationExperiments.current;
+      const disabled = scenario.isolationExperiments.tableControlsDisabled;
+      const geometry = scenario.isolationExperiments.geometryOnly;
+      const fixed = scenario.isolationExperiments.experimentalFixedLayout;
+      process.stdout.write(
+        `  Isolation p50 total: current ${ms(current.totalInputAcceptedMs.p50)} ms; TableControls disabled ${ms(disabled.totalInputAcceptedMs.p50)} ms; geometry-only ${ms(geometry.getBoundingClientRectMs.p50)} ms; fixed layout ${ms(fixed.totalInputAcceptedMs.p50)} ms\n`,
+      );
+      process.stdout.write(
+        `  TableControls: update ${current.tableControls.update.calls} calls/${ms(current.tableControls.update.totalMs)} ms; measureLayout ${current.tableControls.measureLayout.calls} calls/${ms(current.tableControls.measureLayout.totalMs)} ms/${current.tableControls.measureLayout.getBoundingClientRectCalls} rects; handles row/column ${current.tableControls.renderTarget.rowHandleCount}/${current.tableControls.renderTarget.columnHandleCount}\n`,
+      );
+      process.stdout.write(
+        `  Direct validation: ${current.tableControls.supportsDirectTableOperations.calls} calls, ${current.tableControls.supportsDirectTableOperations.cellsVisited} cells, ${ms(current.tableControls.supportsDirectTableOperations.totalMs)} ms\n`,
+      );
+    }
   }
 }
 
@@ -609,9 +1154,12 @@ async function main() {
           startup: startupSamples,
           preview: previewSamples,
           typingBurstEdits: burstEdits,
+          stressIsolationPerCondition: 3,
         },
         latencyDefinition:
           "Elapsed browser time from immediately before a real Playwright keyboard/pointer action until the Rich Editor DOM reflects the edit",
+        stressInteractionPhaseDefinition:
+          "Browser performance.now() milestones around real locator wait/click and keyboard actions; DOM reflection is timestamped by a MutationObserver on the target table cell",
         percentiles: ["p50", "p95", "max"],
       },
       environment: {
@@ -630,8 +1178,13 @@ async function main() {
       process.stdout.write(`Measuring ${scenario.id}...\n`);
       const samples = [];
       const count = scenario.category === "stress-only" ? 3 : startupSamples;
-      for (let index = 0; index < count; index += 1)
-        samples.push(await collectStartupSample(browser, scenario));
+      for (let index = 0; index < count; index += 1) {
+        samples.push(
+          scenario.category === "stress-only"
+            ? await collectStressInputSample(browser, scenario)
+            : await collectStartupSample(browser, scenario),
+        );
+      }
       const startup = {
         sampleCount: count,
         editorReadyMilliseconds: summarize(
@@ -645,6 +1198,22 @@ async function main() {
         ),
         metrics: summarizeHookSamples(samples.map((sample) => sample.metrics)),
       };
+      if (scenario.category === "stress-only") {
+        startup.totalInputAcceptedMs = summarize(
+          samples.map(
+            (sample) => sample.interactionPhases.totalInputAcceptedMs,
+          ),
+        );
+        startup.interactionPhases = summarizeStressPhases(samples);
+        startup.interactionPhaseSamples = samples.map(
+          (sample) => sample.interactionPhases,
+        );
+        startup.tableControls = summarizeTableControls(
+          samples.map((sample) => sample.metrics),
+          samples.map((sample) => sample.counters),
+        );
+        startup.longTasks = summarizeLongTasks(samples);
+      }
       const result = {
         id: scenario.id,
         category: scenario.category,
@@ -653,6 +1222,14 @@ async function main() {
         startup,
         preview: await runPreviewSamples(browser, scenario),
       };
+      if (scenario.category === "stress-only") {
+        process.stdout.write("Measuring stress isolation experiments...\n");
+        result.isolationExperiments = await runStressIsolationExperiments(
+          browser,
+          scenario,
+          samples,
+        );
+      }
       if (scenario.category !== "stress-only") {
         result.edits = {
           normalText: await runInputSamples(browser, scenario, "normal-text"),

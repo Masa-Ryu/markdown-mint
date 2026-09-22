@@ -1,4 +1,10 @@
 import type { Node as PMNode } from "prosemirror-model";
+import {
+  measureEditorPerformance,
+  recordEditorPerformanceCount,
+  recordEditorPerformanceDuration,
+  tableControlsDisabledForBenchmark,
+} from "../shared/performanceBenchmark";
 import { appendToolbarIcon } from "./icons";
 
 export type TableControlAxis = "row" | "column";
@@ -467,9 +473,14 @@ export class TableControls {
     this.element.hidden = true;
     stage.append(this.element);
     const ResizeObserverCtor = stage.ownerDocument.defaultView?.ResizeObserver;
-    this.resizeObserver = ResizeObserverCtor
-      ? new ResizeObserverCtor(() => this.requestLayout())
-      : null;
+    const benchmarkControlsDisabled =
+      __MM_EDITOR_PERFORMANCE_BENCHMARK__ &&
+      tableControlsDisabledForBenchmark();
+    this.resizeObserver =
+      !benchmarkControlsDisabled && ResizeObserverCtor
+        ? new ResizeObserverCtor(() => this.requestLayout())
+        : null;
+    if (benchmarkControlsDisabled) return;
     this.resizeObserver?.observe(stage);
     stage.addEventListener("pointermove", this.stagePointerMove);
     stage.addEventListener("pointerleave", this.stagePointerLeave);
@@ -492,6 +503,18 @@ export class TableControls {
 
   /** Update the one table whose controls are currently allowed to be shown. */
   update(target: TableControlTarget | null): void {
+    if (this.destroyed) return;
+    if (__MM_EDITOR_PERFORMANCE_BENCHMARK__) {
+      if (tableControlsDisabledForBenchmark()) return;
+      measureEditorPerformance("tableControls.update", () =>
+        this.updateInternal(target),
+      );
+      return;
+    }
+    this.updateInternal(target);
+  }
+
+  private updateInternal(target: TableControlTarget | null): void {
     if (this.destroyed) return;
     if (!target || !this.callbacks.canEdit()) {
       this.clear();
@@ -567,6 +590,11 @@ export class TableControls {
   }
 
   updateLayout(): void {
+    if (
+      __MM_EDITOR_PERFORMANCE_BENCHMARK__ &&
+      tableControlsDisabledForBenchmark()
+    )
+      return;
     this.cancelScheduledLayout();
     this.measureLayout();
   }
@@ -575,6 +603,8 @@ export class TableControls {
   requestLayout(): void {
     if (
       this.destroyed ||
+      (__MM_EDITOR_PERFORMANCE_BENCHMARK__ &&
+        tableControlsDisabledForBenchmark()) ||
       !this.target ||
       this.element.hidden ||
       this.layoutFrame !== null
@@ -610,8 +640,44 @@ export class TableControls {
 
   private measureLayout(): void {
     if (!this.target || this.element.hidden) return;
-    const tableRect = clientRect(this.target.tableElement);
-    const stageRect = clientRect(this.stage);
+    if (__MM_EDITOR_PERFORMANCE_BENCHMARK__) {
+      measureEditorPerformance("tableControls.measureLayout", () =>
+        this.measureLayoutInternal(),
+      );
+      return;
+    }
+    this.measureLayoutInternal();
+  }
+
+  private measureLayoutInternal(): void {
+    if (!this.target || this.element.hidden) return;
+    const now = (): number => this.ownerWindow?.performance.now() ?? Date.now();
+    const recordSegment = (name: string, startedAt: number): void => {
+      recordEditorPerformanceDuration(name, now() - startedAt);
+    };
+    let getBoundingClientRectCalls = 0;
+    let rowsMeasured = 0;
+    let cellsMeasured = 0;
+    const measureClientRect = __MM_EDITOR_PERFORMANCE_BENCHMARK__
+      ? (element: Element): DOMRect => {
+          getBoundingClientRectCalls += 1;
+          return clientRect(element);
+        }
+      : clientRect;
+    let segmentStartedAt = __MM_EDITOR_PERFORMANCE_BENCHMARK__ ? now() : 0;
+    const tableRect = __MM_EDITOR_PERFORMANCE_BENCHMARK__
+      ? measureClientRect(this.target.tableElement)
+      : clientRect(this.target.tableElement);
+    const stageRect = __MM_EDITOR_PERFORMANCE_BENCHMARK__
+      ? measureClientRect(this.stage)
+      : clientRect(this.stage);
+    if (__MM_EDITOR_PERFORMANCE_BENCHMARK__) {
+      recordSegment(
+        "tableControls.measureLayout.tableAndStageRect",
+        segmentStartedAt,
+      );
+      segmentStartedAt = now();
+    }
     const rows = Array.from(this.target.tableElement.rows);
     const height = this.target.table.childCount;
     const width = this.target.table.firstChild?.childCount ?? 0;
@@ -626,10 +692,24 @@ export class TableControls {
       () => undefined,
     );
     rows.slice(0, height).forEach((row, rowIndex) => {
+      if (__MM_EDITOR_PERFORMANCE_BENCHMARK__) rowsMeasured += 1;
       const cells = Array.from(row.cells).slice(0, width);
-      const measuredCells = cells.map((cell) => rectLike(clientRect(cell)));
+      if (__MM_EDITOR_PERFORMANCE_BENCHMARK__) cellsMeasured += cells.length;
+      const measuredCells = cells.map((cell) =>
+        rectLike(
+          __MM_EDITOR_PERFORMANCE_BENCHMARK__
+            ? measureClientRect(cell)
+            : clientRect(cell),
+        ),
+      );
       cellRects[rowIndex] = measuredCells;
-      const rowRect = unionRect(measuredCells) ?? rectLike(clientRect(row));
+      const rowRect =
+        unionRect(measuredCells) ??
+        rectLike(
+          __MM_EDITOR_PERFORMANCE_BENCHMARK__
+            ? measureClientRect(row)
+            : clientRect(row),
+        );
       if (rowRect) {
         rowMeasured[rowIndex] = rowRect.top;
         rowMeasured[rowIndex + 1] = rowRect.bottom;
@@ -639,6 +719,13 @@ export class TableControls {
         if (columnRects[columnIndex]) columnRects[columnIndex]!.push(rect);
       });
     });
+    if (__MM_EDITOR_PERFORMANCE_BENCHMARK__) {
+      recordSegment(
+        "tableControls.measureLayout.cellRectCollection",
+        segmentStartedAt,
+      );
+      segmentStartedAt = now();
+    }
     const columnMeasured: Array<number | undefined> = Array.from(
       { length: width + 1 },
       () => undefined,
@@ -650,7 +737,10 @@ export class TableControls {
       columnMeasured[index + 1] = rect.right;
     });
     const gridRect = unionRect(allCellRects) ?? rectLike(tableRect);
-    const controlClipRect = this.measureControlClip(stageRect);
+    const controlClipRect = this.measureControlClip(
+      stageRect,
+      __MM_EDITOR_PERFORMANCE_BENCHMARK__ ? measureClientRect : clientRect,
+    );
     const visibleGridRect = intersectRect(
       intersectRect(gridRect, rectLike(tableRect)) ?? gridRect,
       controlClipRect,
@@ -682,6 +772,13 @@ export class TableControls {
       scrollLeft: this.stage.scrollLeft,
       scrollTop: this.stage.scrollTop,
     };
+    if (__MM_EDITOR_PERFORMANCE_BENCHMARK__) {
+      recordSegment(
+        "tableControls.measureLayout.boundaryCalculation",
+        segmentStartedAt,
+      );
+      segmentStartedAt = now();
+    }
     const localX = (client: number): number =>
       client - stageRect.left + this.stage.scrollLeft;
     const localY = (client: number): number =>
@@ -738,9 +835,34 @@ export class TableControls {
     );
     setBox(this.rowAppend, grid.left, grid.bottom + 3, 24, 24);
     setBox(this.columnAppend, grid.right + 3, grid.top, 24, 24);
+    if (__MM_EDITOR_PERFORMANCE_BENCHMARK__) {
+      recordSegment(
+        "tableControls.measureLayout.controlPositioning",
+        segmentStartedAt,
+      );
+      segmentStartedAt = now();
+    }
     if (!this.drag) this.updatePointerPresentationFromStoredPointer();
     else this.updateDragPresentation();
     this.updatePresentation();
+    if (__MM_EDITOR_PERFORMANCE_BENCHMARK__) {
+      recordSegment(
+        "tableControls.measureLayout.presentationUpdate",
+        segmentStartedAt,
+      );
+      recordEditorPerformanceCount(
+        "tableControls.measureLayout.rowsMeasured",
+        rowsMeasured,
+      );
+      recordEditorPerformanceCount(
+        "tableControls.measureLayout.cellsMeasured",
+        cellsMeasured,
+      );
+      recordEditorPerformanceCount(
+        "tableControls.measureLayout.getBoundingClientRectCalls",
+        getBoundingClientRectCalls,
+      );
+    }
   }
 
   destroy(): void {
@@ -782,6 +904,25 @@ export class TableControls {
   }
 
   private renderTarget(): void {
+    if (!this.target) return;
+    if (__MM_EDITOR_PERFORMANCE_BENCHMARK__) {
+      measureEditorPerformance("tableControls.renderTarget", () =>
+        this.renderTargetInternal(),
+      );
+      recordEditorPerformanceCount(
+        "tableControls.renderTarget.rowHandleCount",
+        this.rowHandles.length,
+      );
+      recordEditorPerformanceCount(
+        "tableControls.renderTarget.columnHandleCount",
+        this.columnHandles.length,
+      );
+      return;
+    }
+    this.renderTargetInternal();
+  }
+
+  private renderTargetInternal(): void {
     if (!this.target) return;
     this.rowHandles = [];
     this.columnHandles = [];
@@ -1868,7 +2009,10 @@ export class TableControls {
     this.dragPreviewDestination.textContent = text ?? "";
   }
 
-  private measureControlClip(stageRect: DOMRect): RectLike {
+  private measureControlClip(
+    stageRect: DOMRect,
+    measureClientRect: (element: Element) => DOMRect = clientRect,
+  ): RectLike {
     let clip = rectLike(stageRect);
     let ancestor = this.stage.parentElement;
     const getStyle = this.ownerWindow?.getComputedStyle.bind(this.ownerWindow);
@@ -1881,7 +2025,7 @@ export class TableControls {
         overflow.includes("scroll") ||
         overflow.includes("auto")
       ) {
-        const next = intersectRect(clip, rectLike(clientRect(ancestor)));
+        const next = intersectRect(clip, rectLike(measureClientRect(ancestor)));
         if (next) clip = next;
       }
       ancestor = ancestor.parentElement;

@@ -16,10 +16,7 @@ import {
 } from "prosemirror-model";
 import { addListNodes } from "prosemirror-schema-list";
 import { tableNodes } from "prosemirror-tables";
-import {
-  editorPerformanceBenchmarkEnabled,
-  measureEditorPerformance,
-} from "../shared/performanceBenchmark";
+import { measureEditorPerformance } from "../shared/performanceBenchmark";
 import {
   renderAdvancedBlock as renderAdvancedBlockHtml,
   renderCodeBlock as renderCodeBlockHtml,
@@ -2491,11 +2488,11 @@ export function parseMarkdown(
   source: string,
   profile: Profile = "github",
 ): MarkdownSnapshot {
-  if (!editorPerformanceBenchmarkEnabled)
-    return parseMarkdownInternal(source, profile);
-  return measureEditorPerformance("core.parseMarkdown", () =>
-    parseMarkdownInternal(source, profile),
-  );
+  if (__MM_EDITOR_PERFORMANCE_BENCHMARK__)
+    return measureEditorPerformance("core.parseMarkdown", () =>
+      parseMarkdownInternal(source, profile),
+    );
+  return parseMarkdownInternal(source, profile);
 }
 
 function parseMarkdownInternal(
@@ -4136,11 +4133,11 @@ export function serializeMarkdown(
   doc: PMNode,
   previous?: MarkdownSnapshot,
 ): string {
-  if (!editorPerformanceBenchmarkEnabled)
-    return serializeMarkdownInternal(doc, previous);
-  return measureEditorPerformance("core.serializeMarkdown", () =>
-    serializeMarkdownInternal(doc, previous),
-  );
+  if (__MM_EDITOR_PERFORMANCE_BENCHMARK__)
+    return measureEditorPerformance("core.serializeMarkdown", () =>
+      serializeMarkdownInternal(doc, previous),
+    );
+  return serializeMarkdownInternal(doc, previous);
 }
 
 function serializeMarkdownInternal(
@@ -5555,11 +5552,11 @@ export function renderMarkdownDocument(
   profile: Profile = "github",
   input?: RenderInput,
 ): string {
-  if (!editorPerformanceBenchmarkEnabled)
-    return renderMarkdownDocumentInternal(doc, profile, input);
-  return measureEditorPerformance("core.renderMarkdownDocument", () =>
-    renderMarkdownDocumentInternal(doc, profile, input),
-  );
+  if (__MM_EDITOR_PERFORMANCE_BENCHMARK__)
+    return measureEditorPerformance("core.renderMarkdownDocument", () =>
+      renderMarkdownDocumentInternal(doc, profile, input),
+    );
+  return renderMarkdownDocumentInternal(doc, profile, input);
 }
 
 function renderMarkdownDocumentInternal(
@@ -5622,11 +5619,11 @@ export function renderMarkdown(
   source: string,
   profile: Profile = "github",
 ): string {
-  if (!editorPerformanceBenchmarkEnabled)
-    return renderMarkdownInternal(source, profile);
-  return measureEditorPerformance("core.renderMarkdown", () =>
-    renderMarkdownInternal(source, profile),
-  );
+  if (__MM_EDITOR_PERFORMANCE_BENCHMARK__)
+    return measureEditorPerformance("core.renderMarkdown", () =>
+      renderMarkdownInternal(source, profile),
+    );
+  return renderMarkdownInternal(source, profile);
 }
 
 function renderMarkdownInternal(source: string, profile: Profile): string {
@@ -5644,11 +5641,11 @@ export function inspectCompatibility(
   source: string,
   profile: Profile = "github",
 ): CompatibilityDiagnostic[] {
-  if (!editorPerformanceBenchmarkEnabled)
-    return inspectCompatibilityInternal(source, profile);
-  return measureEditorPerformance("core.inspectCompatibility", () =>
-    inspectCompatibilityInternal(source, profile),
-  );
+  if (__MM_EDITOR_PERFORMANCE_BENCHMARK__)
+    return measureEditorPerformance("core.inspectCompatibility", () =>
+      inspectCompatibilityInternal(source, profile),
+    );
+  return inspectCompatibilityInternal(source, profile);
 }
 
 function inspectCompatibilityInternal(

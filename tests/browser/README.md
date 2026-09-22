@@ -82,6 +82,16 @@ scenario). Set `MM_EDITOR_PERFORMANCE_SAMPLES`,
 `MM_EDITOR_PERFORMANCE_BURST_EDITS` to adjust sample counts. Set
 `MM_EDITOR_PERFORMANCE_EXECUTABLE_PATH` to use a specific Chromium executable.
 
+The 2000x20 stress scenario also records navigation/input milestones, Chromium
+Long Tasks, and benchmark-only timings/counters for `TableControls`, table
+operation validation, and the integrated table toolbar. It runs three samples
+each with current behavior, TableControls disabled, a single target-cell
+`getBoundingClientRect()` query with controls disabled, and a benchmark-only
+fixed table-layout CSS override. To save a copy of the full report outside the
+default output path, set `MM_EDITOR_PERFORMANCE_REPORT` to its destination.
+These switches exist only in the instrumented benchmark bundle; the normal
+production bundle keeps the instrumentation disabled.
+
 Run the startup benchmark with:
 
 ```sh

@@ -268,6 +268,14 @@ const server = http.createServer(async (request, response) => {
     if (extension === ".html") {
       let html = body.toString("utf8");
       if (
+        pathname === "/" &&
+        requestUrl.searchParams.get("experimentalFixedLayout") === "1"
+      )
+        html = html.replace(
+          "</head>",
+          '  <link rel="stylesheet" href="/tests/browser/fixtures/fixed-table-layout.css">\n</head>',
+        );
+      if (
         pathname === "/native.html" &&
         requestUrl.searchParams.get("fixture") === "math"
       )

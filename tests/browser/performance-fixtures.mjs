@@ -84,11 +84,12 @@ export async function getPerformanceScenarios() {
     ),
     "utf8",
   );
-  const stressFirstRow = stressSource.split(/\r\n|\n|\r/, 1)[0] ?? "";
-  const stressColumnCount = stressFirstRow.split("|").length - 2;
-  const stressRows = stressSource
+  const stressTableRows = stressSource
     .split(/\r\n|\n|\r/)
-    .filter((line) => line.startsWith("|")).length;
+    .filter((line) => line.startsWith("|"));
+  const stressHeader = stressTableRows[0] ?? "";
+  const stressColumnCount = stressHeader.split("|").length - 2;
+  const stressBodyRows = Math.max(0, stressTableRows.length - 2);
   const scenarios = [
     {
       id: "small-normal",
@@ -129,7 +130,7 @@ export async function getPerformanceScenarios() {
       category: "stress-only",
       profile: "github",
       markdown: stressSource,
-      table: { sourceRows: stressRows, columns: stressColumnCount },
+      table: { bodyRows: stressBodyRows, columns: stressColumnCount },
     },
   ];
 
