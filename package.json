@@ -158,6 +158,7 @@
     "benchmark:editor": "node scripts/benchmark-editor-performance.mjs",
     "benchmark:editor:interactions": "node scripts/benchmark-editor-interaction-investigation.mjs",
     "benchmark:editor:paint-investigation": "node scripts/benchmark-editor-paint-compositor-investigation.mjs",
+    "benchmark:editor:large-table-final": "node scripts/benchmark-editor-large-table-final.mjs",
     "benchmark:table-controls": "npm run build:webview && node scripts/benchmark-table-controls.mjs",
     "demo:full-document": "npm run build:webview && node scripts/demo/full-document-demo.mjs",
     "benchmark:file-search": "node scripts/benchmark-workspace-file-search.mjs",

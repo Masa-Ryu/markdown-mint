@@ -52,9 +52,15 @@ import {
 } from "../shared/protocol";
 import {
   measureEditorPerformance,
+  recordEditorPerformanceCount,
   recordEditorPerformanceDuration,
+  classifyTableScrollModeForBenchmark,
+  tableScrollNodeViewEnabledForBenchmark,
+  tableScrollProxyPlacementForBenchmark,
+  tableScrollProxyRequiresHorizontalOverflowForBenchmark,
+  selectionToolbarDisabledForBenchmark,
+  type BenchmarkTableScrollMode,
   spellcheckDisabledForBenchmark,
-  tableScrollWrapperForBenchmark,
   tableEditingDisabledForBenchmark,
 } from "../shared/performanceBenchmark";
 import { isWorkspaceFileSearchQuery } from "../shared/workspaceFileSearch";
@@ -1232,27 +1238,264 @@ function removeTopLevelRange(doc: PMNode, range: TransientBlankRange): PMNode {
  * scrolling is different. This is intentionally enabled through the
  * benchmark option and is not used by the normal editor bundle.
  */
-function createBenchmarkTableScrollNodeView(node: PMNode): NodeView {
+const benchmarkTableOverflowByShape = new Map<string, boolean>();
+
+function createBenchmarkTableScrollNodeView(
+  node: PMNode,
+  view: EditorView,
+): NodeView {
   let currentNode = node;
-  const dom = document.createElement("div");
-  dom.className = "mm-table-scroll";
+  const requiresHorizontalOverflow =
+    tableScrollProxyRequiresHorizontalOverflowForBenchmark();
+  const shapeMode = classifyTableScrollModeForBenchmark(
+    node.childCount,
+    node.firstChild?.childCount ?? 0,
+  );
+  const shapeKey = `${node.childCount}x${node.firstChild?.childCount ?? 0}`;
+  const cachedHorizontalOverflow = requiresHorizontalOverflow
+    ? benchmarkTableOverflowByShape.get(shapeKey)
+    : undefined;
+  let overflowMeasured =
+    !requiresHorizontalOverflow ||
+    shapeMode !== "proxy" ||
+    cachedHorizontalOverflow !== undefined;
+  let measuredHorizontalOverflow = cachedHorizontalOverflow ?? false;
+  let mode: BenchmarkTableScrollMode =
+    requiresHorizontalOverflow && shapeMode === "proxy"
+      ? cachedHorizontalOverflow === true
+        ? "proxy"
+        : "native"
+      : shapeMode;
+  let modeCheckScheduled = false;
+  let overflowCheckAttempts = 0;
+  let destroyed = false;
+  let overflowCandidate = shapeMode === "proxy";
+  const documentRef = view.dom.ownerDocument;
+  const dom = documentRef.createElement(mode === "native" ? "table" : "div");
+  dom.className = mode === "native" ? "" : "mm-table-scroll";
   dom.dataset.mmBenchmarkTableScroll = "true";
-  const table = document.createElement("table");
+  dom.dataset.mmBenchmarkTableMode = mode;
+  const viewport = mode === "native" ? null : documentRef.createElement("div");
+  if (viewport) {
+    viewport.className = "mm-table-viewport";
+    viewport.dataset.mmBenchmarkTableViewport = "true";
+    viewport.style.cssText =
+      "display:block;position:relative;width:100%;max-width:100%;overflow:hidden;";
+    dom.append(viewport);
+  }
+  const table =
+    mode === "native"
+      ? (dom as HTMLTableElement)
+      : documentRef.createElement("table");
   table.dataset.mmBenchmarkTable = "true";
-  const contentDOM = document.createElement("tbody");
+  const contentDOM = documentRef.createElement("tbody");
   table.append(contentDOM);
-  dom.append(table);
+  if (viewport) viewport.append(table);
+  const proxy = mode === "proxy" ? documentRef.createElement("div") : null;
+  const placement = tableScrollProxyPlacementForBenchmark();
+  if (proxy) {
+    proxy.className = "mm-table-scrollbar-proxy";
+    proxy.dataset.mmBenchmarkScrollProxy = "true";
+    proxy.style.cssText =
+      placement === "sticky"
+        ? "display:block;position:fixed;z-index:20;height:16px;overflow-x:auto;overflow-y:hidden;visibility:hidden;"
+        : "display:block;width:100%;height:16px;overflow-x:auto;overflow-y:hidden;";
+    const spacer = documentRef.createElement("div");
+    spacer.dataset.mmBenchmarkScrollProxySpacer = "true";
+    spacer.style.cssText = "height:1px;";
+    proxy.append(spacer);
+    dom.append(proxy);
+  }
+  const scheduleOverflowModeCheck = (): void => {
+    if (
+      !requiresHorizontalOverflow ||
+      !overflowCandidate ||
+      overflowMeasured ||
+      modeCheckScheduled
+    )
+      return;
+    modeCheckScheduled = true;
+    const check = (): void => {
+      modeCheckScheduled = false;
+      if (destroyed) return;
+      if (!table.isConnected) {
+        scheduleOverflowModeCheck();
+        return;
+      }
+      overflowCheckAttempts += 1;
+      const startedAt = performance.now();
+      const rowsMounted = table.rows.length >= currentNode.childCount;
+      measuredHorizontalOverflow =
+        rowsMounted && table.scrollWidth > table.clientWidth;
+      recordEditorPerformanceCount(
+        "tableScroll.classification.overflow.rowsMounted",
+        rowsMounted ? 1 : 0,
+      );
+      recordEditorPerformanceCount(
+        "tableScroll.classification.overflow.result",
+        measuredHorizontalOverflow ? 1 : 0,
+      );
+      if (
+        (!rowsMounted || !measuredHorizontalOverflow) &&
+        overflowCheckAttempts < 20
+      ) {
+        documentRef.defaultView?.setTimeout(
+          () => documentRef.defaultView?.requestAnimationFrame(check),
+          50,
+        );
+        return;
+      }
+      overflowMeasured = true;
+      benchmarkTableOverflowByShape.set(shapeKey, measuredHorizontalOverflow);
+      recordEditorPerformanceDuration(
+        "tableScroll.classification.overflow",
+        performance.now() - startedAt,
+      );
+      // A no-op transaction is used only by this benchmark hook to ask
+      // ProseMirror to revisit the NodeView after the table has mounted. A
+      // same-state update is intentionally skipped by some EditorView builds.
+      view.dispatch(
+        view.state.tr.setMeta("benchmark-table-scroll-recheck", true),
+      );
+    };
+    documentRef.defaultView?.requestAnimationFrame(() =>
+      documentRef.defaultView?.requestAnimationFrame(check),
+    );
+  };
+  if (mode === "proxy") {
+    dom.style.cssText =
+      "display:block;position:relative;width:100%;max-width:100%;overflow:visible;";
+    table.style.cssText =
+      "display:table;width:max-content;min-width:100%;max-width:none;overflow:visible;";
+  } else if (mode === "wrapper") {
+    dom.style.cssText =
+      "display:block;position:relative;width:100%;max-width:100%;overflow-x:auto;overflow-y:hidden;";
+    table.style.cssText =
+      "display:table;width:max-content;min-width:100%;max-width:none;overflow:visible;";
+  }
+  const updateStickyProxy = (): void => {
+    if (!proxy || placement !== "sticky" || !viewport) return;
+    const selection = documentRef.getSelection();
+    const anchor = selection?.anchorNode;
+    const anchorElement =
+      anchor instanceof Element ? anchor : (anchor?.parentElement ?? null);
+    const active = Boolean(anchorElement && table.contains(anchorElement));
+    const viewportRect = viewport.getBoundingClientRect();
+    const stage = dom.closest<HTMLElement>(".mm-stage");
+    const stageRect = stage?.getBoundingClientRect();
+    const visible =
+      active &&
+      viewportRect.bottom > (stageRect?.top ?? 0) &&
+      viewportRect.top < (stageRect?.bottom ?? window.innerHeight);
+    proxy.style.left = `${viewportRect.left}px`;
+    proxy.style.width = `${viewportRect.width}px`;
+    proxy.style.bottom = `${Math.max(
+      8,
+      window.innerHeight - (stageRect?.bottom ?? window.innerHeight) + 8,
+    )}px`;
+    proxy.style.visibility = visible ? "visible" : "hidden";
+  };
+  const syncProxy = (): void => {
+    if (!proxy || !viewport) return;
+    const spacer = proxy.firstElementChild as HTMLElement | null;
+    if (spacer) spacer.style.width = `${table.scrollWidth}px`;
+    table.style.transform = `translateX(${-proxy.scrollLeft}px)`;
+    updateStickyProxy();
+  };
+  const revealSelection = (): void => {
+    if (!proxy || !viewport) {
+      updateStickyProxy();
+      return;
+    }
+    const selection = documentRef.getSelection();
+    const anchor = selection?.anchorNode;
+    const anchorElement =
+      anchor instanceof Element ? anchor : (anchor?.parentElement ?? null);
+    if (anchorElement && table.contains(anchorElement)) {
+      const cell = anchorElement.closest<HTMLTableCellElement>("td,th");
+      if (cell) {
+        const viewportRect = viewport.getBoundingClientRect();
+        const cellRect = cell.getBoundingClientRect();
+        if (cellRect.left < viewportRect.left)
+          proxy.scrollLeft -= viewportRect.left - cellRect.left;
+        else if (cellRect.right > viewportRect.right)
+          proxy.scrollLeft += cellRect.right - viewportRect.right;
+        syncProxy();
+      }
+    }
+    updateStickyProxy();
+  };
+  const onProxyScroll = (): void => syncProxy();
+  const onWheel = (event: WheelEvent): void => {
+    if (!proxy || event.deltaX === 0) return;
+    proxy.scrollLeft += event.deltaX;
+    syncProxy();
+    event.preventDefault();
+  };
+  if (proxy) {
+    proxy.addEventListener("scroll", onProxyScroll, { passive: true });
+    viewport?.addEventListener("wheel", onWheel, { passive: false });
+    syncProxy();
+    documentRef.defaultView?.requestAnimationFrame(() =>
+      documentRef.defaultView?.requestAnimationFrame(syncProxy),
+    );
+  }
+  scheduleOverflowModeCheck();
+  documentRef.addEventListener("selectionchange", revealSelection, true);
+  view.dom.addEventListener("scroll", updateStickyProxy, true);
+  window.addEventListener("resize", updateStickyProxy);
   return {
     dom,
     contentDOM,
     update(nextNode): boolean {
       if (nextNode.type !== currentNode.type) return false;
+      const nextShapeMode = classifyTableScrollModeForBenchmark(
+        nextNode.childCount,
+        nextNode.firstChild?.childCount ?? 0,
+        mode,
+      );
+      const nextShapeKey = `${nextNode.childCount}x${nextNode.firstChild?.childCount ?? 0}`;
+      const nextCachedHorizontalOverflow = requiresHorizontalOverflow
+        ? benchmarkTableOverflowByShape.get(nextShapeKey)
+        : undefined;
+      overflowCandidate = nextShapeMode === "proxy";
+      if (
+        requiresHorizontalOverflow &&
+        overflowCandidate &&
+        nextCachedHorizontalOverflow === undefined
+      ) {
+        overflowMeasured = false;
+        measuredHorizontalOverflow = false;
+      }
+      if (requiresHorizontalOverflow && overflowCandidate && !overflowMeasured)
+        scheduleOverflowModeCheck();
+      const nextMode =
+        requiresHorizontalOverflow && overflowCandidate
+          ? nextCachedHorizontalOverflow !== undefined
+            ? nextCachedHorizontalOverflow
+              ? "proxy"
+              : "native"
+            : overflowMeasured && measuredHorizontalOverflow
+              ? "proxy"
+              : "native"
+          : nextShapeMode;
+      if (nextMode !== mode) return false;
       currentNode = nextNode;
+      mode = nextMode;
+      if (proxy) syncProxy();
       return true;
     },
     ignoreMutation(mutation): boolean {
       if (mutation.type === "selection") return false;
       return !contentDOM.contains(mutation.target);
+    },
+    destroy(): void {
+      destroyed = true;
+      proxy?.removeEventListener("scroll", onProxyScroll);
+      viewport?.removeEventListener("wheel", onWheel);
+      documentRef.removeEventListener("selectionchange", revealSelection, true);
+      view.dom.removeEventListener("scroll", updateStickyProxy, true);
+      window.removeEventListener("resize", updateStickyProxy);
     },
   };
 }
@@ -1266,9 +1509,17 @@ function tableElementFromNodeDOM(
 ): HTMLTableElement | null {
   const dom = view.nodeDOM(position);
   if (dom instanceof HTMLTableElement) return dom;
-  if (!tableScrollWrapperForBenchmark() || !(dom instanceof HTMLElement))
+  if (
+    !tableScrollNodeViewEnabledForBenchmark() ||
+    !(dom instanceof HTMLElement)
+  )
     return null;
-  const table = dom.querySelector(":scope > table");
+  const table =
+    dom instanceof HTMLTableElement
+      ? dom
+      : dom.querySelector(
+          ":scope > table, :scope > .mm-table-viewport > table",
+        );
   return table instanceof HTMLTableElement ? table : null;
 }
 
@@ -3141,9 +3392,10 @@ export class MarkdownEditorApp {
               this.openRenderedBlockEditor(position, returnFocus),
             { canEdit: () => this.canEditBlock() && !this.composing },
           ),
-        ...(tableScrollWrapperForBenchmark()
+        ...(tableScrollNodeViewEnabledForBenchmark()
           ? {
-              table: (node: PMNode) => createBenchmarkTableScrollNodeView(node),
+              table: (node: PMNode, view: EditorView) =>
+                createBenchmarkTableScrollNodeView(node, view),
             }
           : {}),
       },
@@ -4173,6 +4425,11 @@ export class MarkdownEditorApp {
     if (
       __MM_EDITOR_PERFORMANCE_BENCHMARK__ &&
       applied.state.selection !== oldSelection
+    )
+      this.ensureBenchmarkTableSelectionVisible();
+    if (
+      __MM_EDITOR_PERFORMANCE_BENCHMARK__ &&
+      applied.state.selection !== oldSelection
     ) {
       const phase =
         benchmarkPhase?.phase ?? globalThis.__mmInteractionPhase ?? "unknown";
@@ -4284,6 +4541,36 @@ export class MarkdownEditorApp {
         revealTableToolbar: selectionSet || docChanged || discardedTransient,
       });
     return true;
+  }
+
+  /** Keep benchmark proxy selections visible without changing production scroll behavior. */
+  private ensureBenchmarkTableSelectionVisible(): void {
+    if (!tableScrollNodeViewEnabledForBenchmark()) return;
+    const domAtSelection = this.view.domAtPos(
+      this.view.state.selection.from,
+    ).node;
+    const element =
+      domAtSelection instanceof Element
+        ? domAtSelection
+        : domAtSelection.parentElement;
+    const cell = element?.closest<HTMLTableCellElement>("td,th");
+    const table = cell?.closest<HTMLTableElement>("table");
+    const viewport = table?.closest<HTMLElement>(".mm-table-viewport");
+    const proxy = table
+      ?.closest<HTMLElement>(".mm-table-scroll")
+      ?.querySelector<HTMLElement>(":scope > .mm-table-scrollbar-proxy");
+    if (!cell || !table || !viewport || !proxy) return;
+    const reveal = (): void => {
+      const viewportRect = viewport.getBoundingClientRect();
+      const cellRect = cell.getBoundingClientRect();
+      if (cellRect.left < viewportRect.left)
+        proxy.scrollLeft -= viewportRect.left - cellRect.left;
+      else if (cellRect.right > viewportRect.right)
+        proxy.scrollLeft += cellRect.right - viewportRect.right;
+      table.style.transform = `translateX(${-proxy.scrollLeft}px)`;
+    };
+    reveal();
+    this.view.dom.ownerDocument.defaultView?.requestAnimationFrame(reveal);
   }
 
   private commitTransientBlanksInTransaction(tr: Transaction): boolean {
@@ -7397,6 +7684,12 @@ export class MarkdownEditorApp {
 
   private updateSelectionToolbar(selection = this.view.state.selection): void {
     if (!this.selectionToolbar || !this.stage || !this.view) return;
+    if (selectionToolbarDisabledForBenchmark()) {
+      this.selectionToolbar.hidden = true;
+      this.selectionToolbar.setAttribute("aria-hidden", "true");
+      this.clearSelectionToolbarSelection();
+      return;
+    }
     if (this.linkPickerOpen) {
       this.selectionToolbar.hidden = true;
       this.selectionToolbar.setAttribute("aria-hidden", "true");

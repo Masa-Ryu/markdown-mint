@@ -243,6 +243,7 @@ async function installScrollProxy(page) {
       const proxy = document.createElement("div");
       proxy.className = "mm-table-scrollbar-proxy";
       proxy.setAttribute("data-mm-benchmark-only", "true");
+      proxy.setAttribute("data-mm-benchmark-scroll-proxy", "true");
       proxy.style.cssText =
         "display:block;width:100%;height:16px;overflow-x:auto;overflow-y:hidden;";
       const spacer = document.createElement("div");
@@ -1028,7 +1029,8 @@ async function runInteractionSample(
     state,
     clickLatencyMs: clickResolvedAt - actionStartedAt,
     inputToDomMutationMs: mutationAt - (state.inputStartedAt ?? mutationAt),
-    inputToFirstIdleMs: idleAt - mutationAt,
+    postMutationToFirstIdleMs: idleAt - mutationAt,
+    inputToFirstIdleMs: idleAt - inputStartedAt,
     fullInteractionMs: idleAt - actionStartedAt,
     inputStartedAt: await Promise.resolve(state.inputStartedAt ?? null),
     clickResolvedAt,
@@ -1143,7 +1145,8 @@ async function runInteractionSampleFixed(
     selectionLatencyMs:
       (state.eventTimes.selectionchange ?? clickResolvedAt) - clickStartedAt,
     inputToDomMutationMs: mutationAt - inputStartedAt,
-    inputToFirstIdleMs: idleAt - mutationAt,
+    postMutationToFirstIdleMs: idleAt - mutationAt,
+    inputToFirstIdleMs: idleAt - inputStartedAt,
     fullInteractionMs: idleAt - clickStartedAt,
     clickStartedAt,
     clickResolvedAt,
@@ -1423,6 +1426,9 @@ function conditionSummary(samples) {
     ),
     inputToDomMutation: summarize(
       samples.map((sample) => sample.inputToDomMutationMs),
+    ),
+    postMutationToFirstIdle: summarize(
+      samples.map((sample) => sample.postMutationToFirstIdleMs),
     ),
     inputToFirstIdle: summarize(
       samples.map((sample) => sample.inputToFirstIdleMs),

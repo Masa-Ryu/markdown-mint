@@ -25,6 +25,116 @@ export interface TableControlTarget {
   selection?: TableControlSelection | null;
 }
 
+/**
+ * Benchmark prototype for separating the table viewport from the horizontal
+ * scroll mechanism. Production controls continue to use the DOM ancestor
+ * path; this owner is enabled only by the benchmark bundle.
+ */
+export interface TableHorizontalScrollOwner {
+  getScrollLeft(): number;
+  getMaxScrollLeft(): number;
+  setScrollLeft(value: number): void;
+  scrollBy(delta: number): void;
+  getViewportRect(): DOMRect;
+  subscribe(listener: () => void): () => void;
+  getElement(): HTMLElement;
+}
+
+export class NativeTableScrollOwner implements TableHorizontalScrollOwner {
+  constructor(
+    private readonly element: HTMLElement,
+    private readonly viewport: HTMLElement = element,
+  ) {}
+
+  getScrollLeft(): number {
+    return this.element.scrollLeft;
+  }
+
+  getMaxScrollLeft(): number {
+    return Math.max(0, this.element.scrollWidth - this.element.clientWidth);
+  }
+
+  setScrollLeft(value: number): void {
+    this.element.scrollLeft = value;
+  }
+
+  scrollBy(delta: number): void {
+    this.setScrollLeft(this.getScrollLeft() + delta);
+  }
+
+  getViewportRect(): DOMRect {
+    return clientRect(this.viewport);
+  }
+
+  subscribe(listener: () => void): () => void {
+    this.element.addEventListener("scroll", listener, { passive: true });
+    return () => this.element.removeEventListener("scroll", listener);
+  }
+
+  getElement(): HTMLElement {
+    return this.element;
+  }
+}
+
+export class ProxyTableScrollOwner implements TableHorizontalScrollOwner {
+  constructor(
+    private readonly proxy: HTMLElement,
+    private readonly viewport: HTMLElement,
+  ) {}
+
+  getScrollLeft(): number {
+    return this.proxy.scrollLeft;
+  }
+
+  getMaxScrollLeft(): number {
+    return Math.max(0, this.proxy.scrollWidth - this.proxy.clientWidth);
+  }
+
+  setScrollLeft(value: number): void {
+    this.proxy.scrollLeft = Math.max(
+      0,
+      Math.min(this.getMaxScrollLeft(), value),
+    );
+  }
+
+  scrollBy(delta: number): void {
+    this.setScrollLeft(this.getScrollLeft() + delta);
+  }
+
+  getViewportRect(): DOMRect {
+    return clientRect(this.viewport);
+  }
+
+  subscribe(listener: () => void): () => void {
+    this.proxy.addEventListener("scroll", listener, { passive: true });
+    return () => this.proxy.removeEventListener("scroll", listener);
+  }
+
+  getElement(): HTMLElement {
+    return this.proxy;
+  }
+}
+
+function horizontalScrollOwnerForTable(
+  table: HTMLTableElement,
+): TableHorizontalScrollOwner | null {
+  if (!__MM_EDITOR_PERFORMANCE_BENCHMARK__) return null;
+  const wrapper = table.closest<HTMLElement>(".mm-table-scroll");
+  const proxy = wrapper?.querySelector<HTMLElement>(
+    ":scope > .mm-table-scrollbar-proxy[data-mm-benchmark-scroll-proxy]",
+  );
+  if (proxy && wrapper) return new ProxyTableScrollOwner(proxy, wrapper);
+  if (wrapper) {
+    const style = getComputedStyle(wrapper);
+    if (style.overflowX === "auto" || style.overflowX === "scroll")
+      return new NativeTableScrollOwner(wrapper, wrapper);
+  }
+  const tableStyle = getComputedStyle(table);
+  if (tableStyle.overflowX === "auto" || tableStyle.overflowX === "scroll")
+    return new NativeTableScrollOwner(table, table);
+  return null;
+}
+
 export interface TableControlsCallbacks {
   canEdit: () => boolean;
   onHoverTable: (table: HTMLTableElement | null) => void;
@@ -308,12 +418,19 @@ export class TableControls {
   private flashedDocumentGeneration: number | null = null;
   private flashTimer: number | undefined;
   private scrollContainers: HTMLElement[] = [];
+  private horizontalScrollOwner: TableHorizontalScrollOwner | null = null;
+  private horizontalScrollOwnerUnsubscribe: (() => void) | null = null;
   private destroyed = false;
   private focused = false;
 
   private readonly scroll = (): void => {
     if (this.destroyed) return;
-    this.requestLayout();
+    if (
+      __MM_EDITOR_PERFORMANCE_BENCHMARK__ &&
+      this.horizontalScrollOwner instanceof ProxyTableScrollOwner
+    )
+      this.updateLayout();
+    else this.requestLayout();
     if (this.drag) this.updateDragPresentation();
     else this.updatePointerPresentationFromStoredPointer();
   };
@@ -2040,6 +2157,11 @@ export class TableControls {
     const add = (element: HTMLElement | null): void => {
       if (element && !candidates.includes(element)) candidates.push(element);
     };
+    this.horizontalScrollOwner = horizontalScrollOwnerForTable(
+      this.target.tableElement,
+    );
+    this.horizontalScrollOwnerUnsubscribe =
+      this.horizontalScrollOwner?.subscribe(this.scroll) ?? null;
     add(this.stage);
     add(this.target.tableElement);
     let ancestor = this.target.tableElement.parentElement;
@@ -2047,7 +2169,12 @@ export class TableControls {
       add(ancestor);
       ancestor = ancestor.parentElement;
     }
+    add(this.horizontalScrollOwner?.getElement() ?? null);
     for (const element of candidates) {
+      if (element === this.horizontalScrollOwner?.getElement()) {
+        this.scrollContainers.push(element);
+        continue;
+      }
       const style = this.ownerWindow?.getComputedStyle(element);
       const overflow = `${style?.overflow ?? ""} ${style?.overflowX ?? ""} ${style?.overflowY ?? ""}`;
       const scrollable =
@@ -2065,6 +2192,10 @@ export class TableControls {
         .map((element) => {
           if (element === this.stage) return "stage";
           if (element === this.target?.tableElement) return "table";
+          if (element === this.horizontalScrollOwner?.getElement())
+            return this.horizontalScrollOwner instanceof ProxyTableScrollOwner
+              ? "proxy"
+              : "scroll-owner";
           return (
             element.className?.toString?.() || element.tagName.toLowerCase()
           );
@@ -2081,6 +2212,9 @@ export class TableControls {
     for (const element of this.scrollContainers)
       element.removeEventListener("scroll", this.scroll);
     this.scrollContainers = [];
+    this.horizontalScrollOwnerUnsubscribe?.();
+    this.horizontalScrollOwnerUnsubscribe = null;
+    this.horizontalScrollOwner = null;
   }
 
   private hideDropLine(): void {
@@ -2099,7 +2233,26 @@ export class TableControls {
       if (!drag || this.destroyed) return;
       let changed = false;
       let nearScrollableEdge = false;
+      const owner = this.horizontalScrollOwner;
+      if (owner) {
+        const rect = owner.getViewportRect();
+        const insideX = drag.lastX >= rect.left && drag.lastX <= rect.right;
+        if (insideX && owner.getMaxScrollLeft() > 0) {
+          if (drag.lastX < rect.left + EDGE_SCROLL_DISTANCE) {
+            const before = owner.getScrollLeft();
+            owner.scrollBy(-EDGE_SCROLL_STEP);
+            changed ||= owner.getScrollLeft() !== before;
+            nearScrollableEdge = true;
+          } else if (drag.lastX > rect.right - EDGE_SCROLL_DISTANCE) {
+            const before = owner.getScrollLeft();
+            owner.scrollBy(EDGE_SCROLL_STEP);
+            changed ||= owner.getScrollLeft() !== before;
+            nearScrollableEdge = true;
+          }
+        }
+      }
       for (const container of this.scrollContainers) {
+        if (container === owner?.getElement()) continue;
         const rect = clientRect(container);
         const canScrollY =
           container.scrollHeight > container.clientHeight ||
