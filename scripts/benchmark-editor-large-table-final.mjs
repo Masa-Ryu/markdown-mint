@@ -2412,8 +2412,17 @@ async function main() {
         thresholdSticky: thresholdSeries,
       },
       matrix,
+      matrixProvenance: skipMatrix
+        ? "retained from the previous current-native series; this focused run skipped the row-growth matrix"
+        : "measured in this run",
       cellMatrix,
+      cellMatrixProvenance: skipMatrix
+        ? "retained from the previous current-native series; this focused run skipped the same-cell matrix"
+        : "measured in this run",
       thresholdMatrix,
+      thresholdMatrixProvenance: skipThresholdMatrix
+        ? "retained from the previous current-native series; this focused run skipped the threshold matrix"
+        : "measured in this run",
       proxy: {
         bottom: proxySeries,
         sticky: stickySeries,
@@ -2476,6 +2485,8 @@ async function main() {
         (item) =>
           `| ${item.rows} | ${item.columns} | ${item.cells} | ${item.horizontalOverflow ? "yes" : "no"} | ${fmt(item.summary.longestPaintArtifactCompositorUpdate.p50)} | ${fmt(item.summary.click.p50)} |`,
       ),
+      "",
+      `- Matrix provenance: ${skipMatrix ? "the row-growth and same-cell tables are retained from the previous current-native series in the JSON" : "measured in this run"}. The threshold matrix below is ${skipThresholdMatrix ? "also retained from the previous current-native series" : "measured in this run"}; the final comparison table uses its separately recorded three-run baseline.`,
       "",
       "",
       "### Cell-count activation threshold",
@@ -2574,7 +2585,7 @@ async function main() {
       "- `tests/webview/table-controls.test.ts` and `tests/browser/table-controls.test.mjs`: 0/50/100% geometry, drag edge scrolling, wheel behavior, multi-table independence, and wide-table editing.",
       "",
     ].join("\n");
-    await writeFile(reportPath, `${report}\n`);
+    await writeFile(reportPath, `${report.trimEnd()}\n`);
     process.stdout.write(`Wrote ${resultPath}\nWrote ${reportPath}\n`);
   } finally {
     await sharedContext?.close().catch(() => {});
