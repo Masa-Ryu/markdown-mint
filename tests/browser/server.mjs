@@ -239,6 +239,11 @@ function nativeSpacingFixture(name) {
 function fileFor(pathname) {
   if (pathname === "/")
     return resolve(repository, "tests/browser/harness.html");
+  if (
+    pathname === "/dist/webview.js" &&
+    process.env.MM_EDITOR_PERFORMANCE_BENCHMARK === "1"
+  )
+    return resolve(repository, "output/benchmark/webview.js");
   if (pathname === "/native.html")
     return resolve(repository, "tests/browser/native.html");
   if (pathname === "/__vscode__/markdown.css")
@@ -262,6 +267,14 @@ const server = http.createServer(async (request, response) => {
     let body = await readFile(filename);
     if (extension === ".html") {
       let html = body.toString("utf8");
+      if (
+        pathname === "/" &&
+        requestUrl.searchParams.get("experimentalFixedLayout") === "1"
+      )
+        html = html.replace(
+          "</head>",
+          '  <link rel="stylesheet" href="/tests/browser/fixtures/fixed-table-layout.css">\n</head>',
+        );
       if (
         pathname === "/native.html" &&
         requestUrl.searchParams.get("fixture") === "math"

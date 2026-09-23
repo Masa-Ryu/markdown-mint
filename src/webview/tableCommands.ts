@@ -1,5 +1,9 @@
 import { Fragment, type Node as PMNode } from "prosemirror-model";
 import type { EditorState, Transaction } from "prosemirror-state";
+import {
+  measureEditorPerformance,
+  recordEditorPerformanceCount,
+} from "../shared/performanceBenchmark";
 import { isNumberedTable, renumberTableAt } from "./tableNumbering";
 
 export type TableOperationAxis = "row" | "column";
@@ -41,6 +45,28 @@ export function tableAt(doc: PMNode, tablePos: number): PMNode | null {
  * the new handles simply refuse a shape whose coordinates are ambiguous.
  */
 export function supportsDirectTableOperations(table: PMNode): boolean {
+  if (__MM_EDITOR_PERFORMANCE_BENCHMARK__) {
+    let cellsVisited = 0;
+    const supported = measureEditorPerformance(
+      "tableCommands.supportsDirectTableOperations",
+      () =>
+        supportsDirectTableOperationsInstrumented(table, () => {
+          cellsVisited += 1;
+        }),
+    );
+    recordEditorPerformanceCount(
+      "tableCommands.supportsDirectTableOperations.cellsVisited",
+      cellsVisited,
+    );
+    benchmarkTableNodeScanCounts ??= new WeakMap<PMNode, number>();
+    const scanOrdinal = (benchmarkTableNodeScanCounts.get(table) ?? 0) + 1;
+    benchmarkTableNodeScanCounts.set(table, scanOrdinal);
+    recordEditorPerformanceCount(
+      "tableCommands.supportsDirectTableOperations.sameNodeScanOrdinal",
+      scanOrdinal,
+    );
+    return supported;
+  }
   if (!isTable(table) || table.childCount === 0) return false;
   const firstRow = table.child(0);
   if (
@@ -56,6 +82,37 @@ export function supportsDirectTableOperations(table: PMNode): boolean {
       return false;
     for (let column = 0; column < row.childCount; column += 1) {
       const cell = row.child(column);
+      if (!isCell(cell) || !isUnitCell(cell)) return false;
+      if (rowIndex === 0 && cell.type.spec.tableRole !== "header_cell")
+        return false;
+      if (rowIndex > 0 && cell.type.spec.tableRole !== "cell") return false;
+    }
+  }
+  return true;
+}
+
+let benchmarkTableNodeScanCounts: WeakMap<PMNode, number> | undefined;
+
+function supportsDirectTableOperationsInstrumented(
+  table: PMNode,
+  onCellVisited: () => void,
+): boolean {
+  if (!isTable(table) || table.childCount === 0) return false;
+  const firstRow = table.child(0);
+  if (
+    firstRow.type.spec.tableRole !== "row" ||
+    firstRow.childCount === 0 ||
+    firstRow.firstChild?.type.spec.tableRole !== "header_cell"
+  )
+    return false;
+  const width = firstRow.childCount;
+  for (let rowIndex = 0; rowIndex < table.childCount; rowIndex += 1) {
+    const row = table.child(rowIndex);
+    if (row.type.spec.tableRole !== "row" || row.childCount !== width)
+      return false;
+    for (let column = 0; column < row.childCount; column += 1) {
+      const cell = row.child(column);
+      onCellVisited();
       if (!isCell(cell) || !isUnitCell(cell)) return false;
       if (rowIndex === 0 && cell.type.spec.tableRole !== "header_cell")
         return false;

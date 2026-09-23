@@ -1,0 +1,3039 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-09-22T08:02:33.789Z",
+  "packageVersion": "0.5.8",
+  "gitCommit": "84a99b58f9e6516880adc5a2388bb205c4933776",
+  "measurement": {
+    "webview": "The packaged src/webview/main.ts bundle built for Chromium",
+    "instrumentation": "Explicit benchmark-only hook; production build disables it",
+    "sampleCounts": {
+      "edit": 20,
+      "startup": 5,
+      "preview": 5,
+      "typingBurstEdits": 30,
+      "stressIsolationPerCondition": 3
+    },
+    "latencyDefinition": "Elapsed browser time from immediately before a real Playwright keyboard/pointer action until the Rich Editor DOM reflects the edit",
+    "stressInteractionPhaseDefinition": "Browser performance.now() milestones around real locator wait/click and keyboard actions; DOM reflection is timestamped by a MutationObserver on the target table cell",
+    "percentiles": ["p50", "p95", "max"]
+  },
+  "environment": {
+    "platform": "darwin-arm64",
+    "operatingSystem": "Darwin 25.6.0",
+    "cpu": "Apple M1 Pro",
+    "logicalCpuCount": 10,
+    "nodeVersion": "v24.5.0",
+    "chromiumVersion": "153.0.8010.12",
+    "viewport": {
+      "width": 1280,
+      "height": 900,
+      "deviceScaleFactor": 1
+    }
+  },
+  "scenarios": [
+    {
+      "id": "small-normal",
+      "category": "ordinary",
+      "profile": "github",
+      "metadata": {
+        "bytes": 174,
+        "lines": 8,
+        "topLevelBlocks": 4
+      },
+      "startup": {
+        "sampleCount": 5,
+        "editorReadyMilliseconds": {
+          "sampleCount": 5,
+          "p50": 165.19999999552965,
+          "p95": 175.64000000208617,
+          "max": 176.70000000298023
+        },
+        "inputAcceptedMilliseconds": {
+          "sampleCount": 5,
+          "p50": 261.20000000298023,
+          "p95": 263.57999999821186,
+          "max": 263.8999999985099
+        },
+        "inputAcceptedSamplesMilliseconds": [
+          263.8999999985099, 261.20000000298023, 249.79999999701977,
+          258.6000000014901, 262.29999999701977
+        ],
+        "metrics": {
+          "core.inspectCompatibility": {
+            "callCount": 10,
+            "totalMilliseconds": 1.1000000014901161,
+            "perCallMilliseconds": {
+              "sampleCount": 10,
+              "p50": 0.10000000149011612,
+              "p95": 0.29999999701976776,
+              "max": 0.29999999701976776
+            }
+          },
+          "core.parseMarkdown": {
+            "callCount": 20,
+            "totalMilliseconds": 25.200000010430813,
+            "perCallMilliseconds": {
+              "sampleCount": 20,
+              "p50": 0.8000000007450581,
+              "p95": 3.4099999986588956,
+              "max": 3.600000001490116
+            }
+          },
+          "core.serializeMarkdown": {
+            "callCount": 5,
+            "totalMilliseconds": 4.399999998509884,
+            "perCallMilliseconds": {
+              "sampleCount": 5,
+              "p50": 0.8999999985098839,
+              "p95": 0.9000000044703483,
+              "max": 0.9000000059604645
+            }
+          },
+          "editor.applyTransaction": {
+            "callCount": 5,
+            "totalMilliseconds": 1.7000000029802322,
+            "perCallMilliseconds": {
+              "sampleCount": 5,
+              "p50": 0.30000000447034836,
+              "p95": 0.3999999985098839,
+              "max": 0.3999999985098839
+            }
+          },
+          "editor.dispatchTransaction": {
+            "callCount": 5,
+            "totalMilliseconds": 13.400000005960464,
+            "perCallMilliseconds": {
+              "sampleCount": 5,
+              "p50": 2.7000000029802322,
+              "p95": 2.779999998211861,
+              "max": 2.7999999970197678
+            }
+          },
+          "editor.updateTableToolbar": {
+            "callCount": 73,
+            "totalMilliseconds": 2.399999998509884,
+            "perCallMilliseconds": {
+              "sampleCount": 73,
+              "p50": 0,
+              "p95": 0.10000000149011612,
+              "max": 0.20000000298023224
+            }
+          },
+          "editor.updateTableToolbar.numberingState": {
+            "callCount": 73,
+            "totalMilliseconds": 0.10000000149011612,
+            "perCallMilliseconds": {
+              "sampleCount": 73,
+              "p50": 0,
+              "p95": 0,
+              "max": 0.10000000149011612
+            }
+          },
+          "editor.updateTableToolbar.tableContext": {
+            "callCount": 53,
+            "totalMilliseconds": 0.20000000298023224,
+            "perCallMilliseconds": {
+              "sampleCount": 53,
+              "p50": 0,
+              "p95": 0,
+              "max": 0.10000000149011612
+            }
+          },
+          "tableControls.update": {
+            "callCount": 20,
+            "totalMilliseconds": 0.30000000447034836,
+            "perCallMilliseconds": {
+              "sampleCount": 20,
+              "p50": 0,
+              "p95": 0.10000000149011612,
+              "max": 0.10000000149011612
+            }
+          }
+        }
+      },
+      "preview": {
+        "sampleCount": 5,
+        "previewReadyMilliseconds": {
+          "sampleCount": 5,
+          "p50": 170.89999999850988,
+          "p95": 172.45999999791383,
+          "max": 172.79999999701977
+        },
+        "metrics": {
+          "core.inspectCompatibility": {
+            "callCount": 10,
+            "totalMilliseconds": 0.7999999970197678,
+            "perCallMilliseconds": {
+              "sampleCount": 10,
+              "p50": 0.09999999776482582,
+              "p95": 0.19999999962747098,
+              "max": 0.20000000298023224
+            }
+          },
+          "core.parseMarkdown": {
+            "callCount": 30,
+            "totalMilliseconds": 26.200000010430813,
+            "perCallMilliseconds": {
+              "sampleCount": 30,
+              "p50": 0,
+              "p95": 3.4549999993294476,
+              "max": 3.7000000029802322
+            }
+          },
+          "core.renderMarkdown": {
+            "callCount": 10,
+            "totalMilliseconds": 1.6000000089406967,
+            "perCallMilliseconds": {
+              "sampleCount": 10,
+              "p50": 0.14999999850988388,
+              "p95": 0.255000003799796,
+              "max": 0.30000000447034836
+            }
+          },
+          "core.renderMarkdownDocument": {
+            "callCount": 10,
+            "totalMilliseconds": 1.3000000044703484,
+            "perCallMilliseconds": {
+              "sampleCount": 10,
+              "p50": 0.10000000149011612,
+              "p95": 0.20000000298023224,
+              "max": 0.20000000298023224
+            }
+          },
+          "editor.updateTableToolbar": {
+            "callCount": 50,
+            "totalMilliseconds": 1.8999999910593033,
+            "perCallMilliseconds": {
+              "sampleCount": 50,
+              "p50": 0,
+              "p95": 0.15499999821186036,
+              "max": 0.20000000298023224
+            }
+          },
+          "editor.updateTableToolbar.numberingState": {
+            "callCount": 50,
+            "totalMilliseconds": 0.3999999985098839,
+            "perCallMilliseconds": {
+              "sampleCount": 50,
+              "p50": 0,
+              "p95": 0.09999999813735486,
+              "max": 0.10000000149011612
+            }
+          }
+        }
+      },
+      "edits": {
+        "normalText": {
+          "sampleCount": 20,
+          "latencyMilliseconds": {
+            "sampleCount": 20,
+            "p50": 3.550000000745058,
+            "p95": 7.32999999858441,
+            "max": 34.5
+          },
+          "latencySamplesMilliseconds": [
+            34.5, 3.8000000044703484, 3.399999998509884, 3.1999999955296516, 3,
+            3.7999999970197678, 4.200000002980232, 3.600000001490116,
+            3.899999998509884, 3.7000000029802322, 3.2999999970197678,
+            3.2999999970197678, 5.899999998509884, 4.399999998509884, 3.5,
+            2.899999998509884, 3.100000001490116, 3.600000001490116,
+            3.3000000044703484, 3
+          ],
+          "sourceUpdatedEverySample": true,
+          "metrics": {
+            "core.inspectCompatibility": {
+              "callCount": 20,
+              "totalMilliseconds": 20.30000001937151,
+              "perCallMilliseconds": {
+                "sampleCount": 20,
+                "p50": 1.050000000745058,
+                "p95": 1.920000005885959,
+                "max": 2.3000000044703484
+              }
+            },
+            "core.parseMarkdown": {
+              "callCount": 20,
+              "totalMilliseconds": 19.30000001192093,
+              "perCallMilliseconds": {
+                "sampleCount": 20,
+                "p50": 1,
+                "p95": 1.8200000043958429,
+                "max": 2.2000000029802322
+              }
+            },
+            "core.serializeMarkdown": {
+              "callCount": 20,
+              "totalMilliseconds": 1.7999999970197678,
+              "perCallMilliseconds": {
+                "sampleCount": 20,
+                "p50": 0.04999999701976776,
+                "p95": 0.14000000134110507,
+                "max": 0.8999999985098839
+              }
+            },
+            "editor.applyTransaction": {
+              "callCount": 20,
+              "totalMilliseconds": 2.299999989569187,
+              "perCallMilliseconds": {
+                "sampleCount": 20,
+                "p50": 0.10000000149011612,
+                "p95": 0.20500000268220908,
+                "max": 0.29999999701976776
+              }
+            },
+            "editor.dispatchTransaction": {
+              "callCount": 20,
+              "totalMilliseconds": 18.299999989569187,
+              "perCallMilliseconds": {
+                "sampleCount": 20,
+                "p50": 0.7000000029802322,
+                "p95": 2.0300000000745064,
+                "max": 2.600000001490116
+              }
+            },
+            "editor.updateTableToolbar": {
+              "callCount": 100,
+              "totalMilliseconds": 2.9000000059604645,
+              "perCallMilliseconds": {
+                "sampleCount": 100,
+                "p50": 0,
+                "p95": 0.10000000149011612,
+                "max": 0.20000000298023224
+              }
+            },
+            "editor.updateTableToolbar.numberingState": {
+              "callCount": 100,
+              "totalMilliseconds": 0,
+              "perCallMilliseconds": {
+                "sampleCount": 100,
+                "p50": 0,
+                "p95": 0,
+                "max": 0
+              }
+            },
+            "editor.updateTableToolbar.tableContext": {
+              "callCount": 100,
+              "totalMilliseconds": 0,
+              "perCallMilliseconds": {
+                "sampleCount": 100,
+                "p50": 0,
+                "p95": 0,
+                "max": 0
+              }
+            },
+            "tableControls.update": {
+              "callCount": 40,
+              "totalMilliseconds": 0.20000000298023224,
+              "perCallMilliseconds": {
+                "sampleCount": 40,
+                "p50": 0,
+                "p95": 0.005000000074505522,
+                "max": 0.10000000149011612
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "normal-100kb-many-blocks",
+      "category": "ordinary",
+      "profile": "github",
+      "metadata": {
+        "bytes": 102456,
+        "lines": 1553,
+        "topLevelBlocks": 777
+      },
+      "startup": {
+        "sampleCount": 5,
+        "editorReadyMilliseconds": {
+          "sampleCount": 5,
+          "p50": 192.89999999850988,
+          "p95": 199.2400000050664,
+          "max": 199.90000000596046
+        },
+        "inputAcceptedMilliseconds": {
+          "sampleCount": 5,
+          "p50": 305.70000000298023,
+          "p95": 308.6200000032783,
+          "max": 309.30000000447035
+        },
+        "inputAcceptedSamplesMilliseconds": [
+          305.70000000298023, 301.8999999985099, 293.40000000596046,
+          309.30000000447035, 305.8999999985099
+        ],
+        "metrics": {
+          "core.inspectCompatibility": {
+            "callCount": 10,
+            "totalMilliseconds": 2.3000000044703484,
+            "perCallMilliseconds": {
+              "sampleCount": 10,
+              "p50": 0.25,
+              "p95": 0.41000000201165654,
+              "max": 0.5
+            }
+          },
+          "core.parseMarkdown": {
+            "callCount": 20,
+            "totalMilliseconds": 66.1000000089407,
+            "perCallMilliseconds": {
+              "sampleCount": 20,
+              "p50": 0.5,
+              "p95": 12.410000005736947,
+              "max": 12.600000001490116
+            }
+          },
+          "core.serializeMarkdown": {
+            "callCount": 5,
+            "totalMilliseconds": 17,
+            "perCallMilliseconds": {
+              "sampleCount": 5,
+              "p50": 3.3000000044703484,
+              "p95": 3.5800000011920927,
+              "max": 3.600000001490116
+            }
+          },
+          "editor.applyTransaction": {
+            "callCount": 10,
+            "totalMilliseconds": 4.200000002980232,
+            "perCallMilliseconds": {
+              "sampleCount": 10,
+              "p50": 0.3999999985098839,
+              "p95": 0.9000000026077032,
+              "max": 0.9000000059604645
+            }
+          },
+          "editor.dispatchTransaction": {
+            "callCount": 10,
+            "totalMilliseconds": 45.30000000447035,
+            "perCallMilliseconds": {
+              "sampleCount": 10,
+              "p50": 4.349999997764826,
+              "p95": 8.065000000968576,
+              "max": 8.200000002980232
+            }
+          },
+          "editor.updateTableToolbar": {
+            "callCount": 85,
+            "totalMilliseconds": 2.4000000283122063,
+            "perCallMilliseconds": {
+              "sampleCount": 85,
+              "p50": 0,
+              "p95": 0.10000000149011612,
+              "max": 0.29999999701976776
+            }
+          },
+          "editor.updateTableToolbar.numberingState": {
+            "callCount": 85,
+            "totalMilliseconds": 0.20000000298023224,
+            "perCallMilliseconds": {
+              "sampleCount": 85,
+              "p50": 0,
+              "p95": 0,
+              "max": 0.10000000149011612
+            }
+          },
+          "editor.updateTableToolbar.tableContext": {
+            "callCount": 65,
+            "totalMilliseconds": 0.10000000149011612,
+            "perCallMilliseconds": {
+              "sampleCount": 65,
+              "p50": 0,
+              "p95": 0,
+              "max": 0.10000000149011612
+            }
+          },
+          "tableControls.update": {
+            "callCount": 25,
+            "totalMilliseconds": 0.30000000447034836,
+            "perCallMilliseconds": {
+              "sampleCount": 25,
+              "p50": 0,
+              "p95": 0.10000000149011612,
+              "max": 0.10000000149011612
+            }
+          }
+        }
+      },
+      "preview": {
+        "sampleCount": 5,
+        "previewReadyMilliseconds": {
+          "sampleCount": 5,
+          "p50": 196.60000000149012,
+          "p95": 200.76000000238417,
+          "max": 201.20000000298023
+        },
+        "metrics": {
+          "core.inspectCompatibility": {
+            "callCount": 10,
+            "totalMilliseconds": 2.299999989569187,
+            "perCallMilliseconds": {
+              "sampleCount": 10,
+              "p50": 0.25,
+              "p95": 0.3549999978393315,
+              "max": 0.3999999985098839
+            }
+          },
+          "core.parseMarkdown": {
+            "callCount": 30,
+            "totalMilliseconds": 64.79999998956919,
+            "perCallMilliseconds": {
+              "sampleCount": 30,
+              "p50": 0,
+              "p95": 11.919999998807906,
+              "max": 12.200000002980232
+            }
+          },
+          "core.renderMarkdown": {
+            "callCount": 10,
+            "totalMilliseconds": 5.0999999940395355,
+            "perCallMilliseconds": {
+              "sampleCount": 10,
+              "p50": 0.4999999962747097,
+              "p95": 0.8550000019371509,
+              "max": 0.9000000059604645
+            }
+          },
+          "core.renderMarkdownDocument": {
+            "callCount": 10,
+            "totalMilliseconds": 4.999999992549419,
+            "perCallMilliseconds": {
+              "sampleCount": 10,
+              "p50": 0.4999999962747097,
+              "p95": 0.8550000019371509,
+              "max": 0.9000000059604645
+            }
+          },
+          "editor.updateTableToolbar": {
+            "callCount": 50,
+            "totalMilliseconds": 1.800000011920929,
+            "perCallMilliseconds": {
+              "sampleCount": 50,
+              "p50": 0,
+              "p95": 0.1550000023096797,
+              "max": 0.20000000298023224
+            }
+          },
+          "editor.updateTableToolbar.numberingState": {
+            "callCount": 50,
+            "totalMilliseconds": 0.4000000059604645,
+            "perCallMilliseconds": {
+              "sampleCount": 50,
+              "p50": 0,
+              "p95": 0.10000000149011612,
+              "max": 0.10000000149011612
+            }
+          }
+        }
+      },
+      "edits": {
+        "normalText": {
+          "sampleCount": 20,
+          "latencyMilliseconds": {
+            "sampleCount": 20,
+            "p50": 7.799999997019768,
+            "p95": 14.459999997168781,
+            "max": 17.5
+          },
+          "latencySamplesMilliseconds": [
+            17.5, 8.100000001490116, 7.899999998509884, 7.899999998509884,
+            7.399999998509884, 7.800000004470348, 7.300000004470348,
+            7.600000001490116, 7.399999998509884, 7.799999997019768, 8.5, 7.5,
+            14.299999997019768, 7.799999997019768, 7.899999998509884,
+            6.4000000059604645, 7.200000002980232, 7.0999999940395355,
+            6.5999999940395355, 8
+          ],
+          "sourceUpdatedEverySample": true,
+          "metrics": {
+            "core.inspectCompatibility": {
+              "callCount": 20,
+              "totalMilliseconds": 155.19999998807907,
+              "perCallMilliseconds": {
+                "sampleCount": 20,
+                "p50": 8.099999997764826,
+                "p95": 9.804999997094274,
+                "max": 9.899999998509884
+              }
+            },
+            "core.parseMarkdown": {
+              "callCount": 20,
+              "totalMilliseconds": 153,
+              "perCallMilliseconds": {
+                "sampleCount": 20,
+                "p50": 8.00000000372529,
+                "p95": 9.519999999925494,
+                "max": 9.899999998509884
+              }
+            },
+            "core.serializeMarkdown": {
+              "callCount": 20,
+              "totalMilliseconds": 17.30000001937151,
+              "perCallMilliseconds": {
+                "sampleCount": 20,
+                "p50": 0.7000000029802322,
+                "p95": 1.1350000001490135,
+                "max": 3.7000000029802322
+              }
+            },
+            "editor.applyTransaction": {
+              "callCount": 20,
+              "totalMilliseconds": 7.799999982118607,
+              "perCallMilliseconds": {
+                "sampleCount": 20,
+                "p50": 0.3999999985098839,
+                "p95": 0.5099999997764827,
+                "max": 0.6999999955296516
+              }
+            },
+            "editor.dispatchTransaction": {
+              "callCount": 20,
+              "totalMilliseconds": 78.19999999552965,
+              "perCallMilliseconds": {
+                "sampleCount": 20,
+                "p50": 3.699999999254942,
+                "p95": 4.315000001341107,
+                "max": 8.399999998509884
+              }
+            },
+            "editor.updateTableToolbar": {
+              "callCount": 100,
+              "totalMilliseconds": 2.6000000089406967,
+              "perCallMilliseconds": {
+                "sampleCount": 100,
+                "p50": 0,
+                "p95": 0.10000000149011612,
+                "max": 0.20000000298023224
+              }
+            },
+            "editor.updateTableToolbar.numberingState": {
+              "callCount": 100,
+              "totalMilliseconds": 0,
+              "perCallMilliseconds": {
+                "sampleCount": 100,
+                "p50": 0,
+                "p95": 0,
+                "max": 0
+              }
+            },
+            "editor.updateTableToolbar.tableContext": {
+              "callCount": 100,
+              "totalMilliseconds": 0.30000000447034836,
+              "perCallMilliseconds": {
+                "sampleCount": 100,
+                "p50": 0,
+                "p95": 0,
+                "max": 0.10000000149011612
+              }
+            },
+            "tableControls.update": {
+              "callCount": 40,
+              "totalMilliseconds": 0.20000000298023224,
+              "perCallMilliseconds": {
+                "sampleCount": 40,
+                "p50": 0,
+                "p95": 0.005000000074505522,
+                "max": 0.10000000149011612
+              }
+            }
+          }
+        }
+      },
+      "typingBurst": {
+        "editCount": 30,
+        "requestedKeystrokes": 30,
+        "keyboardDelayMilliseconds": 15,
+        "metrics": {
+          "core.inspectCompatibility": {
+            "callCount": 1,
+            "totalMilliseconds": 10.599999994039536,
+            "perCallMilliseconds": {
+              "sampleCount": 1,
+              "p50": 10.599999994039536,
+              "p95": 10.599999994039536,
+              "max": 10.599999994039536
+            }
+          },
+          "core.parseMarkdown": {
+            "callCount": 1,
+            "totalMilliseconds": 10.299999997019768,
+            "perCallMilliseconds": {
+              "sampleCount": 1,
+              "p50": 10.299999997019768,
+              "p95": 10.299999997019768,
+              "max": 10.299999997019768
+            }
+          },
+          "core.serializeMarkdown": {
+            "callCount": 30,
+            "totalMilliseconds": 27.000000029802322,
+            "perCallMilliseconds": {
+              "sampleCount": 30,
+              "p50": 0.7999999970197678,
+              "p95": 1.4849999990314227,
+              "max": 3.5
+            }
+          },
+          "editor.applyTransaction": {
+            "callCount": 30,
+            "totalMilliseconds": 10.100000001490116,
+            "perCallMilliseconds": {
+              "sampleCount": 30,
+              "p50": 0.30000000074505806,
+              "p95": 0.45500000268220875,
+              "max": 0.7999999970197678
+            }
+          },
+          "editor.dispatchTransaction": {
+            "callCount": 30,
+            "totalMilliseconds": 117.40000000596046,
+            "perCallMilliseconds": {
+              "sampleCount": 30,
+              "p50": 3.650000002235174,
+              "p95": 4.800000001117587,
+              "max": 8.5
+            }
+          },
+          "editor.updateTableToolbar": {
+            "callCount": 150,
+            "totalMilliseconds": 3.3999999910593033,
+            "perCallMilliseconds": {
+              "sampleCount": 150,
+              "p50": 0,
+              "p95": 0.10000000149011612,
+              "max": 0.10000000149011612
+            }
+          },
+          "editor.updateTableToolbar.numberingState": {
+            "callCount": 150,
+            "totalMilliseconds": 0.10000000149011612,
+            "perCallMilliseconds": {
+              "sampleCount": 150,
+              "p50": 0,
+              "p95": 0,
+              "max": 0.10000000149011612
+            }
+          },
+          "editor.updateTableToolbar.tableContext": {
+            "callCount": 150,
+            "totalMilliseconds": 0.10000000149011612,
+            "perCallMilliseconds": {
+              "sampleCount": 150,
+              "p50": 0,
+              "p95": 0,
+              "max": 0.10000000149011612
+            }
+          },
+          "tableControls.update": {
+            "callCount": 60,
+            "totalMilliseconds": 0.20000000298023224,
+            "perCallMilliseconds": {
+              "sampleCount": 60,
+              "p50": 0,
+              "p95": 0,
+              "max": 0.10000000149011612
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "code-heading-footnote-heavy",
+      "category": "ordinary",
+      "profile": "github",
+      "metadata": {
+        "bytes": 36225,
+        "lines": 1002,
+        "topLevelBlocks": 102
+      },
+      "startup": {
+        "sampleCount": 5,
+        "editorReadyMilliseconds": {
+          "sampleCount": 5,
+          "p50": 310,
+          "p95": 316.75999999940393,
+          "max": 317.3999999985099
+        },
+        "inputAcceptedMilliseconds": {
+          "sampleCount": 5,
+          "p50": 437,
+          "p95": 446.68000000119207,
+          "max": 447.6000000014901
+        },
+        "inputAcceptedSamplesMilliseconds": [
+          437, 447.6000000014901, 428.8999999985099, 434.1000000014901, 443
+        ],
+        "metrics": {
+          "core.inspectCompatibility": {
+            "callCount": 10,
+            "totalMilliseconds": 27.30000001192093,
+            "perCallMilliseconds": {
+              "sampleCount": 10,
+              "p50": 2.650000002235174,
+              "p95": 5.454999999329448,
+              "max": 5.5
+            }
+          },
+          "core.parseMarkdown": {
+            "callCount": 520,
+            "totalMilliseconds": 134.20000000298023,
+            "perCallMilliseconds": {
+              "sampleCount": 520,
+              "p50": 0.10000000149011612,
+              "p95": 0.30000000447034836,
+              "max": 11.300000004470348
+            }
+          },
+          "core.serializeMarkdown": {
+            "callCount": 5,
+            "totalMilliseconds": 26.700000010430813,
+            "perCallMilliseconds": {
+              "sampleCount": 5,
+              "p50": 5.200000002980232,
+              "p95": 5.580000001192093,
+              "max": 5.600000001490116
+            }
+          },
+          "editor.applyTransaction": {
+            "callCount": 10,
+            "totalMilliseconds": 23.00000000745058,
+            "perCallMilliseconds": {
+              "sampleCount": 10,
+              "p50": 2.25,
+              "p95": 4.65500000230968,
+              "max": 4.700000002980232
+            }
+          },
+          "editor.dispatchTransaction": {
+            "callCount": 10,
+            "totalMilliseconds": 87.30000001192093,
+            "perCallMilliseconds": {
+              "sampleCount": 10,
+              "p50": 8.450000002980232,
+              "p95": 16.049999999999997,
+              "max": 16.5
+            }
+          },
+          "editor.updateTableToolbar": {
+            "callCount": 580,
+            "totalMilliseconds": 6.200000032782555,
+            "perCallMilliseconds": {
+              "sampleCount": 580,
+              "p50": 0,
+              "p95": 0.10000000149011612,
+              "max": 0.20000000298023224
+            }
+          },
+          "editor.updateTableToolbar.numberingState": {
+            "callCount": 580,
+            "totalMilliseconds": 0.6000000089406967,
+            "perCallMilliseconds": {
+              "sampleCount": 580,
+              "p50": 0,
+              "p95": 0,
+              "max": 0.10000000149011612
+            }
+          },
+          "editor.updateTableToolbar.tableContext": {
+            "callCount": 560,
+            "totalMilliseconds": 0.29999999701976776,
+            "perCallMilliseconds": {
+              "sampleCount": 560,
+              "p50": 0,
+              "p95": 0,
+              "max": 0.10000000149011612
+            }
+          },
+          "tableControls.update": {
+            "callCount": 25,
+            "totalMilliseconds": 0.5999999940395355,
+            "perCallMilliseconds": {
+              "sampleCount": 25,
+              "p50": 0,
+              "p95": 0.10000000149011612,
+              "max": 0.10000000149011612
+            }
+          }
+        }
+      },
+      "preview": {
+        "sampleCount": 5,
+        "previewReadyMilliseconds": {
+          "sampleCount": 5,
+          "p50": 319.5,
+          "p95": 330.80000000298025,
+          "max": 331.20000000298023
+        },
+        "metrics": {
+          "core.inspectCompatibility": {
+            "callCount": 10,
+            "totalMilliseconds": 21.400000005960464,
+            "perCallMilliseconds": {
+              "sampleCount": 10,
+              "p50": 2.100000001490116,
+              "p95": 4.199999999627471,
+              "max": 4.200000002980232
+            }
+          },
+          "core.parseMarkdown": {
+            "callCount": 1030,
+            "totalMilliseconds": 191.90000002086163,
+            "perCallMilliseconds": {
+              "sampleCount": 1030,
+              "p50": 0.10000000149011612,
+              "p95": 0.20000000298023224,
+              "max": 11.799999997019768
+            }
+          },
+          "core.renderMarkdown": {
+            "callCount": 10,
+            "totalMilliseconds": 104.30000001192093,
+            "perCallMilliseconds": {
+              "sampleCount": 10,
+              "p50": 10.200000002980232,
+              "p95": 20.855000001192092,
+              "max": 20.899999998509884
+            }
+          },
+          "core.renderMarkdownDocument": {
+            "callCount": 10,
+            "totalMilliseconds": 79.30000000447035,
+            "perCallMilliseconds": {
+              "sampleCount": 10,
+              "p50": 7.700000002980232,
+              "p95": 15.899999998509884,
+              "max": 15.899999998509884
+            }
+          },
+          "editor.updateTableToolbar": {
+            "callCount": 550,
+            "totalMilliseconds": 5.500000029802322,
+            "perCallMilliseconds": {
+              "sampleCount": 550,
+              "p50": 0,
+              "p95": 0.10000000149011612,
+              "max": 0.19999999552965164
+            }
+          },
+          "editor.updateTableToolbar.numberingState": {
+            "callCount": 550,
+            "totalMilliseconds": 0.5000000074505806,
+            "perCallMilliseconds": {
+              "sampleCount": 550,
+              "p50": 0,
+              "p95": 0,
+              "max": 0.10000000149011612
+            }
+          }
+        }
+      },
+      "edits": {
+        "normalText": {
+          "sampleCount": 20,
+          "latencyMilliseconds": {
+            "sampleCount": 20,
+            "p50": 15.050000000745058,
+            "p95": 22.815000004321345,
+            "max": 32.600000001490116
+          },
+          "latencySamplesMilliseconds": [
+            32.600000001490116, 22.30000000447035, 17.399999998509884,
+            16.80000000447035, 15.700000002980232, 16.700000002980232,
+            16.299999997019768, 15.100000001490116, 14.700000002980232,
+            15.700000002980232, 14.900000005960464, 14.300000004470348,
+            15.100000001490116, 14.300000004470348, 14.300000004470348, 15,
+            13.199999995529652, 13.699999995529652, 14.899999998509884,
+            14.100000001490116
+          ],
+          "sourceUpdatedEverySample": true,
+          "metrics": {
+            "core.inspectCompatibility": {
+              "callCount": 20,
+              "totalMilliseconds": 127.00000000745058,
+              "perCallMilliseconds": {
+                "sampleCount": 20,
+                "p50": 6.300000004470348,
+                "p95": 8.664999999850991,
+                "max": 11.799999997019768
+              }
+            },
+            "core.parseMarkdown": {
+              "callCount": 20,
+              "totalMilliseconds": 124.70000000298023,
+              "perCallMilliseconds": {
+                "sampleCount": 20,
+                "p50": 6.300000004470348,
+                "p95": 8.439999996870759,
+                "max": 11.099999994039536
+              }
+            },
+            "core.serializeMarkdown": {
+              "callCount": 20,
+              "totalMilliseconds": 48.49999997019768,
+              "perCallMilliseconds": {
+                "sampleCount": 20,
+                "p50": 2.149999998509884,
+                "p95": 3.304999995604159,
+                "max": 5.299999997019768
+              }
+            },
+            "editor.applyTransaction": {
+              "callCount": 20,
+              "totalMilliseconds": 40.100000001490116,
+              "perCallMilliseconds": {
+                "sampleCount": 20,
+                "p50": 1.7000000029802322,
+                "p95": 3.474999998509885,
+                "max": 4.899999998509884
+              }
+            },
+            "editor.dispatchTransaction": {
+              "callCount": 20,
+              "totalMilliseconds": 174.19999999552965,
+              "perCallMilliseconds": {
+                "sampleCount": 20,
+                "p50": 8.00000000372529,
+                "p95": 12.659999999776485,
+                "max": 15.699999995529652
+              }
+            },
+            "editor.updateTableToolbar": {
+              "callCount": 100,
+              "totalMilliseconds": 2.399999998509884,
+              "perCallMilliseconds": {
+                "sampleCount": 100,
+                "p50": 0,
+                "p95": 0.10000000149011612,
+                "max": 0.10000000149011612
+              }
+            },
+            "editor.updateTableToolbar.numberingState": {
+              "callCount": 100,
+              "totalMilliseconds": 0.10000000149011612,
+              "perCallMilliseconds": {
+                "sampleCount": 100,
+                "p50": 0,
+                "p95": 0,
+                "max": 0.10000000149011612
+              }
+            },
+            "editor.updateTableToolbar.tableContext": {
+              "callCount": 100,
+              "totalMilliseconds": 0,
+              "perCallMilliseconds": {
+                "sampleCount": 100,
+                "p50": 0,
+                "p95": 0,
+                "max": 0
+              }
+            },
+            "tableControls.update": {
+              "callCount": 40,
+              "totalMilliseconds": 0.19999999552965164,
+              "perCallMilliseconds": {
+                "sampleCount": 40,
+                "p50": 0,
+                "p95": 0.004999999701976492,
+                "max": 0.10000000149011612
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "large-table-100x10",
+      "category": "ordinary",
+      "profile": "github",
+      "metadata": {
+        "bytes": 8420,
+        "lines": 104,
+        "topLevelBlocks": 2,
+        "table": {
+          "bodyRows": 100,
+          "columns": 10
+        }
+      },
+      "startup": {
+        "sampleCount": 5,
+        "editorReadyMilliseconds": {
+          "sampleCount": 5,
+          "p50": 201.60000000149012,
+          "p95": 204.8800000011921,
+          "max": 205.60000000149012
+        },
+        "inputAcceptedMilliseconds": {
+          "sampleCount": 5,
+          "p50": 310.3999999985099,
+          "p95": 314.81999999880793,
+          "max": 314.8999999985099
+        },
+        "inputAcceptedSamplesMilliseconds": [
+          314.8999999985099, 314.5, 310.3999999985099, 306.3999999985099,
+          310.3999999985099
+        ],
+        "metrics": {
+          "core.inspectCompatibility": {
+            "callCount": 10,
+            "totalMilliseconds": 2.899999998509884,
+            "perCallMilliseconds": {
+              "sampleCount": 10,
+              "p50": 0.25,
+              "p95": 0.5,
+              "max": 0.5
+            }
+          },
+          "core.parseMarkdown": {
+            "callCount": 20,
+            "totalMilliseconds": 46.69999999552965,
+            "perCallMilliseconds": {
+              "sampleCount": 20,
+              "p50": 0.8000000007450581,
+              "p95": 7.714999995753169,
+              "max": 8
+            }
+          },
+          "core.serializeMarkdown": {
+            "callCount": 5,
+            "totalMilliseconds": 25.599999994039536,
+            "perCallMilliseconds": {
+              "sampleCount": 5,
+              "p50": 5.199999995529652,
+              "p95": 5.299999997019768,
+              "max": 5.299999997019768
+            }
+          },
+          "editor.applyTransaction": {
+            "callCount": 5,
+            "totalMilliseconds": 6.800000004470348,
+            "perCallMilliseconds": {
+              "sampleCount": 5,
+              "p50": 1.3000000044703484,
+              "p95": 1.4799999997019768,
+              "max": 1.5
+            }
+          },
+          "editor.dispatchTransaction": {
+            "callCount": 5,
+            "totalMilliseconds": 50.099999994039536,
+            "perCallMilliseconds": {
+              "sampleCount": 5,
+              "p50": 9.899999998509884,
+              "p95": 10.579999996721744,
+              "max": 10.699999995529652
+            }
+          },
+          "editor.updateTableToolbar": {
+            "callCount": 79,
+            "totalMilliseconds": 7.599999979138374,
+            "perCallMilliseconds": {
+              "sampleCount": 79,
+              "p50": 0.09999999403953552,
+              "p95": 0.5,
+              "max": 0.7000000029802322
+            }
+          },
+          "editor.updateTableToolbar.alignmentScan": {
+            "callCount": 29,
+            "totalMilliseconds": 3.299999974668026,
+            "perCallMilliseconds": {
+              "sampleCount": 29,
+              "p50": 0.09999999403953552,
+              "p95": 0.40000000298023225,
+              "max": 0.5
+            }
+          },
+          "editor.updateTableToolbar.numberingState": {
+            "callCount": 79,
+            "totalMilliseconds": 1.0999999940395355,
+            "perCallMilliseconds": {
+              "sampleCount": 79,
+              "p50": 0,
+              "p95": 0.10000000149011612,
+              "max": 0.20000000298023224
+            }
+          },
+          "editor.updateTableToolbar.tableContext": {
+            "callCount": 59,
+            "totalMilliseconds": 0.30000000447034836,
+            "perCallMilliseconds": {
+              "sampleCount": 59,
+              "p50": 0,
+              "p95": 0.010000000149011043,
+              "max": 0.10000000149011612
+            }
+          },
+          "tableCommands.supportsDirectTableOperations": {
+            "callCount": 25,
+            "totalMilliseconds": 1.699999988079071,
+            "perCallMilliseconds": {
+              "sampleCount": 25,
+              "p50": 0.09999999403953552,
+              "p95": 0.20000000149011612,
+              "max": 0.29999999701976776
+            }
+          },
+          "tableControls.measureLayout": {
+            "callCount": 23,
+            "totalMilliseconds": 57.79999999701977,
+            "perCallMilliseconds": {
+              "sampleCount": 23,
+              "p50": 2.2999999970197678,
+              "p95": 3.7900000035762784,
+              "max": 4
+            }
+          },
+          "tableControls.measureLayout.boundaryCalculation": {
+            "callCount": 23,
+            "totalMilliseconds": 8.49999999254942,
+            "perCallMilliseconds": {
+              "sampleCount": 23,
+              "p50": 0.29999999701976776,
+              "p95": 0.8000000037252903,
+              "max": 0.8999999985098839
+            }
+          },
+          "tableControls.measureLayout.cellRectCollection": {
+            "callCount": 23,
+            "totalMilliseconds": 31.00000001490116,
+            "perCallMilliseconds": {
+              "sampleCount": 23,
+              "p50": 1.3999999985098839,
+              "p95": 1.5900000013411044,
+              "max": 1.6999999955296516
+            }
+          },
+          "tableControls.measureLayout.controlPositioning": {
+            "callCount": 23,
+            "totalMilliseconds": 9.600000016391277,
+            "perCallMilliseconds": {
+              "sampleCount": 23,
+              "p50": 0.20000000298023224,
+              "p95": 1.1000000014901161,
+              "max": 1.2999999970197678
+            }
+          },
+          "tableControls.measureLayout.presentationUpdate": {
+            "callCount": 23,
+            "totalMilliseconds": 5.1999999806284904,
+            "perCallMilliseconds": {
+              "sampleCount": 23,
+              "p50": 0.20000000298023224,
+              "p95": 0.3999999985098839,
+              "max": 0.3999999985098839
+            }
+          },
+          "tableControls.measureLayout.tableAndStageRect": {
+            "callCount": 23,
+            "totalMilliseconds": 2.399999998509884,
+            "perCallMilliseconds": {
+              "sampleCount": 23,
+              "p50": 0,
+              "p95": 0.3899999991059302,
+              "max": 0.3999999985098839
+            }
+          },
+          "tableControls.renderTarget": {
+            "callCount": 5,
+            "totalMilliseconds": 7.399999998509884,
+            "perCallMilliseconds": {
+              "sampleCount": 5,
+              "p50": 1.5,
+              "p95": 1.5,
+              "max": 1.5
+            }
+          },
+          "tableControls.update": {
+            "callCount": 25,
+            "totalMilliseconds": 51.1000000089407,
+            "perCallMilliseconds": {
+              "sampleCount": 25,
+              "p50": 0.20000000298023224,
+              "p95": 9.379999999701976,
+              "max": 9.899999998509884
+            }
+          }
+        }
+      },
+      "preview": {
+        "sampleCount": 5,
+        "previewReadyMilliseconds": {
+          "sampleCount": 5,
+          "p50": 191.80000000447035,
+          "p95": 196.72000000476837,
+          "max": 197.90000000596046
+        },
+        "metrics": {
+          "core.inspectCompatibility": {
+            "callCount": 10,
+            "totalMilliseconds": 2.2999999970197678,
+            "perCallMilliseconds": {
+              "sampleCount": 10,
+              "p50": 0.25,
+              "p95": 0.3550000011920928,
+              "max": 0.3999999985098839
+            }
+          },
+          "core.parseMarkdown": {
+            "callCount": 30,
+            "totalMilliseconds": 46.3999999910593,
+            "perCallMilliseconds": {
+              "sampleCount": 30,
+              "p50": 0,
+              "p95": 7.5999999981373545,
+              "max": 7.799999997019768
+            }
+          },
+          "core.renderMarkdown": {
+            "callCount": 10,
+            "totalMilliseconds": 6.899999998509884,
+            "perCallMilliseconds": {
+              "sampleCount": 10,
+              "p50": 0.6500000022351742,
+              "p95": 1.2000000029802322,
+              "max": 1.2000000029802322
+            }
+          },
+          "core.renderMarkdownDocument": {
+            "callCount": 10,
+            "totalMilliseconds": 6.799999997019768,
+            "perCallMilliseconds": {
+              "sampleCount": 10,
+              "p50": 0.6500000022351742,
+              "p95": 1.2000000029802322,
+              "max": 1.2000000029802322
+            }
+          },
+          "editor.updateTableToolbar": {
+            "callCount": 50,
+            "totalMilliseconds": 2.300000011920929,
+            "perCallMilliseconds": {
+              "sampleCount": 50,
+              "p50": 0,
+              "p95": 0.15499999821186036,
+              "max": 0.29999999701976776
+            }
+          },
+          "editor.updateTableToolbar.numberingState": {
+            "callCount": 50,
+            "totalMilliseconds": 0.5,
+            "perCallMilliseconds": {
+              "sampleCount": 50,
+              "p50": 0,
+              "p95": 0.10000000149011612,
+              "max": 0.10000000149011612
+            }
+          }
+        }
+      },
+      "edits": {
+        "normalText": {
+          "sampleCount": 20,
+          "latencyMilliseconds": {
+            "sampleCount": 20,
+            "p50": 6.349999997764826,
+            "p95": 12.110000001266599,
+            "max": 12.299999997019768
+          },
+          "latencySamplesMilliseconds": [
+            12.299999997019768, 9.700000002980232, 12.100000001490116,
+            6.100000001490116, 6.5999999940395355, 7.399999998509884,
+            6.399999998509884, 5.9000000059604645, 6, 6, 9.100000001490116,
+            5.600000001490116, 5.799999997019768, 5.9000000059604645,
+            6.299999997019768, 11.599999994039536, 9.799999997019768,
+            9.200000002980232, 6, 5.5
+          ],
+          "sourceUpdatedEverySample": true,
+          "metrics": {
+            "core.inspectCompatibility": {
+              "callCount": 20,
+              "totalMilliseconds": 99.00000000745058,
+              "perCallMilliseconds": {
+                "sampleCount": 20,
+                "p50": 5.599999997764826,
+                "p95": 7.650000001490117,
+                "max": 8.600000001490116
+              }
+            },
+            "core.parseMarkdown": {
+              "callCount": 20,
+              "totalMilliseconds": 96.59999999403954,
+              "perCallMilliseconds": {
+                "sampleCount": 20,
+                "p50": 5.549999997019768,
+                "p95": 7.354999997466804,
+                "max": 8.400000005960464
+              }
+            },
+            "core.serializeMarkdown": {
+              "callCount": 20,
+              "totalMilliseconds": 3.1999999955296516,
+              "perCallMilliseconds": {
+                "sampleCount": 20,
+                "p50": 0.10000000149011612,
+                "p95": 0.28000000268221015,
+                "max": 1.7999999970197678
+              }
+            },
+            "editor.applyTransaction": {
+              "callCount": 20,
+              "totalMilliseconds": 14.700000002980232,
+              "perCallMilliseconds": {
+                "sampleCount": 20,
+                "p50": 0.6999999955296516,
+                "p95": 1.1200000014156106,
+                "max": 1.5
+              }
+            },
+            "editor.dispatchTransaction": {
+              "callCount": 20,
+              "totalMilliseconds": 50.900000005960464,
+              "perCallMilliseconds": {
+                "sampleCount": 20,
+                "p50": 2.300000000745058,
+                "p95": 3.4750000055879364,
+                "max": 4.899999998509884
+              }
+            },
+            "editor.updateTableToolbar": {
+              "callCount": 100,
+              "totalMilliseconds": 2.5000000074505806,
+              "perCallMilliseconds": {
+                "sampleCount": 100,
+                "p50": 0,
+                "p95": 0.10000000149011612,
+                "max": 0.10000000149011612
+              }
+            },
+            "editor.updateTableToolbar.numberingState": {
+              "callCount": 100,
+              "totalMilliseconds": 0.4000000059604645,
+              "perCallMilliseconds": {
+                "sampleCount": 100,
+                "p50": 0,
+                "p95": 0,
+                "max": 0.10000000149011612
+              }
+            },
+            "editor.updateTableToolbar.tableContext": {
+              "callCount": 100,
+              "totalMilliseconds": 0,
+              "perCallMilliseconds": {
+                "sampleCount": 100,
+                "p50": 0,
+                "p95": 0,
+                "max": 0
+              }
+            },
+            "tableCommands.supportsDirectTableOperations": {
+              "callCount": 40,
+              "totalMilliseconds": 0.5000000074505806,
+              "perCallMilliseconds": {
+                "sampleCount": 40,
+                "p50": 0,
+                "p95": 0.10000000149011612,
+                "max": 0.10000000149011612
+              }
+            },
+            "tableControls.measureLayout": {
+              "callCount": 20,
+              "totalMilliseconds": 29.200000010430813,
+              "perCallMilliseconds": {
+                "sampleCount": 20,
+                "p50": 1.4000000059604645,
+                "p95": 1.710000002756715,
+                "max": 1.8999999985098839
+              }
+            },
+            "tableControls.measureLayout.boundaryCalculation": {
+              "callCount": 20,
+              "totalMilliseconds": 3.6999999955296516,
+              "perCallMilliseconds": {
+                "sampleCount": 20,
+                "p50": 0.19999999552965164,
+                "p95": 0.3050000041723252,
+                "max": 0.3999999985098839
+              }
+            },
+            "tableControls.measureLayout.cellRectCollection": {
+              "callCount": 20,
+              "totalMilliseconds": 17.00000000745058,
+              "perCallMilliseconds": {
+                "sampleCount": 20,
+                "p50": 0.8000000044703484,
+                "p95": 1,
+                "max": 1
+              }
+            },
+            "tableControls.measureLayout.controlPositioning": {
+              "callCount": 20,
+              "totalMilliseconds": 4.299999974668026,
+              "perCallMilliseconds": {
+                "sampleCount": 20,
+                "p50": 0.19999999552965164,
+                "p95": 0.3050000041723252,
+                "max": 0.3999999985098839
+              }
+            },
+            "tableControls.measureLayout.presentationUpdate": {
+              "callCount": 20,
+              "totalMilliseconds": 4.000000029802322,
+              "perCallMilliseconds": {
+                "sampleCount": 20,
+                "p50": 0.20000000298023224,
+                "p95": 0.29999999739229677,
+                "max": 0.30000000447034836
+              }
+            },
+            "tableControls.measureLayout.tableAndStageRect": {
+              "callCount": 20,
+              "totalMilliseconds": 0,
+              "perCallMilliseconds": {
+                "sampleCount": 20,
+                "p50": 0,
+                "p95": 0,
+                "max": 0
+              }
+            },
+            "tableControls.update": {
+              "callCount": 40,
+              "totalMilliseconds": 6.899999998509884,
+              "perCallMilliseconds": {
+                "sampleCount": 40,
+                "p50": 0.19999999552965164,
+                "p95": 0.29999999739229677,
+                "max": 0.30000000447034836
+              }
+            }
+          }
+        },
+        "tableCell": {
+          "sampleCount": 20,
+          "latencyMilliseconds": {
+            "sampleCount": 20,
+            "p50": 12.25,
+            "p95": 21.420000001415637,
+            "max": 56
+          },
+          "latencySamplesMilliseconds": [
+            56, 15.200000002980232, 14.5, 9.600000001490116, 17.600000001490116,
+            10, 15.899999998509884, 16.5, 15.799999997019768,
+            16.399999998509884, 16.600000001490116, 8.899999998509884,
+            9.099999994039536, 9, 19.600000001490116, 9.100000001490116, 9,
+            8.700000002980232, 8.200000002980232, 9
+          ],
+          "sourceUpdatedEverySample": true,
+          "metrics": {
+            "core.inspectCompatibility": {
+              "callCount": 20,
+              "totalMilliseconds": 106.80000000447035,
+              "perCallMilliseconds": {
+                "sampleCount": 20,
+                "p50": 5.449999999254942,
+                "p95": 8.249999995902181,
+                "max": 9.200000002980232
+              }
+            },
+            "core.parseMarkdown": {
+              "callCount": 20,
+              "totalMilliseconds": 103.89999999850988,
+              "perCallMilliseconds": {
+                "sampleCount": 20,
+                "p50": 5.399999998509884,
+                "p95": 8.150000001490117,
+                "max": 9.100000001490116
+              }
+            },
+            "core.serializeMarkdown": {
+              "callCount": 20,
+              "totalMilliseconds": 48.50000000745058,
+              "perCallMilliseconds": {
+                "sampleCount": 20,
+                "p50": 2.100000001490116,
+                "p95": 3.5650000002235185,
+                "max": 4.800000004470348
+              }
+            },
+            "editor.applyTransaction": {
+              "callCount": 20,
+              "totalMilliseconds": 16.700000010430813,
+              "perCallMilliseconds": {
+                "sampleCount": 20,
+                "p50": 0.75,
+                "p95": 1.4099999982863667,
+                "max": 1.5999999940395355
+              }
+            },
+            "editor.dispatchTransaction": {
+              "callCount": 20,
+              "totalMilliseconds": 102.79999999701977,
+              "perCallMilliseconds": {
+                "sampleCount": 20,
+                "p50": 4.75000000372529,
+                "p95": 6.929999997466805,
+                "max": 9.400000005960464
+              }
+            },
+            "editor.updateTableToolbar": {
+              "callCount": 102,
+              "totalMilliseconds": 8.399999998509884,
+              "perCallMilliseconds": {
+                "sampleCount": 102,
+                "p50": 0.10000000149011612,
+                "p95": 0.20000000298023224,
+                "max": 0.3999999985098839
+              }
+            },
+            "editor.updateTableToolbar.alignmentScan": {
+              "callCount": 102,
+              "totalMilliseconds": 5.299999997019768,
+              "perCallMilliseconds": {
+                "sampleCount": 102,
+                "p50": 0,
+                "p95": 0.19499999582767374,
+                "max": 0.3999999985098839
+              }
+            },
+            "editor.updateTableToolbar.numberingState": {
+              "callCount": 102,
+              "totalMilliseconds": 0.29999998956918716,
+              "perCallMilliseconds": {
+                "sampleCount": 102,
+                "p50": 0,
+                "p95": 0,
+                "max": 0.10000000149011612
+              }
+            },
+            "editor.updateTableToolbar.tableContext": {
+              "callCount": 102,
+              "totalMilliseconds": 0.09999999403953552,
+              "perCallMilliseconds": {
+                "sampleCount": 102,
+                "p50": 0,
+                "p95": 0,
+                "max": 0.09999999403953552
+              }
+            },
+            "tableCommands.supportsDirectTableOperations": {
+              "callCount": 40,
+              "totalMilliseconds": 0.6000000089406967,
+              "perCallMilliseconds": {
+                "sampleCount": 40,
+                "p50": 0,
+                "p95": 0.10000000149011612,
+                "max": 0.10000000149011612
+              }
+            },
+            "tableControls.measureLayout": {
+              "callCount": 28,
+              "totalMilliseconds": 48.3999999910593,
+              "perCallMilliseconds": {
+                "sampleCount": 28,
+                "p50": 1.6499999985098839,
+                "p95": 2.164999997615814,
+                "max": 2.2999999970197678
+              }
+            },
+            "tableControls.measureLayout.boundaryCalculation": {
+              "callCount": 28,
+              "totalMilliseconds": 5.1999999806284904,
+              "perCallMilliseconds": {
+                "sampleCount": 28,
+                "p50": 0.19999999552965164,
+                "p95": 0.2649999991059302,
+                "max": 0.8000000044703484
+              }
+            },
+            "tableControls.measureLayout.cellRectCollection": {
+              "callCount": 28,
+              "totalMilliseconds": 27.200000010430813,
+              "perCallMilliseconds": {
+                "sampleCount": 28,
+                "p50": 0.8999999985098839,
+                "p95": 1.3300000000745056,
+                "max": 1.5999999940395355
+              }
+            },
+            "tableControls.measureLayout.controlPositioning": {
+              "callCount": 28,
+              "totalMilliseconds": 7.500000014901161,
+              "perCallMilliseconds": {
+                "sampleCount": 28,
+                "p50": 0.20000000298023224,
+                "p95": 0.4000000059604645,
+                "max": 0.5
+              }
+            },
+            "tableControls.measureLayout.presentationUpdate": {
+              "callCount": 28,
+              "totalMilliseconds": 5.0999999940395355,
+              "perCallMilliseconds": {
+                "sampleCount": 28,
+                "p50": 0.20000000298023224,
+                "p95": 0.29999999701976776,
+                "max": 0.29999999701976776
+              }
+            },
+            "tableControls.measureLayout.tableAndStageRect": {
+              "callCount": 28,
+              "totalMilliseconds": 3.299999989569187,
+              "perCallMilliseconds": {
+                "sampleCount": 28,
+                "p50": 0,
+                "p95": 0.3999999985098839,
+                "max": 0.5
+              }
+            },
+            "tableControls.update": {
+              "callCount": 40,
+              "totalMilliseconds": 6.9000000059604645,
+              "perCallMilliseconds": {
+                "sampleCount": 40,
+                "p50": 0.19999999552965164,
+                "p95": 0.30000000447034836,
+                "max": 0.30000000447034836
+              }
+            }
+          }
+        },
+        "tableStructure": {
+          "sampleCount": 20,
+          "operation": "Insert row using the real Rich Editor row-insert control",
+          "latencyMilliseconds": {
+            "sampleCount": 20,
+            "p50": 50,
+            "p95": 56.33500000163913,
+            "max": 60.80000000447035
+          },
+          "latencySamplesMilliseconds": [
+            60.80000000447035, 54, 56.100000001490116, 49.599999994039536,
+            49.79999999701977, 50, 48.899999998509884, 48.79999999701977, 53,
+            49.399999998509884, 48.30000000447035, 49.20000000298023, 50,
+            51.100000001490116, 50.5, 49.20000000298023, 50.70000000298023,
+            49.900000005960464, 50.100000001490116, 52.600000001490116
+          ],
+          "metrics": {
+            "core.inspectCompatibility": {
+              "callCount": 20,
+              "totalMilliseconds": 135.60000000149012,
+              "perCallMilliseconds": {
+                "sampleCount": 20,
+                "p50": 6.800000000745058,
+                "p95": 9.90499999858439,
+                "max": 10
+              }
+            },
+            "core.parseMarkdown": {
+              "callCount": 20,
+              "totalMilliseconds": 130.29999999701977,
+              "perCallMilliseconds": {
+                "sampleCount": 20,
+                "p50": 6.400000002235174,
+                "p95": 9.424999998509884,
+                "max": 9.899999998509884
+              }
+            },
+            "core.serializeMarkdown": {
+              "callCount": 20,
+              "totalMilliseconds": 55.400000020861626,
+              "perCallMilliseconds": {
+                "sampleCount": 20,
+                "p50": 2.599999997764826,
+                "p95": 3.3000000029802337,
+                "max": 5.200000002980232
+              }
+            },
+            "editor.applyTransaction": {
+              "callCount": 20,
+              "totalMilliseconds": 14.69999997317791,
+              "perCallMilliseconds": {
+                "sampleCount": 20,
+                "p50": 0.6999999992549419,
+                "p95": 0.92000000551343,
+                "max": 1.2999999970197678
+              }
+            },
+            "editor.dispatchTransaction": {
+              "callCount": 20,
+              "totalMilliseconds": 333.80000001192093,
+              "perCallMilliseconds": {
+                "sampleCount": 20,
+                "p50": 16.349999997764826,
+                "p95": 19.439999998733402,
+                "max": 20.200000002980232
+              }
+            },
+            "editor.updateTableToolbar": {
+              "callCount": 120,
+              "totalMilliseconds": 7.899999961256981,
+              "perCallMilliseconds": {
+                "sampleCount": 120,
+                "p50": 0.09999999403953552,
+                "p95": 0.19999999552965164,
+                "max": 0.5999999940395355
+              }
+            },
+            "editor.updateTableToolbar.alignmentScan": {
+              "callCount": 118,
+              "totalMilliseconds": 5.399999983608723,
+              "perCallMilliseconds": {
+                "sampleCount": 118,
+                "p50": 0,
+                "p95": 0.10000000149011612,
+                "max": 0.30000000447034836
+              }
+            },
+            "editor.updateTableToolbar.numberingState": {
+              "callCount": 120,
+              "totalMilliseconds": 0.7999999970197678,
+              "perCallMilliseconds": {
+                "sampleCount": 120,
+                "p50": 0,
+                "p95": 0.09999999441206456,
+                "max": 0.19999999552965164
+              }
+            },
+            "editor.updateTableToolbar.tableContext": {
+              "callCount": 120,
+              "totalMilliseconds": 0.19999999552965164,
+              "perCallMilliseconds": {
+                "sampleCount": 120,
+                "p50": 0,
+                "p95": 0,
+                "max": 0.10000000149011612
+              }
+            },
+            "tableCommands.supportsDirectTableOperations": {
+              "callCount": 178,
+              "totalMilliseconds": 4.5,
+              "perCallMilliseconds": {
+                "sampleCount": 178,
+                "p50": 0,
+                "p95": 0.10000000149011612,
+                "max": 0.20000000298023224
+              }
+            },
+            "tableControls.measureLayout": {
+              "callCount": 40,
+              "totalMilliseconds": 92.5999999716878,
+              "perCallMilliseconds": {
+                "sampleCount": 40,
+                "p50": 2.2999999970197678,
+                "p95": 2.899999998882413,
+                "max": 3.2999999970197678
+              }
+            },
+            "tableControls.measureLayout.boundaryCalculation": {
+              "callCount": 40,
+              "totalMilliseconds": 7.3000000566244125,
+              "perCallMilliseconds": {
+                "sampleCount": 40,
+                "p50": 0.20000000298023224,
+                "p95": 0.30000000447034836,
+                "max": 0.7999999970197678
+              }
+            },
+            "tableControls.measureLayout.cellRectCollection": {
+              "callCount": 40,
+              "totalMilliseconds": 44.19999993592501,
+              "perCallMilliseconds": {
+                "sampleCount": 40,
+                "p50": 1.0999999977648258,
+                "p95": 1.2000000029802322,
+                "max": 1.7000000029802322
+              }
+            },
+            "tableControls.measureLayout.controlPositioning": {
+              "callCount": 40,
+              "totalMilliseconds": 20.599999956786633,
+              "perCallMilliseconds": {
+                "sampleCount": 40,
+                "p50": 0.5,
+                "p95": 0.6999999959021806,
+                "max": 0.7000000029802322
+              }
+            },
+            "tableControls.measureLayout.presentationUpdate": {
+              "callCount": 40,
+              "totalMilliseconds": 18.100000023841858,
+              "perCallMilliseconds": {
+                "sampleCount": 40,
+                "p50": 0.4000000059604645,
+                "p95": 0.6050000011920926,
+                "max": 0.8000000044703484
+              }
+            },
+            "tableControls.measureLayout.tableAndStageRect": {
+              "callCount": 40,
+              "totalMilliseconds": 1.8999999910593033,
+              "perCallMilliseconds": {
+                "sampleCount": 40,
+                "p50": 0,
+                "p95": 0.10000000149011612,
+                "max": 0.6000000014901161
+              }
+            },
+            "tableControls.renderTarget": {
+              "callCount": 20,
+              "totalMilliseconds": 22.19999999552965,
+              "perCallMilliseconds": {
+                "sampleCount": 20,
+                "p50": 1.0999999940395355,
+                "p95": 1.399999998882413,
+                "max": 1.4000000059604645
+              }
+            },
+            "tableControls.update": {
+              "callCount": 60,
+              "totalMilliseconds": 88.89999996870756,
+              "perCallMilliseconds": {
+                "sampleCount": 60,
+                "p50": 0.20000000298023224,
+                "p95": 4.415000005438923,
+                "max": 6.5
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "stress-table-2000x20",
+      "category": "stress-only",
+      "profile": "github",
+      "metadata": {
+        "bytes": 434328,
+        "lines": 2011,
+        "topLevelBlocks": 4,
+        "table": {
+          "bodyRows": 2000,
+          "columns": 20
+        }
+      },
+      "startup": {
+        "sampleCount": 3,
+        "editorReadyMilliseconds": {
+          "sampleCount": 3,
+          "p50": 1274.8999999985099,
+          "p95": 1300.9999999985098,
+          "max": 1303.8999999985099
+        },
+        "inputAcceptedMilliseconds": {
+          "sampleCount": 3,
+          "p50": 33245.89999999851,
+          "p95": 41299.73000000119,
+          "max": 42194.60000000149
+        },
+        "inputAcceptedSamplesMilliseconds": [
+          42194.60000000149, 25025.80000000447, 33245.89999999851
+        ],
+        "metrics": {
+          "core.inspectCompatibility": {
+            "callCount": 9,
+            "totalMilliseconds": 309.3999999985099,
+            "perCallMilliseconds": {
+              "sampleCount": 9,
+              "p50": 3.399999998509884,
+              "p95": 112.41999999582765,
+              "max": 128.29999999701977
+            }
+          },
+          "core.parseMarkdown": {
+            "callCount": 15,
+            "totalMilliseconds": 560.8000000044703,
+            "perCallMilliseconds": {
+              "sampleCount": 15,
+              "p50": 1.7000000029802322,
+              "p95": 100.580000000447,
+              "max": 120.60000000149012
+            }
+          },
+          "core.serializeMarkdown": {
+            "callCount": 3,
+            "totalMilliseconds": 396.9999999925494,
+            "perCallMilliseconds": {
+              "sampleCount": 3,
+              "p50": 113.79999999701977,
+              "p95": 163.92999999970198,
+              "max": 169.5
+            }
+          },
+          "editor.applyTransaction": {
+            "callCount": 6,
+            "totalMilliseconds": 100.79999999701977,
+            "perCallMilliseconds": {
+              "sampleCount": 6,
+              "p50": 15,
+              "p95": 37.899999998509884,
+              "max": 40.399999998509884
+            }
+          },
+          "editor.dispatchTransaction": {
+            "callCount": 6,
+            "totalMilliseconds": 919.2999999895692,
+            "perCallMilliseconds": {
+              "sampleCount": 6,
+              "p50": 139.45000000298023,
+              "p95": 281.99999999441206,
+              "max": 296.09999999403954
+            }
+          },
+          "editor.updateTableToolbar": {
+            "callCount": 60,
+            "totalMilliseconds": 321,
+            "perCallMilliseconds": {
+              "sampleCount": 60,
+              "p50": 0.10000000149011612,
+              "p95": 13.810000004246831,
+              "max": 14.700000002980232
+            }
+          },
+          "editor.updateTableToolbar.alignmentScan": {
+            "callCount": 24,
+            "totalMilliseconds": 315.80000000447035,
+            "perCallMilliseconds": {
+              "sampleCount": 24,
+              "p50": 13.050000000745058,
+              "p95": 13.784999997913838,
+              "max": 14.399999998509884
+            }
+          },
+          "editor.updateTableToolbar.numberingState": {
+            "callCount": 60,
+            "totalMilliseconds": 1.1999999955296516,
+            "perCallMilliseconds": {
+              "sampleCount": 60,
+              "p50": 0,
+              "p95": 0.10000000149011612,
+              "max": 0.19999999552965164
+            }
+          },
+          "editor.updateTableToolbar.tableContext": {
+            "callCount": 48,
+            "totalMilliseconds": 0.3999999910593033,
+            "perCallMilliseconds": {
+              "sampleCount": 48,
+              "p50": 0,
+              "p95": 0.09999999403953552,
+              "max": 0.10000000149011612
+            }
+          },
+          "tableCommands.supportsDirectTableOperations": {
+            "callCount": 12,
+            "totalMilliseconds": 24.599999994039536,
+            "perCallMilliseconds": {
+              "sampleCount": 12,
+              "p50": 2.100000001490116,
+              "p95": 2.899999998509884,
+              "max": 2.899999998509884
+            }
+          },
+          "tableControls.measureLayout": {
+            "callCount": 16,
+            "totalMilliseconds": 1111.3999999985099,
+            "perCallMilliseconds": {
+              "sampleCount": 16,
+              "p50": 63.80000000074506,
+              "p95": 93.65000000223517,
+              "max": 99.5
+            }
+          },
+          "tableControls.measureLayout.boundaryCalculation": {
+            "callCount": 16,
+            "totalMilliseconds": 116.59999998658895,
+            "perCallMilliseconds": {
+              "sampleCount": 16,
+              "p50": 6.299999997019768,
+              "p95": 10.574999997392297,
+              "max": 11.099999994039536
+            }
+          },
+          "tableControls.measureLayout.cellRectCollection": {
+            "callCount": 16,
+            "totalMilliseconds": 783.3000000268221,
+            "perCallMilliseconds": {
+              "sampleCount": 16,
+              "p50": 40.75,
+              "p95": 74.4250000026077,
+              "max": 76.60000000149012
+            }
+          },
+          "tableControls.measureLayout.controlPositioning": {
+            "callCount": 16,
+            "totalMilliseconds": 95.6000000089407,
+            "perCallMilliseconds": {
+              "sampleCount": 16,
+              "p50": 3.400000002235174,
+              "p95": 17.22500000335276,
+              "max": 17.30000000447035
+            }
+          },
+          "tableControls.measureLayout.presentationUpdate": {
+            "callCount": 16,
+            "totalMilliseconds": 73.60000000149012,
+            "perCallMilliseconds": {
+              "sampleCount": 16,
+              "p50": 4.300000000745058,
+              "p95": 6.574999999254942,
+              "max": 6.799999997019768
+            }
+          },
+          "tableControls.measureLayout.tableAndStageRect": {
+            "callCount": 16,
+            "totalMilliseconds": 41.19999997317791,
+            "perCallMilliseconds": {
+              "sampleCount": 16,
+              "p50": 0.5,
+              "p95": 7.799999998882413,
+              "max": 9
+            }
+          },
+          "tableControls.renderTarget": {
+            "callCount": 3,
+            "totalMilliseconds": 56.80000000447035,
+            "perCallMilliseconds": {
+              "sampleCount": 3,
+              "p50": 18.899999998509884,
+              "p95": 19.170000002533197,
+              "max": 19.200000002980232
+            }
+          },
+          "tableControls.update": {
+            "callCount": 18,
+            "totalMilliseconds": 336.69999999552965,
+            "perCallMilliseconds": {
+              "sampleCount": 18,
+              "p50": 3.899999998509884,
+              "p95": 99.16999999806285,
+              "max": 100.69999999552965
+            }
+          }
+        },
+        "totalInputAcceptedMs": {
+          "sampleCount": 3,
+          "p50": 33245.89999999851,
+          "p95": 41299.73000000119,
+          "max": 42194.60000000149
+        },
+        "interactionPhases": {
+          "navigationToEditorReadyMs": {
+            "sampleCount": 3,
+            "p50": 1274.8999999985099,
+            "p95": 1300.9999999985098,
+            "max": 1303.8999999985099
+          },
+          "editorReadyToTargetFoundMs": {
+            "sampleCount": 3,
+            "p50": 94.89999999850988,
+            "p95": 96.78999999985099,
+            "max": 97
+          },
+          "targetFoundToVisibleMs": {
+            "sampleCount": 3,
+            "p50": 49.399999998509884,
+            "p95": 50.29999999850988,
+            "max": 50.399999998509884
+          },
+          "visibleToClickCompleteMs": {
+            "sampleCount": 3,
+            "p50": 16032.89999999851,
+            "p95": 16079.250000005215,
+            "max": 16084.40000000596
+          },
+          "clickToCaretReadyMs": {
+            "sampleCount": 3,
+            "p50": 7689.60000000149,
+            "p95": 15632.64000000283,
+            "max": 16515.20000000298
+          },
+          "caretReadyToInputStartMs": {
+            "sampleCount": 3,
+            "p50": 3.899999998509884,
+            "p95": 7056.659999997168,
+            "max": 7840.29999999702
+          },
+          "inputStartToDomReflectionMs": {
+            "sampleCount": 3,
+            "p50": 390.3999999985099,
+            "p95": 7309.959999997168,
+            "max": 8078.79999999702
+          },
+          "totalInputAcceptedMs": {
+            "sampleCount": 3,
+            "p50": 33245.89999999851,
+            "p95": 41299.73000000119,
+            "max": 42194.60000000149
+          }
+        },
+        "interactionPhaseSamples": [
+          {
+            "navigationToEditorReadyMs": 1271.7000000029802,
+            "editorReadyToTargetFoundMs": 94.89999999850988,
+            "targetFoundToVisibleMs": 49.20000000298023,
+            "visibleToClickCompleteMs": 16032.89999999851,
+            "clickToCaretReadyMs": 16515.20000000298,
+            "caretReadyToInputStartMs": 7840.29999999702,
+            "inputStartToDomReflectionMs": 390.3999999985099,
+            "totalInputAcceptedMs": 42194.60000000149
+          },
+          {
+            "navigationToEditorReadyMs": 1274.8999999985099,
+            "editorReadyToTargetFoundMs": 93.10000000149012,
+            "targetFoundToVisibleMs": 50.399999998509884,
+            "visibleToClickCompleteMs": 15661.70000000298,
+            "clickToCaretReadyMs": 7689.60000000149,
+            "caretReadyToInputStartMs": 3,
+            "inputStartToDomReflectionMs": 253.10000000149012,
+            "totalInputAcceptedMs": 25025.80000000447
+          },
+          {
+            "navigationToEditorReadyMs": 1303.8999999985099,
+            "editorReadyToTargetFoundMs": 97,
+            "targetFoundToVisibleMs": 49.399999998509884,
+            "visibleToClickCompleteMs": 16084.40000000596,
+            "clickToCaretReadyMs": 7628.5,
+            "caretReadyToInputStartMs": 3.899999998509884,
+            "inputStartToDomReflectionMs": 8078.79999999702,
+            "totalInputAcceptedMs": 33245.89999999851
+          }
+        ],
+        "tableControls": {
+          "update": {
+            "calls": 18,
+            "totalMs": 336.69999999552965,
+            "maxMs": 100.69999999552965
+          },
+          "renderTarget": {
+            "calls": 3,
+            "totalMs": 56.80000000447035,
+            "maxMs": 19.200000002980232,
+            "rowHandleCount": 2000,
+            "rowHandleCountTotal": 6000,
+            "columnHandleCount": 20,
+            "columnHandleCountTotal": 60
+          },
+          "measureLayout": {
+            "calls": 16,
+            "totalMs": 1111.3999999985099,
+            "maxMs": 99.5,
+            "rowsMeasured": 32016,
+            "rowsMeasuredPerLayoutMax": 2001,
+            "cellsMeasured": 640320,
+            "cellsMeasuredPerLayoutMax": 40020,
+            "getBoundingClientRectCalls": 640368,
+            "getBoundingClientRectCallsPerLayoutMax": 40023,
+            "tableAndStageRectMs": {
+              "calls": 16,
+              "totalMs": 41.19999997317791,
+              "maxMs": 9
+            },
+            "cellRectCollectionMs": {
+              "calls": 16,
+              "totalMs": 783.3000000268221,
+              "maxMs": 76.60000000149012
+            },
+            "boundaryCalculationMs": {
+              "calls": 16,
+              "totalMs": 116.59999998658895,
+              "maxMs": 11.099999994039536
+            },
+            "controlPositioningMs": {
+              "calls": 16,
+              "totalMs": 95.6000000089407,
+              "maxMs": 17.30000000447035
+            },
+            "presentationUpdateMs": {
+              "calls": 16,
+              "totalMs": 73.60000000149012,
+              "maxMs": 6.799999997019768
+            }
+          },
+          "supportsDirectTableOperations": {
+            "calls": 12,
+            "totalMs": 24.599999994039536,
+            "maxMs": 2.899999998509884,
+            "cellsVisited": 480240,
+            "maxSameNodeFullScans": 2,
+            "repeatedSameNodeScans": 6
+          },
+          "updateTableToolbar": {
+            "calls": 60,
+            "totalMs": 321,
+            "maxMs": 14.700000002980232,
+            "tableContextMs": {
+              "calls": 48,
+              "totalMs": 0.3999999910593033,
+              "maxMs": 0.10000000149011612
+            },
+            "alignmentScanMs": {
+              "calls": 24,
+              "totalMs": 315.80000000447035,
+              "maxMs": 14.399999998509884
+            },
+            "numberingStateMs": {
+              "calls": 60,
+              "totalMs": 1.1999999955296516,
+              "maxMs": 0.19999999552965164
+            }
+          }
+        },
+        "longTasks": {
+          "observerSupportedSamples": 3,
+          "sampleCount": 3,
+          "count": 37,
+          "longestMs": 8284,
+          "totalDurationMs": 107076,
+          "editorReadyToTargetVisible": {
+            "count": 0,
+            "totalDurationMs": 0,
+            "longestMs": 0
+          },
+          "targetVisibleToClickComplete": {
+            "count": 15,
+            "totalDurationMs": 47494,
+            "longestMs": 7920
+          },
+          "clickCompleteToInputStart": {
+            "count": 2,
+            "totalDurationMs": 16123,
+            "longestMs": 8284
+          },
+          "inputStartToDomReflection": {
+            "count": 4,
+            "totalDurationMs": 8716.20000000298,
+            "longestMs": 7808
+          }
+        }
+      },
+      "preview": {
+        "sampleCount": 3,
+        "previewReadyMilliseconds": {
+          "sampleCount": 3,
+          "p50": 1272.1999999955297,
+          "p95": 1273.6399999968708,
+          "max": 1273.7999999970198
+        },
+        "metrics": {
+          "core.inspectCompatibility": {
+            "callCount": 6,
+            "totalMilliseconds": 11.900000005960464,
+            "perCallMilliseconds": {
+              "sampleCount": 6,
+              "p50": 1.8999999985098839,
+              "p95": 4.050000002607703,
+              "max": 4.200000002980232
+            }
+          },
+          "core.parseMarkdown": {
+            "callCount": 18,
+            "totalMilliseconds": 281.29999999701977,
+            "perCallMilliseconds": {
+              "sampleCount": 18,
+              "p50": 0,
+              "p95": 92.9050000037998,
+              "max": 93.5
+            }
+          },
+          "core.renderMarkdown": {
+            "callCount": 6,
+            "totalMilliseconds": 65.10000000149012,
+            "perCallMilliseconds": {
+              "sampleCount": 6,
+              "p50": 10.700000002980232,
+              "p95": 21.90000000037253,
+              "max": 22.100000001490116
+            }
+          },
+          "core.renderMarkdownDocument": {
+            "callCount": 6,
+            "totalMilliseconds": 65,
+            "perCallMilliseconds": {
+              "sampleCount": 6,
+              "p50": 10.700000002980232,
+              "p95": 21.90000000037253,
+              "max": 22.100000001490116
+            }
+          },
+          "editor.updateTableToolbar": {
+            "callCount": 30,
+            "totalMilliseconds": 1.6000000089406967,
+            "perCallMilliseconds": {
+              "sampleCount": 30,
+              "p50": 0,
+              "p95": 0.15499999821186036,
+              "max": 0.20000000298023224
+            }
+          },
+          "editor.updateTableToolbar.numberingState": {
+            "callCount": 30,
+            "totalMilliseconds": 0.29999999701976776,
+            "perCallMilliseconds": {
+              "sampleCount": 30,
+              "p50": 0,
+              "p95": 0.09999999813735486,
+              "max": 0.10000000149011612
+            }
+          }
+        }
+      },
+      "isolationExperiments": {
+        "current": {
+          "condition": {
+            "css": "current",
+            "tableControls": "enabled"
+          },
+          "sampleCount": 3,
+          "totalInputAcceptedMs": {
+            "sampleCount": 3,
+            "p50": 33245.89999999851,
+            "p95": 41299.73000000119,
+            "max": 42194.60000000149
+          },
+          "interactionPhases": {
+            "navigationToEditorReadyMs": {
+              "sampleCount": 3,
+              "p50": 1274.8999999985099,
+              "p95": 1300.9999999985098,
+              "max": 1303.8999999985099
+            },
+            "editorReadyToTargetFoundMs": {
+              "sampleCount": 3,
+              "p50": 94.89999999850988,
+              "p95": 96.78999999985099,
+              "max": 97
+            },
+            "targetFoundToVisibleMs": {
+              "sampleCount": 3,
+              "p50": 49.399999998509884,
+              "p95": 50.29999999850988,
+              "max": 50.399999998509884
+            },
+            "visibleToClickCompleteMs": {
+              "sampleCount": 3,
+              "p50": 16032.89999999851,
+              "p95": 16079.250000005215,
+              "max": 16084.40000000596
+            },
+            "clickToCaretReadyMs": {
+              "sampleCount": 3,
+              "p50": 7689.60000000149,
+              "p95": 15632.64000000283,
+              "max": 16515.20000000298
+            },
+            "caretReadyToInputStartMs": {
+              "sampleCount": 3,
+              "p50": 3.899999998509884,
+              "p95": 7056.659999997168,
+              "max": 7840.29999999702
+            },
+            "inputStartToDomReflectionMs": {
+              "sampleCount": 3,
+              "p50": 390.3999999985099,
+              "p95": 7309.959999997168,
+              "max": 8078.79999999702
+            },
+            "totalInputAcceptedMs": {
+              "sampleCount": 3,
+              "p50": 33245.89999999851,
+              "p95": 41299.73000000119,
+              "max": 42194.60000000149
+            }
+          },
+          "tableControls": {
+            "update": {
+              "calls": 18,
+              "totalMs": 336.69999999552965,
+              "maxMs": 100.69999999552965
+            },
+            "renderTarget": {
+              "calls": 3,
+              "totalMs": 56.80000000447035,
+              "maxMs": 19.200000002980232,
+              "rowHandleCount": 2000,
+              "rowHandleCountTotal": 6000,
+              "columnHandleCount": 20,
+              "columnHandleCountTotal": 60
+            },
+            "measureLayout": {
+              "calls": 16,
+              "totalMs": 1111.3999999985099,
+              "maxMs": 99.5,
+              "rowsMeasured": 32016,
+              "rowsMeasuredPerLayoutMax": 2001,
+              "cellsMeasured": 640320,
+              "cellsMeasuredPerLayoutMax": 40020,
+              "getBoundingClientRectCalls": 640368,
+              "getBoundingClientRectCallsPerLayoutMax": 40023,
+              "tableAndStageRectMs": {
+                "calls": 16,
+                "totalMs": 41.19999997317791,
+                "maxMs": 9
+              },
+              "cellRectCollectionMs": {
+                "calls": 16,
+                "totalMs": 783.3000000268221,
+                "maxMs": 76.60000000149012
+              },
+              "boundaryCalculationMs": {
+                "calls": 16,
+                "totalMs": 116.59999998658895,
+                "maxMs": 11.099999994039536
+              },
+              "controlPositioningMs": {
+                "calls": 16,
+                "totalMs": 95.6000000089407,
+                "maxMs": 17.30000000447035
+              },
+              "presentationUpdateMs": {
+                "calls": 16,
+                "totalMs": 73.60000000149012,
+                "maxMs": 6.799999997019768
+              }
+            },
+            "supportsDirectTableOperations": {
+              "calls": 12,
+              "totalMs": 24.599999994039536,
+              "maxMs": 2.899999998509884,
+              "cellsVisited": 480240,
+              "maxSameNodeFullScans": 2,
+              "repeatedSameNodeScans": 6
+            },
+            "updateTableToolbar": {
+              "calls": 60,
+              "totalMs": 321,
+              "maxMs": 14.700000002980232,
+              "tableContextMs": {
+                "calls": 48,
+                "totalMs": 0.3999999910593033,
+                "maxMs": 0.10000000149011612
+              },
+              "alignmentScanMs": {
+                "calls": 24,
+                "totalMs": 315.80000000447035,
+                "maxMs": 14.399999998509884
+              },
+              "numberingStateMs": {
+                "calls": 60,
+                "totalMs": 1.1999999955296516,
+                "maxMs": 0.19999999552965164
+              }
+            }
+          },
+          "longTasks": {
+            "observerSupportedSamples": 3,
+            "sampleCount": 3,
+            "count": 37,
+            "longestMs": 8284,
+            "totalDurationMs": 107076,
+            "editorReadyToTargetVisible": {
+              "count": 0,
+              "totalDurationMs": 0,
+              "longestMs": 0
+            },
+            "targetVisibleToClickComplete": {
+              "count": 15,
+              "totalDurationMs": 47494,
+              "longestMs": 7920
+            },
+            "clickCompleteToInputStart": {
+              "count": 2,
+              "totalDurationMs": 16123,
+              "longestMs": 8284
+            },
+            "inputStartToDomReflection": {
+              "count": 4,
+              "totalDurationMs": 8716.20000000298,
+              "longestMs": 7808
+            }
+          },
+          "tableLayout": ["auto", "auto", "auto"],
+          "tableWidth": ["987.25px", "987.25px", "987.25px"]
+        },
+        "tableControlsDisabled": {
+          "condition": {
+            "css": "current",
+            "tableControls": "disabled"
+          },
+          "sampleCount": 3,
+          "totalInputAcceptedMs": {
+            "sampleCount": 3,
+            "p50": 25306.39999999851,
+            "p95": 39746.08999999985,
+            "max": 41350.5
+          },
+          "interactionPhases": {
+            "navigationToEditorReadyMs": {
+              "sampleCount": 3,
+              "p50": 1290.5,
+              "p95": 1300.040000001341,
+              "max": 1301.1000000014901
+            },
+            "editorReadyToTargetFoundMs": {
+              "sampleCount": 3,
+              "p50": 98.39999999850988,
+              "p95": 100.37999999448657,
+              "max": 100.59999999403954
+            },
+            "targetFoundToVisibleMs": {
+              "sampleCount": 3,
+              "p50": 52.5,
+              "p95": 53.13000000268221,
+              "max": 53.20000000298023
+            },
+            "visibleToClickCompleteMs": {
+              "sampleCount": 3,
+              "p50": 23577.70000000298,
+              "p95": 23589.129999998957,
+              "max": 23590.39999999851
+            },
+            "clickToCaretReadyMs": {
+              "sampleCount": 3,
+              "p50": 17.299999997019768,
+              "p95": 6983.929999999701,
+              "max": 7758
+            },
+            "caretReadyToInputStartMs": {
+              "sampleCount": 3,
+              "p50": 0.8000000044703484,
+              "p95": 7361.45000000447,
+              "max": 8179.30000000447
+            },
+            "inputStartToDomReflectionMs": {
+              "sampleCount": 3,
+              "p50": 281.09999999403954,
+              "p95": 359.21999999806286,
+              "max": 367.8999999985099
+            },
+            "totalInputAcceptedMs": {
+              "sampleCount": 3,
+              "p50": 25306.39999999851,
+              "p95": 39746.08999999985,
+              "max": 41350.5
+            }
+          },
+          "tableControls": {
+            "update": {
+              "calls": 0,
+              "totalMs": 0,
+              "maxMs": 0
+            },
+            "renderTarget": {
+              "calls": 0,
+              "totalMs": 0,
+              "maxMs": 0,
+              "rowHandleCount": 0,
+              "rowHandleCountTotal": 0,
+              "columnHandleCount": 0,
+              "columnHandleCountTotal": 0
+            },
+            "measureLayout": {
+              "calls": 0,
+              "totalMs": 0,
+              "maxMs": 0,
+              "rowsMeasured": 0,
+              "rowsMeasuredPerLayoutMax": 0,
+              "cellsMeasured": 0,
+              "cellsMeasuredPerLayoutMax": 0,
+              "getBoundingClientRectCalls": 0,
+              "getBoundingClientRectCallsPerLayoutMax": 0,
+              "tableAndStageRectMs": {
+                "calls": 0,
+                "totalMs": 0,
+                "maxMs": 0
+              },
+              "cellRectCollectionMs": {
+                "calls": 0,
+                "totalMs": 0,
+                "maxMs": 0
+              },
+              "boundaryCalculationMs": {
+                "calls": 0,
+                "totalMs": 0,
+                "maxMs": 0
+              },
+              "controlPositioningMs": {
+                "calls": 0,
+                "totalMs": 0,
+                "maxMs": 0
+              },
+              "presentationUpdateMs": {
+                "calls": 0,
+                "totalMs": 0,
+                "maxMs": 0
+              }
+            },
+            "supportsDirectTableOperations": {
+              "calls": 9,
+              "totalMs": 18.400000013411045,
+              "maxMs": 2.2000000029802322,
+              "cellsVisited": 360180,
+              "maxSameNodeFullScans": 2,
+              "repeatedSameNodeScans": 3
+            },
+            "updateTableToolbar": {
+              "calls": 60,
+              "totalMs": 322.19999999552965,
+              "maxMs": 14.100000001490116,
+              "tableContextMs": {
+                "calls": 48,
+                "totalMs": 0.10000000149011612,
+                "maxMs": 0.10000000149011612
+              },
+              "alignmentScanMs": {
+                "calls": 24,
+                "totalMs": 316.7000000104308,
+                "maxMs": 14
+              },
+              "numberingStateMs": {
+                "calls": 60,
+                "totalMs": 1.3999999910593033,
+                "maxMs": 0.10000000149011612
+              }
+            }
+          },
+          "longTasks": {
+            "observerSupportedSamples": 3,
+            "sampleCount": 3,
+            "count": 28,
+            "longestMs": 8178,
+            "totalDurationMs": 105990,
+            "editorReadyToTargetVisible": {
+              "count": 0,
+              "totalDurationMs": 0,
+              "longestMs": 0
+            },
+            "targetVisibleToClickComplete": {
+              "count": 6,
+              "totalDurationMs": 46819,
+              "longestMs": 7941
+            },
+            "clickCompleteToInputStart": {
+              "count": 2,
+              "totalDurationMs": 15911,
+              "longestMs": 8178
+            },
+            "inputStartToDomReflection": {
+              "count": 3,
+              "totalDurationMs": 881,
+              "longestMs": 325
+            }
+          },
+          "tableLayout": ["auto", "auto", "auto"],
+          "tableWidth": ["987.25px", "987.25px", "987.25px"]
+        },
+        "geometryOnly": {
+          "condition": {
+            "css": "current",
+            "tableControls": "disabled",
+            "action": "one target-cell getBoundingClientRect() after editorReady"
+          },
+          "sampleCount": 3,
+          "navigationToEditorReadyMs": {
+            "sampleCount": 3,
+            "p50": 1280,
+            "p95": 1282.790000001341,
+            "max": 1283.1000000014901
+          },
+          "editorReadyToTargetFoundMs": {
+            "sampleCount": 3,
+            "p50": 29.899999998509884,
+            "p95": 31.33999999985099,
+            "max": 31.5
+          },
+          "targetFoundToGeometryMs": {
+            "sampleCount": 3,
+            "p50": 0,
+            "p95": 0.08999999463558196,
+            "max": 0.09999999403953552
+          },
+          "getBoundingClientRectMs": {
+            "sampleCount": 3,
+            "p50": 0,
+            "p95": 0.08999999463558196,
+            "max": 0.09999999403953552
+          },
+          "tableLayout": ["auto", "auto", "auto"],
+          "tableWidth": ["987.25px", "987.25px", "987.25px"],
+          "tableControls": {
+            "update": {
+              "calls": 0,
+              "totalMs": 0,
+              "maxMs": 0
+            },
+            "renderTarget": {
+              "calls": 0,
+              "totalMs": 0,
+              "maxMs": 0,
+              "rowHandleCount": 0,
+              "rowHandleCountTotal": 0,
+              "columnHandleCount": 0,
+              "columnHandleCountTotal": 0
+            },
+            "measureLayout": {
+              "calls": 0,
+              "totalMs": 0,
+              "maxMs": 0,
+              "rowsMeasured": 0,
+              "rowsMeasuredPerLayoutMax": 0,
+              "cellsMeasured": 0,
+              "cellsMeasuredPerLayoutMax": 0,
+              "getBoundingClientRectCalls": 0,
+              "getBoundingClientRectCallsPerLayoutMax": 0,
+              "tableAndStageRectMs": {
+                "calls": 0,
+                "totalMs": 0,
+                "maxMs": 0
+              },
+              "cellRectCollectionMs": {
+                "calls": 0,
+                "totalMs": 0,
+                "maxMs": 0
+              },
+              "boundaryCalculationMs": {
+                "calls": 0,
+                "totalMs": 0,
+                "maxMs": 0
+              },
+              "controlPositioningMs": {
+                "calls": 0,
+                "totalMs": 0,
+                "maxMs": 0
+              },
+              "presentationUpdateMs": {
+                "calls": 0,
+                "totalMs": 0,
+                "maxMs": 0
+              }
+            },
+            "supportsDirectTableOperations": {
+              "calls": 0,
+              "totalMs": 0,
+              "maxMs": 0,
+              "cellsVisited": 0,
+              "maxSameNodeFullScans": 0,
+              "repeatedSameNodeScans": 0
+            },
+            "updateTableToolbar": {
+              "calls": 30,
+              "totalMs": 1.3000000044703484,
+              "maxMs": 0.19999999552965164,
+              "tableContextMs": {
+                "calls": 18,
+                "totalMs": 0,
+                "maxMs": 0
+              },
+              "alignmentScanMs": {
+                "calls": 0,
+                "totalMs": 0,
+                "maxMs": 0
+              },
+              "numberingStateMs": {
+                "calls": 30,
+                "totalMs": 0.10000000149011612,
+                "maxMs": 0.10000000149011612
+              }
+            }
+          },
+          "longTasks": {
+            "observerSupportedSamples": 3,
+            "sampleCount": 3,
+            "count": 9,
+            "longestMs": 908,
+            "totalDurationMs": 3076,
+            "editorReadyToTargetVisible": {
+              "count": 0,
+              "totalDurationMs": 0,
+              "longestMs": 0
+            },
+            "targetVisibleToClickComplete": {
+              "count": 0,
+              "totalDurationMs": 0,
+              "longestMs": 0
+            },
+            "clickCompleteToInputStart": {
+              "count": 0,
+              "totalDurationMs": 0,
+              "longestMs": 0
+            },
+            "inputStartToDomReflection": {
+              "count": 0,
+              "totalDurationMs": 0,
+              "longestMs": 0
+            }
+          }
+        },
+        "experimentalFixedLayout": {
+          "condition": {
+            "css": "benchmark-only .mm-document-content table { table-layout: fixed; }",
+            "tableControls": "enabled"
+          },
+          "sampleCount": 3,
+          "totalInputAcceptedMs": {
+            "sampleCount": 3,
+            "p50": 40812.20000000298,
+            "p95": 40941.26000000164,
+            "max": 40955.60000000149
+          },
+          "interactionPhases": {
+            "navigationToEditorReadyMs": {
+              "sampleCount": 3,
+              "p50": 1272.8000000044703,
+              "p95": 1281.8000000044703,
+              "max": 1282.8000000044703
+            },
+            "editorReadyToTargetFoundMs": {
+              "sampleCount": 3,
+              "p50": 100.29999999701977,
+              "p95": 104.34999999701976,
+              "max": 104.79999999701977
+            },
+            "targetFoundToVisibleMs": {
+              "sampleCount": 3,
+              "p50": 57.100000001490116,
+              "p95": 57.100000001490116,
+              "max": 57.100000001490116
+            },
+            "visibleToClickCompleteMs": {
+              "sampleCount": 3,
+              "p50": 15803.79999999702,
+              "p95": 15943.839999998361,
+              "max": 15959.39999999851
+            },
+            "clickToCaretReadyMs": {
+              "sampleCount": 3,
+              "p50": 7754.60000000149,
+              "p95": 7806.169999998808,
+              "max": 7811.89999999851
+            },
+            "caretReadyToInputStartMs": {
+              "sampleCount": 3,
+              "p50": 7750,
+              "p95": 7834.8700000040235,
+              "max": 7844.30000000447
+            },
+            "inputStartToDomReflectionMs": {
+              "sampleCount": 3,
+              "p50": 8054.79999999702,
+              "p95": 8062.539999998361,
+              "max": 8063.39999999851
+            },
+            "totalInputAcceptedMs": {
+              "sampleCount": 3,
+              "p50": 40812.20000000298,
+              "p95": 40941.26000000164,
+              "max": 40955.60000000149
+            }
+          },
+          "tableControls": {
+            "update": {
+              "calls": 18,
+              "totalMs": 341.30000001192093,
+              "maxMs": 105.10000000149012
+            },
+            "renderTarget": {
+              "calls": 3,
+              "totalMs": 58.30000000447035,
+              "maxMs": 19.899999998509884,
+              "rowHandleCount": 2000,
+              "rowHandleCountTotal": 6000,
+              "columnHandleCount": 20,
+              "columnHandleCountTotal": 60
+            },
+            "measureLayout": {
+              "calls": 21,
+              "totalMs": 1422.900000013411,
+              "maxMs": 97.79999999701977,
+              "rowsMeasured": 42021,
+              "rowsMeasuredPerLayoutMax": 2001,
+              "cellsMeasured": 840420,
+              "cellsMeasuredPerLayoutMax": 40020,
+              "getBoundingClientRectCalls": 840483,
+              "getBoundingClientRectCallsPerLayoutMax": 40023,
+              "tableAndStageRectMs": {
+                "calls": 21,
+                "totalMs": 58.10000002384186,
+                "maxMs": 5.300000004470348
+              },
+              "cellRectCollectionMs": {
+                "calls": 21,
+                "totalMs": 948.1999999806285,
+                "maxMs": 74.39999999850988
+              },
+              "boundaryCalculationMs": {
+                "calls": 21,
+                "totalMs": 207.40000000596046,
+                "maxMs": 37.600000001490116
+              },
+              "controlPositioningMs": {
+                "calls": 21,
+                "totalMs": 113.6000000089407,
+                "maxMs": 18.5
+              },
+              "presentationUpdateMs": {
+                "calls": 21,
+                "totalMs": 94.69999999552965,
+                "maxMs": 7.399999998509884
+              }
+            },
+            "supportsDirectTableOperations": {
+              "calls": 12,
+              "totalMs": 23.19999999552965,
+              "maxMs": 2.899999998509884,
+              "cellsVisited": 480240,
+              "maxSameNodeFullScans": 2,
+              "repeatedSameNodeScans": 6
+            },
+            "updateTableToolbar": {
+              "calls": 60,
+              "totalMs": 316.1000000014901,
+              "maxMs": 14.200000002980232,
+              "tableContextMs": {
+                "calls": 48,
+                "totalMs": 0.3999999910593033,
+                "maxMs": 0.10000000149011612
+              },
+              "alignmentScanMs": {
+                "calls": 24,
+                "totalMs": 311.29999999701977,
+                "maxMs": 13.900000005960464
+              },
+              "numberingStateMs": {
+                "calls": 60,
+                "totalMs": 1.5000000149011612,
+                "maxMs": 0.20000000298023224
+              }
+            }
+          },
+          "longTasks": {
+            "observerSupportedSamples": 3,
+            "sampleCount": 3,
+            "count": 42,
+            "longestMs": 7914,
+            "totalDurationMs": 121542,
+            "editorReadyToTargetVisible": {
+              "count": 0,
+              "totalDurationMs": 0,
+              "longestMs": 0
+            },
+            "targetVisibleToClickComplete": {
+              "count": 15,
+              "totalDurationMs": 47231,
+              "longestMs": 7914
+            },
+            "clickCompleteToInputStart": {
+              "count": 6,
+              "totalDurationMs": 23535,
+              "longestMs": 7838
+            },
+            "inputStartToDomReflection": {
+              "count": 6,
+              "totalDurationMs": 24143.89999999851,
+              "longestMs": 7802
+            }
+          },
+          "tableLayout": ["fixed", "fixed", "fixed"],
+          "tableWidth": ["987.25px", "987.25px", "987.25px"]
+        }
+      }
+    }
+  ]
+}

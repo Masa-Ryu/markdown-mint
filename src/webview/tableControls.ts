@@ -1,4 +1,10 @@
 import type { Node as PMNode } from "prosemirror-model";
+import {
+  measureEditorPerformance,
+  recordEditorPerformanceCount,
+  recordEditorPerformanceDuration,
+  tableControlsDisabledForBenchmark,
+} from "../shared/performanceBenchmark";
 import { appendToolbarIcon } from "./icons";
 
 export type TableControlAxis = "row" | "column";
@@ -17,6 +23,119 @@ export interface TableControlTarget {
   numbered: boolean;
   supported: boolean;
   selection?: TableControlSelection | null;
+}
+
+/**
+ * Benchmark prototype for separating the table viewport from the horizontal
+ * scroll mechanism. Production controls continue to use the DOM ancestor
+ * path; this owner is enabled only by the benchmark bundle.
+ */
+export interface TableHorizontalScrollOwner {
+  getScrollLeft(): number;
+  getMaxScrollLeft(): number;
+  setScrollLeft(value: number): void;
+  scrollBy(delta: number): void;
+  getViewportRect(): DOMRect;
+  subscribe(listener: () => void): () => void;
+  getElement(): HTMLElement;
+}
+
+export class NativeTableScrollOwner implements TableHorizontalScrollOwner {
+  constructor(
+    private readonly element: HTMLElement,
+    private readonly viewport: HTMLElement = element,
+  ) {}
+
+  getScrollLeft(): number {
+    return this.element.scrollLeft;
+  }
+
+  getMaxScrollLeft(): number {
+    return Math.max(0, this.element.scrollWidth - this.element.clientWidth);
+  }
+
+  setScrollLeft(value: number): void {
+    this.element.scrollLeft = value;
+  }
+
+  scrollBy(delta: number): void {
+    this.setScrollLeft(this.getScrollLeft() + delta);
+  }
+
+  getViewportRect(): DOMRect {
+    return clientRect(this.viewport);
+  }
+
+  subscribe(listener: () => void): () => void {
+    this.element.addEventListener("scroll", listener, { passive: true });
+    return () => this.element.removeEventListener("scroll", listener);
+  }
+
+  getElement(): HTMLElement {
+    return this.element;
+  }
+}
+
+export class ProxyTableScrollOwner implements TableHorizontalScrollOwner {
+  constructor(
+    private readonly proxy: HTMLElement,
+    private readonly viewport: HTMLElement,
+  ) {}
+
+  getScrollLeft(): number {
+    return this.proxy.scrollLeft;
+  }
+
+  getMaxScrollLeft(): number {
+    return Math.max(0, this.proxy.scrollWidth - this.proxy.clientWidth);
+  }
+
+  setScrollLeft(value: number): void {
+    this.proxy.scrollLeft = Math.max(
+      0,
+      Math.min(this.getMaxScrollLeft(), value),
+    );
+  }
+
+  scrollBy(delta: number): void {
+    this.setScrollLeft(this.getScrollLeft() + delta);
+  }
+
+  getViewportRect(): DOMRect {
+    return clientRect(this.viewport);
+  }
+
+  subscribe(listener: () => void): () => void {
+    this.proxy.addEventListener("scroll", listener, { passive: true });
+    return () => this.proxy.removeEventListener("scroll", listener);
+  }
+
+  getElement(): HTMLElement {
+    return this.proxy;
+  }
+}
+
+function horizontalScrollOwnerForTable(
+  table: HTMLTableElement,
+): TableHorizontalScrollOwner | null {
+  if (!__MM_EDITOR_PERFORMANCE_BENCHMARK__) return null;
+  const wrapper = table.closest<HTMLElement>(".mm-table-scroll");
+  const proxy = wrapper?.querySelector<HTMLElement>(
+    ":scope > .mm-table-scrollbar-proxy[data-mm-benchmark-scroll-proxy]",
+  );
+  const viewport = wrapper?.querySelector<HTMLElement>(
+    ":scope > .mm-table-viewport[data-mm-benchmark-table-viewport]",
+  );
+  if (proxy && viewport) return new ProxyTableScrollOwner(proxy, viewport);
+  if (wrapper) {
+    const style = getComputedStyle(wrapper);
+    if (style.overflowX === "auto" || style.overflowX === "scroll")
+      return new NativeTableScrollOwner(wrapper, wrapper);
+  }
+  const tableStyle = getComputedStyle(table);
+  if (tableStyle.overflowX === "auto" || tableStyle.overflowX === "scroll")
+    return new NativeTableScrollOwner(table, table);
+  return null;
 }
 
 export interface TableControlsCallbacks {
@@ -302,12 +421,19 @@ export class TableControls {
   private flashedDocumentGeneration: number | null = null;
   private flashTimer: number | undefined;
   private scrollContainers: HTMLElement[] = [];
+  private horizontalScrollOwner: TableHorizontalScrollOwner | null = null;
+  private horizontalScrollOwnerUnsubscribe: (() => void) | null = null;
   private destroyed = false;
   private focused = false;
 
   private readonly scroll = (): void => {
     if (this.destroyed) return;
-    this.requestLayout();
+    if (
+      __MM_EDITOR_PERFORMANCE_BENCHMARK__ &&
+      this.horizontalScrollOwner instanceof ProxyTableScrollOwner
+    )
+      this.updateLayout();
+    else this.requestLayout();
     if (this.drag) this.updateDragPresentation();
     else this.updatePointerPresentationFromStoredPointer();
   };
@@ -467,9 +593,14 @@ export class TableControls {
     this.element.hidden = true;
     stage.append(this.element);
     const ResizeObserverCtor = stage.ownerDocument.defaultView?.ResizeObserver;
-    this.resizeObserver = ResizeObserverCtor
-      ? new ResizeObserverCtor(() => this.requestLayout())
-      : null;
+    const benchmarkControlsDisabled =
+      __MM_EDITOR_PERFORMANCE_BENCHMARK__ &&
+      tableControlsDisabledForBenchmark();
+    this.resizeObserver =
+      !benchmarkControlsDisabled && ResizeObserverCtor
+        ? new ResizeObserverCtor(() => this.requestLayout())
+        : null;
+    if (benchmarkControlsDisabled) return;
     this.resizeObserver?.observe(stage);
     stage.addEventListener("pointermove", this.stagePointerMove);
     stage.addEventListener("pointerleave", this.stagePointerLeave);
@@ -492,6 +623,18 @@ export class TableControls {
 
   /** Update the one table whose controls are currently allowed to be shown. */
   update(target: TableControlTarget | null): void {
+    if (this.destroyed) return;
+    if (__MM_EDITOR_PERFORMANCE_BENCHMARK__) {
+      if (tableControlsDisabledForBenchmark()) return;
+      measureEditorPerformance("tableControls.update", () =>
+        this.updateInternal(target),
+      );
+      return;
+    }
+    this.updateInternal(target);
+  }
+
+  private updateInternal(target: TableControlTarget | null): void {
     if (this.destroyed) return;
     if (!target || !this.callbacks.canEdit()) {
       this.clear();
@@ -567,6 +710,11 @@ export class TableControls {
   }
 
   updateLayout(): void {
+    if (
+      __MM_EDITOR_PERFORMANCE_BENCHMARK__ &&
+      tableControlsDisabledForBenchmark()
+    )
+      return;
     this.cancelScheduledLayout();
     this.measureLayout();
   }
@@ -575,6 +723,8 @@ export class TableControls {
   requestLayout(): void {
     if (
       this.destroyed ||
+      (__MM_EDITOR_PERFORMANCE_BENCHMARK__ &&
+        tableControlsDisabledForBenchmark()) ||
       !this.target ||
       this.element.hidden ||
       this.layoutFrame !== null
@@ -610,8 +760,44 @@ export class TableControls {
 
   private measureLayout(): void {
     if (!this.target || this.element.hidden) return;
-    const tableRect = clientRect(this.target.tableElement);
-    const stageRect = clientRect(this.stage);
+    if (__MM_EDITOR_PERFORMANCE_BENCHMARK__) {
+      measureEditorPerformance("tableControls.measureLayout", () =>
+        this.measureLayoutInternal(),
+      );
+      return;
+    }
+    this.measureLayoutInternal();
+  }
+
+  private measureLayoutInternal(): void {
+    if (!this.target || this.element.hidden) return;
+    const now = (): number => this.ownerWindow?.performance.now() ?? Date.now();
+    const recordSegment = (name: string, startedAt: number): void => {
+      recordEditorPerformanceDuration(name, now() - startedAt);
+    };
+    let getBoundingClientRectCalls = 0;
+    let rowsMeasured = 0;
+    let cellsMeasured = 0;
+    const measureClientRect = __MM_EDITOR_PERFORMANCE_BENCHMARK__
+      ? (element: Element): DOMRect => {
+          getBoundingClientRectCalls += 1;
+          return clientRect(element);
+        }
+      : clientRect;
+    let segmentStartedAt = __MM_EDITOR_PERFORMANCE_BENCHMARK__ ? now() : 0;
+    const tableRect = __MM_EDITOR_PERFORMANCE_BENCHMARK__
+      ? measureClientRect(this.target.tableElement)
+      : clientRect(this.target.tableElement);
+    const stageRect = __MM_EDITOR_PERFORMANCE_BENCHMARK__
+      ? measureClientRect(this.stage)
+      : clientRect(this.stage);
+    if (__MM_EDITOR_PERFORMANCE_BENCHMARK__) {
+      recordSegment(
+        "tableControls.measureLayout.tableAndStageRect",
+        segmentStartedAt,
+      );
+      segmentStartedAt = now();
+    }
     const rows = Array.from(this.target.tableElement.rows);
     const height = this.target.table.childCount;
     const width = this.target.table.firstChild?.childCount ?? 0;
@@ -626,10 +812,24 @@ export class TableControls {
       () => undefined,
     );
     rows.slice(0, height).forEach((row, rowIndex) => {
+      if (__MM_EDITOR_PERFORMANCE_BENCHMARK__) rowsMeasured += 1;
       const cells = Array.from(row.cells).slice(0, width);
-      const measuredCells = cells.map((cell) => rectLike(clientRect(cell)));
+      if (__MM_EDITOR_PERFORMANCE_BENCHMARK__) cellsMeasured += cells.length;
+      const measuredCells = cells.map((cell) =>
+        rectLike(
+          __MM_EDITOR_PERFORMANCE_BENCHMARK__
+            ? measureClientRect(cell)
+            : clientRect(cell),
+        ),
+      );
       cellRects[rowIndex] = measuredCells;
-      const rowRect = unionRect(measuredCells) ?? rectLike(clientRect(row));
+      const rowRect =
+        unionRect(measuredCells) ??
+        rectLike(
+          __MM_EDITOR_PERFORMANCE_BENCHMARK__
+            ? measureClientRect(row)
+            : clientRect(row),
+        );
       if (rowRect) {
         rowMeasured[rowIndex] = rowRect.top;
         rowMeasured[rowIndex + 1] = rowRect.bottom;
@@ -639,6 +839,13 @@ export class TableControls {
         if (columnRects[columnIndex]) columnRects[columnIndex]!.push(rect);
       });
     });
+    if (__MM_EDITOR_PERFORMANCE_BENCHMARK__) {
+      recordSegment(
+        "tableControls.measureLayout.cellRectCollection",
+        segmentStartedAt,
+      );
+      segmentStartedAt = now();
+    }
     const columnMeasured: Array<number | undefined> = Array.from(
       { length: width + 1 },
       () => undefined,
@@ -650,7 +857,10 @@ export class TableControls {
       columnMeasured[index + 1] = rect.right;
     });
     const gridRect = unionRect(allCellRects) ?? rectLike(tableRect);
-    const controlClipRect = this.measureControlClip(stageRect);
+    const controlClipRect = this.measureControlClip(
+      stageRect,
+      __MM_EDITOR_PERFORMANCE_BENCHMARK__ ? measureClientRect : clientRect,
+    );
     const visibleGridRect = intersectRect(
       intersectRect(gridRect, rectLike(tableRect)) ?? gridRect,
       controlClipRect,
@@ -682,6 +892,13 @@ export class TableControls {
       scrollLeft: this.stage.scrollLeft,
       scrollTop: this.stage.scrollTop,
     };
+    if (__MM_EDITOR_PERFORMANCE_BENCHMARK__) {
+      recordSegment(
+        "tableControls.measureLayout.boundaryCalculation",
+        segmentStartedAt,
+      );
+      segmentStartedAt = now();
+    }
     const localX = (client: number): number =>
       client - stageRect.left + this.stage.scrollLeft;
     const localY = (client: number): number =>
@@ -696,11 +913,20 @@ export class TableControls {
     const visibleGrid = localRect(visibleGridRect);
     const tableLeft = localX(tableRect.left);
     const tableTop = localY(tableRect.top);
+    const proxyViewportLeft =
+      this.horizontalScrollOwner instanceof ProxyTableScrollOwner
+        ? localX(this.horizontalScrollOwner.getViewportRect().left)
+        : tableLeft;
+    const rowHandleLeft =
+      this.horizontalScrollOwner instanceof ProxyTableScrollOwner &&
+      __MM_EDITOR_PERFORMANCE_BENCHMARK__
+        ? Math.max(localX(stageRect.left) + 4, proxyViewportLeft - 30)
+        : tableLeft - 30;
     this.rowHandles.forEach((button) => {
       const index = Number(button.dataset.index);
       const top = localY(rowBoundaries[index] ?? gridRect.top);
       const bottom = localY(rowBoundaries[index + 1] ?? gridRect.bottom);
-      setBox(button, tableLeft - 30, (top + bottom) / 2 - 12, 24, 24);
+      setBox(button, rowHandleLeft, (top + bottom) / 2 - 12, 24, 24);
     });
     this.columnHandles.forEach((button) => {
       const index = Number(button.dataset.index);
@@ -738,9 +964,34 @@ export class TableControls {
     );
     setBox(this.rowAppend, grid.left, grid.bottom + 3, 24, 24);
     setBox(this.columnAppend, grid.right + 3, grid.top, 24, 24);
+    if (__MM_EDITOR_PERFORMANCE_BENCHMARK__) {
+      recordSegment(
+        "tableControls.measureLayout.controlPositioning",
+        segmentStartedAt,
+      );
+      segmentStartedAt = now();
+    }
     if (!this.drag) this.updatePointerPresentationFromStoredPointer();
     else this.updateDragPresentation();
     this.updatePresentation();
+    if (__MM_EDITOR_PERFORMANCE_BENCHMARK__) {
+      recordSegment(
+        "tableControls.measureLayout.presentationUpdate",
+        segmentStartedAt,
+      );
+      recordEditorPerformanceCount(
+        "tableControls.measureLayout.rowsMeasured",
+        rowsMeasured,
+      );
+      recordEditorPerformanceCount(
+        "tableControls.measureLayout.cellsMeasured",
+        cellsMeasured,
+      );
+      recordEditorPerformanceCount(
+        "tableControls.measureLayout.getBoundingClientRectCalls",
+        getBoundingClientRectCalls,
+      );
+    }
   }
 
   destroy(): void {
@@ -782,6 +1033,25 @@ export class TableControls {
   }
 
   private renderTarget(): void {
+    if (!this.target) return;
+    if (__MM_EDITOR_PERFORMANCE_BENCHMARK__) {
+      measureEditorPerformance("tableControls.renderTarget", () =>
+        this.renderTargetInternal(),
+      );
+      recordEditorPerformanceCount(
+        "tableControls.renderTarget.rowHandleCount",
+        this.rowHandles.length,
+      );
+      recordEditorPerformanceCount(
+        "tableControls.renderTarget.columnHandleCount",
+        this.columnHandles.length,
+      );
+      return;
+    }
+    this.renderTargetInternal();
+  }
+
+  private renderTargetInternal(): void {
     if (!this.target) return;
     this.rowHandles = [];
     this.columnHandles = [];
@@ -1868,7 +2138,10 @@ export class TableControls {
     this.dragPreviewDestination.textContent = text ?? "";
   }
 
-  private measureControlClip(stageRect: DOMRect): RectLike {
+  private measureControlClip(
+    stageRect: DOMRect,
+    measureClientRect: (element: Element) => DOMRect = clientRect,
+  ): RectLike {
     let clip = rectLike(stageRect);
     let ancestor = this.stage.parentElement;
     const getStyle = this.ownerWindow?.getComputedStyle.bind(this.ownerWindow);
@@ -1881,7 +2154,7 @@ export class TableControls {
         overflow.includes("scroll") ||
         overflow.includes("auto")
       ) {
-        const next = intersectRect(clip, rectLike(clientRect(ancestor)));
+        const next = intersectRect(clip, rectLike(measureClientRect(ancestor)));
         if (next) clip = next;
       }
       ancestor = ancestor.parentElement;
@@ -1896,6 +2169,11 @@ export class TableControls {
     const add = (element: HTMLElement | null): void => {
       if (element && !candidates.includes(element)) candidates.push(element);
     };
+    this.horizontalScrollOwner = horizontalScrollOwnerForTable(
+      this.target.tableElement,
+    );
+    this.horizontalScrollOwnerUnsubscribe =
+      this.horizontalScrollOwner?.subscribe(this.scroll) ?? null;
     add(this.stage);
     add(this.target.tableElement);
     let ancestor = this.target.tableElement.parentElement;
@@ -1903,7 +2181,12 @@ export class TableControls {
       add(ancestor);
       ancestor = ancestor.parentElement;
     }
+    add(this.horizontalScrollOwner?.getElement() ?? null);
     for (const element of candidates) {
+      if (element === this.horizontalScrollOwner?.getElement()) {
+        this.scrollContainers.push(element);
+        continue;
+      }
       const style = this.ownerWindow?.getComputedStyle(element);
       const overflow = `${style?.overflow ?? ""} ${style?.overflowX ?? ""} ${style?.overflowY ?? ""}`;
       const scrollable =
@@ -1916,12 +2199,34 @@ export class TableControls {
       element.addEventListener("scroll", this.scroll, { passive: true });
       this.scrollContainers.push(element);
     }
+    if (__MM_EDITOR_PERFORMANCE_BENCHMARK__) {
+      this.element.dataset.mmBenchmarkScrollContainers = this.scrollContainers
+        .map((element) => {
+          if (element === this.stage) return "stage";
+          if (element === this.target?.tableElement) return "table";
+          if (element === this.horizontalScrollOwner?.getElement())
+            return this.horizontalScrollOwner instanceof ProxyTableScrollOwner
+              ? "proxy"
+              : "scroll-owner";
+          return (
+            element.className?.toString?.() || element.tagName.toLowerCase()
+          );
+        })
+        .join(",");
+      recordEditorPerformanceCount(
+        "tableControls.refreshScrollContainers.count",
+        this.scrollContainers.length,
+      );
+    }
   }
 
   private removeScrollListeners(): void {
     for (const element of this.scrollContainers)
       element.removeEventListener("scroll", this.scroll);
     this.scrollContainers = [];
+    this.horizontalScrollOwnerUnsubscribe?.();
+    this.horizontalScrollOwnerUnsubscribe = null;
+    this.horizontalScrollOwner = null;
   }
 
   private hideDropLine(): void {
@@ -1940,7 +2245,26 @@ export class TableControls {
       if (!drag || this.destroyed) return;
       let changed = false;
       let nearScrollableEdge = false;
+      const owner = this.horizontalScrollOwner;
+      if (owner) {
+        const rect = owner.getViewportRect();
+        const insideX = drag.lastX >= rect.left && drag.lastX <= rect.right;
+        if (insideX && owner.getMaxScrollLeft() > 0) {
+          if (drag.lastX < rect.left + EDGE_SCROLL_DISTANCE) {
+            const before = owner.getScrollLeft();
+            owner.scrollBy(-EDGE_SCROLL_STEP);
+            changed ||= owner.getScrollLeft() !== before;
+            nearScrollableEdge = true;
+          } else if (drag.lastX > rect.right - EDGE_SCROLL_DISTANCE) {
+            const before = owner.getScrollLeft();
+            owner.scrollBy(EDGE_SCROLL_STEP);
+            changed ||= owner.getScrollLeft() !== before;
+            nearScrollableEdge = true;
+          }
+        }
+      }
       for (const container of this.scrollContainers) {
+        if (container === owner?.getElement()) continue;
         const rect = clientRect(container);
         const canScrollY =
           container.scrollHeight > container.clientHeight ||

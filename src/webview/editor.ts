@@ -30,7 +30,7 @@ import {
 } from "prosemirror-state";
 import type { Transaction } from "prosemirror-state";
 import { Decoration, DecorationSet, EditorView } from "prosemirror-view";
-import type { ViewMutationRecord } from "prosemirror-view";
+import type { NodeView, ViewMutationRecord } from "prosemirror-view";
 import {
   liftListItem,
   sinkListItem,
@@ -50,6 +50,19 @@ import {
   type SaveResultMessage,
   type WorkspaceFileSearchResultMessage,
 } from "../shared/protocol";
+import {
+  measureEditorPerformance,
+  recordEditorPerformanceCount,
+  recordEditorPerformanceDuration,
+  classifyTableScrollModeForBenchmark,
+  tableScrollNodeViewEnabledForBenchmark,
+  tableScrollProxyPlacementForBenchmark,
+  tableScrollProxyRequiresHorizontalOverflowForBenchmark,
+  selectionToolbarDisabledForBenchmark,
+  type BenchmarkTableScrollMode,
+  spellcheckDisabledForBenchmark,
+  tableEditingDisabledForBenchmark,
+} from "../shared/performanceBenchmark";
 import { isWorkspaceFileSearchQuery } from "../shared/workspaceFileSearch";
 import {
   createStarterPlugin,
@@ -1217,6 +1230,331 @@ function removeTopLevelRange(doc: PMNode, range: TransientBlankRange): PMNode {
     position = end;
   }
   return doc.copy(Fragment.fromArray(children));
+}
+
+/**
+ * Benchmark-only table presentation wrapper. The ProseMirror table node and
+ * its attributes stay unchanged; only the DOM ancestor that owns horizontal
+ * scrolling is different. This is intentionally enabled through the
+ * benchmark option and is not used by the normal editor bundle.
+ */
+function createBenchmarkTableScrollNodeView(
+  node: PMNode,
+  view: EditorView,
+): NodeView {
+  let currentNode = node;
+  const requiresHorizontalOverflow =
+    tableScrollProxyRequiresHorizontalOverflowForBenchmark();
+  const shapeMode = classifyTableScrollModeForBenchmark(
+    node.childCount,
+    node.firstChild?.childCount ?? 0,
+  );
+  // Threshold candidates start in a safe, non-scrolling presentation. The
+  // result is kept per NodeView because it depends on instance geometry,
+  // text, font, zoom, and container width.
+  const overflowCandidate = requiresHorizontalOverflow && shapeMode === "proxy";
+  let overflowMeasured = !overflowCandidate;
+  let mode: BenchmarkTableScrollMode | "pending" = overflowCandidate
+    ? "pending"
+    : shapeMode;
+  let modeCheckScheduled = false;
+  let overflowCheckAttempts = 0;
+  let destroyed = false;
+  let lastMeasuredRows = node.childCount;
+  let lastMeasuredColumns = node.firstChild?.childCount ?? 0;
+  const documentRef = view.dom.ownerDocument;
+  const ownerWindow = documentRef.defaultView;
+  const safeWrapper = mode !== "native";
+  const dom = documentRef.createElement(safeWrapper ? "div" : "table");
+  dom.className = mode === "native" ? "" : "mm-table-scroll";
+  dom.dataset.mmBenchmarkTableScroll = "true";
+  dom.dataset.mmBenchmarkTableMode = mode;
+  dom.dataset.mmBenchmarkNodeViewCreatedAt = String(performance.now());
+  const viewport = safeWrapper ? documentRef.createElement("div") : null;
+  if (viewport) {
+    viewport.className = "mm-table-viewport";
+    viewport.dataset.mmBenchmarkTableViewport = "true";
+    viewport.style.cssText =
+      "display:block;position:relative;width:100%;max-width:100%;overflow-x:clip;overflow-y:visible;";
+    dom.append(viewport);
+  }
+  const table =
+    mode === "native"
+      ? (dom as HTMLTableElement)
+      : documentRef.createElement("table");
+  table.dataset.mmBenchmarkTable = "true";
+  const contentDOM = documentRef.createElement("tbody");
+  table.append(contentDOM);
+  if (viewport) viewport.append(table);
+  let proxy: HTMLElement | null = null;
+  let proxyScrollHandler: (() => void) | null = null;
+  let wheelHandler: ((event: WheelEvent) => void) | null = null;
+  const placement = tableScrollProxyPlacementForBenchmark();
+  const activationMark = (name: string): void => {
+    dom.dataset[name] = String(performance.now());
+  };
+  const safeScrollPositions = (): void => {
+    if (!viewport) return;
+    // Proxy is the only logical horizontal owner. Selection reveal can still
+    // ask Chromium to scroll an ancestor, so normalize presentation ancestors.
+    if (viewport.scrollLeft !== 0) viewport.scrollLeft = 0;
+    if (table.scrollLeft !== 0) table.scrollLeft = 0;
+  };
+  const updateStickyProxy = (): void => {
+    if (!proxy || placement !== "sticky" || !viewport) return;
+    const selection = documentRef.getSelection();
+    const anchor = selection?.anchorNode;
+    const anchorElement =
+      anchor instanceof Element ? anchor : (anchor?.parentElement ?? null);
+    const active = Boolean(anchorElement && table.contains(anchorElement));
+    const viewportRect = viewport.getBoundingClientRect();
+    const stage = dom.closest<HTMLElement>(".mm-stage");
+    const stageRect = stage?.getBoundingClientRect();
+    const visible =
+      active &&
+      viewportRect.bottom > (stageRect?.top ?? 0) &&
+      viewportRect.top < (stageRect?.bottom ?? window.innerHeight);
+    proxy.style.left = String(viewportRect.left) + "px";
+    proxy.style.width = String(viewportRect.width) + "px";
+    proxy.style.bottom =
+      String(
+        Math.max(
+          8,
+          window.innerHeight - (stageRect?.bottom ?? window.innerHeight) + 8,
+        ),
+      ) + "px";
+    proxy.style.visibility = visible ? "visible" : "hidden";
+  };
+  const syncProxy = (): void => {
+    if (!proxy || !viewport) return;
+    safeScrollPositions();
+    const spacer = proxy.firstElementChild as HTMLElement | null;
+    if (spacer) spacer.style.width = String(table.scrollWidth) + "px";
+    table.style.transform = "translateX(" + String(-proxy.scrollLeft) + "px)";
+    activationMark("mmBenchmarkLastProxySyncAt");
+    updateStickyProxy();
+  };
+  const detachProxy = (): void => {
+    if (!proxy) return;
+    if (proxyScrollHandler)
+      proxy.removeEventListener("scroll", proxyScrollHandler);
+    if (wheelHandler) viewport?.removeEventListener("wheel", wheelHandler);
+    proxy.remove();
+    proxy = null;
+    proxyScrollHandler = null;
+    wheelHandler = null;
+    table.style.transform = "";
+    dom.dataset.mmBenchmarkTableMode = "native";
+    activationMark("mmBenchmarkFinalModeSelectedAt");
+    safeScrollPositions();
+  };
+  const attachProxy = (): void => {
+    if (proxy || !viewport) return;
+    proxy = documentRef.createElement("div");
+    proxy.className = "mm-table-scrollbar-proxy";
+    proxy.dataset.mmBenchmarkScrollProxy = "true";
+    proxy.style.cssText =
+      placement === "sticky"
+        ? "display:block;position:fixed;z-index:20;height:16px;overflow-x:auto;overflow-y:hidden;visibility:hidden;"
+        : "display:block;width:100%;height:16px;overflow-x:auto;overflow-y:hidden;";
+    const spacer = documentRef.createElement("div");
+    spacer.dataset.mmBenchmarkScrollProxySpacer = "true";
+    spacer.style.cssText = "height:1px;";
+    proxy.append(spacer);
+    dom.append(proxy);
+    dom.dataset.mmBenchmarkTableMode = "proxy";
+    mode = "proxy";
+    activationMark("mmBenchmarkProxyReadyAt");
+    activationMark("mmBenchmarkFinalModeSelectedAt");
+    proxyScrollHandler = (): void => syncProxy();
+    wheelHandler = (event: WheelEvent): void => {
+      if (!proxy || event.deltaX === 0) return;
+      proxy.scrollLeft += event.deltaX;
+      syncProxy();
+      event.preventDefault();
+    };
+    proxy.addEventListener("scroll", proxyScrollHandler, { passive: true });
+    viewport.addEventListener("wheel", wheelHandler, { passive: false });
+    syncProxy();
+  };
+  const selectMeasuredMode = (horizontalOverflow: boolean): void => {
+    overflowMeasured = true;
+    activationMark("mmBenchmarkOverflowMeasuredAt");
+    if (horizontalOverflow) attachProxy();
+    else detachProxy();
+    if (!horizontalOverflow && mode === "pending") {
+      mode = "native";
+      dom.dataset.mmBenchmarkTableMode = "native";
+      activationMark("mmBenchmarkFinalModeSelectedAt");
+    }
+    view.dispatch(
+      view.state.tr.setMeta("benchmark-table-scroll-recheck", true),
+    );
+  };
+  const scheduleOverflowModeCheck = (): void => {
+    if (!overflowCandidate || overflowMeasured || modeCheckScheduled) return;
+    modeCheckScheduled = true;
+    const check = (): void => {
+      modeCheckScheduled = false;
+      if (destroyed) return;
+      if (!table.isConnected) {
+        scheduleOverflowModeCheck();
+        return;
+      }
+      overflowCheckAttempts += 1;
+      if (!dom.dataset.mmBenchmarkCandidateMountedAt)
+        activationMark("mmBenchmarkCandidateMountedAt");
+      const startedAt = performance.now();
+      const rowsMounted = table.rows.length >= currentNode.childCount;
+      if (rowsMounted && !dom.dataset.mmBenchmarkRowsMountedAt)
+        activationMark("mmBenchmarkRowsMountedAt");
+      const horizontalOverflow =
+        rowsMounted &&
+        viewport !== null &&
+        viewport.scrollWidth > viewport.clientWidth;
+      recordEditorPerformanceCount(
+        "tableScroll.classification.overflow.rowsMounted",
+        rowsMounted ? 1 : 0,
+      );
+      recordEditorPerformanceCount(
+        "tableScroll.classification.overflow.result",
+        horizontalOverflow ? 1 : 0,
+      );
+      if (!rowsMounted && overflowCheckAttempts < 20) {
+        ownerWindow?.setTimeout(
+          () => ownerWindow?.requestAnimationFrame(check),
+          50,
+        );
+        return;
+      }
+      recordEditorPerformanceDuration(
+        "tableScroll.classification.overflow",
+        performance.now() - startedAt,
+      );
+      selectMeasuredMode(horizontalOverflow);
+    };
+    ownerWindow?.requestAnimationFrame(() =>
+      ownerWindow?.requestAnimationFrame(check),
+    );
+  };
+  if (mode === "proxy" || mode === "pending") {
+    dom.style.cssText =
+      "display:block;position:relative;width:100%;max-width:100%;overflow:visible;";
+    table.style.cssText =
+      "display:table;width:max-content;min-width:100%;max-width:none;overflow:visible;";
+  } else if (mode === "wrapper") {
+    dom.style.cssText =
+      "display:block;position:relative;width:100%;max-width:100%;overflow-x:auto;overflow-y:hidden;";
+    table.style.cssText =
+      "display:table;width:max-content;min-width:100%;max-width:none;overflow:visible;";
+  }
+  const revealSelection = (): void => {
+    if (!proxy || !viewport) {
+      updateStickyProxy();
+      return;
+    }
+    const selection = documentRef.getSelection();
+    const anchor = selection?.anchorNode;
+    const anchorElement =
+      anchor instanceof Element ? anchor : (anchor?.parentElement ?? null);
+    if (anchorElement && table.contains(anchorElement)) {
+      const cell = anchorElement.closest<HTMLTableCellElement>("td,th");
+      if (cell) {
+        const viewportRect = viewport.getBoundingClientRect();
+        const cellRect = cell.getBoundingClientRect();
+        if (cellRect.left < viewportRect.left)
+          proxy.scrollLeft -= viewportRect.left - cellRect.left;
+        else if (cellRect.right > viewportRect.right)
+          proxy.scrollLeft += cellRect.right - viewportRect.right;
+        syncProxy();
+      }
+    }
+    safeScrollPositions();
+    updateStickyProxy();
+  };
+  if (mode === "proxy") attachProxy();
+  scheduleOverflowModeCheck();
+  documentRef.addEventListener("selectionchange", revealSelection, true);
+  view.dom.addEventListener("scroll", updateStickyProxy, true);
+  const onResize = (): void => {
+    updateStickyProxy();
+    if (overflowCandidate) {
+      overflowMeasured = false;
+      overflowCheckAttempts = 0;
+      scheduleOverflowModeCheck();
+    }
+  };
+  ownerWindow?.addEventListener("resize", onResize);
+  return {
+    dom,
+    contentDOM,
+    update(nextNode): boolean {
+      if (nextNode.type !== currentNode.type) return false;
+      const nextShapeMode = classifyTableScrollModeForBenchmark(
+        nextNode.childCount,
+        nextNode.firstChild?.childCount ?? 0,
+        mode === "pending" ? "native" : mode,
+      );
+      const nextOverflowCandidate =
+        requiresHorizontalOverflow && nextShapeMode === "proxy";
+      if (nextOverflowCandidate !== overflowCandidate) return false;
+      const shapeChanged =
+        nextNode.childCount !== lastMeasuredRows ||
+        (nextNode.firstChild?.childCount ?? 0) !== lastMeasuredColumns;
+      if (nextOverflowCandidate && shapeChanged) {
+        overflowMeasured = false;
+        overflowCheckAttempts = 0;
+      }
+      if (nextOverflowCandidate && !overflowMeasured)
+        scheduleOverflowModeCheck();
+      currentNode = nextNode;
+      lastMeasuredRows = nextNode.childCount;
+      lastMeasuredColumns = nextNode.firstChild?.childCount ?? 0;
+      if (!nextOverflowCandidate && mode === "pending") {
+        mode = nextShapeMode;
+        dom.dataset.mmBenchmarkTableMode = mode;
+      }
+      if (proxy) syncProxy();
+      return true;
+    },
+    ignoreMutation(mutation): boolean {
+      if (mutation.type === "selection") return false;
+      return !contentDOM.contains(mutation.target);
+    },
+    destroy(): void {
+      destroyed = true;
+      if (proxy && proxyScrollHandler)
+        proxy.removeEventListener("scroll", proxyScrollHandler);
+      if (viewport && wheelHandler)
+        viewport.removeEventListener("wheel", wheelHandler);
+      documentRef.removeEventListener("selectionchange", revealSelection, true);
+      view.dom.removeEventListener("scroll", updateStickyProxy, true);
+      ownerWindow?.removeEventListener("resize", onResize);
+    },
+  };
+}
+
+/** Resolve the benchmark wrapper's descendant table without changing the
+ * normal nodeDOM contract. The production path still requires table DOM to be
+ * the table node's root element. */
+function tableElementFromNodeDOM(
+  view: EditorView,
+  position: number,
+): HTMLTableElement | null {
+  const dom = view.nodeDOM(position);
+  if (dom instanceof HTMLTableElement) return dom;
+  if (
+    !tableScrollNodeViewEnabledForBenchmark() ||
+    !(dom instanceof HTMLElement)
+  )
+    return null;
+  const table =
+    dom instanceof HTMLTableElement
+      ? dom
+      : dom.querySelector(
+          ":scope > table, :scope > .mm-table-viewport > table",
+        );
+  return table instanceof HTMLTableElement ? table : null;
 }
 
 class TaskItemNodeView {
@@ -3017,7 +3355,7 @@ export class MarkdownEditorApp {
       dispatchTransaction: (tr) => this.dispatchTransaction(tr),
       attributes: {
         class: "ProseMirror mm-document-content",
-        spellcheck: "true",
+        spellcheck: spellcheckDisabledForBenchmark() ? "false" : "true",
         "data-testid": "rich-editor",
       },
       nodeViews: {
@@ -3088,6 +3426,12 @@ export class MarkdownEditorApp {
               this.openRenderedBlockEditor(position, returnFocus),
             { canEdit: () => this.canEditBlock() && !this.composing },
           ),
+        ...(tableScrollNodeViewEnabledForBenchmark()
+          ? {
+              table: (node: PMNode, view: EditorView) =>
+                createBenchmarkTableScrollNodeView(node, view),
+            }
+          : {}),
       },
       handleDOMEvents: {
         beforeinput: (view, event) =>
@@ -3183,6 +3527,7 @@ export class MarkdownEditorApp {
         this.handleTableControlDelete(selection, target),
       onEscape: () => this.clearTableStructureSelection(true),
     });
+    this.installPerformanceBenchmarkEditorApi();
     // The initial document came from the host, so it is already the current
     // serialized snapshot even when the starter plugin adds a virtual node.
     this.serializedDocument = this.view.state.doc;
@@ -3394,7 +3739,7 @@ export class MarkdownEditorApp {
       createRenderingPlugin(() => this.profile),
       this.imageImport.plugin,
       keymap(this.createKeymap()),
-      tableEditing(),
+      ...(tableEditingDisabledForBenchmark() ? [] : [tableEditing()]),
       createTableNumberingPlugin(),
       keymap(baseKeymap),
       new Plugin({
@@ -4016,6 +4361,52 @@ export class MarkdownEditorApp {
   }
 
   private dispatchTransaction(tr: Transaction): boolean {
+    if (__MM_EDITOR_PERFORMANCE_BENCHMARK__) {
+      const phase = globalThis.__mmInteractionPhase ?? "unknown";
+      const phaseStartedAt =
+        globalThis.__mmInteractionPhaseStartedAt?.[phase] ?? null;
+      const apply = () =>
+        this.dispatchTransactionInternal(tr, { phase, phaseStartedAt });
+      const selectionOnly = !tr.docChanged && tr.selectionSet;
+      const measuredApply = selectionOnly
+        ? () => {
+            const startedAt = performance.now();
+            try {
+              return apply();
+            } finally {
+              globalThis.__markdownMintBenchmarkSelectionOnlyTransactions?.push(
+                {
+                  phase,
+                  phaseStartedAt,
+                  fromPhaseStartMs:
+                    phaseStartedAt === null
+                      ? null
+                      : performance.now() - phaseStartedAt,
+                  durationMs: performance.now() - startedAt,
+                },
+              );
+            }
+          }
+        : apply;
+      const measuredSelectionOnly = selectionOnly
+        ? () =>
+            measureEditorPerformance(
+              "editor.selectionOnlyTransaction",
+              measuredApply,
+            )
+        : measuredApply;
+      return measureEditorPerformance(
+        "editor.dispatchTransaction",
+        measuredSelectionOnly,
+      );
+    }
+    return this.dispatchTransactionInternal(tr);
+  }
+
+  private dispatchTransactionInternal(
+    tr: Transaction,
+    benchmarkPhase?: { phase: string; phaseStartedAt: number | null },
+  ): boolean {
     const oldSelection = this.view.state.selection;
     const rootTransientMeta = tr.getMeta(TRANSIENT_BLANK_META) as
       TransientBlankTransactionMeta | undefined;
@@ -4031,7 +4422,11 @@ export class MarkdownEditorApp {
       !this.spreadsheetPasteWithinMarkdownLimit(tr, committedTransient)
     )
       return false;
-    const applied = this.view.state.applyTransaction(tr);
+    const applied = __MM_EDITOR_PERFORMANCE_BENCHMARK__
+      ? measureEditorPerformance("editor.applyTransaction", () =>
+          this.view.state.applyTransaction(tr),
+        )
+      : this.view.state.applyTransaction(tr);
     const transactions = applied.transactions;
     const editTarget = this.profileFeatureEditTarget;
     if (editTarget && editTarget.document === this.view.state.doc) {
@@ -4061,6 +4456,33 @@ export class MarkdownEditorApp {
     }
 
     this.view.updateState(applied.state);
+    if (
+      __MM_EDITOR_PERFORMANCE_BENCHMARK__ &&
+      applied.state.selection !== oldSelection
+    )
+      this.ensureBenchmarkTableSelectionVisible();
+    if (
+      __MM_EDITOR_PERFORMANCE_BENCHMARK__ &&
+      applied.state.selection !== oldSelection
+    ) {
+      const phase =
+        benchmarkPhase?.phase ?? globalThis.__mmInteractionPhase ?? "unknown";
+      const phaseStartedAt = benchmarkPhase
+        ? benchmarkPhase.phaseStartedAt
+        : (globalThis.__mmInteractionPhaseStartedAt?.[phase] ?? null);
+      const at = performance.now();
+      globalThis.__markdownMintBenchmarkPmSelectionChanges?.push({
+        at,
+        phase,
+        phaseStartedAt,
+        fromPhaseStartMs: phaseStartedAt === null ? null : at - phaseStartedAt,
+        from: this.view.state.selection.from,
+        to: this.view.state.selection.to,
+        head: this.view.state.selection.head,
+        anchor: this.view.state.selection.anchor,
+        empty: this.view.state.selection.empty,
+      });
+    }
     if (committedTransient && applied.transactions.length > 0)
       this.transientBlanks = null;
 
@@ -4153,6 +4575,36 @@ export class MarkdownEditorApp {
         revealTableToolbar: selectionSet || docChanged || discardedTransient,
       });
     return true;
+  }
+
+  /** Keep benchmark proxy selections visible without changing production scroll behavior. */
+  private ensureBenchmarkTableSelectionVisible(): void {
+    if (!tableScrollNodeViewEnabledForBenchmark()) return;
+    const domAtSelection = this.view.domAtPos(
+      this.view.state.selection.from,
+    ).node;
+    const element =
+      domAtSelection instanceof Element
+        ? domAtSelection
+        : domAtSelection.parentElement;
+    const cell = element?.closest<HTMLTableCellElement>("td,th");
+    const table = cell?.closest<HTMLTableElement>("table");
+    const viewport = table?.closest<HTMLElement>(".mm-table-viewport");
+    const proxy = table
+      ?.closest<HTMLElement>(".mm-table-scroll")
+      ?.querySelector<HTMLElement>(":scope > .mm-table-scrollbar-proxy");
+    if (!cell || !table || !viewport || !proxy) return;
+    const reveal = (): void => {
+      const viewportRect = viewport.getBoundingClientRect();
+      const cellRect = cell.getBoundingClientRect();
+      if (cellRect.left < viewportRect.left)
+        proxy.scrollLeft -= viewportRect.left - cellRect.left;
+      else if (cellRect.right > viewportRect.right)
+        proxy.scrollLeft += cellRect.right - viewportRect.right;
+      table.style.transform = `translateX(${-proxy.scrollLeft}px)`;
+    };
+    reveal();
+    this.view.dom.ownerDocument.defaultView?.requestAnimationFrame(reveal);
   }
 
   private commitTransientBlanksInTransaction(tr: Transaction): boolean {
@@ -7266,6 +7718,12 @@ export class MarkdownEditorApp {
 
   private updateSelectionToolbar(selection = this.view.state.selection): void {
     if (!this.selectionToolbar || !this.stage || !this.view) return;
+    if (selectionToolbarDisabledForBenchmark()) {
+      this.selectionToolbar.hidden = true;
+      this.selectionToolbar.setAttribute("aria-hidden", "true");
+      this.clearSelectionToolbarSelection();
+      return;
+    }
     if (this.linkPickerOpen) {
       this.selectionToolbar.hidden = true;
       this.selectionToolbar.setAttribute("aria-hidden", "true");
@@ -8006,7 +8464,7 @@ export class MarkdownEditorApp {
       return;
     const context = tableContext(this.view.state.selection);
     const tableElement = context
-      ? this.view.nodeDOM(context.tableStart - 1)
+      ? tableElementFromNodeDOM(this.view, context.tableStart - 1)
       : null;
     if (!context || !(tableElement instanceof HTMLElement)) {
       this.clearTableDeletePreview();
@@ -8051,7 +8509,10 @@ export class MarkdownEditorApp {
       // Keep this guard next to the preview path even though the toolbar also
       // disables commands that would be no-ops.
       if (!tableDeletePreviewLogicalRect(context, action)) return;
-      const tableElement = this.view.nodeDOM(context.tableStart - 1);
+      const tableElement = tableElementFromNodeDOM(
+        this.view,
+        context.tableStart - 1,
+      );
       if (!(tableElement instanceof HTMLElement)) return;
       const previews = tableDeletePreviewPixelRects(
         this.view,
@@ -9267,7 +9728,8 @@ export class MarkdownEditorApp {
       return null;
     }
     const table = explicitTableAt(document, tablePos);
-    if (!table || this.view.nodeDOM(tablePos) !== tableElement) return null;
+    if (!table || tableElementFromNodeDOM(this.view, tablePos) !== tableElement)
+      return null;
     if (!supportsDirectTableOperations(table)) return null;
     const structure = this.tableStructureSelection;
     const selected =
@@ -9295,16 +9757,16 @@ export class MarkdownEditorApp {
   ): TableControlTarget | null {
     const context = tableContext(selection);
     if (!context) return null;
-    const element = this.view.nodeDOM(context.tableStart - 1);
-    if (!(element instanceof HTMLTableElement)) return null;
+    const element = tableElementFromNodeDOM(this.view, context.tableStart - 1);
+    if (!element) return null;
     return this.tableTargetAtElement(element);
   }
 
   private tableTargetForStructureSelection(): TableControlTarget | null {
     const structure = this.tableStructureSelection;
     if (!structure || !this.view) return null;
-    const element = this.view.nodeDOM(structure.tablePos);
-    if (!(element instanceof HTMLTableElement)) return null;
+    const element = tableElementFromNodeDOM(this.view, structure.tablePos);
+    if (!element) return null;
     return this.tableTargetAtElement(element);
   }
 
@@ -9407,8 +9869,64 @@ export class MarkdownEditorApp {
       target.document === this.view.state.doc &&
       target.documentGeneration === this.documentGeneration &&
       explicitTableAt(this.view.state.doc, target.tablePos) === target.table &&
-      this.view.nodeDOM(target.tablePos) === target.tableElement
+      tableElementFromNodeDOM(this.view, target.tablePos) ===
+        target.tableElement
     );
+  }
+
+  private installPerformanceBenchmarkEditorApi(): void {
+    if (!__MM_EDITOR_PERFORMANCE_BENCHMARK__) return;
+    globalThis.__markdownMintBenchmarkEditor = {
+      setTableCellSelection: (row, column, edge) => {
+        const startedAt = performance.now();
+        const state = this.view.state;
+        const found: { position: number; table: PMNode | null } = {
+          position: -1,
+          table: null,
+        };
+        state.doc.descendants((node, position) => {
+          if (node.type.spec.tableRole !== "table") return true;
+          found.position = position;
+          found.table = node;
+          return false;
+        });
+        if (found.position < 0 || !found.table)
+          throw new Error("No table is available for benchmark selection");
+
+        const table = found.table;
+        const map = TableMap.get(table);
+        const cellPosition = this.directCellPosition(
+          state.doc,
+          found.position,
+          row,
+          column,
+        );
+        const cell = table.nodeAt(map.positionAt(row, column, table));
+        if (cellPosition === null || !cell)
+          throw new Error("Benchmark table cell is out of range");
+
+        const resolvedPosition =
+          edge === "end" ? cellPosition + cell.nodeSize - 2 : cellPosition + 1;
+        const selection = TextSelection.near(
+          state.doc.resolve(resolvedPosition),
+          edge === "end" ? -1 : 1,
+        );
+        const dispatchStartedAt = performance.now();
+        this.dispatchTransaction(state.tr.setSelection(selection));
+        const completedAt = performance.now();
+        return {
+          startedAt,
+          dispatchStartedAt,
+          completedAt,
+          selectionPreparationMs: dispatchStartedAt - startedAt,
+          dispatchMs: completedAt - dispatchStartedAt,
+          position: cellPosition,
+          selectionFrom: this.view.state.selection.from,
+          selectionTo: this.view.state.selection.to,
+          selectionHead: this.view.state.selection.head,
+        };
+      },
+    };
   }
 
   private directCellPosition(
@@ -10434,6 +10952,19 @@ export class MarkdownEditorApp {
     options: { allowReveal?: boolean } = {},
   ): void {
     if (this.destroyed || !this.tableToolbar || !this.view) return;
+    if (__MM_EDITOR_PERFORMANCE_BENCHMARK__) {
+      measureEditorPerformance("editor.updateTableToolbar", () =>
+        this.updateTableToolbarInternal(selection, options),
+      );
+      return;
+    }
+    this.updateTableToolbarInternal(selection, options);
+  }
+
+  private updateTableToolbarInternal(
+    selection: Selection,
+    options: { allowReveal?: boolean },
+  ): void {
     const activePreview = this.tableDeletePreviewAction;
     this.clearTableDeletePreview();
     const updateAlignmentState = (
@@ -10456,7 +10987,15 @@ export class MarkdownEditorApp {
       !this.syncPaused &&
       this.mode === "rich" &&
       this.profile !== "commonmark";
-    const context = canShow ? tableContext(selection) : null;
+    let context: TableContext | null = null;
+    if (canShow) {
+      context = __MM_EDITOR_PERFORMANCE_BENCHMARK__
+        ? measureEditorPerformance(
+            "editor.updateTableToolbar.tableContext",
+            () => tableContext(selection),
+          )
+        : tableContext(selection);
+    }
     if (
       canShow &&
       context &&
@@ -10495,12 +11034,15 @@ export class MarkdownEditorApp {
       this.clearTableDeletePreview();
       updateAlignmentState(null);
       this.tableToolbar.removeAttribute("data-table-pos");
-      this.updateTableNumberingState(null);
+      this.updateTableNumberingStateForToolbar(null);
       return;
     }
 
     // A null alignment is Markdown's default left alignment. Show a pressed
     // state only when every cell in the selected column(s) agrees.
+    const alignmentStartedAt = __MM_EDITOR_PERFORMANCE_BENCHMARK__
+      ? this.view.dom.ownerDocument.defaultView?.performance.now()
+      : undefined;
     const alignments = new Set<"left" | "center" | "right">();
     for (let row = 0; row < context.map.height; row += 1) {
       for (
@@ -10517,13 +11059,35 @@ export class MarkdownEditorApp {
         );
       }
     }
+    if (
+      __MM_EDITOR_PERFORMANCE_BENCHMARK__ &&
+      alignmentStartedAt !== undefined
+    ) {
+      recordEditorPerformanceDuration(
+        "editor.updateTableToolbar.alignmentScan",
+        (this.view.dom.ownerDocument.defaultView?.performance.now() ??
+          alignmentStartedAt) - alignmentStartedAt,
+      );
+    }
     updateAlignmentState(
       alignments.size === 1 ? ([...alignments][0] ?? null) : null,
     );
 
     this.tableToolbar.dataset.tablePos = String(context.tableStart - 1);
-    this.updateTableNumberingState(context);
+    this.updateTableNumberingStateForToolbar(context);
     if (activePreview) this.showTableDeletePreview(activePreview);
+  }
+
+  private updateTableNumberingStateForToolbar(
+    context: TableContext | null,
+  ): void {
+    if (__MM_EDITOR_PERFORMANCE_BENCHMARK__) {
+      measureEditorPerformance("editor.updateTableToolbar.numberingState", () =>
+        this.updateTableNumberingState(context),
+      );
+      return;
+    }
+    this.updateTableNumberingState(context);
   }
 
   private postReady(): void {
