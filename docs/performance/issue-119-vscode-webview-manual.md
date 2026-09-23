@@ -1,15 +1,56 @@
-# Issue #119 VS Code Webview Paint Reproduction
+# Issue #119 VS Code Webview Large-table Proxy Reproduction
 
-The current benchmark machine reported that macOS is locked, so this run could not open or drive VS Code. Use these steps to collect the native Webview result separately; do not substitute the headless Chromium timings.
+The benchmark branch now includes a runnable, benchmark-only VS Code bundle.
+The current run still did not capture a Webview trace, so the values below must
+be filled by a local Extension Development Host run; do not substitute the
+headless Chromium timings.
 
-## Reproduction
+## Build and launch
 
-1. Check out `codex/issue-119-editor-performance` and launch the Markdown Mint Extension Development Host from this worktree (Run and Debug → Launch Extension).
-2. Open `tests/github-markdown-test-suite/stress/github-table-2000x20.md` with the **Markdown Mint** custom editor (`markdownMint.editor`). Confirm that the Rich Editor shows the first table body cell `R0001C01`.
-3. Open the Webview developer tools from the Command Palette using **Developer: Open Webview Developer Tools**. In its Performance panel, start a recording.
-4. Return to the Rich Editor, click once in `R0001C01`, and wait until the caret appears and the UI responds. Stop the recording after the editor is responsive.
-5. In the Performance trace, inspect the click interval and main-thread tasks for `RunTask`, `WebFrameWidgetImpl::UpdateLifecycle`, `LocalFrameView::RunPaintLifecyclePhase`, `LocalFrameView::pushPaintArtifactToCompositor`, `Layerize`, and `PaintArtifactCompositor::Update`. Record the longest task and its nested lifecycle events.
-6. Repeat by clicking `R0001C01` again without changing cells. Compare the first and repeat clicks.
+From the repository root, run:
+
+```sh
+npm ci
+npm run benchmark:editor:vscode -- --launch
+```
+
+The command builds the normal extension host bundle, replaces only the local
+ignored `dist/webview.js` with the benchmark bundle, and launches an Extension
+Development Host. It does not change `src/`, `media/`, Preview, or package
+settings. Open the fixture with **Reopen With → Markdown Mint**.
+
+For a Current/native run, restore the normal bundle first:
+
+```sh
+npm run benchmark:editor:vscode -- --current --launch
+```
+
+Close the Development Host between Current and Threshold runs, then reload the
+fixture so both measurements start from the same document state. The threshold
+bundle defaults to `totalCells >= 10000`, OFF below `7500`, plus one
+instance-local `viewport.scrollWidth > viewport.clientWidth` probe and a sticky
+proxy. The normal bundle leaves the product native path unchanged.
+
+## Reproduction and trace
+
+1. Open `tests/github-markdown-test-suite/stress/github-table-2000x20.md` with
+   the **Markdown Mint** custom editor. Confirm `R0001C01` is visible.
+2. Open **Developer: Open Webview Developer Tools**. In Performance, start a
+   recording.
+3. Click `R0001C01`, type one character, and stop after the caret and DOM are
+   responsive. Record click→caret, input→DOM, UI freeze, and the longest
+   `RunTask`, `UpdateLifecycle`, `Layerize`, and
+   `PaintArtifactCompositor::Update`.
+4. In the threshold bundle, `globalThis.__markdownMintPerformanceBenchmark`
+   exposes `snapshot()` and `counterSnapshot()` in the Webview console. Save
+   those objects with the trace.
+5. Repeat after reload for Current and Threshold. Do not report a Webview
+   improvement unless the trace shows it.
+
+Repeat the pair for `500×20`, `250×40`, and `2000×20`. The first two verify
+that cell-count activation catches wide shapes; `2000×5` and `1000×10` are
+useful negative controls because they should remain native when they do not
+overflow horizontally.
 
 ## Candidate CSS A/B check
 
@@ -31,17 +72,15 @@ document.head.append(style);
 
 Wait for two animation frames, repeat the same-cell click and Performance recording, and then reload again before treating the next result as a separate Current run. Record whether the candidate changes `PaintArtifactCompositor::Update`; do not claim native Webview reproduction or improvement unless these steps are completed in VS Code. The wrapper NodeView and scrollbar-proxy conditions require the benchmark bundle and are not represented by this CSS-only snippet.
 
-## Large-table proxy prototype
+## Threshold proxy checks
 
-The final headless prototype keeps ordinary tables on the existing native
-scroll path. A large candidate (500 body rows in this run; OFF below 250) is
-mounted first in a non-scrolling pending presentation, so the table never
-starts with `overflow-x:auto`. After rows mount, one instance-local geometry
-read checks `viewport.scrollWidth > viewport.clientWidth`; overflow attaches
-the sticky proxy and no-overflow candidates remain native-equivalent. The
-prototype does not use a global row/column shape cache and does not
-reclassify ordinary text input. The proxy bundle is benchmark-only and is not
-enabled by the normal Extension Development Host build.
+The prototype keeps ordinary tables on the existing native scroll path. A
+cell-count candidate mounts in a non-scrolling pending presentation, so the
+table never starts with `overflow-x:auto`. After rows mount, one
+instance-local geometry read checks `viewport.scrollWidth > viewport.clientWidth`;
+overflow attaches the sticky proxy and no-overflow candidates remain
+native-equivalent. There is no global shape cache and ordinary text input does
+not reclassify the presentation.
 
 If a future Development Host bundle exposes the prototype, repeat the same
 document reload sequence for Current and Proxy and record:
@@ -95,7 +134,8 @@ branch.
 | First click: UI unresponsive duration                  |                                    |
 | First click: longest main-thread task                  |                                    |
 | First click: longest `PaintArtifactCompositor::Update` |                                    |
-| Activation: candidate mount → proxy ready              |                                    |
+| Activation: nodeViewCreated → proxy ready              |                                    |
+| Activation: candidateMounted → proxy ready             |                                    |
 | Activation: PAC max from mount through first input     |                                    |
 | Proxy 0/50/100% handle clicks and alignment            |                                    |
 | Proxy-only scroll ownership round-trip                 |                                    |

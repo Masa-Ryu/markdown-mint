@@ -2,6 +2,8 @@ export interface PerformanceBenchmarkRecorder {
   record(name: string, durationMilliseconds: number): void;
   count?(name: string, value: number): void;
   reset?(): void;
+  snapshot?(): unknown;
+  counterSnapshot?(): unknown;
 }
 
 export interface PerformanceBenchmarkOptions {
@@ -12,9 +14,12 @@ export interface PerformanceBenchmarkOptions {
   tableScrollWrapper?: boolean;
   /** Benchmark-only table scroll presentation. */
   tableScrollMode?: "native" | "wrapper" | "proxy" | "threshold";
-  /** Threshold mode: turn the proxy on at or above this row count. */
+  /**
+   * Legacy threshold field retained for old benchmark JSON. Threshold mode
+   * now uses cell count as its primary shape signal; this field is ignored.
+   */
   tableScrollProxyOnRows?: number;
-  /** Threshold mode: turn the proxy off below this row count. */
+  /** Legacy counterpart retained for old benchmark JSON; ignored in cell mode. */
   tableScrollProxyOffRows?: number;
   /** Threshold mode: turn the proxy on at or above this cell count. */
   tableScrollProxyOnCells?: number;
@@ -136,14 +141,10 @@ export function classifyTableScrollModeForBenchmark(
     mode = "wrapper";
   else if (configuredMode === "threshold") {
     const cells = rows * columns;
-    const onRows = Math.max(0, options.tableScrollProxyOnRows ?? Infinity);
-    const offRows = Math.max(0, options.tableScrollProxyOffRows ?? onRows);
     const onCells = Math.max(0, options.tableScrollProxyOnCells ?? Infinity);
     const offCells = Math.max(0, options.tableScrollProxyOffCells ?? onCells);
     const previouslyProxy = previousMode === "proxy";
-    const enable = previouslyProxy
-      ? rows >= offRows && cells >= offCells
-      : rows >= onRows && cells >= onCells;
+    const enable = previouslyProxy ? cells >= offCells : cells >= onCells;
     mode = enable ? "proxy" : "native";
   }
   if (globalThis.performance && globalThis.__markdownMintPerformanceBenchmark) {

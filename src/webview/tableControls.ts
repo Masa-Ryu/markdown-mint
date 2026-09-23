@@ -917,11 +917,16 @@ export class TableControls {
       this.horizontalScrollOwner instanceof ProxyTableScrollOwner
         ? localX(this.horizontalScrollOwner.getViewportRect().left)
         : tableLeft;
+    const rowHandleLeft =
+      this.horizontalScrollOwner instanceof ProxyTableScrollOwner &&
+      __MM_EDITOR_PERFORMANCE_BENCHMARK__
+        ? Math.max(localX(stageRect.left) + 4, proxyViewportLeft - 30)
+        : tableLeft - 30;
     this.rowHandles.forEach((button) => {
       const index = Number(button.dataset.index);
       const top = localY(rowBoundaries[index] ?? gridRect.top);
       const bottom = localY(rowBoundaries[index + 1] ?? gridRect.bottom);
-      setBox(button, proxyViewportLeft - 30, (top + bottom) / 2 - 12, 24, 24);
+      setBox(button, rowHandleLeft, (top + bottom) / 2 - 12, 24, 24);
     });
     this.columnHandles.forEach((button) => {
       const index = Number(button.dataset.index);

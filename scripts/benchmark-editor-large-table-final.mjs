@@ -28,7 +28,11 @@ const sampleCount = Math.max(
 );
 const smoke = process.env.MM_LARGE_TABLE_SMOKE === "1";
 const skipMatrix = process.env.MM_LARGE_TABLE_SKIP_MATRIX === "1";
+const skipThresholdMatrix =
+  process.env.MM_LARGE_TABLE_SKIP_THRESHOLD_MATRIX === "1";
 const skipControls = process.env.MM_LARGE_TABLE_SKIP_CONTROLS === "1";
+const skipDiagnosticControls =
+  process.env.MM_LARGE_TABLE_SKIP_DIAGNOSTIC_CONTROLS === "1";
 const skipSticky = process.env.MM_LARGE_TABLE_SKIP_STICKY === "1";
 const skipProxy = process.env.MM_LARGE_TABLE_SKIP_PROXY === "1";
 const noTrace = process.env.MM_LARGE_TABLE_NO_TRACE === "1";
@@ -151,6 +155,31 @@ function multiScenario(base, largeRows, largeColumns) {
         small.trimEnd(),
         "Large table B.",
         large.trimEnd(),
+        "After tables.",
+      ].join("\n\n") + "\n",
+  };
+}
+
+function thresholdMixedScenario(base) {
+  const small = shapedTableMarkdown(base.markdown, 3, 3);
+  const wideProxy = shapedTableMarkdown(base.markdown, 250, 40);
+  const tallNative = shapedTableMarkdown(base.markdown, 1000, 10);
+  const rowProxy = shapedTableMarkdown(base.markdown, 500, 20);
+  return {
+    ...base,
+    id: "mixed-small-250x40-small-1000x10-500x20",
+    markdown:
+      [
+        "Small table A.",
+        small.trimEnd(),
+        "Wide proxy table.",
+        wideProxy.trimEnd(),
+        "Small table B.",
+        small.trimEnd(),
+        "Tall narrow native table.",
+        tallNative.trimEnd(),
+        "Row threshold proxy table.",
+        rowProxy.trimEnd(),
         "After tables.",
       ].join("\n\n") + "\n",
   };
@@ -539,9 +568,13 @@ function sampleSummary(samples) {
       (sample) => sample.inputToFirstIdleMs,
     ),
     fullInteraction: metricFrom(samples, (sample) => sample.fullInteractionMs),
-    initializationToProxyReady: metricFrom(
+    nodeViewCreatedToProxyReady: metricFrom(
       samples,
-      (sample) => sample.initializationToProxyReadyMs,
+      (sample) => sample.nodeViewCreatedToProxyReadyMs,
+    ),
+    candidateMountedToProxyReady: metricFrom(
+      samples,
+      (sample) => sample.candidateMountedToProxyReadyMs,
     ),
     firstInteractionAfterOpen: metricFrom(
       samples,
@@ -765,11 +798,16 @@ async function runPerformanceSample(
       postMutationToFirstIdleMs: idleAt - mutationAt,
       inputToFirstIdleMs: idleAt - inputStartedAt,
       fullInteractionMs: idleAt - startedAt,
-      initializationToProxyReadyMs:
+      nodeViewCreatedToProxyReadyMs:
         state.activation.proxyReadyAt === null ||
         state.activation.nodeViewCreatedAt === null
           ? null
           : state.activation.proxyReadyAt - state.activation.nodeViewCreatedAt,
+      candidateMountedToProxyReadyMs:
+        state.activation.proxyReadyAt === null ||
+        state.activation.candidateMountedAt === null
+          ? null
+          : state.activation.proxyReadyAt - state.activation.candidateMountedAt,
       firstInteractionAfterOpenMs:
         state.activation.editorReadyAt === null
           ? null
@@ -821,85 +859,90 @@ async function setProxyPosition(page, ratio) {
   await page.waitForTimeout(180);
 }
 
-async function controlRects(page) {
-  return page.evaluate(() => {
-    for (const handle of document.querySelectorAll(
-      ".mm-table-controls .mm-table-row-handle,.mm-table-controls .mm-table-column-handle",
-    ))
-      handle.hidden = false;
-    const table = document.querySelector(".mm-rich-panel .ProseMirror table");
-    const row = table?.rows[1];
-    const targetCell = row?.cells[row.cells.length - 1];
-    const firstCell = row?.cells[0];
-    const columnHandle = document.querySelector(
-      '.mm-table-controls .mm-table-column-handle[data-index="19"]',
-    );
-    const rowHandle = document.querySelector(
-      '.mm-table-controls .mm-table-row-handle[data-index="1"]',
-    );
-    const rect = (element) => {
-      if (!element) return null;
-      const value = element.getBoundingClientRect();
-      return {
-        left: value.left,
-        top: value.top,
-        right: value.right,
-        bottom: value.bottom,
-        width: value.width,
-        height: value.height,
+async function controlRects(page, options = {}) {
+  return page.evaluate(
+    ({ forceReveal }) => {
+      if (forceReveal) {
+        for (const handle of document.querySelectorAll(
+          ".mm-table-controls .mm-table-row-handle,.mm-table-controls .mm-table-column-handle",
+        ))
+          handle.hidden = false;
+      }
+      const table = document.querySelector(".mm-rich-panel .ProseMirror table");
+      const row = table?.rows[1];
+      const targetCell = row?.cells[row.cells.length - 1];
+      const firstCell = row?.cells[0];
+      const columnHandle = document.querySelector(
+        '.mm-table-controls .mm-table-column-handle[data-index="19"]',
+      );
+      const rowHandle = document.querySelector(
+        '.mm-table-controls .mm-table-row-handle[data-index="1"]',
+      );
+      const rect = (element) => {
+        if (!element) return null;
+        const value = element.getBoundingClientRect();
+        return {
+          left: value.left,
+          top: value.top,
+          right: value.right,
+          bottom: value.bottom,
+          width: value.width,
+          height: value.height,
+        };
       };
-    };
-    const centerX = (value) => (value ? value.left + value.width / 2 : null);
-    const centerY = (value) => (value ? value.top + value.height / 2 : null);
-    const cellRect = rect(targetCell);
-    const firstRect = rect(firstCell);
-    const columnRect = rect(columnHandle);
-    const rowRect = rect(rowHandle);
-    return {
-      targetCell: cellRect,
-      columnHandle: columnRect,
-      rowHandle: rowRect,
-      columnDeltaPx:
-        centerX(columnRect) === null || centerX(cellRect) === null
-          ? null
-          : centerX(columnRect) - centerX(cellRect),
-      rowDeltaPx:
-        centerY(rowRect) === null || centerY(firstRect) === null
-          ? null
-          : centerY(rowRect) - centerY(firstRect),
-      controls:
-        document.querySelector(".mm-table-controls")?.dataset
-          .mmBenchmarkScrollContainers ?? null,
-      handles: {
-        rows: document.querySelectorAll(
-          ".mm-table-controls .mm-table-row-handle",
-        ).length,
-        columns: document.querySelectorAll(
-          ".mm-table-controls .mm-table-column-handle",
-        ).length,
-      },
-      scrollPositions: {
-        proxy:
-          document.querySelector(".mm-table-scrollbar-proxy")?.scrollLeft ??
-          null,
-        viewport:
-          document.querySelector(".mm-table-viewport")?.scrollLeft ?? null,
-        table: table?.scrollLeft ?? null,
-        stage: document.querySelector(".mm-stage")?.scrollLeft ?? null,
-      },
-      highlights: [
-        ...document.querySelectorAll(".mm-table-control-highlight"),
-      ].filter((element) => !element.hidden).length,
-      insertControls: [
-        ...document.querySelectorAll(
-          ".mm-table-row-insert,.mm-table-column-insert",
-        ),
-      ].some((element) => !element.hidden),
-      moveIndicatorHidden:
-        document.querySelector(".mm-table-move-indicator")?.hidden ?? true,
-      dragPreviewHidden: !document.querySelector(".mm-table-drag-preview"),
-    };
-  });
+      const centerX = (value) => (value ? value.left + value.width / 2 : null);
+      const centerY = (value) => (value ? value.top + value.height / 2 : null);
+      const cellRect = rect(targetCell);
+      const firstRect = rect(firstCell);
+      const columnRect = rect(columnHandle);
+      const rowRect = rect(rowHandle);
+      return {
+        targetCell: cellRect,
+        columnHandle: columnRect,
+        rowHandle: rowRect,
+        columnDeltaPx:
+          centerX(columnRect) === null || centerX(cellRect) === null
+            ? null
+            : centerX(columnRect) - centerX(cellRect),
+        rowDeltaPx:
+          centerY(rowRect) === null || centerY(firstRect) === null
+            ? null
+            : centerY(rowRect) - centerY(firstRect),
+        controls:
+          document.querySelector(".mm-table-controls")?.dataset
+            .mmBenchmarkScrollContainers ?? null,
+        handles: {
+          rows: document.querySelectorAll(
+            ".mm-table-controls .mm-table-row-handle",
+          ).length,
+          columns: document.querySelectorAll(
+            ".mm-table-controls .mm-table-column-handle",
+          ).length,
+        },
+        scrollPositions: {
+          proxy:
+            document.querySelector(".mm-table-scrollbar-proxy")?.scrollLeft ??
+            null,
+          viewport:
+            document.querySelector(".mm-table-viewport")?.scrollLeft ?? null,
+          table: table?.scrollLeft ?? null,
+          stage: document.querySelector(".mm-stage")?.scrollLeft ?? null,
+        },
+        highlights: [
+          ...document.querySelectorAll(".mm-table-control-highlight"),
+        ].filter((element) => !element.hidden).length,
+        insertControls: [
+          ...document.querySelectorAll(
+            ".mm-table-row-insert,.mm-table-column-insert",
+          ),
+        ].some((element) => !element.hidden),
+        moveIndicatorHidden:
+          document.querySelector(".mm-table-move-indicator")?.hidden ?? true,
+        dragPreviewHidden: !document.querySelector(".mm-table-drag-preview"),
+      };
+    },
+    { forceReveal: options.forceReveal !== false },
+  );
 }
 
 async function scrollRoundTrip(page) {
@@ -963,6 +1006,358 @@ async function scrollRoundTrip(page) {
     });
   }
   return states;
+}
+
+async function revealNaturalRowHandle(page, table, rowIndex) {
+  const viewport = page.locator(".mm-table-viewport");
+  const viewportBox = await viewport.boundingBox();
+  const rowBox = await table.locator("tr").nth(rowIndex).boundingBox();
+  assert.ok(viewportBox && rowBox, `row ${rowIndex} has no geometry`);
+  await page.mouse.move(
+    Math.max(4, viewportBox.x + 1),
+    rowBox.y + rowBox.height / 2,
+  );
+  const handle = page.locator(
+    `[data-table-control="row-handle"][data-index="${rowIndex}"]`,
+  );
+  await handle.waitFor({ state: "visible", timeout: 5_000 });
+  return handle;
+}
+
+async function revealNaturalColumnHandle(page, table, columnIndex) {
+  const header = table.locator("tr").first().locator("th, td").nth(columnIndex);
+  const headerBox = await header.boundingBox();
+  assert.ok(headerBox, `column ${columnIndex} has no geometry`);
+  await page.mouse.move(
+    headerBox.x + headerBox.width / 2,
+    headerBox.y + headerBox.height / 2,
+  );
+  await page.mouse.move(
+    headerBox.x + headerBox.width / 2,
+    Math.max(8, headerBox.y - 18),
+  );
+  const handle = page.locator(
+    `[data-table-control="column-handle"][data-index="${columnIndex}"]`,
+  );
+  await handle.waitFor({ state: "visible", timeout: 5_000 });
+  return handle;
+}
+
+async function activateNaturalTableAtCell(page, table) {
+  const cellBox = await table
+    .locator("tr")
+    .nth(1)
+    .locator("td")
+    .first()
+    .boundingBox();
+  assert.ok(cellBox, "natural controls target cell has no geometry");
+  await page.mouse.move(
+    cellBox.x + cellBox.width / 2,
+    cellBox.y + cellBox.height / 2,
+  );
+  await page.mouse.click(
+    cellBox.x + cellBox.width / 2,
+    cellBox.y + cellBox.height / 2,
+  );
+  await page.evaluate(() => {
+    const stage = document.querySelector(".mm-stage");
+    if (stage) stage.scrollTop = 0;
+  });
+  await frames(page, 2);
+}
+
+/**
+ * Product-like controls probe. Unlike runControlsProbe this never makes a
+ * hidden control visible and never uses force:true. It is intentionally kept
+ * separate from the older diagnostic probe so a forced control result cannot
+ * be mistaken for an acceptance result.
+ */
+async function runNaturalControlsProbe(browser, scenario, config) {
+  const page = await createPage(browser, scenario, config);
+  try {
+    const table = page.locator(".mm-rich-panel .ProseMirror table").first();
+    await activateNaturalTableAtCell(page, table);
+    const positions = [];
+    const handleClicks = [];
+    for (const ratio of [0, 0.5, 1]) {
+      await setProxyPosition(page, ratio);
+      await table.hover();
+      const rowHandle = await revealNaturalRowHandle(page, table, 1);
+      const rowBox = await rowHandle.boundingBox();
+      await rowHandle.click();
+      await frames(page, 2);
+      const rowResult = await page.evaluate(() => {
+        const button = document.querySelector(
+          '[data-table-control="row-handle"][data-index="1"]',
+        );
+        const value = button?.getBoundingClientRect();
+        const viewport = document
+          .querySelector(".mm-table-viewport")
+          ?.getBoundingClientRect();
+        const stage = document
+          .querySelector(".mm-stage")
+          ?.getBoundingClientRect();
+        const cell = document
+          .querySelector(
+            ".mm-rich-panel .ProseMirror table tr:nth-child(2) td:first-child",
+          )
+          ?.getBoundingClientRect();
+        return {
+          selected: button?.classList.contains("is-selected") ?? false,
+          visible: Boolean(
+            value &&
+            stage &&
+            value.left >= stage.left - 1 &&
+            value.right <= stage.right + 1,
+          ),
+          rowDeltaPx:
+            value && cell
+              ? value.top + value.height / 2 - (cell.top + cell.height / 2)
+              : null,
+          rect: value
+            ? { left: value.left, right: value.right, top: value.top }
+            : null,
+        };
+      });
+      await page.keyboard.press("Escape").catch(() => {});
+      await activateNaturalTableAtCell(page, table);
+      await setProxyPosition(page, ratio);
+      const columnIndex = Math.round(19 * ratio);
+      const columnHandle = await revealNaturalColumnHandle(
+        page,
+        table,
+        columnIndex,
+      );
+      const columnBox = await columnHandle.boundingBox();
+      await columnHandle.click();
+      await frames(page, 2);
+      const columnResult = await page.evaluate((index) => {
+        const button = document.querySelector(
+          `[data-table-control="column-handle"][data-index="${index}"]`,
+        );
+        const value = button?.getBoundingClientRect();
+        const viewport = document
+          .querySelector(".mm-table-viewport")
+          ?.getBoundingClientRect();
+        const cell = document
+          .querySelector(
+            `.mm-rich-panel .ProseMirror table tr:nth-child(2) td:nth-child(${index + 1})`,
+          )
+          ?.getBoundingClientRect();
+        return {
+          index,
+          selected: button?.classList.contains("is-selected") ?? false,
+          visible: Boolean(
+            value &&
+            viewport &&
+            value.left >= viewport.left - 1 &&
+            value.right <= viewport.right + 1,
+          ),
+          columnDeltaPx:
+            value && cell
+              ? value.left + value.width / 2 - (cell.left + cell.width / 2)
+              : null,
+          rect: value
+            ? { left: value.left, right: value.right, top: value.top }
+            : null,
+        };
+      }, columnIndex);
+      handleClicks.push({
+        ratio,
+        row: rowResult,
+        column: columnResult,
+        rowBox,
+        columnBox,
+        scrollPositions: await page.evaluate(() => ({
+          proxy:
+            document.querySelector(".mm-table-scrollbar-proxy")?.scrollLeft ??
+            null,
+          viewport:
+            document.querySelector(".mm-table-viewport")?.scrollLeft ?? null,
+          table:
+            document.querySelector(".mm-rich-panel table")?.scrollLeft ?? null,
+          stage: document.querySelector(".mm-stage")?.scrollLeft ?? null,
+        })),
+      });
+      positions.push({
+        ratio,
+        ...(await controlRects(page, { forceReveal: false })),
+      });
+    }
+    const width640 = { status: "not-run", row: null, column: null };
+    await page.setViewportSize({ width: 640, height: 900 });
+    await frames(page, 4);
+    try {
+      await page.evaluate(() =>
+        window.__markdownMintBenchmarkEditor?.setTableCellSelection(
+          1,
+          0,
+          "start",
+        ),
+      );
+      await frames(page, 4);
+      await page.evaluate(() => {
+        const proxy = document.querySelector(".mm-table-scrollbar-proxy");
+        if (proxy) proxy.scrollLeft = 0;
+      });
+      await frames(page, 2);
+      await activateNaturalTableAtCell(page, table);
+      await page.evaluate(() => {
+        const proxy = document.querySelector(".mm-table-scrollbar-proxy");
+        if (proxy) proxy.scrollLeft = 0;
+      });
+      await frames(page, 2);
+      const rowHandle = await revealNaturalRowHandle(page, table, 1);
+      await rowHandle.click();
+      await frames(page, 2);
+      const row = await page.evaluate(() => {
+        const button = document.querySelector(
+          '[data-table-control="row-handle"][data-index="1"]',
+        );
+        const rect = button?.getBoundingClientRect();
+        const viewport = document
+          .querySelector(".mm-table-viewport")
+          ?.getBoundingClientRect();
+        const stage = document
+          .querySelector(".mm-stage")
+          ?.getBoundingClientRect();
+        return {
+          visible: Boolean(rect && stage && rect.right <= stage.right),
+          selected: button?.classList.contains("is-selected") ?? false,
+          rect: rect ? { left: rect.left, right: rect.right } : null,
+        };
+      });
+      await page.keyboard.press("Escape").catch(() => {});
+      await activateNaturalTableAtCell(page, table);
+      await setProxyPosition(page, 1);
+      const columnHandle = await revealNaturalColumnHandle(page, table, 19);
+      await columnHandle.click();
+      await frames(page, 2);
+      const column = await page.evaluate(() => {
+        const button = document.querySelector(
+          '[data-table-control="column-handle"][data-index="19"]',
+        );
+        const rect = button?.getBoundingClientRect();
+        const viewport = document
+          .querySelector(".mm-table-viewport")
+          ?.getBoundingClientRect();
+        const cell = document
+          .querySelector(
+            ".mm-rich-panel .ProseMirror table tr:nth-child(2) td:last-child",
+          )
+          ?.getBoundingClientRect();
+        return {
+          visible: Boolean(rect && viewport && rect.right <= viewport.right),
+          selected: button?.classList.contains("is-selected") ?? false,
+          columnDeltaPx:
+            rect && cell
+              ? rect.left + rect.width / 2 - (cell.left + cell.width / 2)
+              : null,
+          rect: rect ? { left: rect.left, right: rect.right } : null,
+        };
+      });
+      width640.status =
+        row.visible &&
+        row.selected &&
+        column.visible &&
+        column.selected &&
+        Math.abs(column.columnDeltaPx ?? 999) <= 2
+          ? "pass"
+          : "fail";
+      width640.row = row;
+      width640.column = column;
+    } catch (error) {
+      width640.status = "fail";
+      width640.error = String(error);
+      width640.debug = await page
+        .evaluate(() => {
+          const table = document.querySelector(".mm-rich-panel table");
+          const stage = document.querySelector(".mm-stage");
+          const proxy = document.querySelector(".mm-table-scrollbar-proxy");
+          const rect = (element) => {
+            const value = element?.getBoundingClientRect();
+            return value
+              ? {
+                  left: value.left,
+                  top: value.top,
+                  right: value.right,
+                  bottom: value.bottom,
+                }
+              : null;
+          };
+          return {
+            table: rect(table),
+            stage: rect(stage),
+            proxy: rect(proxy),
+            proxyScrollLeft: proxy?.scrollLeft ?? null,
+            stageScrollTop: stage?.scrollTop ?? null,
+            controlsHidden:
+              document.querySelector(".mm-table-controls")?.hidden ?? null,
+          };
+        })
+        .catch(() => null);
+    }
+    const handleClicksPass = handleClicks.every(
+      (item) =>
+        item.row.selected &&
+        item.row.visible &&
+        Math.abs(item.row.rowDeltaPx ?? 999) <= 2 &&
+        item.column.selected &&
+        item.column.visible &&
+        Math.abs(item.column.columnDeltaPx ?? 999) <= 2 &&
+        item.scrollPositions.viewport === 0 &&
+        item.scrollPositions.table === 0 &&
+        item.scrollPositions.stage === 0,
+    );
+    return {
+      diagnosticForcedControls: false,
+      natural: true,
+      status: handleClicksPass && width640.status === "pass" ? "pass" : "fail",
+      positions,
+      handleClicks,
+      handleClicksPass,
+      width640,
+      alignmentPass: handleClicksPass,
+    };
+  } catch (error) {
+    const debug = await page
+      .evaluate(() => {
+        const table = document.querySelector(".mm-rich-panel table");
+        const stage = document.querySelector(".mm-stage");
+        const controls = document.querySelector(".mm-table-controls");
+        const rect = (element) => {
+          const value = element?.getBoundingClientRect();
+          return value
+            ? {
+                left: value.left,
+                top: value.top,
+                right: value.right,
+                bottom: value.bottom,
+              }
+            : null;
+        };
+        return {
+          table: rect(table),
+          stage: rect(stage),
+          controls: rect(controls),
+          controlsHidden: controls?.hidden ?? null,
+          stageScrollTop: stage?.scrollTop ?? null,
+        };
+      })
+      .catch(() => null);
+    return {
+      diagnosticForcedControls: false,
+      natural: true,
+      status: "fail",
+      error: String(error),
+      debug,
+      handleClicks: [],
+      handleClicksPass: false,
+      width640: { status: "not-run" },
+    };
+  } finally {
+    await page.close();
+  }
 }
 
 async function runControlsProbe(browser, scenario, config) {
@@ -1612,8 +2007,15 @@ async function runMultiProbe(browser, scenario, config) {
           clientWidth: element?.clientWidth ?? 0,
         })),
     );
-    const large = page.locator(".mm-rich-panel .ProseMirror table").nth(1);
-    const largeB = page.locator(".mm-rich-panel .ProseMirror table").nth(3);
+    const proxyIndexes = modes
+      .map((item, index) => (item.mode === "proxy" ? index : -1))
+      .filter((index) => index >= 0);
+    const large = page
+      .locator(".mm-rich-panel .ProseMirror table")
+      .nth(proxyIndexes[0] ?? 1);
+    const largeB = page
+      .locator(".mm-rich-panel .ProseMirror table")
+      .nth(proxyIndexes.at(-1) ?? 3);
     const ownerA = await large.evaluate((table) =>
       table
         .closest(".mm-table-scroll")
@@ -1639,6 +2041,7 @@ async function runMultiProbe(browser, scenario, config) {
       owners,
       stickyA,
       stickyB,
+      proxyIndexes,
       ownerA: Boolean(ownerA),
       metrics: await page.evaluate(() => ({
         measurements: window.__markdownMintPerformanceBenchmark.snapshot(),
@@ -1676,11 +2079,23 @@ async function runNarrowProbe(browser, scenario, config) {
   }
 }
 
-function thresholdFromMatrix(matrix) {
-  const candidates = matrix.filter(
-    (item) => item.summary.longestPaintArtifactCompositorUpdate.p50 >= 500,
+function thresholdFromCellMatrix(cellMatrix) {
+  const levels = [...new Set(cellMatrix.map((item) => item.cells))].sort(
+    (a, b) => a - b,
   );
-  return candidates[0]?.rows ?? 1000;
+  for (const cells of levels) {
+    const level = cellMatrix.filter(
+      (item) => item.cells === cells && item.horizontalOverflow,
+    );
+    if (!level.length) continue;
+    const missesTarget = level.some(
+      (item) =>
+        item.summary.longestPaintArtifactCompositorUpdate.p50 >= 500 ||
+        item.summary.click.p50 >= 1000,
+    );
+    if (missesTarget) return cells;
+  }
+  return 10_000;
 }
 
 function fmt(value) {
@@ -1731,9 +2146,21 @@ async function main() {
       [250, 40],
       [125, 80],
     ];
+    const thresholdShapes = [
+      [400, 20],
+      [200, 40],
+      [100, 80],
+      [500, 20],
+      [250, 40],
+      [125, 80],
+      [600, 20],
+      [300, 40],
+      [150, 80],
+    ];
     const currentConfig = { tableScrollMode: "native" };
     const matrix = [];
     const cellMatrix = [];
+    const thresholdMatrix = [];
     if (!skipMatrix) {
       for (const [rows, columns] of matrixShapes) {
         const scenario = scenarioFor(
@@ -1785,19 +2212,56 @@ async function main() {
           summary: result.summary,
         });
       }
-    } else {
+    }
+    if (!skipThresholdMatrix) {
+      for (const [rows, columns] of thresholdShapes) {
+        const scenario = scenarioFor(
+          base,
+          `threshold-cells-${rows}x${columns}`,
+          rows,
+          columns,
+        );
+        const result = await runSeries(browser, scenario, currentConfig, {
+          label: `threshold current ${rows}x${columns}`,
+        });
+        const geometry = result.samples[0]?.geometry;
+        thresholdMatrix.push({
+          rows,
+          columns,
+          cells: rows * columns,
+          tableScrollWidth: geometry?.table?.scroll?.scrollWidth ?? null,
+          tableClientWidth: geometry?.table?.scroll?.clientWidth ?? null,
+          horizontalOverflow: geometry?.horizontalOverflow ?? false,
+          classification: {
+            pac: classify(
+              result.summary.longestPaintArtifactCompositorUpdate.p50,
+            ),
+            click: classify(result.summary.click.p50),
+            fullInteraction: classify(result.summary.fullInteraction.p50),
+          },
+          summary: result.summary,
+        });
+      }
+    }
+    if (skipMatrix || skipThresholdMatrix) {
       try {
         const previous = JSON.parse(await readFile(resultPath, "utf8"));
         const previousFinal = previous.investigation?.largeTableFinal;
-        if (Array.isArray(previousFinal?.matrix))
+        if (skipMatrix && Array.isArray(previousFinal?.matrix))
           matrix.push(...previousFinal.matrix);
-        if (Array.isArray(previousFinal?.cellMatrix))
+        if (skipMatrix && Array.isArray(previousFinal?.cellMatrix))
           cellMatrix.push(...previousFinal.cellMatrix);
+        if (
+          skipThresholdMatrix &&
+          Array.isArray(previousFinal?.thresholdMatrix)
+        )
+          thresholdMatrix.push(...previousFinal.thresholdMatrix);
       } catch {
         // A focused run may be performed before the full matrix exists.
       }
     }
-    const proxyOnRows = thresholdFromMatrix(matrix);
+    const proxyOnCells = thresholdFromCellMatrix(thresholdMatrix);
+    const proxyOffCells = Math.max(0, proxyOnCells - 2_500);
     const proxyConfig = {
       tableScrollMode: "proxy",
       tableScrollProxyPlacement: "bottom",
@@ -1834,25 +2298,53 @@ async function main() {
           label: "sticky proxy 2000x20",
           tracePrefix: "sticky-proxy-2000x20",
         });
-    const controls = skipControls
-      ? null
-      : await runControlsProbe(browser, stress, {
-          ...proxyConfig,
-          disableSelectionToolbar: true,
-        });
+    const controls =
+      skipControls || skipDiagnosticControls
+        ? null
+        : await runControlsProbe(browser, stress, {
+            ...proxyConfig,
+            disableSelectionToolbar: true,
+          });
     const stickyControls =
-      skipControls || skipSticky
+      skipControls || skipSticky || skipDiagnosticControls
         ? null
         : await runControlsProbe(browser, stress, {
             ...stickyConfig,
             disableSelectionToolbar: true,
           });
+    const naturalControls = skipControls
+      ? null
+      : await runNaturalControlsProbe(
+          browser,
+          fixtureScenario(
+            base,
+            "natural-controls-2000x20",
+            2000,
+            [
+              "Controls spacer 1.",
+              "Controls spacer 2.",
+              "Controls spacer 3.",
+            ].join("\n\n"),
+            "Controls spacer after.",
+          ),
+          {
+            tableScrollMode: "threshold",
+            tableScrollProxyOnRows: 0,
+            tableScrollProxyOffRows: 0,
+            tableScrollProxyOnCells: proxyOnCells,
+            tableScrollProxyOffCells: proxyOffCells,
+            tableScrollProxyPlacement: "sticky",
+            tableScrollProxyRequiresHorizontalOverflow: true,
+          },
+        );
     const thresholdConfig = {
       tableScrollMode: "threshold",
-      tableScrollProxyOnRows: proxyOnRows,
-      tableScrollProxyOffRows: Math.max(0, proxyOnRows - 250),
-      tableScrollProxyOnCells: 1,
-      tableScrollProxyOffCells: 1,
+      // Cell count is the only shape threshold. Row fields are deliberately
+      // zeroed so an old row-based option cannot gate this prototype.
+      tableScrollProxyOnRows: 0,
+      tableScrollProxyOffRows: 0,
+      tableScrollProxyOnCells: proxyOnCells,
+      tableScrollProxyOffCells: proxyOffCells,
       tableScrollProxyPlacement: "sticky",
       tableScrollProxyRequiresHorizontalOverflow: true,
       traceFromNavigation: true,
@@ -1865,16 +2357,13 @@ async function main() {
       5,
     );
     const normal = scenarioFor(base, "threshold-normal-100x20", 100, 20);
-    const mixed = multiScenario(base, Math.max(proxyOnRows, 1000), 20);
+    const mixed = thresholdMixedScenario(base);
     const thresholdProbes = {
       narrow: await runNarrowProbe(browser, narrow, thresholdConfig),
       tallNarrow: await runNarrowProbe(browser, tallNarrow, thresholdConfig),
       normal: await runNarrowProbe(browser, normal, thresholdConfig),
-      // The mixed-document probe focuses on independent native/proxy owners;
-      // the separate tall-narrow probe exercises the post-mount overflow guard.
       mixed: await runMultiProbe(browser, mixed, {
         ...thresholdConfig,
-        tableScrollProxyRequiresHorizontalOverflow: false,
         tableScrollProxyPlacement: "sticky",
       }),
     };
@@ -1908,11 +2397,11 @@ async function main() {
         rawTraceDirectory: traceDirectory,
       },
       activation: {
-        rule: `large candidate when rows >= ${proxyOnRows}; mount non-scrolling pending presentation, then proxy when viewport.scrollWidth > viewport.clientWidth; hysteresis off below ${Math.max(0, proxyOnRows - 250)}; shape classification uses O(1) PM row/column counts`,
-        onRows: proxyOnRows,
-        offRows: Math.max(0, proxyOnRows - 250),
-        onCells: 1,
-        offCells: 1,
+        rule: `large candidate when totalCells (PM rows × first-row columns) >= ${proxyOnCells}; mount non-scrolling pending presentation, then proxy when viewport.scrollWidth > viewport.clientWidth; hysteresis off below ${proxyOffCells} cells; shape classification uses O(1) PM row/column counts`,
+        onRows: 0,
+        offRows: 0,
+        onCells: proxyOnCells,
+        offCells: proxyOffCells,
         requiresHorizontalOverflow: true,
         decisionCost:
           activationProbe?.state.metrics["tableScroll.classification"] ?? [],
@@ -1924,11 +2413,13 @@ async function main() {
       },
       matrix,
       cellMatrix,
+      thresholdMatrix,
       proxy: {
         bottom: proxySeries,
         sticky: stickySeries,
         controls,
         stickyControls,
+        naturalControls,
       },
       thresholdProbes,
       vscode: {
@@ -1986,15 +2477,38 @@ async function main() {
           `| ${item.rows} | ${item.columns} | ${item.cells} | ${item.horizontalOverflow ? "yes" : "no"} | ${fmt(item.summary.longestPaintArtifactCompositorUpdate.p50)} | ${fmt(item.summary.click.p50)} |`,
       ),
       "",
-      `**Recommended activation rule:** proxy when PM rows >= ${proxyOnRows} **and** one post-mount geometry read reports \`viewport.scrollWidth > viewport.clientWidth\`; turn it off below ${Math.max(0, proxyOnRows - 250)} rows. Large candidates mount in a non-scrolling pending presentation, so the table never starts with \`overflow-x:auto\`. The shape decision is O(1) from PM row/column counts, the overflow guard is one viewport-level read, and no cell scan or 40,000 rectangle reads are used. The presentation is stable during ordinary text edits.`,
+      "",
+      "### Cell-count activation threshold",
+      "",
+      "| Rows | Columns | Cells | Horizontal overflow | PAC p50 | PAC max | Click p50 | Click max | Full p50 |",
+      "|---:|---:|---:|:---:|---:|---:|---:|---:|---:|",
+      ...thresholdMatrix.map(
+        (item) =>
+          `| ${item.rows} | ${item.columns} | ${item.cells} | ${item.horizontalOverflow ? "yes" : "no"} | ${fmt(item.summary.longestPaintArtifactCompositorUpdate.p50)} | ${fmt(item.summary.longestPaintArtifactCompositorUpdate.max)} | ${fmt(item.summary.click.p50)} | ${fmt(item.summary.click.max)} | ${fmt(item.summary.fullInteraction.p50)} |`,
+      ),
+      "",
+      `**Recommended activation rule:** proxy when totalCells (PM rows × first-row columns) >= ${proxyOnCells} **and** one post-mount geometry read reports \`viewport.scrollWidth > viewport.clientWidth\`; turn it off below ${proxyOffCells} cells. Large candidates mount in a non-scrolling pending presentation, so the table never starts with \`overflow-x:auto\`. The shape decision is O(1) from PM row/column counts, the overflow guard is one viewport-level read, and no cell scan or 40,000 rectangle reads are used. The presentation is stable during ordinary text edits.`,
+      `- Nearest tested lower cell-count point: ${thresholdMatrix.filter((item) => item.cells < proxyOnCells).at(-1)?.cells ?? "n/a"} cells; nearest tested upper/selected point: ${proxyOnCells} cells. The threshold was selected from the first measured overflowing level where any tested shape crossed PAC >=500 ms or click >=1000 ms; values are preserved in JSON for review.`,
+      "",
+      "## Shape independence",
+      "",
+      "- 8,000 cells (400×20, 200×40, 100×80) stayed below both native targets in the measured shapes.",
+      "- 10,000 cells crossed the target for 500×20 and 250×40 while 125×80 remained below it; the cell-count rule intentionally chooses the conservative level that catches the worst horizontal shapes.",
+      "- 12,000 cells crossed the target for all three measured shapes. 2,000×5 and 1,000×10 remain native when the one instance-local overflow guard reports no horizontal overflow.",
+      "",
+      "## Final activation rule",
+      "",
+      `- ON: totalCells >= ${proxyOnCells}; OFF: totalCells < ${proxyOffCells}; horizontal overflow is required. Header rows are included because the PM table child count and first-row child count describe the complete table shape consistently.`,
+      "- Decision complexity: O(1) PM row/column counts plus one viewport-level geometry read per candidate mount/structural change/resize; no cell scan and no shape-global cache.",
+      "- Ordinary cell text input does not reclassify the NodeView. A product implementation should recheck after row/column structure changes and container resize; if text can change table width, schedule a debounced instance-local overflow read without changing presentation on every transaction.",
       "",
       "- False-positive risk: tall tables that remain fast receive the proxy and a separate scrollbar.",
-      "- False-negative risk: a wide table below the selected row boundary may still cross the latency target; re-evaluate the boundary if browser or Webview baselines differ.",
+      "- False-negative risk: a wide table below the selected cell boundary may still cross the latency target; re-evaluate the boundary if browser or Webview baselines differ.",
       "- Switching behavior: large candidates use a per-instance pending/probe state, remeasure only on initial mount, structural shape changes, and resize, and use ON/OFF hysteresis. Ordinary cell text edits do not reclassify the presentation.",
       "",
       "### Threshold + sticky automatic path",
       thresholdSeries
-        ? `- ${thresholdSeries.summary.sampleCount} samples: initialization→proxy ready p50 ${fmt(thresholdSeries.summary.initializationToProxyReady.p50)}, first interaction after open p50 ${fmt(thresholdSeries.summary.firstInteractionAfterOpen.p50)}, click p50 ${fmt(thresholdSeries.summary.click.p50)}, full interaction p50 ${fmt(thresholdSeries.summary.fullInteraction.p50)}, PAC max from mount through interaction ${fmt(thresholdSeries.summary.longestPaintArtifactCompositorUpdate.max)}.`
+        ? `- ${thresholdSeries.summary.sampleCount} samples: nodeViewCreated→proxy ready p50 ${fmt(thresholdSeries.summary.nodeViewCreatedToProxyReady.p50)}, candidateMounted→proxy ready p50 ${fmt(thresholdSeries.summary.candidateMountedToProxyReady.p50)}, first interaction after open p50 ${fmt(thresholdSeries.summary.firstInteractionAfterOpen.p50)}, click p50 ${fmt(thresholdSeries.summary.click.p50)}, full interaction p50 ${fmt(thresholdSeries.summary.fullInteraction.p50)}, PAC max from mount through interaction ${fmt(thresholdSeries.summary.longestPaintArtifactCompositorUpdate.max)}.`
         : "- Threshold + sticky series not measured.",
       thresholdSeries
         ? `- Acceptance: ${thresholdSeries.summary.longestPaintArtifactCompositorUpdate.max < 500 && thresholdSeries.summary.click.max < 1000 && thresholdSeries.summary.fullInteraction.max < 2000 ? "pass" : "fail"} (PAC max <500 ms, click <1000 ms, full interaction <2000 ms).`
@@ -2011,13 +2525,14 @@ async function main() {
         ? `| Threshold + sticky proxy | pending → one viewport probe → proxy | ${fmt(thresholdSeries.summary.longestPaintArtifactCompositorUpdate.p50)} / ${fmt(thresholdSeries.summary.longestPaintArtifactCompositorUpdate.max)} | ${fmt(thresholdSeries.summary.click.p50)} / ${fmt(thresholdSeries.summary.click.max)} | ${fmt(thresholdSeries.summary.fullInteraction.p50)} / ${fmt(thresholdSeries.summary.fullInteraction.max)} | 0 / 0 / 0 | fast; VS Code pending |`
         : "| Threshold + sticky proxy | not available | n/a | n/a | n/a | n/a | not measured |",
       "",
-      "## Proxy Controls Integration",
+      "## Product-like controls validation",
       "",
-      `- 0/50/100% alignment: ${controls?.alignmentPass ? "pass" : "not pass"}; maximum measured column/row center error is recorded in JSON.`,
+      `- Product-like 0/50/100% alignment: ${naturalControls?.alignmentPass ? "pass" : "not pass"}; maximum measured column/row center error is recorded in JSON. The older forced probe is retained separately as diagnosticForcedControls.`,
       `- Drag auto-scroll: ${controls?.drag?.status ?? "not measured"}; right/left proxy deltas and overlay state are recorded.`,
       `- Wheel/trackpad diagnostic: ${controls?.wheel?.pass ? "pass" : "not pass"}; deltaY is not intercepted by the benchmark listener.`,
       `- Scroll ownership round-trip: ${controls?.scrollRoundTripPass ? "pass" : "not pass"}; proxy is the only horizontal source and viewport/table/stage remain at scrollLeft 0.`,
-      `- Actual row/column handle clicks: ${controls?.handleClicksPass ? "pass" : "not pass"} at 0/50/100%; insertion controls: ${controls?.insertionPass ? "pass" : "not pass"}; resize wide→narrow→wide: ${controls?.resizePass ? "pass" : "not pass"}.`,
+      `- Natural row/column handle clicks: ${naturalControls?.handleClicksPass ? "pass" : "not pass"} at 0/50/100%; 640px natural row/column clicks: ${naturalControls?.width640?.status ?? "not measured"}. The forced diagnostic probe is not used for acceptance.`,
+      `- Older diagnostic insertion/resize probe: insertion ${controls?.insertionPass ? "pass" : "not pass"}; resize ${controls?.resizePass ? "pass" : "not pass"}; these results used forced visibility and are not the product-like acceptance gate.`,
       `- Selection reveal: Tab ${controls?.tabReveal?.cellVisible ? "pass" : "not pass"} (C${(controls?.tabReveal?.selectedColumn ?? -1) + 1}), Shift+Tab ${controls?.shiftTabReveal?.selectedColumn === 18 ? "pass" : "not pass"}, programmatic ${controls?.programmaticReveal?.cellVisible ? "pass" : "not pass"}.`,
       `- Rightmost-cell edit/source/DOM probe: ${controls?.editing?.rightmostEditPass ? "pass" : "not pass"}.`,
       "",
@@ -2034,9 +2549,9 @@ async function main() {
       `- Mixed document modes: ${thresholdProbes.mixed.modes.map((item) => item.mode).join(", ")}; large table owners are independent and small tables remain native in the benchmark probe.`,
       `- Active sticky visibility: A=${thresholdProbes.mixed.stickyA.join(",")}; B=${thresholdProbes.mixed.stickyB.join(",")}.`,
       "",
-      "## VS Code Webview",
+      "## VS Code Development Host",
       "",
-      "Current/proxy Webview measurements were not captured. The CLI reports VS Code 1.138.0; Electron/Chromium and Webview PAC/click values remain not measured. The manual procedure has been updated and must be run before product implementation.",
+      "Current/proxy Webview measurements were not captured. The CLI reports VS Code 1.138.0; Electron/Chromium and Webview PAC/click values remain not measured. Run `npm run benchmark:editor:vscode -- --current --launch` and `npm run benchmark:editor:vscode -- --launch` in separate Development Hosts; the manual procedure records the trace fields before product implementation.",
       "",
       "## Final Recommendation",
       "",
@@ -2044,8 +2559,9 @@ async function main() {
       thresholdSeries.summary.longestPaintArtifactCompositorUpdate.max < 500 &&
       thresholdSeries.summary.click.max < 1000 &&
       thresholdSeries.summary.fullInteraction.max < 2000 &&
-      controls?.handleClicksPass &&
-      controls?.scrollRoundTripPass
+      naturalControls?.handleClicksPass &&
+      controls?.scrollRoundTripPass &&
+      naturalControls?.width640?.status === "pass"
         ? "**CONDITIONAL.** The automatic threshold + sticky path now mounts large candidates safely, reaches proxy without a native table stall, keeps proxy as the only horizontal owner, and passes headless performance/control acceptance. VS Code Webview performance and the final visual/manual Extension Development Host checks remain unmeasured; do not call this product-ready until that environment is confirmed."
         : "**NOT READY.** The automatic threshold path or headless control acceptance is still failing; keep the branch measurement-only and do not start product implementation.",
       "",

@@ -61,6 +61,55 @@ function getRoot(): HTMLElement {
   return root;
 }
 
+/**
+ * The VS Code benchmark bundle has no Playwright init script to provide the
+ * benchmark globals. Keep its defaults behind the compile-time benchmark
+ * define so the normal product bundle is byte-for-byte on the existing path.
+ */
+function installBenchmarkDefaults(): void {
+  if (!__MM_EDITOR_PERFORMANCE_BENCHMARK__) return;
+  if (!globalThis.__markdownMintPerformanceBenchmarkOptions) {
+    globalThis.__markdownMintPerformanceBenchmarkOptions = {
+      tableScrollMode: "threshold",
+      tableScrollProxyOnRows: 0,
+      tableScrollProxyOffRows: 0,
+      tableScrollProxyOnCells: 10_000,
+      tableScrollProxyOffCells: 7_500,
+      tableScrollProxyPlacement: "sticky",
+      tableScrollProxyRequiresHorizontalOverflow: true,
+    };
+  }
+  if (!globalThis.__markdownMintPerformanceBenchmark) {
+    const measurements: Record<string, number[]> = Object.create(null);
+    const counters: Record<string, number[]> = Object.create(null);
+    globalThis.__markdownMintPerformanceBenchmark = {
+      record(name, duration) {
+        (measurements[name] ??= []).push(duration);
+      },
+      count(name, value) {
+        (counters[name] ??= []).push(value);
+      },
+      snapshot() {
+        return Object.fromEntries(
+          Object.entries(measurements).map(([name, values]) => [
+            name,
+            [...values],
+          ]),
+        );
+      },
+      counterSnapshot() {
+        return Object.fromEntries(
+          Object.entries(counters).map(([name, values]) => [name, [...values]]),
+        );
+      },
+      reset() {
+        for (const key of Object.keys(measurements)) delete measurements[key];
+        for (const key of Object.keys(counters)) delete counters[key];
+      },
+    };
+  }
+}
+
 function initialDocumentFromRoot(
   root: HTMLElement,
 ): EditorInitialDocument | undefined {
@@ -82,6 +131,7 @@ function initialDocumentFromRoot(
 export function startWebview(
   options: Partial<EditorAppOptions> = {},
 ): MarkdownEditorApp {
+  installBenchmarkDefaults();
   const root = options.root ?? getRoot();
   const mermaidRuntimeUri = root.dataset.mermaidRuntimeUri;
   if (mermaidRuntimeUri)
