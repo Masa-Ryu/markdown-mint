@@ -3,6 +3,7 @@
 - Measurement commit: `28d6b2ac4f59249aca2bf255fc8c88640ef6dfc6`
 - Chromium: `153.0.8010.12`
 - Raw traces: `/tmp/markdown-mint-issue119-large-table-traces`
+- Raw trace archive size at completion: approximately `537 MB` (kept outside Git; representative proxy/sticky/threshold traces are retained there).
 - Product CSS, main, Preview, and production table NodeView were not changed.
 
 ## Measurement naming
