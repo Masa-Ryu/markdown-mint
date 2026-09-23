@@ -1,6 +1,6 @@
 # Issue #119 Scroll Ownership Investigation
 
-- Commit: `c56e69ba57dd3652e25e410de1e202c35e126cce`
+- Measurement commit: `6fe48f8`
 - Chromium: `153.0.8010.12`
 - Raw traces: `/tmp/markdown-mint-issue119-scroll-structure-traces` (representative traces are retained there)
 - Product CSS and main were not changed; the wrapper NodeView is benchmark-only.

@@ -52,7 +52,7 @@
     "scrollStructure": {
       "generatedAt": "2026-09-23T00:23:25.900Z",
       "branch": "codex/issue-119-editor-performance",
-      "gitCommit": "c56e69ba57dd3652e25e410de1e202c35e126cce",
+      "gitCommit": "6fe48f8",
       "environment": {
         "browser": "Playwright Chromium headless",
         "chromiumVersion": "153.0.8010.12",
