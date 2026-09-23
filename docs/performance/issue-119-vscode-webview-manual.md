@@ -34,13 +34,14 @@ Wait for two animation frames, repeat the same-cell click and Performance record
 ## Large-table proxy prototype
 
 The final headless prototype keeps ordinary tables on the existing native
-scroll path. It selects the proxy only when the PM table shape reaches the
-measured large-table boundary (500 body rows in this run), then confirms
-`table.scrollWidth > table.clientWidth` after the table has mounted. The
-overflow guard keeps a tall but narrow 2,000×5 table native. A 250-row off
-threshold is used to avoid switching the DOM presentation during ordinary
-cell typing. The proxy bundle is benchmark-only and is not enabled by the
-normal Extension Development Host build.
+scroll path. A large candidate (500 body rows in this run; OFF below 250) is
+mounted first in a non-scrolling pending presentation, so the table never
+starts with `overflow-x:auto`. After rows mount, one instance-local geometry
+read checks `viewport.scrollWidth > viewport.clientWidth`; overflow attaches
+the sticky proxy and no-overflow candidates remain native-equivalent. The
+prototype does not use a global row/column shape cache and does not
+reclassify ordinary text input. The proxy bundle is benchmark-only and is not
+enabled by the normal Extension Development Host build.
 
 If a future Development Host bundle exposes the prototype, repeat the same
 document reload sequence for Current and Proxy and record:
@@ -54,10 +55,33 @@ document reload sequence for Current and Proxy and record:
 6. independent scrolling when two large tables are present, while small
    tables remain native.
 
-The proxy scrollbar must not move `.mm-stage` horizontally. A horizontal
-wheel/trackpad `deltaX` should move the active proxy while ordinary vertical
-scrolling remains available. Record any mismatch rather than applying a
-permanent CSS or NodeView change in this investigation branch.
+For each reload, also record the activation timeline:
+
+1. candidate mounted;
+2. rows mounted;
+3. overflow measured;
+4. final mode selected;
+5. sticky proxy ready;
+6. first click and first caret.
+
+At every 0%, 50%, and 100% position verify that the proxy is the only
+horizontal source of truth:
+
+```text
+proxy.scrollLeft       = logical horizontal position
+viewport.scrollLeft    = 0
+table.scrollLeft       = 0
+.mm-stage.scrollLeft   = 0
+```
+
+Click the visible row handle and a visible column handle at each position.
+Move the pointer to a row and column boundary to show insert controls, then
+drag a column toward both viewport edges. Confirm the move indicator and drag
+preview follow the cell after auto-scroll. Repeat after resizing wide → narrow
+→ wide. A horizontal wheel/trackpad `deltaX` should move the active proxy
+while ordinary vertical scrolling remains available. Record any mismatch
+rather than applying a permanent CSS or NodeView change in this investigation
+branch.
 
 ## Record
 
@@ -71,6 +95,13 @@ permanent CSS or NodeView change in this investigation branch.
 | First click: UI unresponsive duration                  |                                    |
 | First click: longest main-thread task                  |                                    |
 | First click: longest `PaintArtifactCompositor::Update` |                                    |
+| Activation: candidate mount → proxy ready              |                                    |
+| Activation: PAC max from mount through first input     |                                    |
+| Proxy 0/50/100% handle clicks and alignment            |                                    |
+| Proxy-only scroll ownership round-trip                 |                                    |
+| Drag auto-scroll and overlay follow                    |                                    |
+| Resize wide → narrow → wide                            |                                    |
+| Threshold proxy mode (not forced)                      |                                    |
 | Same-cell repeat: click latency                        |                                    |
 | Same-cell repeat: longest lifecycle task               |                                    |
 | Webview Performance trace file                         |                                    |

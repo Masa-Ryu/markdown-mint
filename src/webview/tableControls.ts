@@ -123,7 +123,10 @@ function horizontalScrollOwnerForTable(
   const proxy = wrapper?.querySelector<HTMLElement>(
     ":scope > .mm-table-scrollbar-proxy[data-mm-benchmark-scroll-proxy]",
   );
-  if (proxy && wrapper) return new ProxyTableScrollOwner(proxy, wrapper);
+  const viewport = wrapper?.querySelector<HTMLElement>(
+    ":scope > .mm-table-viewport[data-mm-benchmark-table-viewport]",
+  );
+  if (proxy && viewport) return new ProxyTableScrollOwner(proxy, viewport);
   if (wrapper) {
     const style = getComputedStyle(wrapper);
     if (style.overflowX === "auto" || style.overflowX === "scroll")
@@ -910,11 +913,15 @@ export class TableControls {
     const visibleGrid = localRect(visibleGridRect);
     const tableLeft = localX(tableRect.left);
     const tableTop = localY(tableRect.top);
+    const proxyViewportLeft =
+      this.horizontalScrollOwner instanceof ProxyTableScrollOwner
+        ? localX(this.horizontalScrollOwner.getViewportRect().left)
+        : tableLeft;
     this.rowHandles.forEach((button) => {
       const index = Number(button.dataset.index);
       const top = localY(rowBoundaries[index] ?? gridRect.top);
       const bottom = localY(rowBoundaries[index + 1] ?? gridRect.bottom);
-      setBox(button, tableLeft - 30, (top + bottom) / 2 - 12, 24, 24);
+      setBox(button, proxyViewportLeft - 30, (top + bottom) / 2 - 12, 24, 24);
     });
     this.columnHandles.forEach((button) => {
       const index = Number(button.dataset.index);
