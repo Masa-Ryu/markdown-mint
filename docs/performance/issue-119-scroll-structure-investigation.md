@@ -17,25 +17,25 @@
 
 ## Large-table activation threshold
 
-| Rows | Columns | Cells | Horizontal overflow | PAC p50 | Click p50 | Full interaction p50 |
-|---:|---:|---:|:---:|---:|---:|---:|
-| 100 | 20 | 2000 | yes | 21.4 ms | 115.8 ms | 195.3 ms |
-| 250 | 20 | 5000 | yes | 131.3 ms | 260.1 ms | 594.3 ms |
-| 500 | 20 | 10000 | yes | 523.8 ms | 1242.5 ms | 1929.9 ms |
-| 750 | 20 | 15000 | yes | 1173.6 ms | 2592.5 ms | 3996.8 ms |
-| 1000 | 20 | 20000 | yes | 2071.9 ms | 4467.7 ms | 6830.4 ms |
-| 1500 | 20 | 30000 | yes | 4633.2 ms | 5147.6 ms | 14863.1 ms |
-| 2000 | 20 | 40000 | yes | 8193.0 ms | 16966.4 ms | 25795.7 ms |
+| Rows | Columns | Cells | Horizontal overflow |   PAC p50 |  Click p50 | Full interaction p50 |
+| ---: | ------: | ----: | :-----------------: | --------: | ---------: | -------------------: |
+|  100 |      20 |  2000 |         yes         |   21.4 ms |   115.8 ms |             195.3 ms |
+|  250 |      20 |  5000 |         yes         |  131.3 ms |   260.1 ms |             594.3 ms |
+|  500 |      20 | 10000 |         yes         |  523.8 ms |  1242.5 ms |            1929.9 ms |
+|  750 |      20 | 15000 |         yes         | 1173.6 ms |  2592.5 ms |            3996.8 ms |
+| 1000 |      20 | 20000 |         yes         | 2071.9 ms |  4467.7 ms |            6830.4 ms |
+| 1500 |      20 | 30000 |         yes         | 4633.2 ms |  5147.6 ms |           14863.1 ms |
+| 2000 |      20 | 40000 |         yes         | 8193.0 ms | 16966.4 ms |           25795.7 ms |
 
 ### Same cell count shape matrix
 
-| Rows | Columns | Cells | Horizontal overflow | PAC p50 | Click p50 |
-|---:|---:|---:|:---:|---:|---:|
-| 2000 | 5 | 10000 | no | 1.1 ms | 222.6 ms |
-| 1000 | 10 | 10000 | no | 2.8 ms | 159.8 ms |
-| 500 | 20 | 10000 | yes | 527.6 ms | 1238.8 ms |
-| 250 | 40 | 10000 | yes | 456.0 ms | 1092.4 ms |
-| 125 | 80 | 10000 | yes | 359.7 ms | 897.8 ms |
+| Rows | Columns | Cells | Horizontal overflow |  PAC p50 | Click p50 |
+| ---: | ------: | ----: | :-----------------: | -------: | --------: |
+| 2000 |       5 | 10000 |         no          |   1.1 ms |  222.6 ms |
+| 1000 |      10 | 10000 |         no          |   2.8 ms |  159.8 ms |
+|  500 |      20 | 10000 |         yes         | 527.6 ms | 1238.8 ms |
+|  250 |      40 | 10000 |         yes         | 456.0 ms | 1092.4 ms |
+|  125 |      80 | 10000 |         yes         | 359.7 ms |  897.8 ms |
 
 **Recommended activation rule:** proxy when PM rows >= 500 **and** one post-mount geometry read reports `viewport.scrollWidth > viewport.clientWidth`; turn it off below 250 rows. Large candidates mount in a non-scrolling pending presentation, so the table never starts with `overflow-x:auto`. The shape decision is O(1) from PM row/column counts, the overflow guard is one viewport-level read, and no cell scan or 40,000 rectangle reads are used. The presentation is stable during ordinary text edits.
 
@@ -44,8 +44,16 @@
 - Switching behavior: large candidates use a per-instance pending/probe state, remeasure only on initial mount, structural shape changes, and resize, and use ON/OFF hysteresis. Ordinary cell text edits do not reclassify the presentation.
 
 ### Threshold + sticky automatic path
+
 - 3 samples: initialization→proxy ready p50 694.9 ms, first interaction after open p50 121.6 ms, click p50 578.9 ms, full interaction p50 1314.8 ms, PAC max from mount through interaction 5.8 ms.
 - Acceptance: pass (PAC max <500 ms, click <1000 ms, full interaction <2000 ms).
+
+## Final performance comparison
+
+| Condition                | Activation                           |      PAC p50 / max |      Click p50 / max |       Full p50 / max | Viewport/table/stage scrollLeft | Verdict               |
+| ------------------------ | ------------------------------------ | -----------------: | -------------------: | -------------------: | ------------------------------- | --------------------- |
+| Current native           | native at open                       | 7316.4 / 7327.4 ms | 15195.5 / 15234.9 ms | 23135.5 / 23191.0 ms | 0 / 0 / 0                       | slow                  |
+| Threshold + sticky proxy | pending → one viewport probe → proxy |       5.7 / 5.8 ms |     578.9 / 583.8 ms |   1314.8 / 1316.7 ms | 0 / 0 / 0                       | fast; VS Code pending |
 
 ## Proxy Controls Integration
 
@@ -83,4 +91,3 @@ Current/proxy Webview measurements were not captured. The CLI reports VS Code 1.
 - `media/webview.css`: Rich Editor-only viewport/proxy/sticky presentation. Do not change Preview rules in `media/document.css` without a separate compatibility decision.
 - `tests/webview/table-ux.test.ts`: threshold split, native/proxy DOM, selection reveal, Markdown/PM/DOM sync.
 - `tests/webview/table-controls.test.ts` and `tests/browser/table-controls.test.mjs`: 0/50/100% geometry, drag edge scrolling, wheel behavior, multi-table independence, and wide-table editing.
-

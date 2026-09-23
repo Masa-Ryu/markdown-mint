@@ -1946,6 +1946,9 @@ async function main() {
         largeTableFinal: final,
       },
     };
+    const currentBaseline =
+      existing.investigation?.scrollStructure?.conditions?.current?.summary ??
+      null;
     await writeFile(resultPath, `${JSON.stringify(merged, null, 2)}\n`);
     const report = [
       "# Issue #119 Large-table Activation and Proxy Controls Investigation",
@@ -1996,6 +1999,17 @@ async function main() {
       thresholdSeries
         ? `- Acceptance: ${thresholdSeries.summary.longestPaintArtifactCompositorUpdate.max < 500 && thresholdSeries.summary.click.max < 1000 && thresholdSeries.summary.fullInteraction.max < 2000 ? "pass" : "fail"} (PAC max <500 ms, click <1000 ms, full interaction <2000 ms).`
         : "",
+      "",
+      "## Final performance comparison",
+      "",
+      "| Condition | Activation | PAC p50 / max | Click p50 / max | Full p50 / max | Viewport/table/stage scrollLeft | Verdict |",
+      "|---|---|---:|---:|---:|---|---|",
+      currentBaseline
+        ? `| Current native | native at open | ${fmt(currentBaseline.paintArtifactCompositorUpdate.p50)} / ${fmt(currentBaseline.paintArtifactCompositorUpdate.max)} | ${fmt(currentBaseline.click.p50)} / ${fmt(currentBaseline.click.max)} | ${fmt(currentBaseline.fullInteraction.p50)} / ${fmt(currentBaseline.fullInteraction.max)} | 0 / 0 / 0 | slow |`
+        : "| Current native | not available | n/a | n/a | n/a | n/a | not measured |",
+      thresholdSeries
+        ? `| Threshold + sticky proxy | pending → one viewport probe → proxy | ${fmt(thresholdSeries.summary.longestPaintArtifactCompositorUpdate.p50)} / ${fmt(thresholdSeries.summary.longestPaintArtifactCompositorUpdate.max)} | ${fmt(thresholdSeries.summary.click.p50)} / ${fmt(thresholdSeries.summary.click.max)} | ${fmt(thresholdSeries.summary.fullInteraction.p50)} / ${fmt(thresholdSeries.summary.fullInteraction.max)} | 0 / 0 / 0 | fast; VS Code pending |`
+        : "| Threshold + sticky proxy | not available | n/a | n/a | n/a | n/a | not measured |",
       "",
       "## Proxy Controls Integration",
       "",
