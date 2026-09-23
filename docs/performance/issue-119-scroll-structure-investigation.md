@@ -1,58 +1,79 @@
-# Issue #119 Scroll Ownership Investigation
+# Issue #119 Large-table Activation and Proxy Controls Investigation
 
-- Measurement commit: `6fe48f8`
+- Measurement commit: `28d6b2ac4f59249aca2bf255fc8c88640ef6dfc6`
 - Chromium: `153.0.8010.12`
-- Raw traces: `/tmp/markdown-mint-issue119-scroll-structure-traces` (representative traces are retained there)
-- Product CSS and main were not changed; the wrapper NodeView is benchmark-only.
+- Raw traces: `/tmp/markdown-mint-issue119-large-table-traces`
+- Product CSS, main, Preview, and production table NodeView were not changed.
 
-## Current baseline and scroll ownership
+## Measurement naming
 
-The Current condition records the existing table-owned horizontal scroll container. The stage condition is the fast performance baseline and intentionally moves horizontal scrolling to `.mm-stage`.
+`inputToDomMutationMs = mutationAt - inputStartedAt`; `postMutationToFirstIdleMs = idleAt - mutationAt`; `inputToFirstIdleMs = idleAt - inputStartedAt`. The JSON keeps these fields separately.
 
-| Structure                                   | Local table scroll | Stage scroll |   PAC p50 |  Click p50 | Full interaction p50 | Controls / UX                              | Verdict      |
-| ------------------------------------------- | -----------------: | -----------: | --------: | ---------: | -------------------: | ------------------------------------------ | ------------ |
-| Current table overflow:auto                 |                yes |           no | 7316.4 ms | 15195.5 ms |           23135.5 ms | controls measured; independent scroll pass | slow         |
-| Stage scroll (table overflow:visible)       |                 no |          yes |   10.6 ms |   434.5 ms |             882.4 ms | stage/table ownership changes UX           | fast         |
-| Table wrapper overflow-x:auto               |                yes |           no | 1841.6 ms |  4253.5 ms |            6860.3 ms | controls measured; independent scroll pass | intermediate |
-| Table wrapper auto + overflow-y:hidden      |                yes |           no | 1849.0 ms |  4272.5 ms |            6910.3 ms | controls measured; independent scroll pass | intermediate |
-| Table wrapper auto + overflow-y:clip        |                yes |           no | 1854.2 ms |  4278.2 ms |            6894.1 ms | controls measured; independent scroll pass | intermediate |
-| Non-scroll viewport + small scrollbar proxy |                yes |           no |    3.0 ms |   414.8 ms |            1127.5 ms | proxy not in existing listener set         | fast         |
+## Scroll ownership baseline
 
-## Effective style and geometry verification
+- Current 2,000x20: table scrollWidth/clientWidth 1401/987; the table owns the native horizontal scrollbar and stage.scrollLeft remains 0 at the baseline probe.
+- Proxy 2,000x20: table overflow is visible; the proxy owns the horizontal scrollbar, stage.scrollLeft remains 0, and the rightmost cell is reachable through selection reveal/programmatic reveal.
+- Mixed document: small tables remain native, each large table has an independent proxy owner, and sticky visibility follows the active table (visible,hidden then hidden,visible).
 
-The JSON stores computed style and geometry snapshots for `.mm-stage`, `.mm-rich-panel`, `.ProseMirror`, `.mm-table-scroll`, `table`, `tbody`, target row/cell, and paragraph. It also records all non-visible overflow ancestors and scroll dimensions. Wrapper C1-C3 differ only in wrapper overflow-y; cell padding, border, minimum width, border model, and header styling remain inherited from Current.
+## Large-table activation threshold
 
-## TableControls and editing
+| Rows | Columns | Cells | Horizontal overflow |   PAC p50 |  Click p50 | Full interaction p50 |
+| ---: | ------: | ----: | :-----------------: | --------: | ---------: | -------------------: |
+|  100 |      20 |  2000 |         yes         |   21.4 ms |   115.8 ms |             195.3 ms |
+|  250 |      20 |  5000 |         yes         |  131.3 ms |   260.1 ms |             594.3 ms |
+|  500 |      20 | 10000 |         yes         |  523.8 ms |  1242.5 ms |            1929.9 ms |
+|  750 |      20 | 15000 |         yes         | 1173.6 ms |  2592.5 ms |            3996.8 ms |
+| 1000 |      20 | 20000 |         yes         | 2071.9 ms |  4467.7 ms |            6830.4 ms |
+| 1500 |      20 | 30000 |         yes         | 4633.2 ms |  5147.6 ms |           14863.1 ms |
+| 2000 |      20 | 40000 |         yes         | 8193.0 ms | 16966.4 ms |           25795.7 ms |
 
-The benchmark NodeView changes `view.nodeDOM(tablePos)` to the wrapper. The normal TableControls resolver therefore needs a descendant-table adapter; this branch uses a compile-time benchmark-only adapter solely to measure geometry. The existing scroll-container scan detects `.mm-table-scroll`, but it does not detect the proxy because the proxy is a child outside the table's ancestor chain.
+### Same cell count shape matrix
 
-The control geometry, right-edge edit, Tab/Shift+Tab, Markdown/DOM/PM state, and independent-scroll probes are stored under each condition. Wrapper C1-C3 keep a table-local scrollbar but remain intermediate. The proxy is fast and keeps stage.scrollLeft at 0, but its horizontal scroll is not currently in refreshScrollContainers() and the measured column-handle delta grows with proxy scroll; drag auto-scroll is therefore not claimed as passing. A product implementation must explicitly register and sync the proxy before adoption.
+| Rows | Columns | Cells | Horizontal overflow |  PAC p50 | Click p50 |
+| ---: | ------: | ----: | :-----------------: | -------: | --------: |
+| 2000 |       5 | 10000 |         no          |   1.1 ms |  222.6 ms |
+| 1000 |      10 | 10000 |         no          |   2.8 ms |  159.8 ms |
+|  500 |      20 | 10000 |         yes         | 527.6 ms | 1238.8 ms |
+|  250 |      40 | 10000 |         yes         | 456.0 ms | 1092.4 ms |
+|  125 |      80 | 10000 |         yes         | 359.7 ms |  897.8 ms |
 
-## Position verification
+**Recommended activation rule:** proxy when PM rows >= 500 **and** one post-mount geometry read reports `table.scrollWidth > table.clientWidth`; turn it off below 250 rows. The shape decision is O(1) from PM row/column counts, the overflow guard is one table-level read, and no cell scan or 40,000 rectangle reads are used. The presentation is stable during ordinary text edits.
 
-- row1: click 412.3 ms, PAC 3.0 ms, full interaction 1093.9 ms.
-- row1000: click 409.6 ms, PAC 2.9 ms, full interaction 1091.3 ms.
-- row2000: click 403.7 ms, PAC 0.3 ms, full interaction 1081.3 ms.
+- False-positive risk: tall tables that remain fast receive the proxy and a separate scrollbar.
+- False-negative risk: a wide table below the selected row boundary may still cross the latency target; re-evaluate the boundary if browser or Webview baselines differ.
+- Switching behavior: NodeView presentation is stable during text edits; a structural row/column change causes ProseMirror to recreate the benchmark NodeView only when the hysteresis boundary is crossed.
 
-## Preview and VS Code
+## Proxy Controls Integration
 
-The preview was not modified by this benchmark-only NodeView/CSS path. VS Code Webview was not measured; do not treat the headless result as a Webview confirmation.
+- 0/50/100% alignment: pass; maximum measured column/row center error is recorded in JSON.
+- Drag auto-scroll: pass; right/left proxy deltas and overlay state are recorded.
+- Wheel/trackpad diagnostic: pass; deltaY is not intercepted by the benchmark listener.
+- Selection reveal: Tab pass (C20), Shift+Tab pass, programmatic pass.
+- Rightmost-cell edit/source/DOM probe: pass.
 
-## Recommended product architecture
+## Proxy Placement
 
-The simple wrapper (`overflow-x:auto` on `.mm-table-scroll`) is not the final architecture: it reduces PAC from about 7316ms to about 1842ms but remains above the 500ms target and keeps row-position sensitivity. The only fast diagnostic structure is a Rich Editor-only non-scroll table viewport plus a small horizontal proxy that translates the table. It preserves stage.scrollLeft=0, right-edge reachability, paragraph stability, independent table owners, and editing in this headless run, but it is not ready for product implementation until proxy-aware Controls and a usable scrollbar placement are designed. Keep Preview DOM/CSS unchanged. The stage-scroll condition remains the simplest fast baseline but changes the current table-local UX.
+- Bottom-only: PAC 5.7 ms, click 630.0 ms, full 1350.3 ms. It is not usable for a 2,000-row table without reaching the bottom.
+- Active sticky: PAC 5.7 ms, click 640.0 ms, full 1379.8 ms. Visibility switches with the active large table; the proxy remains benchmark-only.
 
-## Required product changes
+## Normal and mixed tables
 
-1. Add a real table NodeView in `src/webview/editor.ts` while preserving PM table nodes, attrs, serialization, and `contentDOM` semantics.
-2. Update the table target resolver and delete-preview paths that assume `view.nodeDOM(tablePos)` is an `HTMLTableElement`; resolve the descendant table while retaining the wrapper as the scroll ancestor.
-3. Verify `TableControls.refreshScrollContainers()`, `updateLayout()`, and `scheduleAutoScroll()` observe and scroll the wrapper, then add browser/webview tests for 0/50/100% scroll and drag edge scrolling.
-4. Add Rich Editor-only CSS and leave `media/document.css` Preview behavior unchanged.
+- Narrow/normal threshold tables: native table path; no proxy DOM. The 2,000x5 tall/narrow probe is used to enforce the horizontal-overflow guard.
+- Mixed document modes: native, proxy, native, proxy; large table owners are independent and small tables remain native in the benchmark probe.
+- Active sticky visibility: A=visible,hidden; B=hidden,visible.
 
-## Known risks
+## VS Code Webview
 
-- The benchmark NodeView and descendant-table adapter are compile-time benchmark paths only; they are not a product implementation.
-- Headless Chromium results are not VS Code Webview measurements.
-- C2/C3 computed overflow values must be reviewed from the saved snapshots because CSS overflow coupling can normalize `visible` or `clip`.
-- The diagnostic proxy is appended inside the wrapper and currently sits after the table; its scrollbar placement and keyboard/drag affordance require a product UX design.
-- The raw traces are temporary files outside git; the JSON retains summary data and paths.
+Current/proxy Webview measurements were not captured. The CLI reports VS Code 1.138.0; Electron/Chromium and Webview PAC/click values remain not measured. The manual procedure has been updated and must be run before product implementation.
+
+## Final Recommendation
+
+**CONDITIONAL.** Large-table-only proxy is viable in headless Chromium: PAC/click/full-interaction targets pass, controls align at 0/50/100%, drag and wheel probes pass, selection reveal reaches C20, and mixed documents keep small tables native. It remains conditional because VS Code Webview performance and the final visual/manual Extension Development Host checks were not captured. Keep normal tables native, keep Preview unchanged, and move product work to a new Issue/branch after those checks.
+
+### Product implementation plan for the next Issue
+
+- `src/webview/editor.ts`: production table NodeView with O(1) shape classification, hysteresis lifecycle, proxy owner, active sticky lifecycle, and selection reveal hook; preserve PM nodes/attrs/serialization.
+- `src/webview/tableControls.ts`: use a horizontal scroll owner for native/proxy, register proxy scroll events, update layout/presentation, and route edge auto-scroll through the owner.
+- `media/webview.css`: Rich Editor-only viewport/proxy/sticky presentation. Do not change Preview rules in `media/document.css` without a separate compatibility decision.
+- `tests/webview/table-ux.test.ts`: threshold split, native/proxy DOM, selection reveal, Markdown/PM/DOM sync.
+- `tests/webview/table-controls.test.ts` and `tests/browser/table-controls.test.mjs`: 0/50/100% geometry, drag edge scrolling, wheel behavior, multi-table independence, and wide-table editing.

@@ -31,20 +31,52 @@ document.head.append(style);
 
 Wait for two animation frames, repeat the same-cell click and Performance recording, and then reload again before treating the next result as a separate Current run. Record whether the candidate changes `PaintArtifactCompositor::Update`; do not claim native Webview reproduction or improvement unless these steps are completed in VS Code. The wrapper NodeView and scrollbar-proxy conditions require the benchmark bundle and are not represented by this CSS-only snippet.
 
+## Large-table proxy prototype
+
+The final headless prototype keeps ordinary tables on the existing native
+scroll path. It selects the proxy only when the PM table shape reaches the
+measured large-table boundary (500 body rows in this run), then confirms
+`table.scrollWidth > table.clientWidth` after the table has mounted. The
+overflow guard keeps a tall but narrow 2,000×5 table native. A 250-row off
+threshold is used to avoid switching the DOM presentation during ordinary
+cell typing. The proxy bundle is benchmark-only and is not enabled by the
+normal Extension Development Host build.
+
+If a future Development Host bundle exposes the prototype, repeat the same
+document reload sequence for Current and Proxy and record:
+
+1. the active large table's proxy scrollbar at the editor viewport bottom;
+2. horizontal scroll at 0%, 50%, and 100%, including column/row handle
+   alignment;
+3. right-edge and left-edge drag auto-scroll;
+4. Tab/Shift+Tab reveal to the first and last columns;
+5. rightmost-cell editing and Markdown/ProseMirror/DOM synchronization;
+6. independent scrolling when two large tables are present, while small
+   tables remain native.
+
+The proxy scrollbar must not move `.mm-stage` horizontally. A horizontal
+wheel/trackpad `deltaX` should move the active proxy while ordinary vertical
+scrolling remains available. Record any mismatch rather than applying a
+permanent CSS or NodeView change in this investigation branch.
+
 ## Record
 
-| Field                                                  | Value    |
-| ------------------------------------------------------ | -------- |
-| VS Code version                                        |          |
-| Electron / Chromium version (Help → About)             |          |
-| Worktree commit SHA                                    |          |
-| Fixture loaded in Markdown Mint editor                 | yes / no |
-| First click: pointer down → caret visible              |          |
-| First click: UI unresponsive duration                  |          |
-| First click: longest main-thread task                  |          |
-| First click: longest `PaintArtifactCompositor::Update` |          |
-| Same-cell repeat: click latency                        |          |
-| Same-cell repeat: longest lifecycle task               |          |
-| Webview Performance trace file                         |          |
+| Field                                                  | Value                              |
+| ------------------------------------------------------ | ---------------------------------- |
+| VS Code version                                        | not measured (CLI 1.138.0 present) |
+| Electron / Chromium version (Help → About)             | not measured                       |
+| Worktree commit SHA                                    |                                    |
+| Fixture loaded in Markdown Mint editor                 | yes / no                           |
+| First click: pointer down → caret visible              |                                    |
+| First click: UI unresponsive duration                  |                                    |
+| First click: longest main-thread task                  |                                    |
+| First click: longest `PaintArtifactCompositor::Update` |                                    |
+| Same-cell repeat: click latency                        |                                    |
+| Same-cell repeat: longest lifecycle task               |                                    |
+| Webview Performance trace file                         |                                    |
+
+The current run did not capture a VS Code Webview trace. Headless Chromium
+results therefore do not establish native Webview performance, and product
+implementation should remain conditional until this table is filled.
 
 Keep the VS Code trace local unless it is needed for review; it may contain unrelated workbench activity. No product CSS or editor behavior needs to be changed for this measurement.

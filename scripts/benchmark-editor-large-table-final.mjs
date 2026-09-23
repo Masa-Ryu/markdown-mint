@@ -1175,7 +1175,9 @@ async function runControlsProbe(browser, scenario, config) {
     await page.keyboard.type("q");
     await page
       .waitForFunction(
-        () => window.__markdownMintHarness?.document?.markdown?.includes("q") ?? false,
+        () =>
+          window.__markdownMintHarness?.document?.markdown?.includes("q") ??
+          false,
         null,
         { timeout: 30_000 },
       )
