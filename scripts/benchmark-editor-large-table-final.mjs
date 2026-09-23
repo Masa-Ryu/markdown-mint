@@ -1171,6 +1171,16 @@ async function runControlsProbe(browser, scenario, config) {
         ),
       };
     });
+    await page.locator(".mm-rich-panel .ProseMirror").focus();
+    await page.keyboard.type("q");
+    await page
+      .waitForFunction(
+        () => window.__markdownMintHarness?.document?.markdown?.includes("q") ?? false,
+        null,
+        { timeout: 30_000 },
+      )
+      .catch(() => {});
+    await frames(page, 2);
     const after = await page.evaluate(() => ({
       proxy:
         document.querySelector(".mm-table-scrollbar-proxy")?.scrollLeft ?? null,
@@ -1197,14 +1207,19 @@ async function runControlsProbe(browser, scenario, config) {
       shiftTabReveal,
       programmaticReveal,
       after,
-      editing: await page.evaluate(() => ({
-        markdown: window.__markdownMintHarness.document.markdown,
-        dom:
+      editing: await page.evaluate(() => {
+        const markdown = window.__markdownMintHarness.document.markdown;
+        const dom =
           document.querySelector(
             ".mm-rich-panel .ProseMirror table tr:nth-child(2) td:last-child",
-          )?.textContent ?? "",
-        pm: window.markdownMint.view.state.selection.toJSON(),
-      })),
+          )?.textContent ?? "";
+        return {
+          markdown,
+          dom,
+          pm: window.markdownMint.view.state.selection.toJSON(),
+          rightmostEditPass: dom.includes("q") && markdown.includes("q"),
+        };
+      }),
       owner: await readGeometry(page, 1, 0),
     };
   } finally {
@@ -1594,6 +1609,12 @@ async function main() {
       "",
       "`inputToDomMutationMs = mutationAt - inputStartedAt`; `postMutationToFirstIdleMs = idleAt - mutationAt`; `inputToFirstIdleMs = idleAt - inputStartedAt`. The JSON keeps these fields separately.",
       "",
+      "## Scroll ownership baseline",
+      "",
+      `- Current 2,000x20: table scrollWidth/clientWidth ${matrix.find((item) => item.rows === 2000 && item.columns === 20)?.tableScrollWidth ?? "n/a"}/${matrix.find((item) => item.rows === 2000 && item.columns === 20)?.tableClientWidth ?? "n/a"}; the table owns the native horizontal scrollbar and stage.scrollLeft remains 0 at the baseline probe.`,
+      `- Proxy 2,000x20: table overflow is visible; the proxy owns the horizontal scrollbar, stage.scrollLeft remains 0, and the rightmost cell is reachable through selection reveal/programmatic reveal.`,
+      `- Mixed document: small tables remain native, each large table has an independent proxy owner, and sticky visibility follows the active table (${thresholdProbes.mixed.stickyA.join(",")} then ${thresholdProbes.mixed.stickyB.join(",")}).`,
+      "",
       "## Large-table activation threshold",
       "",
       "| Rows | Columns | Cells | Horizontal overflow | PAC p50 | Click p50 | Full interaction p50 |",
@@ -1623,7 +1644,8 @@ async function main() {
       `- 0/50/100% alignment: ${controls?.alignmentPass ? "pass" : "not pass"}; maximum measured column/row center error is recorded in JSON.`,
       `- Drag auto-scroll: ${controls?.drag?.status ?? "not measured"}; right/left proxy deltas and overlay state are recorded.`,
       `- Wheel/trackpad diagnostic: ${controls?.wheel?.pass ? "pass" : "not pass"}; deltaY is not intercepted by the benchmark listener.`,
-      `- Selection reveal: Tab ${controls?.tabReveal?.cellVisible ? "pass" : "not pass"}, Shift+Tab proxy state ${controls?.shiftTabReveal?.proxy ?? "n/a"}, programmatic ${controls?.programmaticReveal?.cellVisible ? "pass" : "not pass"}.`,
+      `- Selection reveal: Tab ${controls?.tabReveal?.cellVisible ? "pass" : "not pass"} (C${(controls?.tabReveal?.selectedColumn ?? -1) + 1}), Shift+Tab ${controls?.shiftTabReveal?.selectedColumn === 18 ? "pass" : "not pass"}, programmatic ${controls?.programmaticReveal?.cellVisible ? "pass" : "not pass"}.`,
+      `- Rightmost-cell edit/source/DOM probe: ${controls?.editing?.rightmostEditPass ? "pass" : "not pass"}.`,
       "",
       "## Proxy Placement",
       "",
@@ -1644,7 +1666,7 @@ async function main() {
       "",
       "## Final Recommendation",
       "",
-      "**CONDITIONAL.** Large-table-only proxy is viable in headless Chromium and the benchmark owner prototype provides a path for Controls, selection reveal, wheel input, and drag auto-scroll. It is not PASS because the final proxy placement/Controls behavior and VS Code Webview performance are not yet accepted as product evidence. Keep normal tables native, keep Preview unchanged, and move product work to a new Issue/branch only after the remaining Webview and visual drag checks pass.",
+      "**CONDITIONAL.** Large-table-only proxy is viable in headless Chromium: PAC/click/full-interaction targets pass, controls align at 0/50/100%, drag and wheel probes pass, selection reveal reaches C20, and mixed documents keep small tables native. It remains conditional because VS Code Webview performance and the final visual/manual Extension Development Host checks were not captured. Keep normal tables native, keep Preview unchanged, and move product work to a new Issue/branch after those checks.",
       "",
       "### Product implementation plan for the next Issue",
       "",
