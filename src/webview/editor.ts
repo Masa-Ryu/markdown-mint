@@ -30,7 +30,7 @@ import {
 } from "prosemirror-state";
 import type { Transaction } from "prosemirror-state";
 import { Decoration, DecorationSet, EditorView } from "prosemirror-view";
-import type { ViewMutationRecord } from "prosemirror-view";
+import type { NodeView, ViewMutationRecord } from "prosemirror-view";
 import {
   liftListItem,
   sinkListItem,
@@ -54,6 +54,7 @@ import {
   measureEditorPerformance,
   recordEditorPerformanceDuration,
   spellcheckDisabledForBenchmark,
+  tableScrollWrapperForBenchmark,
   tableEditingDisabledForBenchmark,
 } from "../shared/performanceBenchmark";
 import { isWorkspaceFileSearchQuery } from "../shared/workspaceFileSearch";
@@ -1223,6 +1224,52 @@ function removeTopLevelRange(doc: PMNode, range: TransientBlankRange): PMNode {
     position = end;
   }
   return doc.copy(Fragment.fromArray(children));
+}
+
+/**
+ * Benchmark-only table presentation wrapper. The ProseMirror table node and
+ * its attributes stay unchanged; only the DOM ancestor that owns horizontal
+ * scrolling is different. This is intentionally enabled through the
+ * benchmark option and is not used by the normal editor bundle.
+ */
+function createBenchmarkTableScrollNodeView(node: PMNode): NodeView {
+  let currentNode = node;
+  const dom = document.createElement("div");
+  dom.className = "mm-table-scroll";
+  dom.dataset.mmBenchmarkTableScroll = "true";
+  const table = document.createElement("table");
+  table.dataset.mmBenchmarkTable = "true";
+  const contentDOM = document.createElement("tbody");
+  table.append(contentDOM);
+  dom.append(table);
+  return {
+    dom,
+    contentDOM,
+    update(nextNode): boolean {
+      if (nextNode.type !== currentNode.type) return false;
+      currentNode = nextNode;
+      return true;
+    },
+    ignoreMutation(mutation): boolean {
+      if (mutation.type === "selection") return false;
+      return !contentDOM.contains(mutation.target);
+    },
+  };
+}
+
+/** Resolve the benchmark wrapper's descendant table without changing the
+ * normal nodeDOM contract. The production path still requires table DOM to be
+ * the table node's root element. */
+function tableElementFromNodeDOM(
+  view: EditorView,
+  position: number,
+): HTMLTableElement | null {
+  const dom = view.nodeDOM(position);
+  if (dom instanceof HTMLTableElement) return dom;
+  if (!tableScrollWrapperForBenchmark() || !(dom instanceof HTMLElement))
+    return null;
+  const table = dom.querySelector(":scope > table");
+  return table instanceof HTMLTableElement ? table : null;
 }
 
 class TaskItemNodeView {
@@ -3094,6 +3141,11 @@ export class MarkdownEditorApp {
               this.openRenderedBlockEditor(position, returnFocus),
             { canEdit: () => this.canEditBlock() && !this.composing },
           ),
+        ...(tableScrollWrapperForBenchmark()
+          ? {
+              table: (node: PMNode) => createBenchmarkTableScrollNodeView(node),
+            }
+          : {}),
       },
       handleDOMEvents: {
         beforeinput: (view, event) =>
@@ -8085,7 +8137,7 @@ export class MarkdownEditorApp {
       return;
     const context = tableContext(this.view.state.selection);
     const tableElement = context
-      ? this.view.nodeDOM(context.tableStart - 1)
+      ? tableElementFromNodeDOM(this.view, context.tableStart - 1)
       : null;
     if (!context || !(tableElement instanceof HTMLElement)) {
       this.clearTableDeletePreview();
@@ -8130,7 +8182,10 @@ export class MarkdownEditorApp {
       // Keep this guard next to the preview path even though the toolbar also
       // disables commands that would be no-ops.
       if (!tableDeletePreviewLogicalRect(context, action)) return;
-      const tableElement = this.view.nodeDOM(context.tableStart - 1);
+      const tableElement = tableElementFromNodeDOM(
+        this.view,
+        context.tableStart - 1,
+      );
       if (!(tableElement instanceof HTMLElement)) return;
       const previews = tableDeletePreviewPixelRects(
         this.view,
@@ -9346,7 +9401,8 @@ export class MarkdownEditorApp {
       return null;
     }
     const table = explicitTableAt(document, tablePos);
-    if (!table || this.view.nodeDOM(tablePos) !== tableElement) return null;
+    if (!table || tableElementFromNodeDOM(this.view, tablePos) !== tableElement)
+      return null;
     if (!supportsDirectTableOperations(table)) return null;
     const structure = this.tableStructureSelection;
     const selected =
@@ -9374,16 +9430,16 @@ export class MarkdownEditorApp {
   ): TableControlTarget | null {
     const context = tableContext(selection);
     if (!context) return null;
-    const element = this.view.nodeDOM(context.tableStart - 1);
-    if (!(element instanceof HTMLTableElement)) return null;
+    const element = tableElementFromNodeDOM(this.view, context.tableStart - 1);
+    if (!element) return null;
     return this.tableTargetAtElement(element);
   }
 
   private tableTargetForStructureSelection(): TableControlTarget | null {
     const structure = this.tableStructureSelection;
     if (!structure || !this.view) return null;
-    const element = this.view.nodeDOM(structure.tablePos);
-    if (!(element instanceof HTMLTableElement)) return null;
+    const element = tableElementFromNodeDOM(this.view, structure.tablePos);
+    if (!element) return null;
     return this.tableTargetAtElement(element);
   }
 
@@ -9486,7 +9542,8 @@ export class MarkdownEditorApp {
       target.document === this.view.state.doc &&
       target.documentGeneration === this.documentGeneration &&
       explicitTableAt(this.view.state.doc, target.tablePos) === target.table &&
-      this.view.nodeDOM(target.tablePos) === target.tableElement
+      tableElementFromNodeDOM(this.view, target.tablePos) ===
+        target.tableElement
     );
   }
 

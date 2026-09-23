@@ -2060,6 +2060,21 @@ export class TableControls {
       element.addEventListener("scroll", this.scroll, { passive: true });
       this.scrollContainers.push(element);
     }
+    if (__MM_EDITOR_PERFORMANCE_BENCHMARK__) {
+      this.element.dataset.mmBenchmarkScrollContainers = this.scrollContainers
+        .map((element) => {
+          if (element === this.stage) return "stage";
+          if (element === this.target?.tableElement) return "table";
+          return (
+            element.className?.toString?.() || element.tagName.toLowerCase()
+          );
+        })
+        .join(",");
+      recordEditorPerformanceCount(
+        "tableControls.refreshScrollContainers.count",
+        this.scrollContainers.length,
+      );
+    }
   }
 
   private removeScrollListeners(): void {

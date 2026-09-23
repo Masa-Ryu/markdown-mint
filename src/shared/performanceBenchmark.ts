@@ -8,6 +8,8 @@ export interface PerformanceBenchmarkOptions {
   disableTableControls?: boolean;
   disableTableEditing?: boolean;
   disableSpellcheck?: boolean;
+  /** Benchmark-only table NodeView that moves horizontal scrolling to a wrapper. */
+  tableScrollWrapper?: boolean;
 }
 
 export interface PerformanceBenchmarkSelectionEvent {
@@ -84,6 +86,14 @@ export function spellcheckDisabledForBenchmark(): boolean {
   if (!__MM_EDITOR_PERFORMANCE_BENCHMARK__) return false;
   return (
     globalThis.__markdownMintPerformanceBenchmarkOptions?.disableSpellcheck ===
+    true
+  );
+}
+
+export function tableScrollWrapperForBenchmark(): boolean {
+  if (!__MM_EDITOR_PERFORMANCE_BENCHMARK__) return false;
+  return (
+    globalThis.__markdownMintPerformanceBenchmarkOptions?.tableScrollWrapper ===
     true
   );
 }

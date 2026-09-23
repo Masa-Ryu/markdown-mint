@@ -21,7 +21,15 @@ The headless investigation identified the following benchmark-only candidate. It
 }
 ```
 
-To compare it in VS Code, record the Current click first, paste the snippet into the Webview Developer Tools Console, wait for two animation frames, and repeat the same-cell click and Performance recording. Restore the page or reload the document before treating the second result as a separate Current run. Record whether the candidate changes `PaintArtifactCompositor::Update`; do not claim native Webview reproduction or improvement unless these steps are completed in VS Code.
+To compare it in VS Code, record the Current click first, then reload the document to reset the initial state. CSS cannot be executed by pasting a bare rule into the Console. Use a style element instead (or apply the rule from the Elements → Styles pane):
+
+```js
+const style = document.createElement("style");
+style.textContent = ".mm-document-content table{overflow-x:visible!important}";
+document.head.append(style);
+```
+
+Wait for two animation frames, repeat the same-cell click and Performance recording, and then reload again before treating the next result as a separate Current run. Record whether the candidate changes `PaintArtifactCompositor::Update`; do not claim native Webview reproduction or improvement unless these steps are completed in VS Code. The wrapper NodeView and scrollbar-proxy conditions require the benchmark bundle and are not represented by this CSS-only snippet.
 
 ## Record
 
