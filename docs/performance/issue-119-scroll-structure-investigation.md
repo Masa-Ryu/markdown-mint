@@ -18,6 +18,8 @@
 
 ## Large-table activation threshold
 
+The row and shape matrix uses fixed synthetic cell text to hold dimensions constant; the proxy and sticky series use the original 2,000x20 stress fixture.
+
 | Rows | Columns | Cells | Horizontal overflow |   PAC p50 |  Click p50 | Full interaction p50 |
 | ---: | ------: | ----: | :-----------------: | --------: | ---------: | -------------------: |
 |  100 |      20 |  2000 |         yes         |   21.4 ms |   115.8 ms |             195.3 ms |
