@@ -147,8 +147,44 @@ async function runPdfExportCommandAcceptance(): Promise<void> {
         name: "task-checkboxes",
         profile: "gitlab",
         verifyTaskCheckboxes: true,
-        markdown:
-          "# Production PDF task checkboxes\n\n- [ ] PDF_TASK_UNCHECKED\n- [x] PDF_TASK_CHECKED\n- [~] PDF_TASK_MIXED_STATIC\n\n[PDF_NORMAL_LINK](https://example.com/)\n\n[RESERVED_LOOKING_NORMAL_LINK](https://markdown-mint.invalid/pdf-task-checkbox/0?checked=0)\n",
+        markdown: [
+          "# Production PDF task checkboxes",
+          "",
+          "- [ ] PDF_TASK_UNCHECKED",
+          "- [x] PDF_TASK_CHECKED",
+          "- [~] PDF_TASK_MIXED_STATIC",
+          "",
+          "[PDF_NORMAL_LINK](https://example.com/)",
+          "",
+          "[RESERVED_LOOKING_NORMAL_LINK](https://markdown-mint.invalid/pdf-task-checkbox/0?checked=0)",
+          "",
+          "<details>",
+          "<summary>PDF_DETAILS_CLOSED_SUMMARY</summary>",
+          "",
+          "PDF_DETAILS_BODY_MARKER",
+          "",
+          "- [ ] PDF_DETAILS_TASK_UNCHECKED",
+          "- [x] PDF_DETAILS_TASK_CHECKED",
+          "",
+          "```mermaid",
+          "graph TD",
+          "  A --> PDF_DETAILS_MERMAID_MARKER",
+          "```",
+          "</details>",
+          "",
+          "<details>",
+          "<summary>PDF_DETAILS_NESTED_OUTER_SUMMARY</summary>",
+          "",
+          "PDF_DETAILS_OUTER_BODY",
+          "",
+          "<details>",
+          "<summary>PDF_DETAILS_NESTED_INNER_SUMMARY</summary>",
+          "",
+          "PDF_DETAILS_INNER_BODY",
+          "</details>",
+          "</details>",
+          "",
+        ].join("\n"),
       },
     ];
 
@@ -195,7 +231,12 @@ async function runPdfExportCommandAcceptance(): Promise<void> {
             .map((field) => field.getName())
             .filter((name) => name.startsWith("markdownMint.taskCheckbox."))
             .sort(),
-          ["markdownMint.taskCheckbox.0", "markdownMint.taskCheckbox.1"],
+          [
+            "markdownMint.taskCheckbox.0",
+            "markdownMint.taskCheckbox.1",
+            "markdownMint.taskCheckbox.2",
+            "markdownMint.taskCheckbox.3",
+          ],
         );
         assert.equal(
           form.getCheckBox("markdownMint.taskCheckbox.0").isChecked(),
@@ -203,6 +244,14 @@ async function runPdfExportCommandAcceptance(): Promise<void> {
         );
         assert.equal(
           form.getCheckBox("markdownMint.taskCheckbox.1").isChecked(),
+          true,
+        );
+        assert.equal(
+          form.getCheckBox("markdownMint.taskCheckbox.2").isChecked(),
+          false,
+        );
+        assert.equal(
+          form.getCheckBox("markdownMint.taskCheckbox.3").isChecked(),
           true,
         );
         const taskPdfLinkUris = pdfLinkUris(parsedPdf);

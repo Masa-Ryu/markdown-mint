@@ -7,7 +7,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import { build } from "esbuild";
-import { getDocument } from "pdfjs-dist/legacy/build/pdf.mjs";
+import { getDocument, OPS } from "pdfjs-dist/legacy/build/pdf.mjs";
 import {
   PDFDict,
   PDFDocument,
@@ -85,6 +85,8 @@ try {
   assert.deepEqual(taskFieldNames, [
     "markdownMint.taskCheckbox.0",
     "markdownMint.taskCheckbox.1",
+    "markdownMint.taskCheckbox.2",
+    "markdownMint.taskCheckbox.3",
   ]);
   assert.equal(
     form.getCheckBox("markdownMint.taskCheckbox.0").isChecked(),
@@ -92,6 +94,14 @@ try {
   );
   assert.equal(
     form.getCheckBox("markdownMint.taskCheckbox.1").isChecked(),
+    true,
+  );
+  assert.equal(
+    form.getCheckBox("markdownMint.taskCheckbox.2").isChecked(),
+    false,
+  );
+  assert.equal(
+    form.getCheckBox("markdownMint.taskCheckbox.3").isChecked(),
     true,
   );
   const pdfLinkUris = [];
@@ -142,7 +152,20 @@ try {
   for (let pageNumber = 1; pageNumber <= parsed.numPages; pageNumber += 1) {
     const page = await parsed.getPage(pageNumber);
     const viewport = page.getViewport({ scale: 1 });
-    pageSizes.push({ width: viewport.width, height: viewport.height });
+    const operatorList = await page.getOperatorList();
+    const imagePaintOperations = new Set([
+      OPS.paintImageXObject,
+      OPS.paintInlineImageXObject,
+      OPS.paintImageMaskXObject,
+      OPS.paintImageMaskXObjectGroup,
+    ]);
+    pageSizes.push({
+      width: viewport.width,
+      height: viewport.height,
+      imagePaintCount: operatorList.fnArray.filter((operation) =>
+        imagePaintOperations.has(operation),
+      ).length,
+    });
     const content = await page.getTextContent();
     for (const item of content.items) {
       if (!("str" in item) || !item.str.trim()) continue;
@@ -286,6 +309,22 @@ try {
     "PDF_TASK_UNCHECKED",
     "PDF_TASK_CHECKED",
     "PDF_TASK_MIXED_STATIC",
+    "PDF_DETAILS_CLOSED_SUMMARY",
+    "PDF_DETAILS_CLOSED_BODY",
+    "PDF_DETAILS_TASK_UNCHECKED",
+    "PDF_DETAILS_TASK_CHECKED",
+    "PDF_DETAILS_MERMAID_SUMMARY",
+    "PDF_DETAILS_BODY_MARKER",
+    "PDF_DETAILS_MERMAID_MARKER",
+    "PDF_DETAILS_NESTED_OUTER_SUMMARY",
+    "PDF_DETAILS_OUTER_BODY",
+    "PDF_DETAILS_NESTED_INNER_SUMMARY",
+    "PDF_DETAILS_INNER_BODY",
+    "PDF_DETAILS_OPEN_SUMMARY",
+    "PDF_DETAILS_OPEN_BODY",
+    "PDF_DETAILS_LONG_SUMMARY",
+    "PDF_DETAILS_LONG_BODY_START",
+    "PDF_DETAILS_LONG_TAIL_MARKER",
     "こんにちは",
     "Chromium",
   ])
@@ -303,6 +342,10 @@ try {
         Math.abs(width - 595.28) < 1 && Math.abs(height - 841.89) < 1,
     ),
     `Expected A4 portrait pages, got ${JSON.stringify(pageSizes[0])}`,
+  );
+  assert.ok(
+    pageSizes.reduce((count, page) => count + page.imagePaintCount, 0) >= 2,
+    "The local image outside Details and the local image inside closed Details must both print.",
   );
   assert.ok(
     textRuns.every(({ x, right, pageNumber }) => {
@@ -332,6 +375,35 @@ try {
       Math.min(...taskLabelRuns.map((run) => run.x)) <
       1,
     "Interactive and mixed task labels must keep the same list text column.",
+  );
+  const detailsTaskRuns = [
+    "PDF_DETAILS_TASK_UNCHECKED",
+    "PDF_DETAILS_TASK_CHECKED",
+  ].map((marker) =>
+    [...textRows.values()].find(({ text }) =>
+      normalizePdfText(text).includes(marker),
+    ),
+  );
+  assert.ok(
+    detailsTaskRuns.every(Boolean),
+    "Task labels inside closed Details must remain extractable.",
+  );
+  assert.ok(
+    Math.abs(detailsTaskRuns[0].x - detailsTaskRuns[1].x) < 1,
+    "Checkbox tasks inside Details must keep a consistent label column.",
+  );
+
+  const detailsLongStart = [...textRows.values()].find(({ text }) =>
+    normalizePdfText(text).includes("PDF_DETAILS_LONG_BODY_START"),
+  );
+  const detailsLongTail = [...textRows.values()].find(({ text }) =>
+    normalizePdfText(text).includes("PDF_DETAILS_LONG_TAIL_MARKER"),
+  );
+  assert.ok(detailsLongStart && detailsLongTail);
+  assert.notEqual(
+    detailsLongStart.pageNumber,
+    detailsLongTail.pageNumber,
+    "A long expanded Details body must fragment naturally across printed pages.",
   );
 
   const longLineStart = [...textRows.values()].find(({ text }) =>

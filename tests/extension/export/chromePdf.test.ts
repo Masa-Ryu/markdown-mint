@@ -187,11 +187,26 @@ describe("Chrome CDP PDF backend", () => {
     const browserExpressions = chromeMocks.cdp.send.mock.calls
       .filter(([method]) => method === "Runtime.evaluate")
       .map(([, params]) => (params as { expression: string }).expression);
-    expect(browserExpressions).toHaveLength(3);
+    const setDocumentContentIndex = chromeMocks.cdp.send.mock.calls.findIndex(
+      ([method]) => method === "Page.setDocumentContent",
+    );
+    const firstEvaluateIndex = chromeMocks.cdp.send.mock.calls.findIndex(
+      ([method]) => method === "Runtime.evaluate",
+    );
+    expect(setDocumentContentIndex).toBeGreaterThanOrEqual(0);
+    expect(firstEvaluateIndex).toBeGreaterThan(setDocumentContentIndex);
+    expect(browserExpressions).toHaveLength(4);
     expect(
       browserExpressions.every((expression) => typeof expression === "string"),
     ).toBe(true);
-    const markerTokenLiteral = browserExpressions[2]?.match(
+    expect(browserExpressions[0]).toContain(".markdown-body details");
+    expect(browserExpressions[0]).toContain("element.open = true");
+    expect(browserExpressions[1]).toContain(
+      'document.readyState === "complete"',
+    );
+    expect(browserExpressions[2]).toContain("const diagrams = ()");
+    expect(browserExpressions[3]).toContain("const markerToken =");
+    const markerTokenLiteral = browserExpressions[3]?.match(
       /const markerToken = ("[0-9a-f]{32}");/,
     )?.[1];
     expect(markerTokenLiteral).toBeDefined();

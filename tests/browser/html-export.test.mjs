@@ -130,6 +130,13 @@ try {
         (button) => getComputedStyle(button).display,
       ),
     }));
+    const details = Array.from(
+      document.querySelectorAll(".markdown-body details"),
+    ).map((element) => ({
+      open: element.open,
+      summary: element.querySelector("summary")?.textContent?.trim(),
+      text: element.textContent?.replace(/\s+/g, " ").trim(),
+    }));
     const svgStyle = svg ? getComputedStyle(svg) : undefined;
     return {
       lightClass:
@@ -160,6 +167,7 @@ try {
           : undefined,
       },
       taskBoxes,
+      details,
       codeActions,
       images,
       math: {
@@ -187,6 +195,18 @@ try {
   assert.equal(result.mermaidState, "rendered");
   assert.ok(result.math.count >= 2);
   assert.equal(result.math.mainFontLoaded, true);
+  assert.deepEqual(result.details, [
+    {
+      open: false,
+      summary: "HTML_CLOSED_DETAILS_SUMMARY",
+      text: "HTML_CLOSED_DETAILS_SUMMARYHTML_CLOSED_DETAILS_BODY",
+    },
+    {
+      open: true,
+      summary: "HTML_OPEN_DETAILS_SUMMARY",
+      text: "HTML_OPEN_DETAILS_SUMMARYHTML_OPEN_DETAILS_BODY",
+    },
+  ]);
   assert.equal(result.injectedMarkdownScript, false);
   assert.deepEqual(result.codeActions, [
     {

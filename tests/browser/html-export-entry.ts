@@ -34,6 +34,16 @@ const markdown = [
   "  A[Node A] -->|edge label| B[Node B]",
   "```",
   "",
+  "<details>",
+  "<summary>HTML_CLOSED_DETAILS_SUMMARY</summary>",
+  "HTML_CLOSED_DETAILS_BODY",
+  "</details>",
+  "",
+  "<details open>",
+  "<summary>HTML_OPEN_DETAILS_SUMMARY</summary>",
+  "HTML_OPEN_DETAILS_BODY",
+  "</details>",
+  "",
   "<script>window.__markdownMintInjected = true</script>",
 ].join("\n");
 

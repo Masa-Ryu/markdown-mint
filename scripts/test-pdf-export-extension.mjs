@@ -1,5 +1,6 @@
 import { runTests } from "@vscode/test-electron";
 import { chromium } from "playwright";
+import { getDocument } from "pdfjs-dist/legacy/build/pdf.mjs";
 import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { execFileSync } from "node:child_process";
@@ -62,6 +63,37 @@ if (useVsix) {
   );
 }
 
+async function verifyProductionDetailsPdf() {
+  const pdfBytes = await readFile(join(outputDirectory, "task-checkboxes.pdf"));
+  const pdf = await getDocument({ data: new Uint8Array(pdfBytes) }).promise;
+  const extractedText = [];
+  for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
+    const page = await pdf.getPage(pageNumber);
+    const content = await page.getTextContent();
+    for (const item of content.items)
+      if ("str" in item) extractedText.push(item.str);
+  }
+  const normalizedText = extractedText
+    .join(" ")
+    .replace(/[\s\u200b\u00ad]+/gu, "");
+  for (const marker of [
+    "PDF_DETAILS_CLOSED_SUMMARY",
+    "PDF_DETAILS_BODY_MARKER",
+    "PDF_DETAILS_TASK_UNCHECKED",
+    "PDF_DETAILS_TASK_CHECKED",
+    "PDF_DETAILS_MERMAID_MARKER",
+    "PDF_DETAILS_NESTED_OUTER_SUMMARY",
+    "PDF_DETAILS_OUTER_BODY",
+    "PDF_DETAILS_NESTED_INNER_SUMMARY",
+    "PDF_DETAILS_INNER_BODY",
+  ])
+    if (!normalizedText.includes(marker))
+      throw new Error(`Production VSIX PDF is missing ${marker}.`);
+  process.stdout.write(
+    `Production VSIX PDF text extraction passed: ${pdf.numPages} pages, closed and nested Details content present.\n`,
+  );
+}
+
 try {
   const exitCode = await runTests({
     extensionDevelopmentPath,
@@ -80,6 +112,7 @@ try {
     ],
   });
   if (exitCode !== 0) process.exitCode = exitCode;
+  else await verifyProductionDetailsPdf();
 } finally {
   if (process.env.MARKDOWN_MINT_TEST_KEEP === "1")
     process.stdout.write(

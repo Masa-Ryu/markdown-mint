@@ -61,6 +61,14 @@ function mermaidReadinessExpression(timeoutMs: number): string {
   })()`;
 }
 
+function preparePdfPrintDomExpression(): string {
+  return `(() => {
+    const details = Array.from(document.querySelectorAll(".markdown-body details"));
+    for (const element of details) element.open = true;
+    return { expandedDetailsCount: details.length };
+  })()`;
+}
+
 function preparePdfTaskMarkersExpression(markerToken: string): string {
   const serializedMarkerToken = JSON.stringify(markerToken);
   return `(() => {
@@ -362,6 +370,11 @@ export async function renderPdfWithChrome(
     await client.send(
       "Page.setDocumentContent",
       { frameId: frameTree.frameTree.frame.id, html },
+      sessionId,
+    );
+    await evaluate<{ readonly expandedDetailsCount: number }>(
+      client,
+      preparePdfPrintDomExpression(),
       sessionId,
     );
     await evaluate<void>(
