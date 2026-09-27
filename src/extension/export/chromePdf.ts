@@ -4,6 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { launchBrowser } from "./browserProcess";
 import { createCdpClient, type CdpClient } from "./cdpClient";
+import { addInteractiveTaskCheckboxes } from "./pdfTaskCheckboxes";
 
 export const PDF_EXPORT_TIMEOUT_MS = 30_000;
 
@@ -56,6 +57,37 @@ function mermaidReadinessExpression(timeoutMs: number): string {
       });
       return diagrams().filter((diagram) => diagram.dataset.mmMermaidState !== "rendered").length;
     })();
+  })()`;
+}
+
+function preparePdfTaskMarkersExpression(): string {
+  return `(() => {
+    const inputs = Array.from(document.querySelectorAll('.markdown-body li.task-list-item > input[type="checkbox"]'));
+    let taskMarkerCount = 0;
+    for (const input of inputs) {
+      if (input.dataset.taskState === "mixed") continue;
+      const computed = window.getComputedStyle(input);
+      const marker = document.createElement("a");
+      const checked = input.checked ? "1" : "0";
+      marker.className = "mm-pdf-task-marker";
+      marker.href = "https://markdown-mint.invalid/pdf-task-checkbox/" + taskMarkerCount + "?checked=" + checked;
+      marker.setAttribute("aria-hidden", "true");
+      marker.style.display = "block";
+      marker.style.boxSizing = "border-box";
+      marker.style.width = computed.width;
+      marker.style.height = computed.height;
+      marker.style.margin = computed.margin;
+      marker.style.padding = "0";
+      marker.style.border = "0";
+      marker.style.background = "transparent";
+      marker.style.color = "transparent";
+      marker.style.textDecoration = "none";
+      marker.style.gridColumn = "1";
+      marker.style.gridRow = "1";
+      input.replaceWith(marker);
+      taskMarkerCount += 1;
+    }
+    return taskMarkerCount;
   })()`;
 }
 
@@ -343,6 +375,11 @@ export async function renderPdfWithChrome(
       throw new Error(
         `${failedMermaidCount} Mermaid ${failedMermaidCount === 1 ? "diagram" : "diagrams"} could not be rendered for PDF export.`,
       );
+    const taskMarkerCount = await evaluate<number>(
+      client,
+      preparePdfTaskMarkersExpression(),
+      sessionId,
+    );
     await client.send(
       "Emulation.setEmulatedMedia",
       { media: "print" },
@@ -367,11 +404,15 @@ export async function renderPdfWithChrome(
         sessionId,
       );
     }
+    let pdfBytes: Uint8Array;
     if (printed.stream)
-      return await readPdfStream(client, printed.stream, sessionId);
-    if (printed.data !== undefined)
-      return new Uint8Array(Buffer.from(printed.data, "base64"));
-    throw new Error("Chrome did not return PDF data.");
+      pdfBytes = await readPdfStream(client, printed.stream, sessionId);
+    else if (printed.data !== undefined)
+      pdfBytes = new Uint8Array(Buffer.from(printed.data, "base64"));
+    else throw new Error("Chrome did not return PDF data.");
+    return taskMarkerCount === 0
+      ? pdfBytes
+      : await addInteractiveTaskCheckboxes(pdfBytes);
   } finally {
     if (client) {
       if (targetId) {

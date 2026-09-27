@@ -8,6 +8,8 @@
   or an installed Chrome, Edge, or Chromium; if none is available, explain the
   requirement and offer the official Chrome download page without installing
   anything.
+- Convert PDF `[ ]` and `[x]` task list items to editable AcroForm checkboxes;
+  keep GitLab `[~]` tasks static and keep PDF checkbox changes local to the PDF.
 
 ## 0.6.0
 

@@ -3,6 +3,13 @@ import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import Module from "node:module";
 import * as path from "node:path";
 import * as vscode from "vscode";
+import {
+  PDFDict,
+  PDFDocument,
+  PDFHexString,
+  PDFName,
+  PDFString,
+} from "pdf-lib";
 
 const outputDirectory = process.env.MARKDOWN_MINT_PDF_OUTPUT_DIR;
 const workspaceDirectory = process.env.MARKDOWN_MINT_PDF_WORKSPACE_DIR;
@@ -18,6 +25,35 @@ interface ModuleLoader {
     parent: ModuleParent | null | undefined,
     isMain: boolean,
   ): unknown;
+}
+
+function pdfLinkUris(pdf: PDFDocument): string[] {
+  const uris: string[] = [];
+  for (const page of pdf.getPages()) {
+    const annotations = page.node.Annots();
+    if (!annotations) continue;
+    for (const object of annotations.asArray()) {
+      const annotation = pdf.context.lookupMaybe(object, PDFDict);
+      if (
+        annotation?.lookupMaybe(PDFName.of("Subtype"), PDFName)?.asString() !==
+        "/Link"
+      )
+        continue;
+      const action = pdf.context.lookupMaybe(
+        annotation.get(PDFName.of("A")),
+        PDFDict,
+      );
+      if (action?.lookupMaybe(PDFName.of("S"), PDFName)?.asString() !== "/URI")
+        continue;
+      const uri = pdf.context.lookupMaybe(
+        action.get(PDFName.of("URI")),
+        PDFString,
+        PDFHexString,
+      );
+      if (uri) uris.push(uri.decodeText());
+    }
+  }
+  return uris;
 }
 
 async function runPdfExportCommandAcceptance(): Promise<void> {
@@ -87,7 +123,12 @@ async function runPdfExportCommandAcceptance(): Promise<void> {
     await mkdir(outputDirectory, { recursive: true });
     process.stdout.write("Configured the production PDF command test.\n");
 
-    const cases = [
+    const cases: Array<{
+      name: string;
+      markdown: string;
+      profile?: "github" | "gitlab" | "commonmark";
+      verifyTaskCheckboxes?: boolean;
+    }> = [
       {
         name: "plain",
         markdown: "# Production PDF command\n\nPDF_COMMAND_PLAIN_MARKER\n",
@@ -102,6 +143,13 @@ async function runPdfExportCommandAcceptance(): Promise<void> {
         markdown:
           "# Production Mermaid PDF command\n\n```mermaid\ngraph TD\n  Start --> PDF_COMMAND_MERMAID_MARKER\n```\n",
       },
+      {
+        name: "task-checkboxes",
+        profile: "gitlab",
+        verifyTaskCheckboxes: true,
+        markdown:
+          "# Production PDF task checkboxes\n\n- [ ] PDF_TASK_UNCHECKED\n- [x] PDF_TASK_CHECKED\n- [~] PDF_TASK_MIXED_STATIC\n\n[PDF_NORMAL_LINK](https://example.com/)\n",
+      },
     ];
 
     for (const item of cases) {
@@ -111,6 +159,14 @@ async function runPdfExportCommandAcceptance(): Promise<void> {
       await rm(outputPath, { force: true });
       outputPaths.push(outputPath);
       const documentUri = vscode.Uri.file(markdownPath);
+      if (item.profile)
+        await vscode.workspace
+          .getConfiguration("markdownMint", documentUri)
+          .update(
+            "profile",
+            item.profile,
+            vscode.ConfigurationTarget.WorkspaceFolder,
+          );
       await vscode.workspace.openTextDocument(documentUri);
       process.stdout.write(`Opened PDF test document: ${item.name}.\n`);
       process.stdout.write(`Invoking packaged PDF command: ${item.name}.\n`);
@@ -128,6 +184,34 @@ async function runPdfExportCommandAcceptance(): Promise<void> {
             : ""
         }`,
       );
+      assert.equal(await readFile(markdownPath, "utf8"), item.markdown);
+      if (item.verifyTaskCheckboxes) {
+        assert.ok(pdf, "the task-list PDF was written");
+        const parsedPdf = await PDFDocument.load(new Uint8Array(pdf));
+        const form = parsedPdf.getForm();
+        assert.deepEqual(
+          form
+            .getFields()
+            .map((field) => field.getName())
+            .filter((name) => name.startsWith("markdownMint.taskCheckbox."))
+            .sort(),
+          ["markdownMint.taskCheckbox.0", "markdownMint.taskCheckbox.1"],
+        );
+        assert.equal(
+          form.getCheckBox("markdownMint.taskCheckbox.0").isChecked(),
+          false,
+        );
+        assert.equal(
+          form.getCheckBox("markdownMint.taskCheckbox.1").isChecked(),
+          true,
+        );
+        assert.ok(pdfLinkUris(parsedPdf).includes("https://example.com/"));
+        assert.ok(
+          pdfLinkUris(parsedPdf).every(
+            (uri) => !uri.startsWith("https://markdown-mint.invalid/"),
+          ),
+        );
+      }
     }
 
     assert.deepEqual(
@@ -136,7 +220,7 @@ async function runPdfExportCommandAcceptance(): Promise<void> {
       "PDF export completed without host errors",
     );
     process.stdout.write(
-      "Production dist/extension.js PDF command passed for plain, KaTeX, and Mermaid documents.\n",
+      "Production dist/extension.js PDF command passed for plain, KaTeX, Mermaid, and interactive task checkbox documents.\n",
     );
   } finally {
     moduleLoader._load = originalLoad;

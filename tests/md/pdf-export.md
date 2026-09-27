@@ -14,6 +14,14 @@ This fixture includes Unicode text for print layout: 日本語、Markdown Mint�
 2. Ordered item two
 3. Ordered item three
 
+## Interactive PDF tasks
+
+- [ ] PDF_TASK_UNCHECKED
+- [x] PDF_TASK_CHECKED
+- [~] PDF_TASK_MIXED_STATIC
+
+[PDF_NORMAL_LINK](https://example.com/)
+
 ## Table
 
 | Feature     | Expected output   | Status |

@@ -12,7 +12,7 @@ void (async () => {
   const markdown = await readFile(documentPath, "utf8");
   const html = await createExportHtml({
     markdown,
-    profile: "github",
+    profile: "gitlab",
     documentUri: vscode.Uri.file(documentPath),
     title: "PDF export fixture",
     extensionUri: vscode.Uri.file(extensionPath),

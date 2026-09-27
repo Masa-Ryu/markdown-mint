@@ -186,7 +186,7 @@ describe("Chrome CDP PDF backend", () => {
     const browserExpressions = chromeMocks.cdp.send.mock.calls
       .filter(([method]) => method === "Runtime.evaluate")
       .map(([, params]) => (params as { expression: string }).expression);
-    expect(browserExpressions).toHaveLength(2);
+    expect(browserExpressions).toHaveLength(3);
     expect(
       browserExpressions.every((expression) => typeof expression === "string"),
     ).toBe(true);

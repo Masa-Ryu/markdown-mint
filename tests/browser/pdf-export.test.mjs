@@ -8,6 +8,13 @@ import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import { build } from "esbuild";
 import { getDocument } from "pdfjs-dist/legacy/build/pdf.mjs";
+import {
+  PDFDict,
+  PDFDocument,
+  PDFHexString,
+  PDFName,
+  PDFString,
+} from "pdf-lib";
 import { chromium } from "playwright";
 
 const repository = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
@@ -67,6 +74,60 @@ try {
   assert.ok(
     pdf.length > 10_000,
     `Expected a rendered PDF, got ${pdf.length} bytes`,
+  );
+  const editablePdf = await PDFDocument.load(new Uint8Array(pdf));
+  const form = editablePdf.getForm();
+  const taskFieldNames = form
+    .getFields()
+    .map((field) => field.getName())
+    .filter((name) => name.startsWith("markdownMint.taskCheckbox."))
+    .sort();
+  assert.deepEqual(taskFieldNames, [
+    "markdownMint.taskCheckbox.0",
+    "markdownMint.taskCheckbox.1",
+  ]);
+  assert.equal(
+    form.getCheckBox("markdownMint.taskCheckbox.0").isChecked(),
+    false,
+  );
+  assert.equal(
+    form.getCheckBox("markdownMint.taskCheckbox.1").isChecked(),
+    true,
+  );
+  const pdfLinkUris = [];
+  for (const page of editablePdf.getPages()) {
+    const annotations = page.node.Annots();
+    if (!annotations) continue;
+    for (const object of annotations.asArray()) {
+      const annotation = editablePdf.context.lookupMaybe(object, PDFDict);
+      if (
+        annotation?.lookupMaybe(PDFName.of("Subtype"), PDFName)?.asString() !==
+        "/Link"
+      )
+        continue;
+      const action = editablePdf.context.lookupMaybe(
+        annotation.get(PDFName.of("A")),
+        PDFDict,
+      );
+      if (action?.lookupMaybe(PDFName.of("S"), PDFName)?.asString() !== "/URI")
+        continue;
+      const uri = editablePdf.context.lookupMaybe(
+        action.get(PDFName.of("URI")),
+        PDFString,
+        PDFHexString,
+      );
+      if (uri) pdfLinkUris.push(uri.decodeText());
+    }
+  }
+  assert.ok(pdfLinkUris.includes("https://example.com/"));
+  assert.ok(
+    pdfLinkUris.every(
+      (uri) => !uri.startsWith("https://markdown-mint.invalid/"),
+    ),
+  );
+  assert.ok(
+    !pdf.includes(Buffer.from("markdown-mint.invalid")),
+    "Marker URLs must not remain in the interactive PDF.",
   );
   const parsed = await getDocument({ data: new Uint8Array(pdf) }).promise;
   const pageCount = parsed.numPages;
@@ -216,6 +277,9 @@ try {
     "PDF_LONG_LINE_TAIL_MARKER",
     "PDF_CODE_TAIL_MARKER",
     "PDF_TABLE_TAIL_MARKER",
+    "PDF_TASK_UNCHECKED",
+    "PDF_TASK_CHECKED",
+    "PDF_TASK_MIXED_STATIC",
     "こんにちは",
     "Chromium",
   ])
@@ -243,6 +307,26 @@ try {
   );
   assert.ok(!normalizedTextLowercase.includes("copycode"));
   assert.ok(!normalizedTextLowercase.includes("expandcode"));
+
+  const taskLabelRuns = [
+    "PDF_TASK_UNCHECKED",
+    "PDF_TASK_CHECKED",
+    "PDF_TASK_MIXED_STATIC",
+  ].map((marker) =>
+    [...textRows.values()].find(({ text }) =>
+      normalizePdfText(text).includes(marker),
+    ),
+  );
+  assert.ok(
+    taskLabelRuns.every(Boolean),
+    "All task labels must be extractable.",
+  );
+  assert.ok(
+    Math.max(...taskLabelRuns.map((run) => run.x)) -
+      Math.min(...taskLabelRuns.map((run) => run.x)) <
+      1,
+    "Interactive and mixed task labels must keep the same list text column.",
+  );
 
   const longLineStart = [...textRows.values()].find(({ text }) =>
     normalizePdfText(text).includes(

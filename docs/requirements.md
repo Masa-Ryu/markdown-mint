@@ -78,6 +78,14 @@ failure; the profile, DevTools connection, and PDF stream are cleaned up on all
 paths. PDF bytes are written with `workspace.fs.writeFile()`, and export does
 not modify Markdown, editor state, profile, or undo history.
 
+During PDF printing, unchecked and checked task inputs are replaced with
+temporary link markers so Chrome supplies the final page and rectangle after
+pagination. Those markers become editable PDF AcroForm checkboxes with their
+original checked state; marker annotations are removed and ordinary URL links
+are retained. GitLab mixed `[~]` tasks stay static. Changing a PDF checkbox
+changes only the PDF and never writes back to Markdown. Documents without task
+checkboxes skip PDF form post-processing.
+
 Chromium resolution checks
 `markdownMint.export.pdf.chromiumExecutablePath`, then known Chrome, Edge, and
 Chromium locations on macOS, Windows, or Linux. A configured but invalid path is
