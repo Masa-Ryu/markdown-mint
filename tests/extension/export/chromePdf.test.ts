@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { existsSync } from "node:fs";
 import { rm } from "node:fs/promises";
+import { PDFDocument } from "pdf-lib";
 
 const chromeMocks = vi.hoisted(() => {
   type Listener = (...args: unknown[]) => void;
@@ -190,6 +191,11 @@ describe("Chrome CDP PDF backend", () => {
     expect(
       browserExpressions.every((expression) => typeof expression === "string"),
     ).toBe(true);
+    const markerTokenLiteral = browserExpressions[2]?.match(
+      /const markerToken = ("[0-9a-f]{32}");/,
+    )?.[1];
+    expect(markerTokenLiteral).toBeDefined();
+    expect(JSON.parse(markerTokenLiteral!)).toMatch(/^[0-9a-f]{32}$/);
     expect(browserExpressions.join("\n")).not.toMatch(/\b__name\b/);
     expect(chromeMocks.cdp.close).toHaveBeenCalledOnce();
   });
@@ -283,6 +289,65 @@ describe("Chrome CDP PDF backend", () => {
         ([method]) => method === "Page.printToPDF",
       ),
     ).toHaveLength(1);
+  });
+
+  it("fails a missing marker set and cleans the browser and temporary profile", async () => {
+    const pdfDocument = await PDFDocument.create();
+    pdfDocument.addPage();
+    const printedPdf = await pdfDocument.save();
+    chromeMocks.cdp.send.mockImplementation(
+      async (method: string, params?: Record<string, unknown>) => {
+        if (method === "Target.createTarget") return { targetId: "target-1" };
+        if (method === "Target.attachToTarget")
+          return { sessionId: "session-1" };
+        if (method === "Page.getFrameTree")
+          return { frameTree: { frame: { id: "frame-1" } } };
+        if (method === "Runtime.evaluate") {
+          const expression = String(params?.expression ?? "");
+          return {
+            result: {
+              value: expression.includes("const markerToken =") ? 1 : 0,
+            },
+          };
+        }
+        if (method === "Page.printToPDF") return { stream: "stream-1" };
+        if (method === "IO.read")
+          return {
+            data: Buffer.from(printedPdf).toString("base64"),
+            base64Encoded: true,
+            eof: true,
+          };
+        return {};
+      },
+    );
+
+    const renderPromise = renderPdfWithChrome("<html></html>", {
+      executablePath: "/usr/bin/google-chrome",
+      timeoutMs: 100,
+    });
+    const renderFailure = expect(renderPromise).rejects.toThrow(
+      "Chrome generated 0 of 1 expected PDF task checkbox markers.",
+    );
+    await vi.waitFor(() => expect(chromeMocks.spawn).toHaveBeenCalled());
+    const launchArgs = chromeMocks.spawn.mock.calls[0]?.[1] as string[];
+    const profilePath =
+      launchArgs
+        .find((argument) => argument.startsWith("--user-data-dir="))
+        ?.slice("--user-data-dir=".length) ?? "";
+
+    await renderFailure;
+
+    expect(chromeMocks.cdp.send).toHaveBeenCalledWith(
+      "IO.close",
+      { handle: "stream-1" },
+      "session-1",
+    );
+    expect(chromeMocks.cdp.send).toHaveBeenCalledWith("Target.closeTarget", {
+      targetId: "target-1",
+    });
+    expect(chromeMocks.cdp.close).toHaveBeenCalledOnce();
+    expect(chromeMocks.process.kill).toHaveBeenCalledWith("SIGTERM");
+    expect(existsSync(profilePath)).toBe(false);
   });
 
   it("waits for SIGKILL exit before removing the profile", async () => {

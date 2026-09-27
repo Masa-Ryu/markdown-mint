@@ -10,7 +10,7 @@ import {
   type PDFPage,
 } from "pdf-lib";
 
-const markerPrefix = "https://markdown-mint.invalid/pdf-task-checkbox/";
+const markerNamespace = "https://markdown-mint.invalid/pdf-task-checkbox/";
 const subtypeKey = PDFName.of("Subtype");
 const actionKey = PDFName.of("A");
 const actionTypeKey = PDFName.of("S");
@@ -31,6 +31,11 @@ interface TaskMarker {
   readonly height: number;
 }
 
+export interface InteractiveTaskCheckboxOptions {
+  readonly markerToken: string;
+  readonly expectedCount: number;
+}
+
 function readMarkerUri(
   pdf: PDFDocument,
   annotation: PDFDict,
@@ -47,14 +52,16 @@ function readMarkerUri(
   return { uri: uri.decodeText(), actionObject };
 }
 
-function parseMarkerUri(uri: string): {
+function parseMarkerUri(
+  uri: string,
+  markerTokenPrefix: string,
+): {
   readonly identifier: string;
   readonly checked: boolean;
 } {
-  const match =
-    /^https:\/\/markdown-mint\.invalid\/pdf-task-checkbox\/(0|[1-9]\d*)\?checked=([01])$/.exec(
-      uri,
-    );
+  const match = /^(0|[1-9]\d*)\?checked=([01])$/.exec(
+    uri.slice(markerTokenPrefix.length),
+  );
   if (!match)
     throw new Error("Chrome returned a malformed PDF task checkbox marker.");
   return { identifier: match[1]!, checked: match[2] === "1" };
@@ -94,7 +101,6 @@ function readMarkerRect(annotation: PDFDict): {
 function deleteIndirectMarkerObjects(
   pdf: PDFDocument,
   annotationObject: ReturnType<PDFArray["get"]>,
-  annotation: PDFDict,
   actionObject: ReturnType<PDFDict["get"]>,
 ): void {
   const action = pdf.context.lookupMaybe(actionObject, PDFDict);
@@ -107,7 +113,20 @@ function deleteIndirectMarkerObjects(
 /** Replace Chrome-generated marker links with editable PDF form checkboxes. */
 export async function addInteractiveTaskCheckboxes(
   pdfBytes: Uint8Array,
+  options: InteractiveTaskCheckboxOptions,
 ): Promise<Uint8Array> {
+  const { markerToken, expectedCount } = options;
+  if (!/^[0-9a-f]+$/i.test(markerToken))
+    throw new Error(
+      "PDF task checkbox marker token must contain only hex characters.",
+    );
+  if (!Number.isSafeInteger(expectedCount) || expectedCount < 0)
+    throw new Error(
+      "Expected PDF task checkbox marker count must be a non-negative integer.",
+    );
+  if (expectedCount === 0) return pdfBytes;
+
+  const markerTokenPrefix = `${markerNamespace}${markerToken}/`;
   const pdf = await PDFDocument.load(pdfBytes);
   const markers: TaskMarker[] = [];
   const identifiers = new Set<string>();
@@ -121,8 +140,11 @@ export async function addInteractiveTaskCheckboxes(
       if (annotation?.lookupMaybe(subtypeKey, PDFName)?.asString() !== "/Link")
         continue;
       const markerAction = readMarkerUri(pdf, annotation);
-      if (!markerAction?.uri.startsWith(markerPrefix)) continue;
-      const { identifier, checked } = parseMarkerUri(markerAction.uri);
+      if (!markerAction?.uri.startsWith(markerTokenPrefix)) continue;
+      const { identifier, checked } = parseMarkerUri(
+        markerAction.uri,
+        markerTokenPrefix,
+      );
       if (identifiers.has(identifier))
         throw new Error(
           `Chrome returned duplicate PDF task checkbox marker ${identifier}.`,
@@ -141,7 +163,25 @@ export async function addInteractiveTaskCheckboxes(
     }
   }
 
-  if (markers.length === 0) return pdfBytes;
+  if (markers.length !== expectedCount)
+    throw new Error(
+      `Chrome generated ${markers.length} of ${expectedCount} expected PDF task checkbox markers.`,
+    );
+
+  const expectedIdentifiers = Array.from(
+    { length: expectedCount },
+    (_, index) => String(index),
+  ).sort();
+  const actualIdentifiers = [...identifiers].sort();
+  if (
+    actualIdentifiers.length !== expectedIdentifiers.length ||
+    actualIdentifiers.some(
+      (identifier, index) => identifier !== expectedIdentifiers[index],
+    )
+  )
+    throw new Error(
+      `Chrome returned an unexpected PDF task checkbox marker ID set: expected [${expectedIdentifiers.join(", ")}], received [${actualIdentifiers.join(", ")}].`,
+    );
 
   const removedPerArray = new Map<PDFArray, TaskMarker[]>();
   for (const marker of markers) {
@@ -155,12 +195,7 @@ export async function addInteractiveTaskCheckboxes(
     )) {
       marker.annotationArray.remove(marker.annotationIndex);
       const actionObject = marker.annotationDictionary.get(actionKey);
-      deleteIndirectMarkerObjects(
-        pdf,
-        marker.annotationObject,
-        marker.annotationDictionary,
-        actionObject,
-      );
+      deleteIndirectMarkerObjects(pdf, marker.annotationObject, actionObject);
     }
   }
 

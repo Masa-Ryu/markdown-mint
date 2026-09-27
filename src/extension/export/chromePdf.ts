@@ -1,4 +1,5 @@
 import type { ChildProcess } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -60,8 +61,10 @@ function mermaidReadinessExpression(timeoutMs: number): string {
   })()`;
 }
 
-function preparePdfTaskMarkersExpression(): string {
+function preparePdfTaskMarkersExpression(markerToken: string): string {
+  const serializedMarkerToken = JSON.stringify(markerToken);
   return `(() => {
+    const markerToken = ${serializedMarkerToken};
     const inputs = Array.from(document.querySelectorAll('.markdown-body li.task-list-item > input[type="checkbox"]'));
     let taskMarkerCount = 0;
     for (const input of inputs) {
@@ -70,7 +73,7 @@ function preparePdfTaskMarkersExpression(): string {
       const marker = document.createElement("a");
       const checked = input.checked ? "1" : "0";
       marker.className = "mm-pdf-task-marker";
-      marker.href = "https://markdown-mint.invalid/pdf-task-checkbox/" + taskMarkerCount + "?checked=" + checked;
+      marker.href = "https://markdown-mint.invalid/pdf-task-checkbox/" + markerToken + "/" + taskMarkerCount + "?checked=" + checked;
       marker.setAttribute("aria-hidden", "true");
       marker.style.display = "block";
       marker.style.boxSizing = "border-box";
@@ -375,9 +378,10 @@ export async function renderPdfWithChrome(
       throw new Error(
         `${failedMermaidCount} Mermaid ${failedMermaidCount === 1 ? "diagram" : "diagrams"} could not be rendered for PDF export.`,
       );
+    const markerToken = randomBytes(16).toString("hex");
     const taskMarkerCount = await evaluate<number>(
       client,
-      preparePdfTaskMarkersExpression(),
+      preparePdfTaskMarkersExpression(markerToken),
       sessionId,
     );
     await client.send(
@@ -412,7 +416,10 @@ export async function renderPdfWithChrome(
     else throw new Error("Chrome did not return PDF data.");
     return taskMarkerCount === 0
       ? pdfBytes
-      : await addInteractiveTaskCheckboxes(pdfBytes);
+      : await addInteractiveTaskCheckboxes(pdfBytes, {
+          markerToken,
+          expectedCount: taskMarkerCount,
+        });
   } finally {
     if (client) {
       if (targetId) {

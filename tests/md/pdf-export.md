@@ -22,6 +22,8 @@ This fixture includes Unicode text for print layout: 日本語、Markdown Mint�
 
 [PDF_NORMAL_LINK](https://example.com/)
 
+[RESERVED_LOOKING_NORMAL_LINK](https://markdown-mint.invalid/pdf-task-checkbox/0?checked=0)
+
 ## Table
 
 | Feature     | Expected output   | Status |

@@ -121,13 +121,19 @@ try {
   }
   assert.ok(pdfLinkUris.includes("https://example.com/"));
   assert.ok(
-    pdfLinkUris.every(
-      (uri) => !uri.startsWith("https://markdown-mint.invalid/"),
+    pdfLinkUris.includes(
+      "https://markdown-mint.invalid/pdf-task-checkbox/0?checked=0",
     ),
+    "A user-authored reserved-looking URL must remain a regular PDF link.",
   );
   assert.ok(
-    !pdf.includes(Buffer.from("markdown-mint.invalid")),
-    "Marker URLs must not remain in the interactive PDF.",
+    pdfLinkUris.every(
+      (uri) =>
+        !/^https:\/\/markdown-mint\.invalid\/pdf-task-checkbox\/[0-9a-f]{32}\/\d+\?checked=[01]$/i.test(
+          uri,
+        ),
+    ),
+    "Current export marker URLs must not remain in the interactive PDF.",
   );
   const parsed = await getDocument({ data: new Uint8Array(pdf) }).promise;
   const pageCount = parsed.numPages;

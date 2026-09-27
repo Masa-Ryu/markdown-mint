@@ -1064,6 +1064,37 @@ describe("MarkdownMintEditorProvider", () => {
     provider.dispose();
   });
 
+  it("reports PDF marker integrity failures without writing a partial PDF or changing Markdown", async () => {
+    vi.clearAllMocks();
+    vscode.__state.reset();
+    const provider = new MarkdownMintEditorProvider(context() as never);
+    const document = vscode.__state.document;
+    document.replaceText("# Unsaved PDF task draft");
+    vscode.__state.saveDialogResult = vscode.Uri.file(
+      "/workspace/docs/invalid-markers.pdf",
+    );
+    pdfMocks.renderPdf.mockRejectedValueOnce(
+      new Error("Chrome generated 1 of 2 expected PDF task checkbox markers."),
+    );
+
+    await provider.exportPdf();
+
+    expect(vscode.__state.exportWrites).toHaveLength(0);
+    expect(vscode.__state.userNotifications).toContainEqual({
+      level: "error",
+      message:
+        "Markdown Mint: Chrome generated 1 of 2 expected PDF task checkbox markers.",
+    });
+    expect(document.getText()).toBe("# Unsaved PDF task draft");
+    expect(document.isDirty).toBe(true);
+    expect(
+      vscode.__state.commandCalls.some(
+        ({ command }) => command === "undo" || command === "redo",
+      ),
+    ).toBe(false);
+    provider.dispose();
+  });
+
   it("releases the document queue while PDF rendering uses its captured snapshot", async () => {
     vi.clearAllMocks();
     vscode.__state.reset();

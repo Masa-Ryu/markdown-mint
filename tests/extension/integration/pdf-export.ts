@@ -148,7 +148,7 @@ async function runPdfExportCommandAcceptance(): Promise<void> {
         profile: "gitlab",
         verifyTaskCheckboxes: true,
         markdown:
-          "# Production PDF task checkboxes\n\n- [ ] PDF_TASK_UNCHECKED\n- [x] PDF_TASK_CHECKED\n- [~] PDF_TASK_MIXED_STATIC\n\n[PDF_NORMAL_LINK](https://example.com/)\n",
+          "# Production PDF task checkboxes\n\n- [ ] PDF_TASK_UNCHECKED\n- [x] PDF_TASK_CHECKED\n- [~] PDF_TASK_MIXED_STATIC\n\n[PDF_NORMAL_LINK](https://example.com/)\n\n[RESERVED_LOOKING_NORMAL_LINK](https://markdown-mint.invalid/pdf-task-checkbox/0?checked=0)\n",
       },
     ];
 
@@ -205,10 +205,19 @@ async function runPdfExportCommandAcceptance(): Promise<void> {
           form.getCheckBox("markdownMint.taskCheckbox.1").isChecked(),
           true,
         );
-        assert.ok(pdfLinkUris(parsedPdf).includes("https://example.com/"));
+        const taskPdfLinkUris = pdfLinkUris(parsedPdf);
+        assert.ok(taskPdfLinkUris.includes("https://example.com/"));
         assert.ok(
-          pdfLinkUris(parsedPdf).every(
-            (uri) => !uri.startsWith("https://markdown-mint.invalid/"),
+          taskPdfLinkUris.includes(
+            "https://markdown-mint.invalid/pdf-task-checkbox/0?checked=0",
+          ),
+        );
+        assert.ok(
+          taskPdfLinkUris.every(
+            (uri) =>
+              !/^https:\/\/markdown-mint\.invalid\/pdf-task-checkbox\/[0-9a-f]{32}\/\d+\?checked=[01]$/i.test(
+                uri,
+              ),
           ),
         );
       }
