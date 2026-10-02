@@ -72,6 +72,12 @@ const integrationOptions = {
   legalComments: "none",
 };
 
+const pdfIntegrationOptions = {
+  ...integrationOptions,
+  entryPoints: ["tests/extension/integration/pdf-export.ts"],
+  outfile: "dist/test-pdf-export.js",
+};
+
 const mermaidOptions = {
   entryPoints: ["src/webview/mermaidRuntime.ts"],
   bundle: true,
@@ -129,6 +135,7 @@ if (!extensionOnly) {
       );
     }
     contexts.push(await buildOne(integrationOptions));
+    contexts.push(await buildOne(pdfIntegrationOptions));
   }
 }
 

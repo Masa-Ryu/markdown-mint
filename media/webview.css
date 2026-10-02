@@ -278,6 +278,59 @@ textarea:focus-visible {
   color: var(--mm-control-foreground);
   cursor: pointer;
 }
+.mm-export-menu {
+  position: relative;
+  display: inline-block;
+}
+.mm-export-menu > summary {
+  display: block;
+  list-style: none;
+}
+.mm-export-menu > summary::-webkit-details-marker {
+  display: none;
+}
+.mm-export-menu[open] > summary {
+  background: var(--mm-toolbar-active-background);
+}
+.mm-export-menu-items {
+  position: absolute;
+  z-index: 100;
+  top: calc(100% + 3px);
+  right: 0;
+  display: flex;
+  min-width: 112px;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px;
+  border: 1px solid var(--vscode-panel-border, var(--mm-control-border));
+  border-radius: 4px;
+  background: var(
+    --vscode-editorWidget-background,
+    var(--mm-control-background)
+  );
+  box-shadow: 0 4px 12px rgb(0 0 0 / 24%);
+}
+.mm-export-menu:not([open]) > .mm-export-menu-items {
+  display: none;
+}
+.mm-export-menu-item {
+  min-height: 28px;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: 2px;
+  background: transparent;
+  color: var(--vscode-foreground, var(--mm-control-foreground));
+  cursor: pointer;
+  text-align: left;
+}
+.mm-export-menu-item:hover,
+.mm-export-menu-item:focus-visible {
+  outline: none;
+  background: var(
+    --vscode-list-hoverBackground,
+    var(--mm-toolbar-hover-background)
+  );
+}
 .mm-mode-button.is-active {
   color: var(--vscode-tab-activeForeground, var(--mm-control-foreground));
   background: var(

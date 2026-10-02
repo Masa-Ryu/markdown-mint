@@ -167,6 +167,44 @@ describe("Markdown Mint wire protocol", () => {
     ).toBeUndefined();
   });
 
+  it("validates versioned PDF requests and host commands", () => {
+    expect(
+      parseWebviewMessage({
+        protocolVersion: PROTOCOL_VERSION,
+        type: "export-pdf",
+        baseVersion: 5,
+        operationId: "export-pdf:5:abc",
+      }),
+    ).toEqual({
+      protocolVersion: PROTOCOL_VERSION,
+      type: "export-pdf",
+      baseVersion: 5,
+      operationId: "export-pdf:5:abc",
+    });
+    expect(
+      parseWebviewMessage({
+        protocolVersion: PROTOCOL_VERSION,
+        type: "export-pdf",
+        baseVersion: 0,
+        operationId: "export-pdf:invalid",
+      }),
+    ).toBeUndefined();
+    expect(
+      isHostMessage({
+        protocolVersion: PROTOCOL_VERSION,
+        type: "export-pdf-command",
+        operationId: "export-pdf-command:abc",
+      }),
+    ).toBe(true);
+    expect(
+      isHostMessage({
+        protocolVersion: PROTOCOL_VERSION,
+        type: "export-pdf-command",
+        operationId: "invalid command id",
+      }),
+    ).toBe(false);
+  });
+
   it("accepts bounded user notifications without making them document state", () => {
     expect(
       parseWebviewMessage({

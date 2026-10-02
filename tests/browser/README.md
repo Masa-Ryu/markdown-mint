@@ -80,6 +80,21 @@ light Mermaid palette, CSP-authorized Mermaid SVG rendering, local and data
 images, GitLab mixed task state, and the absence of console, page, or CSP
 errors. Temporary files are removed after the run.
 
+## Standalone PDF export smoke suite
+
+Run the A4 PDF fixture through the same `createExportHtml()` and
+`renderPdf()` functions used by the extension:
+
+```sh
+npm run test:browser:pdf-export
+```
+
+The suite uses the Chromium version pinned by the Playwright lockfile, renders
+`tests/md/pdf-export.md` through the direct Chrome DevTools Protocol backend, and checks the PDF header, output
+size, and multi-page pagination. The fixture includes a local image, long table
+and code block, KaTeX, Mermaid, GitHub Alert, footnote, Japanese, and emoji.
+Temporary browser output is removed after the run.
+
 Open `http://127.0.0.1:4173/native.html?fixture=mermaid` to run the same
 Mermaid flowchart and sequence placeholders through the native preview script.
 Its `window.__markdownMintNative.metrics().mermaid` result reports node anchors,

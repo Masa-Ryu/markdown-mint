@@ -6,9 +6,9 @@ Read the [release guide](./release.md) before publishing.
 
 ## Checklist
 
-* [x] Build
-* [ ] Test
-* [ ] Release
+- [x] Build
+- [ ] Test
+- [ ] Release
 
 ## Status
 

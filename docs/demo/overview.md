@@ -4,7 +4,7 @@
 
 Markdown Mint is a visual Markdown editor for VS Code.
 
-Write **bold text**, *emphasize an idea*, ~~remove what you no longer need~~, add `inline code`, create [links](https://example.com), and keep everything as ordinary Markdown.
+Write **bold text**, _emphasize an idea_, ~~remove what you no longer need~~, add `inline code`, create [links](https://example.com), and keep everything as ordinary Markdown.
 
 > [!TIP]
 > Markdown Mint lets you work with the document itself instead of constantly editing Markdown syntax.
@@ -31,11 +31,11 @@ And nested content stays readable:
 
 Instead of carefully editing pipes and spaces, work directly with cells.
 
-| Feature | Status | Owner |
-| :--- | :---: | ---: |
-| Visual editing | ✅ Ready | Alice |
-| Table controls | 🚧 Review | Sam |
-| GitHub profile | ✅ Ready | Morgan |
+| Feature        |  Status   |  Owner |
+| :------------- | :-------: | -----: |
+| Visual editing | ✅ Ready  |  Alice |
+| Table controls | 🚧 Review |    Sam |
+| GitHub profile | ✅ Ready  | Morgan |
 
 Select several cells with the mouse, copy them, click another cell, and paste the whole rectangular range.
 
@@ -45,11 +45,11 @@ Rows and columns can be added, removed, aligned, and edited without manually reb
 
 Markdown Mint can adapt the editing experience to where the document will be used.
 
-| Profile | Typical use |
-| --- | --- |
-| **GitHub** | GFM tables, task lists, Alerts, Mermaid, math |
-| **GitLab** | GitLab Markdown plus TOC, description lists, and diff text |
-| **CommonMark** | Portable Markdown with fewer platform-specific extensions |
+| Profile        | Typical use                                                |
+| -------------- | ---------------------------------------------------------- |
+| **GitHub**     | GFM tables, task lists, Alerts, Mermaid, math              |
+| **GitLab**     | GitLab Markdown plus TOC, description lists, and diff text |
+| **CommonMark** | Portable Markdown with fewer platform-specific extensions  |
 
 The Markdown file remains the same kind of `.md` file you already use.
 

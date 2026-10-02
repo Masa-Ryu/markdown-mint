@@ -19,6 +19,7 @@ import {
   PROTOCOL_VERSION,
   type DocumentMessage,
   type ExportHtmlMessage,
+  type ExportPdfMessage,
   type EditRejectedMessage,
   type ErrorMessage,
   type ClipboardResultMessage,
@@ -44,6 +45,11 @@ import {
   parseWebviewMessage,
 } from "../shared/protocol";
 import { createExportHtml } from "./export/htmlExport";
+import {
+  PdfBrowserExecutableNotFoundError,
+  resolvePdfBrowserExecutable,
+} from "./export/browserDiscovery";
+import { renderPdf } from "./export/pdfExport";
 import { classifyLinkNavigation } from "./linkNavigation";
 import { WorkspaceFileSearchHost } from "./workspaceFileSearch";
 
@@ -125,6 +131,13 @@ interface ResourceInfo {
   readonly baseUrl?: string;
 }
 
+interface PdfExportSnapshot {
+  readonly markdown: string;
+  readonly profile: MarkdownProfile;
+  readonly documentUri: vscode.Uri;
+  readonly version: number;
+}
+
 interface CoreParseResult {
   readonly diagnostics?: readonly unknown[];
   readonly errors?: readonly unknown[];
@@ -192,6 +205,10 @@ export function activate(context: vscode.ExtensionContext): MarkdownMintApi {
     vscode.commands.registerCommand(
       "markdownMint.exportHtml",
       (uri?: vscode.Uri) => provider.exportHtml(uri),
+    ),
+    vscode.commands.registerCommand(
+      "markdownMint.exportPdf",
+      (uri?: vscode.Uri) => provider.exportPdf(uri),
     ),
     vscode.commands.registerCommand(
       OPEN_IN_MARKDOWN_MINT_COMMAND,
@@ -295,6 +312,7 @@ export class MarkdownMintEditorProvider
   private readonly subscriptions: vscode.Disposable[] = [];
   private readonly output: vscode.OutputChannel;
   private readonly workspaceFileSearch = new WorkspaceFileSearchHost();
+  private pdfExportQueue: Promise<void> = Promise.resolve();
   private lastDocumentUri: vscode.Uri | undefined;
 
   public constructor(private readonly context: vscode.ExtensionContext) {
@@ -453,6 +471,44 @@ export class MarkdownMintEditorProvider
     } catch (error) {
       void vscode.window.showErrorMessage(
         `Markdown Mint: ${errorMessage(error, "HTML export failed.")}`,
+      );
+    }
+  }
+
+  public async exportPdf(uri?: vscode.Uri): Promise<void> {
+    const document = await this.resolveTargetDocument(uri);
+    if (!document) {
+      void vscode.window.showInformationMessage(
+        "Open a Markdown document before exporting PDF.",
+      );
+      return;
+    }
+    this.lastDocumentUri = document.uri;
+    const existingState = this.states.get(documentKey(document.uri));
+    const activeSession = existingState
+      ? Array.from(existingState.panels).find(
+          (session) => session.ready && session.panel.active,
+        )
+      : undefined;
+    if (activeSession) {
+      this.post(activeSession, {
+        protocolVersion: PROTOCOL_VERSION,
+        type: "export-pdf-command",
+        operationId: createOperationId("export-pdf"),
+      });
+      return;
+    }
+
+    const state = existingState ?? this.getOrCreateState(document);
+    try {
+      const snapshot = await this.enqueue(state, async () => {
+        const current = await this.currentDocument(state);
+        return this.pdfExportSnapshot(current, state.profile);
+      });
+      await this.enqueuePdfExport(snapshot);
+    } catch (error) {
+      void vscode.window.showErrorMessage(
+        `Markdown Mint: ${errorMessage(error, "PDF export failed.")}`,
       );
     }
   }
@@ -800,6 +856,7 @@ export class MarkdownMintEditorProvider
       message.type !== "ready" &&
       message.type !== "preview" &&
       message.type !== "export-html" &&
+      message.type !== "export-pdf" &&
       message.type !== "clipboard-write" &&
       message.type !== "notify"
     ) {
@@ -893,6 +950,14 @@ export class MarkdownMintEditorProvider
           await this.enqueue(session.state, () =>
             this.handleHtmlExport(session, message),
           );
+          return;
+        case "export-pdf":
+          {
+            const snapshot = await this.enqueue(session.state, () =>
+              this.handlePdfExport(session, message),
+            );
+            if (snapshot) await this.enqueuePdfExport(snapshot);
+          }
           return;
         case "set-profile":
           await this.enqueue(session.state, () =>
@@ -989,6 +1054,7 @@ export class MarkdownMintEditorProvider
         }
         return;
       case "export-html":
+      case "export-pdf":
         this.notifyUser({
           protocolVersion: PROTOCOL_VERSION,
           type: "notify",
@@ -1582,6 +1648,46 @@ export class MarkdownMintEditorProvider
     await this.writeHtmlExport(document, session.state.profile);
   }
 
+  private async handlePdfExport(
+    session: PanelSession,
+    message: ExportPdfMessage,
+  ): Promise<PdfExportSnapshot | undefined> {
+    const document = await this.currentDocument(session.state);
+    if (document.version !== message.baseVersion) {
+      const failure =
+        "The Markdown document changed before PDF export started. Try exporting again after it syncs.";
+      void vscode.window.showErrorMessage(`Markdown Mint: ${failure}`);
+      this.post(session, this.errorMessage(failure, message.operationId));
+      this.sendDocumentIfVisible(session, "external");
+      return undefined;
+    }
+    return this.pdfExportSnapshot(document, session.state.profile);
+  }
+
+  private pdfExportSnapshot(
+    document: vscode.TextDocument,
+    profile: MarkdownProfile,
+  ): PdfExportSnapshot {
+    return Object.freeze({
+      markdown: document.getText(),
+      profile,
+      documentUri: document.uri,
+      version: document.version,
+    });
+  }
+
+  private enqueuePdfExport(snapshot: PdfExportSnapshot): Promise<void> {
+    const job = this.pdfExportQueue.then(
+      () => this.writePdfExport(snapshot),
+      () => this.writePdfExport(snapshot),
+    );
+    this.pdfExportQueue = job.then(
+      () => undefined,
+      () => undefined,
+    );
+    return job;
+  }
+
   private async writeHtmlExport(
     document: vscode.TextDocument,
     profile: MarkdownProfile,
@@ -1625,6 +1731,73 @@ export class MarkdownMintEditorProvider
       void vscode.window.showErrorMessage(
         `Markdown Mint: ${errorMessage(error, "HTML export failed.")}`,
       );
+    }
+  }
+
+  private async writePdfExport(snapshot: PdfExportSnapshot): Promise<void> {
+    const sourcePath = snapshot.documentUri.fsPath || snapshot.documentUri.path;
+    const sourceName = path.basename(sourcePath || "document.md");
+    const title =
+      path.basename(sourceName, path.extname(sourceName)) || "document";
+    const defaultUri =
+      snapshot.documentUri.scheme === "file" && snapshot.documentUri.fsPath
+        ? vscode.Uri.file(
+            path.join(
+              path.dirname(snapshot.documentUri.fsPath),
+              `${title}.pdf`,
+            ),
+          )
+        : vscode.Uri.file(`${title}.pdf`);
+
+    try {
+      const destination = await vscode.window.showSaveDialog({
+        defaultUri,
+        filters: { PDF: ["pdf"] },
+      });
+      if (!destination) return;
+      const html = await createExportHtml({
+        markdown: snapshot.markdown,
+        profile: snapshot.profile,
+        documentUri: snapshot.documentUri,
+        title,
+        extensionUri: this.context.extensionUri,
+      });
+      const executablePath = await this.pdfChromiumExecutablePath();
+      if (!executablePath) return;
+      const contents = await renderPdf(html, { executablePath });
+      await vscode.workspace.fs.writeFile(destination, contents);
+      const savedName = path.basename(destination.fsPath || destination.path);
+      void vscode.window.showInformationMessage(
+        `Markdown Mint: Exported ${savedName}.`,
+      );
+    } catch (error) {
+      void vscode.window.showErrorMessage(
+        `Markdown Mint: ${errorMessage(error, "PDF export failed.")}`,
+      );
+    }
+  }
+
+  private async pdfChromiumExecutablePath(): Promise<string | undefined> {
+    const configuredPath = vscode.workspace
+      .getConfiguration("markdownMint.export.pdf")
+      .get<string>("chromiumExecutablePath", "");
+    try {
+      return await resolvePdfBrowserExecutable({
+        configuredPath,
+      });
+    } catch (error) {
+      if (!(error instanceof PdfBrowserExecutableNotFoundError)) throw error;
+      const choice = await vscode.window.showErrorMessage(
+        error.message,
+        { modal: true },
+        "Get Chrome",
+        "Cancel",
+      );
+      if (choice === "Get Chrome")
+        await vscode.env.openExternal(
+          vscode.Uri.parse("https://www.google.com/chrome/"),
+        );
+      return undefined;
     }
   }
 

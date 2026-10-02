@@ -2554,6 +2554,7 @@ export class MarkdownEditorApp {
     | "source"
     | "save"
     | "export-html"
+    | "export-pdf"
     | null = null;
   private initialized: boolean;
   private previewOnly = false;
@@ -3003,12 +3004,10 @@ export class MarkdownEditorApp {
     const primaryToolbar = toolbar.querySelector<HTMLElement>(
       ".mm-toolbar-primary",
     );
-    const exportButton = primaryToolbar?.querySelector(
-      ".mm-export-html-button",
-    );
+    const exportMenu = primaryToolbar?.querySelector(".mm-export-menu");
     const sourceButton = primaryToolbar?.querySelector(".mm-source-button");
-    if (exportButton)
-      primaryToolbar?.insertBefore(this.compatibilityEl, exportButton);
+    if (exportMenu)
+      primaryToolbar?.insertBefore(this.compatibilityEl, exportMenu);
     else if (sourceButton)
       primaryToolbar?.insertBefore(this.compatibilityEl, sourceButton);
     else primaryToolbar?.append(this.compatibilityEl);
@@ -5142,18 +5141,62 @@ export class MarkdownEditorApp {
       event.preventDefault(),
     );
     sourceButton.addEventListener("click", () => this.requestSource());
-    const exportHtmlButton = makeElement("button", {
-      type: "button",
+    const exportMenu = makeElement("details", {
+      class: "mm-export-menu",
+      "data-testid": "toolbar-export-menu",
+    }) as HTMLDetailsElement;
+    const exportMenuButton = makeElement("summary", {
       class: "mm-mode-button mm-export-html-button",
+      "aria-label": "Export",
+      "data-tooltip": "Export",
+      "data-testid": "toolbar-export",
+    });
+    exportMenuButton.textContent = "Export";
+    const htmlExportButton = makeElement("button", {
+      type: "button",
+      class: "mm-export-menu-item",
       "aria-label": "Export as HTML",
-      "data-tooltip": "Export as HTML",
       "data-testid": "toolbar-export-html",
     }) as HTMLButtonElement;
-    exportHtmlButton.textContent = "Export";
-    exportHtmlButton.addEventListener("mousedown", (event) =>
+    htmlExportButton.textContent = "HTML";
+    const pdfExportButton = makeElement("button", {
+      type: "button",
+      class: "mm-export-menu-item",
+      "aria-label": "Export as PDF",
+      "data-testid": "toolbar-export-pdf",
+    }) as HTMLButtonElement;
+    pdfExportButton.textContent = "PDF";
+    const exportMenuItems = makeElement("div", {
+      class: "mm-export-menu-items",
+      "aria-label": "Export formats",
+    });
+    exportMenuItems.append(htmlExportButton, pdfExportButton);
+    exportMenu.append(exportMenuButton, exportMenuItems);
+    exportMenuButton.addEventListener("mousedown", (event) =>
       event.preventDefault(),
     );
-    exportHtmlButton.addEventListener("click", () => this.requestHtmlExport());
+    for (const item of [htmlExportButton, pdfExportButton])
+      item.addEventListener("mousedown", (event) => event.preventDefault());
+    htmlExportButton.addEventListener("click", () => {
+      exportMenu.open = false;
+      exportMenuButton.focus({ preventScroll: true });
+      this.requestHtmlExport();
+    });
+    pdfExportButton.addEventListener("click", () => {
+      exportMenu.open = false;
+      exportMenuButton.focus({ preventScroll: true });
+      this.requestPdfExport();
+    });
+    exportMenu.addEventListener("keydown", (event) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopPropagation();
+      exportMenu.open = false;
+      exportMenuButton.focus({ preventScroll: true });
+    });
+    this.root.addEventListener("click", (event) => {
+      if (!exportMenu.contains(event.target as Node)) exportMenu.open = false;
+    });
     const separator = (parent: HTMLElement = primary): void =>
       parent.append(
         makeElement("span", {
@@ -5602,7 +5645,7 @@ export class MarkdownEditorApp {
     this.profileToolbar = this.buildProfileToolbar();
     toolbar.append(this.profileToolbar);
     this.buildProfileFeatureDialog(toolbar);
-    primary.append(exportHtmlButton);
+    primary.append(exportMenu);
     primary.append(sourceButton);
     return toolbar;
   }
@@ -10622,6 +10665,33 @@ export class MarkdownEditorApp {
     this.setNotice("Exporting HTML…");
   }
 
+  private requestPdfExport(): void {
+    if (!this.initialized) return;
+    if (this.syncPaused) {
+      this.notifyHost(
+        "error",
+        "Resolve the document conflict before exporting.",
+      );
+      return;
+    }
+    if (!this.vscode) {
+      this.setNotice("PDF export is available in VS Code.", "error");
+      return;
+    }
+    if (this.composing || this.hasPendingHostSync()) {
+      this.deferredHostCommand = "export-pdf";
+      this.setNotice("Waiting to export until the latest edit is synced.");
+      return;
+    }
+    this.vscode.postMessage({
+      protocolVersion: PROTOCOL_VERSION,
+      type: "export-pdf",
+      baseVersion: this.version,
+      operationId: newOperationId(),
+    });
+    this.setNotice("Exporting PDF…");
+  }
+
   private requestProfileChange(profile: DocumentProfile): void {
     if (
       profile !== "github" &&
@@ -10777,6 +10847,14 @@ export class MarkdownEditorApp {
         operationId,
       });
       this.setNotice("Exporting HTML…");
+    } else if (command === "export-pdf") {
+      this.vscode?.postMessage({
+        protocolVersion: PROTOCOL_VERSION,
+        type: "export-pdf",
+        baseVersion: this.version,
+        operationId,
+      });
+      this.setNotice("Exporting PDF…");
     } else if (command === "source") {
       if (this.vscode) {
         this.vscode.postMessage({
@@ -10814,6 +10892,8 @@ export class MarkdownEditorApp {
       this.receivePreview(message);
     } else if (message.type === "export-html-command") {
       this.requestHtmlExport();
+    } else if (message.type === "export-pdf-command") {
+      this.requestPdfExport();
     } else if (message.type === "edit-rejected") {
       if (message.operationId === this.pendingRecoveryOperationId) {
         this.pendingRecoveryOperationId = undefined;
