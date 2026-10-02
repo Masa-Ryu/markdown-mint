@@ -238,6 +238,18 @@ const vscode = vi.hoisted(() => {
     public active = true;
     public viewColumn = 2;
     private disposeListener: Listener | undefined;
+    private readonly viewStateListeners: Array<() => void> = [];
+    public onDidChangeViewState(listener: () => void): Disposable {
+      this.viewStateListeners.push(listener);
+      return new Disposable(() => {
+        const index = this.viewStateListeners.indexOf(listener);
+        if (index >= 0) this.viewStateListeners.splice(index, 1);
+      });
+    }
+    public setActive(active: boolean): void {
+      this.active = active;
+      for (const listener of this.viewStateListeners) listener();
+    }
     public onDidDispose(listener: Listener): Disposable {
       this.disposeListener = listener;
       return new Disposable(() => {
@@ -291,6 +303,9 @@ const vscode = vi.hoisted(() => {
   let openTextDocumentError: Error | undefined;
   const panel = new WebviewPanel();
   const outputLines: string[] = [];
+  let saveDialogResult: Uri | undefined;
+  const saveDialogCalls: unknown[] = [];
+  const exportWrites: Array<{ uri: Uri; contents: Uint8Array }> = [];
   const userNotifications: Array<{
     level: "info" | "warning" | "error";
     message: string;
@@ -352,6 +367,10 @@ const vscode = vi.hoisted(() => {
       userNotifications.push({ level: "error", message });
       return undefined;
     },
+    async showSaveDialog(options: unknown): Promise<Uri | undefined> {
+      saveDialogCalls.push(options);
+      return saveDialogResult;
+    },
     createOutputChannel(name: string): {
       name: string;
       appendLine(value: string): void;
@@ -382,8 +401,23 @@ const vscode = vi.hoisted(() => {
   const workspace = {
     isTrusted: true,
     fs: {
-      async readFile(): Promise<Uint8Array> {
+      async readFile(uri: Uri): Promise<Uint8Array> {
+        if (uri.fsPath === "/extension/media/document.css")
+          return new TextEncoder().encode(".markdown-body { color: #1f2328; }");
+        if (uri.fsPath === "/extension/media/export.css")
+          return new TextEncoder().encode(":root { color-scheme: light; }");
+        if (uri.fsPath === "/extension/dist/katex/katex.css")
+          return new TextEncoder().encode(
+            "@font-face{src:url(fonts/KaTeX_Main-Regular.woff2);}",
+          );
+        if (
+          uri.fsPath === "/extension/dist/katex/fonts/KaTeX_Main-Regular.woff2"
+        )
+          return new TextEncoder().encode("font-data");
         throw new Error("test file does not exist");
+      },
+      async writeFile(uri: Uri, contents: Uint8Array): Promise<void> {
+        exportWrites.push({ uri, contents });
       },
       async stat(uri: Uri): Promise<unknown> {
         if (!existingFiles.has(uri.fsPath))
@@ -682,6 +716,9 @@ const vscode = vi.hoisted(() => {
     applyEditMode = "success";
     openTextDocumentError = undefined;
     openExternalCalls.length = 0;
+    saveDialogCalls.length = 0;
+    exportWrites.length = 0;
+    saveDialogResult = undefined;
     findFilesCalls.length = 0;
     openExternalResult = true;
     openExternalError = undefined;
@@ -723,6 +760,8 @@ const vscode = vi.hoisted(() => {
       reset,
       workspaceState,
       outputLines,
+      saveDialogCalls,
+      exportWrites,
       userNotifications,
       configurationUpdates,
       commandCalls,
@@ -790,6 +829,9 @@ const vscode = vi.hoisted(() => {
       set openTextDocumentError(value: Error | undefined) {
         openTextDocumentError = value;
       },
+      set saveDialogResult(value: Uri | undefined) {
+        saveDialogResult = value;
+      },
     },
   };
 });
@@ -854,6 +896,126 @@ describe("MarkdownMintEditorProvider", () => {
     expect(vscode.__state.panel.webview.html).toMatch(
       /<script[^>]+dist\/webview\.js/,
     );
+    provider.dispose();
+  });
+
+  it("does not write a file when the HTML export dialog is cancelled", async () => {
+    vscode.__state.reset();
+    const provider = new MarkdownMintEditorProvider(context() as never);
+    const document = vscode.__state.document;
+    document.replaceText("# Unsaved draft");
+
+    await provider.exportHtml();
+
+    expect(vscode.__state.saveDialogCalls).toHaveLength(1);
+    expect(vscode.__state.saveDialogCalls[0]).toMatchObject({
+      defaultUri: expect.objectContaining({
+        fsPath: "/workspace/docs/manual.html",
+      }),
+      filters: { HTML: ["html"] },
+    });
+    expect(vscode.__state.exportWrites).toHaveLength(0);
+    expect(document.getText()).toBe("# Unsaved draft");
+    expect(document.isDirty).toBe(true);
+    provider.dispose();
+  });
+
+  it("exports the current unsaved TextDocument snapshot to the selected URI", async () => {
+    vscode.__state.reset();
+    const provider = new MarkdownMintEditorProvider(context() as never);
+    const document = vscode.__state.document;
+    document.replaceText("# Current unsaved version");
+    vscode.__state.saveDialogResult = vscode.Uri.file(
+      "/workspace/docs/custom.html",
+    );
+
+    await provider.exportHtml();
+
+    expect(vscode.__state.exportWrites).toHaveLength(1);
+    expect(vscode.__state.exportWrites[0]?.uri.fsPath).toBe(
+      "/workspace/docs/custom.html",
+    );
+    const html = new TextDecoder().decode(
+      vscode.__state.exportWrites[0]?.contents,
+    );
+    expect(html).toContain("Current unsaved version");
+    expect(html).not.toContain("Original");
+    expect(document.getText()).toBe("# Current unsaved version");
+    expect(document.isDirty).toBe(true);
+    provider.dispose();
+  });
+
+  it("routes Command Palette export through the active webview", async () => {
+    vscode.__state.reset();
+    const provider = new MarkdownMintEditorProvider(context() as never);
+    const document = vscode.__state.document;
+    await provider.resolveCustomTextEditor(
+      document as never,
+      vscode.__state.panel as never,
+      {} as never,
+    );
+    vscode.__state.panel.webview.receive({ protocolVersion: 1, type: "ready" });
+    await flush();
+
+    await provider.exportHtml();
+
+    expect(vscode.__state.panel.webview.messages).toContainEqual(
+      expect.objectContaining({
+        type: "export-html-command",
+        operationId: expect.any(String),
+      }),
+    );
+    expect(vscode.__state.saveDialogCalls).toHaveLength(0);
+    provider.dispose();
+  });
+
+  it("routes Command Palette export to the active Mint document after tab switches", async () => {
+    vscode.__state.reset();
+    const provider = new MarkdownMintEditorProvider(context() as never);
+    const documentA = vscode.__state.createDocument(
+      "/workspace/docs/A.md",
+      "# A",
+    );
+    const documentB = vscode.__state.createDocument(
+      "/workspace/docs/B.md",
+      "# B",
+    );
+    const panelA = new vscode.WebviewPanel();
+    await provider.resolveCustomTextEditor(
+      documentA as never,
+      panelA as never,
+      {} as never,
+    );
+    panelA.webview.receive({ protocolVersion: 1, type: "ready" });
+    await flush();
+    panelA.setActive(false);
+
+    const panelB = new vscode.WebviewPanel();
+    await provider.resolveCustomTextEditor(
+      documentB as never,
+      panelB as never,
+      {} as never,
+    );
+    panelB.webview.receive({ protocolVersion: 1, type: "ready" });
+    await flush();
+    panelB.setActive(false);
+    panelA.setActive(true);
+
+    await provider.exportHtml();
+
+    expect(panelA.webview.messages).toContainEqual(
+      expect.objectContaining({
+        type: "export-html-command",
+        operationId: expect.any(String),
+      }),
+    );
+    expect(
+      panelB.webview.messages.filter(
+        (message) =>
+          (message as { type?: string }).type === "export-html-command",
+      ),
+    ).toHaveLength(0);
+    expect(vscode.__state.saveDialogCalls).toHaveLength(0);
     provider.dispose();
   });
 

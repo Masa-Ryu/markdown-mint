@@ -55,6 +55,20 @@ describe("Markdown Mint wire protocol", () => {
         markdown: "x".repeat(2_000_001),
       }),
     ).toBeUndefined();
+    expect(
+      isHostMessage({
+        protocolVersion: PROTOCOL_VERSION,
+        type: "export-html-command",
+        operationId: "export-command:abc",
+      }),
+    ).toBe(true);
+    expect(
+      isHostMessage({
+        protocolVersion: PROTOCOL_VERSION,
+        type: "export-html-command",
+        operationId: "invalid command id",
+      }),
+    ).toBe(false);
   });
 
   it("distinguishes an acknowledgement from a stale recovery snapshot", () => {
@@ -125,6 +139,30 @@ describe("Markdown Mint wire protocol", () => {
         type: "save",
         baseVersion: 0,
         operationId: "save:bad",
+      }),
+    ).toBeUndefined();
+  });
+
+  it("validates a versioned HTML export request", () => {
+    expect(
+      parseWebviewMessage({
+        protocolVersion: PROTOCOL_VERSION,
+        type: "export-html",
+        baseVersion: 5,
+        operationId: "export:5:abc",
+      }),
+    ).toEqual({
+      protocolVersion: PROTOCOL_VERSION,
+      type: "export-html",
+      baseVersion: 5,
+      operationId: "export:5:abc",
+    });
+    expect(
+      parseWebviewMessage({
+        protocolVersion: PROTOCOL_VERSION,
+        type: "export-html",
+        baseVersion: 0,
+        operationId: "export:invalid",
       }),
     ).toBeUndefined();
   });

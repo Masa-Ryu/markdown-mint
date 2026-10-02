@@ -2547,7 +2547,14 @@ export class MarkdownEditorApp {
   private parseError: string | null = null;
   private preservedSource: string | null = null;
   private deferredHostCommand:
-    "undo" | "redo" | "format" | "preview" | "source" | "save" | null = null;
+    | "undo"
+    | "redo"
+    | "format"
+    | "preview"
+    | "source"
+    | "save"
+    | "export-html"
+    | null = null;
   private initialized: boolean;
   private previewOnly = false;
   private syncPaused = false;
@@ -2996,8 +3003,13 @@ export class MarkdownEditorApp {
     const primaryToolbar = toolbar.querySelector<HTMLElement>(
       ".mm-toolbar-primary",
     );
+    const exportButton = primaryToolbar?.querySelector(
+      ".mm-export-html-button",
+    );
     const sourceButton = primaryToolbar?.querySelector(".mm-source-button");
-    if (sourceButton)
+    if (exportButton)
+      primaryToolbar?.insertBefore(this.compatibilityEl, exportButton);
+    else if (sourceButton)
       primaryToolbar?.insertBefore(this.compatibilityEl, sourceButton);
     else primaryToolbar?.append(this.compatibilityEl);
     this.tooltip = makeElement("div", {
@@ -5130,6 +5142,18 @@ export class MarkdownEditorApp {
       event.preventDefault(),
     );
     sourceButton.addEventListener("click", () => this.requestSource());
+    const exportHtmlButton = makeElement("button", {
+      type: "button",
+      class: "mm-mode-button mm-export-html-button",
+      "aria-label": "Export as HTML",
+      "data-tooltip": "Export as HTML",
+      "data-testid": "toolbar-export-html",
+    }) as HTMLButtonElement;
+    exportHtmlButton.textContent = "Export";
+    exportHtmlButton.addEventListener("mousedown", (event) =>
+      event.preventDefault(),
+    );
+    exportHtmlButton.addEventListener("click", () => this.requestHtmlExport());
     const separator = (parent: HTMLElement = primary): void =>
       parent.append(
         makeElement("span", {
@@ -5578,6 +5602,7 @@ export class MarkdownEditorApp {
     this.profileToolbar = this.buildProfileToolbar();
     toolbar.append(this.profileToolbar);
     this.buildProfileFeatureDialog(toolbar);
+    primary.append(exportHtmlButton);
     primary.append(sourceButton);
     return toolbar;
   }
@@ -10570,6 +10595,33 @@ export class MarkdownEditorApp {
     this.setNotice("Opening source…");
   }
 
+  private requestHtmlExport(): void {
+    if (!this.initialized) return;
+    if (this.syncPaused) {
+      this.notifyHost(
+        "error",
+        "Resolve the document conflict before exporting.",
+      );
+      return;
+    }
+    if (!this.vscode) {
+      this.setNotice("HTML export is available in VS Code.", "error");
+      return;
+    }
+    if (this.composing || this.hasPendingHostSync()) {
+      this.deferredHostCommand = "export-html";
+      this.setNotice("Waiting to export until the latest edit is synced.");
+      return;
+    }
+    this.vscode.postMessage({
+      protocolVersion: PROTOCOL_VERSION,
+      type: "export-html",
+      baseVersion: this.version,
+      operationId: newOperationId(),
+    });
+    this.setNotice("Exporting HTML…");
+  }
+
   private requestProfileChange(profile: DocumentProfile): void {
     if (
       profile !== "github" &&
@@ -10717,7 +10769,15 @@ export class MarkdownEditorApp {
       return;
     }
     const operationId = newOperationId();
-    if (command === "source") {
+    if (command === "export-html") {
+      this.vscode?.postMessage({
+        protocolVersion: PROTOCOL_VERSION,
+        type: "export-html",
+        baseVersion: this.version,
+        operationId,
+      });
+      this.setNotice("Exporting HTML…");
+    } else if (command === "source") {
       if (this.vscode) {
         this.vscode.postMessage({
           protocolVersion: PROTOCOL_VERSION,
@@ -10752,6 +10812,8 @@ export class MarkdownEditorApp {
     } else if (message.type === "preview") {
       this.clipboardAvailable = message.clipboardAvailable === true;
       this.receivePreview(message);
+    } else if (message.type === "export-html-command") {
+      this.requestHtmlExport();
     } else if (message.type === "edit-rejected") {
       if (message.operationId === this.pendingRecoveryOperationId) {
         this.pendingRecoveryOperationId = undefined;

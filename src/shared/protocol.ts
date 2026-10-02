@@ -119,6 +119,12 @@ export interface ErrorMessage {
   readonly operationId?: string;
 }
 
+export interface ExportHtmlCommandMessage {
+  readonly protocolVersion: typeof PROTOCOL_VERSION;
+  readonly type: "export-html-command";
+  readonly operationId: string;
+}
+
 export interface ClipboardWriteMessage {
   readonly protocolVersion: typeof PROTOCOL_VERSION;
   readonly type: "clipboard-write";
@@ -251,6 +257,14 @@ export interface SaveMessage {
   readonly operationId: string;
 }
 
+export interface ExportHtmlMessage {
+  readonly protocolVersion: typeof PROTOCOL_VERSION;
+  readonly type: "export-html";
+  /** The TextDocument version the webview has observed after its edits. */
+  readonly baseVersion: number;
+  readonly operationId: string;
+}
+
 export interface SaveResultMessage {
   readonly protocolVersion: typeof PROTOCOL_VERSION;
   readonly type: "save-result";
@@ -297,6 +311,7 @@ export type WebviewMessage =
   | SetProfileMessage
   | FormatMessage
   | SaveMessage
+  | ExportHtmlMessage
   | PreviewRequestMessage
   | RecoverDraftMessage
   | ClipboardWriteMessage
@@ -314,6 +329,7 @@ export type HostMessage =
   | FormatRejectedMessage
   | SaveResultMessage
   | RecoveryOpenedMessage
+  | ExportHtmlCommandMessage
   | ClipboardResultMessage
   | WorkspaceFileSearchResultMessage
   | ImageImportResultMessage
@@ -458,6 +474,8 @@ export function isHostMessage(value: unknown): value is HostMessage {
       typeof value.message === "string" && optionalString(value.operationId)
     );
   }
+  if (value.type === "export-html-command")
+    return isOperationId(value.operationId);
   return false;
 }
 
@@ -557,6 +575,15 @@ export function parseWebviewMessage(
         ? {
             protocolVersion: PROTOCOL_VERSION,
             type: "save",
+            baseVersion: value.baseVersion,
+            operationId: value.operationId,
+          }
+        : undefined;
+    case "export-html":
+      return isVersion(value.baseVersion) && isOperationId(value.operationId)
+        ? {
+            protocolVersion: PROTOCOL_VERSION,
+            type: "export-html",
             baseVersion: value.baseVersion,
             operationId: value.operationId,
           }

@@ -2,7 +2,7 @@
   "name": "markdown-mint",
   "displayName": "Markdown Mint — Visual Markdown Editor",
   "description": "A visual WYSIWYG Markdown editor for VS Code with powerful table editing, GitHub/GitLab Markdown, Mermaid, math, and source editing.",
-  "version": "0.5.7",
+  "version": "0.6.0",
   "publisher": "masa-ryu",
   "icon": "assets/icon/icon.png",
   "license": "MIT",
@@ -53,6 +53,7 @@
     "onCommand:markdownMint.openPreview",
     "onCommand:markdownMint.openSource",
     "onCommand:markdownMint.formatDocument",
+    "onCommand:markdownMint.exportHtml",
     "onCommand:markdownMint.openInEditor"
   ],
   "main": "./dist/extension.js",
@@ -71,6 +72,11 @@
       {
         "command": "markdownMint.formatDocument",
         "title": "Markdown Mint: Format Document",
+        "enablement": "resourceLangId == markdown"
+      },
+      {
+        "command": "markdownMint.exportHtml",
+        "title": "Markdown Mint: Export as HTML",
         "enablement": "resourceLangId == markdown"
       },
       {
@@ -166,7 +172,8 @@
     "test:extension": "npm run compile && npm run build && node scripts/test-extension.mjs",
     "verify:package": "npm run build && node scripts/verify-package.mjs",
     "package": "npm run build && vsce package --no-dependencies && node scripts/verify-package.mjs && node scripts/verify-vsix.mjs",
-    "test:browser:blocks": "npm run build:webview && node tests/browser/block-editing.test.mjs"
+    "test:browser:blocks": "npm run build:webview && node tests/browser/block-editing.test.mjs",
+    "test:browser:html-export": "npm run build && node tests/browser/html-export.test.mjs"
   },
   "dependencies": {
     "highlight.js": "^11.12.0",
