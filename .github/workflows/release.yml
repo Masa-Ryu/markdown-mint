@@ -1,0 +1,257 @@
+name: Release
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: markdown-mint-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Validate and package release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.metadata.outputs.version }}
+      artifact_name: ${{ steps.metadata.outputs.artifact_name }}
+      sha256: ${{ steps.artifact.outputs.sha256 }}
+    steps:
+      - name: Check out the selected main commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Validate release target and metadata
+        id: metadata
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ "$GITHUB_REF" != "refs/heads/main" ]]; then
+            echo "::error::Releases can only be started from main (selected ref: $GITHUB_REF)."
+            exit 1
+          fi
+          if [[ "$(git rev-parse HEAD)" != "$GITHUB_SHA" ]]; then
+            echo "::error::Checkout does not match the workflow's selected commit $GITHUB_SHA."
+            exit 1
+          fi
+
+          version="$(node --input-type=module -e 'import { readFileSync } from "node:fs"; process.stdout.write(JSON.parse(readFileSync("package.json", "utf8")).version)')"
+          tag="v${version}"
+          node scripts/release-notes.mjs > "$RUNNER_TEMP/release-notes.md"
+
+          api_status() {
+            local endpoint="$1"
+            local response_file="$2"
+            curl --silent --show-error \
+              --output "$response_file" \
+              --write-out '%{http_code}' \
+              --header 'Accept: application/vnd.github+json' \
+              --header "Authorization: Bearer $GH_TOKEN" \
+              --header 'X-GitHub-Api-Version: 2022-11-28' \
+              "https://api.github.com/repos/${GITHUB_REPOSITORY}/${endpoint}"
+          }
+
+          tag_status="$(api_status "git/ref/tags/${tag}" "$RUNNER_TEMP/tag-response.json")"
+          case "$tag_status" in
+            200)
+              echo "::error::Git tag ${tag} already exists."
+              exit 1
+              ;;
+            404) ;;
+            *)
+              cat "$RUNNER_TEMP/tag-response.json"
+              echo "::error::Could not verify whether Git tag ${tag} exists (HTTP ${tag_status})."
+              exit 1
+              ;;
+          esac
+
+          release_status="$(api_status "releases/tags/${tag}" "$RUNNER_TEMP/release-response.json")"
+          case "$release_status" in
+            200)
+              echo "::error::GitHub Release ${tag} already exists."
+              exit 1
+              ;;
+            404) ;;
+            *)
+              cat "$RUNNER_TEMP/release-response.json"
+              echo "::error::Could not verify whether GitHub Release ${tag} exists (HTTP ${release_status})."
+              exit 1
+              ;;
+          esac
+
+          artifact_name="markdown-mint-${version}"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "artifact_name=${artifact_name}" >> "$GITHUB_OUTPUT"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Compile
+        run: npm run compile
+
+      - name: Test
+        run: npm test
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Check formatting
+        run: npm run format:check
+
+      - name: Package and verify the VSIX
+        run: npm run package
+
+      - name: Confirm the single release artifact
+        id: artifact
+        env:
+          VERSION: ${{ steps.metadata.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          packages=(markdown-mint-*.vsix)
+          expected="markdown-mint-${VERSION}.vsix"
+          if [[ ${#packages[@]} -ne 1 || "${packages[0]}" != "$expected" ]]; then
+            printf '::error::Expected exactly %s; found: %s\n' "$expected" "${packages[*]:-none}"
+            exit 1
+          fi
+
+          sha256="$(sha256sum "$expected" | cut -d ' ' -f 1)"
+          cp "$RUNNER_TEMP/release-notes.md" release-notes.md
+          printf 'sha256=%s\n' "$sha256" >> "$GITHUB_OUTPUT"
+          printf 'Verified release artifact: %s (SHA-256 %s)\n' "$expected" "$sha256"
+
+      - name: Retain the exact release payload for recovery
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.metadata.outputs.artifact_name }}
+          path: |
+            markdown-mint-${{ steps.metadata.outputs.version }}.vsix
+            release-notes.md
+          if-no-files-found: error
+          retention-days: 90
+
+  release:
+    name: Publish release
+    needs: validate
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: write
+    steps:
+      - name: Check out the same release commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install the locked VSCE CLI
+        run: npm ci
+
+      - name: Download the verified release payload
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.validate.outputs.artifact_name }}
+          path: release-payload
+
+      - name: Verify the downloaded artifact
+        id: payload
+        env:
+          VERSION: ${{ needs.validate.outputs.version }}
+          EXPECTED_SHA256: ${{ needs.validate.outputs.sha256 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          vsix="release-payload/markdown-mint-${VERSION}.vsix"
+          notes="release-payload/release-notes.md"
+          if [[ ! -f "$vsix" || ! -f "$notes" ]]; then
+            echo "::error::The validated VSIX or release notes are missing from the workflow artifact."
+            exit 1
+          fi
+
+          actual_sha256="$(sha256sum "$vsix" | cut -d ' ' -f 1)"
+          if [[ "$actual_sha256" != "$EXPECTED_SHA256" ]]; then
+            echo "::error::The downloaded VSIX checksum does not match the validated artifact."
+            exit 1
+          fi
+          echo "vsix_path=${vsix}" >> "$GITHUB_OUTPUT"
+          echo "The downloaded VSIX matches the validated SHA-256 ${actual_sha256}."
+
+      - name: Publish the verified VSIX to the VS Code Marketplace
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+          VERSION: ${{ needs.validate.outputs.version }}
+          ARTIFACT_NAME: ${{ needs.validate.outputs.artifact_name }}
+          VSIX_PATH: ${{ steps.payload.outputs.vsix_path }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "${VSCE_PAT:-}" ]]; then
+            echo "::error::VSCE_PAT is missing from the production environment."
+            exit 1
+          fi
+
+          if ! npx --no-install vsce publish --packagePath "$VSIX_PATH"; then
+            echo "::error::Marketplace publication failed or returned an uncertain result for ${VERSION}. The unchanged VSIX is retained in workflow artifact ${ARTIFACT_NAME} from run ${GITHUB_RUN_ID}; verify Marketplace status before retrying."
+            exit 1
+          fi
+
+      - name: Create the GitHub Release with the same VSIX
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.validate.outputs.version }}
+          ARTIFACT_NAME: ${{ needs.validate.outputs.artifact_name }}
+          EXPECTED_SHA256: ${{ needs.validate.outputs.sha256 }}
+          VSIX_PATH: ${{ steps.payload.outputs.vsix_path }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="v${VERSION}"
+          title="Markdown Mint v${VERSION}"
+          recovery="Workflow run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}. Download the unchanged payload with: gh run download ${GITHUB_RUN_ID} --repo ${GITHUB_REPOSITORY} --name ${ARTIFACT_NAME}. Target commit: ${GITHUB_SHA}. VSIX SHA-256: ${EXPECTED_SHA256}. Do not rebuild or republish a different VSIX during recovery."
+
+          if ! gh release create "$tag" "$VSIX_PATH" \
+            --draft \
+            --target "$GITHUB_SHA" \
+            --title "$title" \
+            --notes-file release-payload/release-notes.md \
+            --repo "$GITHUB_REPOSITORY"; then
+            echo "::error::Marketplace publication succeeded, but draft GitHub Release creation or asset upload failed for ${tag}. ${recovery}"
+            exit 1
+          fi
+
+          release_id="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${tag}" --jq .id)" || {
+            echo "::error::Marketplace publication succeeded and the GitHub draft was created, but its release id could not be read. ${recovery}"
+            exit 1
+          }
+          if ! gh api --method PATCH "repos/${GITHUB_REPOSITORY}/releases/${release_id}" \
+            --field draft=false > /dev/null; then
+            echo "::error::Marketplace publication succeeded and the VSIX is attached to a GitHub draft, but publishing that release failed. ${recovery}"
+            exit 1
+          fi
+
+          release_url="$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json url --jq .url)"
+          echo "::notice::Published ${title} from ${GITHUB_SHA}: ${release_url}"

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.7.1
+
+- Add an explicit GitHub Actions release workflow that validates, packages, and
+  publishes one verified VSIX to the VS Code Marketplace and GitHub Releases.
+
 ## 0.7.0
 
 - Add A4 PDF export from the Export menu and Command Palette. Reuse the
@@ -236,9 +241,6 @@
 - Preserve raw Markdown destinations, percent-encoded filenames, external
   link handling, query and fragment behavior, and remote/virtual workspace URI
   scheme and authority values.
-
-## 0.20.0
-
 - Interpret multi-cell TSV, HTML-table, and Markdown Mint internal clipboard
   payloads pasted outside the Rich Editor's existing tables as a header-first
   Markdown table, while keeping ordinary multiline text, one-cell pastes,

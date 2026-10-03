@@ -40,6 +40,18 @@ validation performed, and update documentation when user-facing behavior or
 setup changes. Reviewers should be able to understand the change from the PR
 description without reconstructing intent from the diff alone.
 
+## Releases
+
+- Pull requests continue to update versions according to the SemVer rules
+  below. Create a GitHub Release only when a version is intentionally published
+  to users.
+- Publish to the VS Code Marketplace and create the GitHub Release through
+  `.github/workflows/release.yml`.
+- Store the Marketplace credential as `VSCE_PAT` in the GitHub `production`
+  Environment.
+- The workflow verifies one VSIX, publishes it to the Marketplace, and attaches
+  that same artifact to the GitHub Release. Release tags use `v<version>`.
+
 作業が完了したらPushしてPullrequestの内容を書き上げること。
 issueが見つからない時はissue番号はないです。
 
