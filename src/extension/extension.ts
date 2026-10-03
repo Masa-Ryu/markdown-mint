@@ -1,4 +1,5 @@
 import * as path from "node:path";
+import { randomUUID } from "node:crypto";
 import * as vscode from "vscode";
 import type MarkdownIt from "markdown-it";
 import { formatMarkdown, parseMarkdown, renderMarkdown } from "../core/index";
@@ -52,6 +53,13 @@ import {
 import { renderPdf } from "./export/pdfExport";
 import { classifyLinkNavigation } from "./linkNavigation";
 import { WorkspaceFileSearchHost } from "./workspaceFileSearch";
+import {
+  AiSuggestionsHost,
+  AI_TRIGGER_COMMAND,
+  AI_MODEL_COMMAND,
+  createAiSuggestionsEnvironment,
+  type AiSuggestionsEnvironment,
+} from "./aiSuggestions";
 
 export const VIEW_TYPE = MARKDOWN_MINT_VIEW_TYPE;
 export const PREVIEW_VIEW_TYPE = "markdownMint.preview";
@@ -116,6 +124,7 @@ interface DocumentState {
 }
 
 interface PanelSession {
+  readonly aiSessionId: string;
   readonly panel: vscode.WebviewPanel;
   readonly state: DocumentState;
   readonly mode: PanelMode;
@@ -190,6 +199,12 @@ export function activate(context: vscode.ExtensionContext): MarkdownMintApi {
     }),
     provider,
     codeLensProvider,
+    vscode.commands.registerCommand(AI_TRIGGER_COMMAND, () =>
+      provider.triggerAiSuggestion(),
+    ),
+    vscode.commands.registerCommand(AI_MODEL_COMMAND, () =>
+      provider.selectAiSuggestionModel(),
+    ),
     vscode.commands.registerCommand(
       "markdownMint.openPreview",
       (uri?: vscode.Uri) => provider.openPreview(uri),
@@ -312,12 +327,25 @@ export class MarkdownMintEditorProvider
   private readonly subscriptions: vscode.Disposable[] = [];
   private readonly output: vscode.OutputChannel;
   private readonly workspaceFileSearch = new WorkspaceFileSearchHost();
+  private readonly aiSuggestions: AiSuggestionsHost;
   private pdfExportQueue: Promise<void> = Promise.resolve();
   private lastDocumentUri: vscode.Uri | undefined;
 
-  public constructor(private readonly context: vscode.ExtensionContext) {
+  public constructor(
+    private readonly context: vscode.ExtensionContext,
+    aiEnvironment?: AiSuggestionsEnvironment,
+  ) {
+    this.aiSuggestions = new AiSuggestionsHost(
+      aiEnvironment ?? createAiSuggestionsEnvironment(context),
+    );
     this.output = vscode.window.createOutputChannel("Markdown Mint");
-    this.subscriptions.push(this.workspaceFileSearch);
+    this.subscriptions.push(this.workspaceFileSearch, this.aiSuggestions);
+    if (typeof vscode.workspace.onDidGrantWorkspaceTrust === "function")
+      this.subscriptions.push(
+        vscode.workspace.onDidGrantWorkspaceTrust(() =>
+          this.aiSuggestions.trustChanged(),
+        ),
+      );
     this.subscriptions.push(
       this.output,
       vscode.workspace.onDidChangeTextDocument((event) =>
@@ -346,8 +374,33 @@ export class MarkdownMintEditorProvider
         disposable.dispose();
     }
     this.sessions.clear();
+    this.updateAiCommandContext();
     this.previewPanels.clear();
     this.states.clear();
+  }
+
+  private activeAiSession(): PanelSession | undefined {
+    return [...this.sessions.values()].find(
+      (session) =>
+        session.mode === "editor" && session.ready && session.panel.active,
+    );
+  }
+  private updateAiCommandContext(): void {
+    void vscode.commands.executeCommand(
+      "setContext",
+      "markdownMint.aiSuggestions.active",
+      Boolean(this.activeAiSession()),
+    );
+  }
+  public async triggerAiSuggestion(): Promise<void> {
+    const session = this.activeAiSession();
+    if (session)
+      await this.aiSuggestions.triggerFromUserAction(session.aiSessionId);
+  }
+  public async selectAiSuggestionModel(): Promise<void> {
+    const session = this.activeAiSession();
+    if (session)
+      await this.aiSuggestions.selectModelFromUserAction(session.aiSessionId);
   }
 
   public async resolveCustomTextEditor(
@@ -550,6 +603,7 @@ export class MarkdownMintEditorProvider
     mode: PanelMode,
   ): PanelSession {
     const session: PanelSession = {
+      aiSessionId: `ai-${randomUUID()}`,
       panel,
       state,
       mode,
@@ -560,6 +614,31 @@ export class MarkdownMintEditorProvider
     };
     state.panels.add(session);
     this.sessions.set(panel, session);
+    if (mode === "editor")
+      this.aiSuggestions.registerSession({
+        id: session.aiSessionId,
+        documentId: () => state.key,
+        version: () => state.document.version,
+        isReady: () =>
+          this.sessions.get(panel) === session &&
+          session.ready &&
+          mode === "editor",
+        isActive: () =>
+          this.sessions.get(panel) === session &&
+          panel.active &&
+          mode === "editor",
+        canStartRequest: () =>
+          this.sessions.get(panel) === session &&
+          session.ready &&
+          panel.active &&
+          mode === "editor" &&
+          state.pending.size === 0 &&
+          state.pendingCommand === undefined,
+        focus: () => panel.reveal(panel.viewColumn, false),
+        post: (message) => {
+          if (session.ready) this.post(session, message);
+        },
+      });
     panel.webview.options = this.webviewOptions(document.uri, panel.webview);
     panel.webview.html = this.webviewHtml(panel.webview, mode);
     session.disposables.push(
@@ -585,6 +664,10 @@ export class MarkdownMintEditorProvider
     if (panelWithViewState.onDidChangeViewState) {
       session.disposables.push(
         panelWithViewState.onDidChangeViewState(() => {
+          if (!session.panel.active)
+            this.aiSuggestions.cancelSession(session.aiSessionId);
+          this.aiSuggestions.publishState(session.aiSessionId);
+          this.updateAiCommandContext();
           if (session.mode === "editor" && session.panel.active)
             this.lastDocumentUri = session.state.uri;
           if (session.mode === "preview" && this.previewPanelVisible(session))
@@ -596,11 +679,13 @@ export class MarkdownMintEditorProvider
   }
 
   private detachPanel(session: PanelSession): void {
+    this.aiSuggestions.unregisterSession(session.aiSessionId);
     if (session.mode === "preview") {
       session.ready = false;
       session.previewRenderGeneration += 1;
     }
     this.sessions.delete(session.panel);
+    this.updateAiCommandContext();
     session.state.panels.delete(session);
     for (const disposable of session.disposables.splice(0))
       disposable.dispose();
@@ -645,6 +730,13 @@ export class MarkdownMintEditorProvider
     // created by a panel or an explicit queued operation, then retained while
     // that owner is still active.
     if (!state) return;
+    if (
+      event.contentChanges.length > 0 ||
+      event.document.version !== state.version
+    ) {
+      for (const session of state.panels)
+        this.aiSuggestions.cancelSession(session.aiSessionId);
+    }
     const previousVersion = state.version;
     const previousText = state.document.getText();
     const previousEol = state.eol;
@@ -760,6 +852,8 @@ export class MarkdownMintEditorProvider
   }
 
   private onConfigurationChanged(event: vscode.ConfigurationChangeEvent): void {
+    if (event.affectsConfiguration("markdownMint.aiSuggestions"))
+      this.aiSuggestions.refreshSettings();
     for (const state of this.states.values()) {
       const profileChanged = event.affectsConfiguration(
         "markdownMint.profile",
@@ -773,7 +867,11 @@ export class MarkdownMintEditorProvider
       if (!profileChanged && !typographyChanged) {
         continue;
       }
-      if (profileChanged) state.profile = this.profileFor(state.uri);
+      if (profileChanged) {
+        state.profile = this.profileFor(state.uri);
+        for (const session of state.panels)
+          this.aiSuggestions.cancelSession(session.aiSessionId);
+      }
       this.broadcastDocument(state, { reason: "external" });
     }
   }
@@ -871,7 +969,22 @@ export class MarkdownMintEditorProvider
         case "ready":
           session.ready = true;
           this.sendDocumentIfVisible(session, "initial");
+          this.aiSuggestions.publishState(session.aiSessionId);
+          this.updateAiCommandContext();
           if (session.mode === "preview") this.requestPreviewRender(session);
+          return;
+        case "ai-suggestion-request":
+          await this.aiSuggestions.requestSuggestion(
+            session.aiSessionId,
+            message,
+          );
+          return;
+        case "ai-suggestion-cancel":
+          if (message.sessionId === session.aiSessionId)
+            this.aiSuggestions.cancelSession(
+              session.aiSessionId,
+              message.requestId,
+            );
           return;
         case "edit":
           await this.enqueue(session.state, () =>

@@ -29,6 +29,7 @@ const documentFixtures = new Map([
   ["gitlab-test-class-B.md", "gitlab"],
 ]);
 let nativeRenderer;
+let aiProtocol;
 
 async function renderDocumentFixture(filename) {
   const profile = documentFixtures.get(filename);
@@ -252,6 +253,23 @@ const server = http.createServer(async (request, response) => {
   try {
     const requestUrl = new URL(request.url ?? "/", "http://localhost");
     const pathname = decodeURIComponent(requestUrl.pathname);
+    if (pathname === "/__ai-protocol__.js") {
+      aiProtocol ??= build({
+        entryPoints: [
+          resolve(repository, "tests/browser/ai-suggestions-protocol.ts"),
+        ],
+        bundle: true,
+        write: false,
+        platform: "browser",
+        format: "iife",
+      });
+      response.writeHead(200, {
+        "content-type": contentTypes[".js"],
+        "cache-control": "no-store",
+      });
+      response.end((await aiProtocol).outputFiles[0].contents);
+      return;
+    }
     const filename = fileFor(pathname);
     if (!filename) {
       response.writeHead(400);
@@ -262,6 +280,11 @@ const server = http.createServer(async (request, response) => {
     let body = await readFile(filename);
     if (extension === ".html") {
       let html = body.toString("utf8");
+      if (pathname === "/" && requestUrl.searchParams.has("ai"))
+        html = html.replace(
+          "<!-- markdown-mint-ai-protocol -->",
+          '<script nonce="mm-test-nonce" src="/__ai-protocol__.js"></script>',
+        );
       if (
         pathname === "/native.html" &&
         requestUrl.searchParams.get("fixture") === "math"

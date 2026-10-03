@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.8.0
+
+- Add optional Copilot prose continuations in the Rich Editor, with a faint
+  display-only candidate, Tab acceptance, Escape dismissal, and native
+  document Undo/Redo. Support paragraph, heading, and list-item ends.
+- Add manual suggestion/model-selection commands and user-only
+  `markdownMint.aiSuggestions.autoTrigger` (initially false) and `.model`
+  settings. Require user-initiated model selection/consent and a manual resume
+  after restart or model changes; leave ordinary editing available without AI.
+- Bound current-document context, input tokens, output size, request frequency,
+  and deadlines; cancel stale requests independently of editing and saving.
+  Keep unaccepted candidates out of Markdown, clipboard, recovery, and exports.
+
 ## 0.7.2
 
 - Preserve release-note bytes during GitHub Release draft recovery and report

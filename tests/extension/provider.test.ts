@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import MarkdownIt from "markdown-it";
 import { isHostMessage } from "../../src/shared/protocol";
+import type { AiSuggestionsEnvironment } from "../../src/extension/aiSuggestions";
+import type * as Vscode from "vscode";
 
 const vscode = vi.hoisted(() => {
   type Listener = (...args: never[]) => void;
@@ -884,7 +886,12 @@ const pdfMocks = vi.hoisted(() => {
   };
 });
 
-vi.mock("vscode", () => vscode);
+vi.mock("vscode", () => ({
+  ...vscode,
+  lm: undefined,
+  LanguageModelChatMessage: undefined,
+  CancellationTokenSource: undefined,
+}));
 vi.mock("../../src/extension/export/browserDiscovery", () => ({
   PdfBrowserExecutableNotFoundError: pdfMocks.PdfBrowserExecutableNotFoundError,
   resolvePdfBrowserExecutable: pdfMocks.resolvePdfBrowserExecutable,
@@ -898,6 +905,264 @@ const {
   extendMarkdownIt,
   webviewContentSecurityPolicy,
 } = await import("../../src/extension/extension");
+
+it("does not put model communication into the document edit/save queue", async () => {
+  vscode.__state.reset();
+  const { panel, document } = vscode.__state;
+  let modelId = "";
+  let sends = 0;
+  let cancelled = false;
+  const response = deferred<never>();
+  const model = {
+    id: "fake",
+    name: "Fake Copilot",
+    vendor: "copilot",
+    maxInputTokens: 4096,
+    countTokens: async () => 20,
+    sendRequest: () => {
+      sends += 1;
+      return response.promise;
+    },
+  };
+  const environment: AiSuggestionsEnvironment = {
+    supported: () => true,
+    trusted: () => true,
+    settings: () => ({ autoTrigger: false, model: modelId }),
+    saveModel: async (id) => {
+      modelId = id;
+    },
+    models: async () => [model],
+    access: () => true,
+    choose: async () => model,
+    explain: async () => true,
+    notify: () => undefined,
+    user: (text) => ({ role: 1, content: [{ value: text }] }) as never,
+    tokenSource: () =>
+      ({
+        token: {
+          get isCancellationRequested() {
+            return cancelled;
+          },
+        },
+        cancel: () => {
+          cancelled = true;
+        },
+        dispose: () => undefined,
+      }) as never,
+  };
+  const provider = new MarkdownMintEditorProvider(
+    context() as never,
+    environment,
+  );
+  await provider.resolveCustomTextEditor(
+    document as never,
+    panel as never,
+    {} as never,
+  );
+  panel.webview.receive({ protocolVersion: 1, type: "ready" });
+  await provider.triggerAiSuggestion();
+  const state = panel.webview.messages
+    .filter(
+      (message) =>
+        isHostMessage(message) && message.type === "ai-suggestion-state",
+    )
+    .at(-1);
+  const trigger = panel.webview.messages
+    .filter(
+      (message) =>
+        isHostMessage(message) && message.type === "ai-suggestion-trigger",
+    )
+    .at(-1);
+  if (
+    !isHostMessage(state) ||
+    state.type !== "ai-suggestion-state" ||
+    !isHostMessage(trigger) ||
+    trigger.type !== "ai-suggestion-trigger"
+  )
+    throw Error("AI command did not publish state and invocation");
+  panel.webview.receive({
+    protocolVersion: 1,
+    type: "ai-suggestion-request",
+    requestId: "held-ai",
+    sessionId: state.sessionId,
+    documentId: document.uri.toString(),
+    baseVersion: document.version,
+    editorRevision: 1,
+    settingsGeneration: state.settingsGeneration,
+    position: 11,
+    targetKind: "heading",
+    trigger: "manual",
+    invocationId: trigger.invocationId,
+    context: { before: "Original", after: "", heading: "" },
+  });
+  await waitForCondition(() => sends === 1, "held fake model request");
+  panel.webview.receive({
+    protocolVersion: 1,
+    type: "edit",
+    baseVersion: document.version,
+    operationId: "edit-during-ai",
+    markdown: "# Edited during AI",
+  });
+  await waitForCondition(
+    () => document.getText() === "# Edited during AI",
+    "edit while model promise is unresolved",
+  );
+  panel.webview.receive({
+    protocolVersion: 1,
+    type: "save",
+    baseVersion: document.version,
+    operationId: "save-during-ai",
+  });
+  await waitForCondition(
+    () =>
+      panel.webview.messages.some(
+        (message) =>
+          isHostMessage(message) &&
+          message.type === "save-result" &&
+          message.operationId === "save-during-ai" &&
+          message.saved,
+      ),
+    "save while model promise is unresolved",
+  );
+  expect(cancelled).toBe(true);
+  expect(document.isDirty).toBe(false);
+  provider.dispose();
+});
+
+it("returns an AI candidate when a non-mutating save is still queued", async () => {
+  const scenario = await startDelayedAiSuggestion();
+  const { document, panel, provider, response } = scenario;
+  try {
+    const markdownBefore = document.getText();
+    const versionBefore = document.version;
+    const enteredSave = deferred<void>();
+    const releaseSave = deferred<void>();
+    document.isDirty = true;
+    document.save = async (): Promise<boolean> => {
+      enteredSave.resolve(undefined);
+      await releaseSave.promise;
+      document.isDirty = false;
+      return true;
+    };
+
+    panel.webview.receive({
+      protocolVersion: 1,
+      type: "save",
+      baseVersion: versionBefore,
+      operationId: "save-with-ai-pending",
+    });
+    await enteredSave.promise;
+    expect(documentQueueDepth(provider)).toBe(1);
+    expect(document.version).toBe(versionBefore);
+    expect(document.getText()).toBe(markdownBefore);
+
+    response.resolve(chatResponse(" continuation"));
+    await waitForCondition(
+      () =>
+        panel.webview.messages.some(
+          (message) =>
+            isHostMessage(message) &&
+            message.type === "ai-suggestion-result" &&
+            message.requestId === "delayed-ai" &&
+            message.reason === "ready",
+        ),
+      "AI candidate while save remains queued",
+    );
+    expect(document.getText()).toBe(markdownBefore);
+    expect(document.version).toBe(versionBefore);
+
+    releaseSave.resolve(undefined);
+    await waitForCondition(
+      () =>
+        panel.webview.messages.some(
+          (message) =>
+            isHostMessage(message) &&
+            message.type === "save-result" &&
+            message.operationId === "save-with-ai-pending" &&
+            message.saved,
+        ),
+      "successful non-mutating save",
+    );
+    expect(document.getText()).toBe(markdownBefore);
+    expect(document.version).toBe(versionBefore);
+    expect(document.isDirty).toBe(false);
+  } finally {
+    provider.dispose();
+  }
+});
+
+it("cancels a pending AI response when format-on-save changes the document", async () => {
+  const scenario = await startDelayedAiSuggestion("#Needs formatting");
+  const { document, panel, provider, response } = scenario;
+  try {
+    const markdownBefore = document.getText();
+    const versionBefore = document.version;
+    vscode.__state.workspaceState.formatOnSave = true;
+    document.isDirty = true;
+    document.save = async (): Promise<boolean> => {
+      const edits = (await vscode.__state.runSave()) as Array<{
+        range: {
+          start: { line: number; character: number };
+          end: { line: number; character: number };
+        };
+        text: string;
+      }>;
+      const formatted = applyTextEdits(markdownBefore, edits);
+      expect(formatted).not.toBe(markdownBefore);
+      document.replaceText(formatted);
+      vscode.__state.emitDocumentChange(document);
+      document.isDirty = false;
+      return true;
+    };
+
+    panel.webview.receive({
+      protocolVersion: 1,
+      type: "save",
+      baseVersion: versionBefore,
+      operationId: "format-save-with-ai-pending",
+    });
+    await waitForCondition(
+      () =>
+        panel.webview.messages.some(
+          (message) =>
+            isHostMessage(message) &&
+            message.type === "save-result" &&
+            message.operationId === "format-save-with-ai-pending" &&
+            message.saved,
+        ),
+      "successful format-on-save",
+      1000,
+    );
+    const formattedDocument = document.getText();
+    const formattedVersion = document.version;
+    expect(formattedDocument).not.toBe(markdownBefore);
+    expect(formattedVersion).toBeGreaterThan(versionBefore);
+    expect(
+      panel.webview.messages.some(
+        (message) =>
+          isHostMessage(message) &&
+          message.type === "document" &&
+          message.version === formattedVersion,
+      ),
+    ).toBe(true);
+
+    response.resolve(chatResponse(" stale continuation"));
+    await flush();
+    expect(document.getText()).toBe(formattedDocument);
+    expect(document.version).toBe(formattedVersion);
+    expect(
+      panel.webview.messages.some(
+        (message) =>
+          isHostMessage(message) &&
+          message.type === "ai-suggestion-result" &&
+          message.requestId === "delayed-ai" &&
+          message.reason === "ready",
+      ),
+    ).toBe(false);
+  } finally {
+    provider.dispose();
+  }
+});
 
 function context(): {
   extensionUri: unknown;
@@ -926,11 +1191,158 @@ function deferred<T>(): {
   return { promise, resolve };
 }
 
+async function startDelayedAiSuggestion(markdown = "# Original"): Promise<{
+  provider: InstanceType<typeof MarkdownMintEditorProvider>;
+  panel: typeof vscode.__state.panel & {
+    webview: { receive(value: unknown): void; messages: unknown[] };
+  };
+  document: typeof vscode.__state.document & {
+    getText(): string;
+    version: number;
+    isDirty: boolean;
+    save(): Promise<boolean>;
+    replaceText(value: string): void;
+  };
+  response: ReturnType<typeof deferred<Vscode.LanguageModelChatResponse>>;
+}> {
+  vscode.__state.reset();
+  const { panel, document } = vscode.__state;
+  if (markdown !== document.getText()) document.reset(markdown);
+  let modelId = "";
+  let sends = 0;
+  const response = deferred<Vscode.LanguageModelChatResponse>();
+  const model = {
+    id: "fake",
+    name: "Fake Copilot",
+    vendor: "copilot",
+    maxInputTokens: 4096,
+    countTokens: async () => 20,
+    sendRequest: () => {
+      sends += 1;
+      return response.promise;
+    },
+  };
+  const environment: AiSuggestionsEnvironment = {
+    supported: () => true,
+    trusted: () => true,
+    settings: () => ({ autoTrigger: false, model: modelId }),
+    saveModel: async (id) => {
+      modelId = id;
+    },
+    models: async () => [model],
+    access: () => true,
+    choose: async () => model,
+    explain: async () => true,
+    notify: () => undefined,
+    user: (text) => ({ role: 1, content: [{ value: text }] }) as never,
+    tokenSource: () =>
+      ({
+        token: { isCancellationRequested: false },
+        cancel: () => undefined,
+        dispose: () => undefined,
+      }) as never,
+  };
+  const provider = new MarkdownMintEditorProvider(
+    context() as never,
+    environment,
+  );
+  await provider.resolveCustomTextEditor(
+    document as never,
+    panel as never,
+    {} as never,
+  );
+  panel.webview.receive({ protocolVersion: 1, type: "ready" });
+  await provider.triggerAiSuggestion();
+  const state = panel.webview.messages
+    .filter(
+      (message) =>
+        isHostMessage(message) && message.type === "ai-suggestion-state",
+    )
+    .at(-1);
+  const trigger = panel.webview.messages
+    .filter(
+      (message) =>
+        isHostMessage(message) && message.type === "ai-suggestion-trigger",
+    )
+    .at(-1);
+  if (
+    !isHostMessage(state) ||
+    state.type !== "ai-suggestion-state" ||
+    !isHostMessage(trigger) ||
+    trigger.type !== "ai-suggestion-trigger"
+  )
+    throw Error("AI command did not publish state and invocation");
+  panel.webview.receive({
+    protocolVersion: 1,
+    type: "ai-suggestion-request",
+    requestId: "delayed-ai",
+    sessionId: state.sessionId,
+    documentId: document.uri.toString(),
+    baseVersion: document.version,
+    editorRevision: 1,
+    settingsGeneration: state.settingsGeneration,
+    position: document.getText().length,
+    targetKind: "heading",
+    trigger: "manual",
+    invocationId: trigger.invocationId,
+    context: {
+      before: document.getText().replace(/^#\s*/, ""),
+      after: "",
+      heading: "",
+    },
+  });
+  await waitForCondition(() => sends === 1, "delayed fake model request");
+  return { provider, panel, document, response };
+}
+
+function chatResponse(text: string): Vscode.LanguageModelChatResponse {
+  return {
+    text: (async function* () {
+      yield text;
+    })(),
+  } as unknown as Vscode.LanguageModelChatResponse;
+}
+
+function applyTextEdits(
+  markdown: string,
+  edits: readonly {
+    range: {
+      start: { line: number; character: number };
+      end: { line: number; character: number };
+    };
+    text: string;
+  }[],
+): string {
+  const offsetAt = (position: { line: number; character: number }): number => {
+    const lines = markdown.split("\n");
+    let offset = position.character;
+    for (let line = 0; line < position.line; line += 1)
+      offset += (lines[line]?.length ?? 0) + 1;
+    return offset;
+  };
+  const replacements = edits
+    .map((edit) => ({
+      start: offsetAt(edit.range.start),
+      end: offsetAt(edit.range.end),
+      text: edit.text,
+    }))
+    .filter((edit) => edit.start !== edit.end || edit.text.length > 0)
+    .sort((a, b) => b.start - a.start);
+  let formatted = markdown;
+  for (const replacement of replacements)
+    formatted =
+      formatted.slice(0, replacement.start) +
+      replacement.text +
+      formatted.slice(replacement.end);
+  return formatted;
+}
+
 async function waitForCondition(
   condition: () => boolean,
   description: string,
+  attempts = 50,
 ): Promise<void> {
-  for (let attempt = 0; attempt < 50; attempt += 1) {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
     if (condition()) return;
     await flush();
   }
@@ -943,6 +1355,13 @@ function stateCount(provider: object): number {
       states: Map<string, unknown>;
     }
   ).states.size;
+}
+
+function documentQueueDepth(provider: object): number {
+  const states = (
+    provider as unknown as { states: Map<string, { queueDepth: number }> }
+  ).states;
+  return [...states.values()][0]?.queueDepth ?? 0;
 }
 
 describe("MarkdownMintEditorProvider", () => {
