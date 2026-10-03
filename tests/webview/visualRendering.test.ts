@@ -481,8 +481,8 @@ describe("local Mermaid rendering lifecycle", () => {
             ? '<text class="edgeTerminals" transform="translate(10, 20)">1</text>'
             : "") +
           '<path class="relation" fill="black" />' +
-          '<marker id="mm-classDiagram-extensionEnd"><path fill="black" /></marker>' +
-          '<marker id="mm-classDiagram-aggregationEnd"><path fill="black" /></marker>' +
+          '<marker id="mm-classDiagram-extensionEnd-markerID-margin"><path fill="black" /></marker>' +
+          '<marker id="mm-classDiagram-aggregationEnd-markerID-margin"><path fill="black" /></marker>' +
           '<marker id="mm-classDiagram-compositionEnd"><path fill="black" /></marker>' +
           '<marker id="mm-classDiagram-dependencyEnd"><path fill="black" /></marker>' +
           '<marker id="mm-classDiagram-lollipopEnd"><circle fill="black" /></marker>' +
@@ -504,10 +504,10 @@ describe("local Mermaid rendering lifecycle", () => {
       ".node.default .divider path",
     )!;
     const extension = classSvg.querySelector<SVGPathElement>(
-      "#mm-classDiagram-extensionEnd path",
+      "#mm-classDiagram-extensionEnd-markerID-margin path",
     )!;
     const aggregation = classSvg.querySelector<SVGPathElement>(
-      "#mm-classDiagram-aggregationEnd path",
+      "#mm-classDiagram-aggregationEnd-markerID-margin path",
     )!;
     const composition = classSvg.querySelector<SVGPathElement>(
       "#mm-classDiagram-compositionEnd path",
@@ -547,7 +547,7 @@ describe("local Mermaid rendering lifecycle", () => {
     ).toBeUndefined();
     expect(
       otherSvg.querySelector<SVGPathElement>(
-        "#mm-classDiagram-extensionEnd path",
+        'marker[id^="mm-classDiagram-extensionEnd-"] path',
       )?.style.fill,
     ).toBe("");
     enhancer.dispose();

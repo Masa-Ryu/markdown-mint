@@ -504,9 +504,8 @@ function normalizeClassDiagramSvg(
     svg.querySelectorAll<SVGMarkerElement>('marker[id*="classDiagram-"]'),
   )) {
     const id = marker.id;
-    const hollow = /classDiagram-(?:extension|aggregation)(?:Start|End)$/.test(
-      id,
-    );
+    const hollow =
+      /classDiagram-(?:extension|aggregation)(?:Start|End)(?:-|$)/.test(id);
     const surface = /classDiagram-lollipop(?:Start|End)$/.test(id);
     const fill = hollow
       ? "transparent"

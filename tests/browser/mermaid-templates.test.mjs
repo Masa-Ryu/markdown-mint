@@ -995,6 +995,15 @@ async function assertClassDiagramMarkerPresentation(
   const markers = presentation.markers.filter((marker) =>
     referencedMarkers.has(marker.id),
   );
+  if (options.requireSuffixedHollowMarkerIds) {
+    for (const kind of ["extension", "aggregation"])
+      assert.ok(
+        markers.some((marker) =>
+          new RegExp(`classDiagram-${kind}(?:Start|End)-`).test(marker.id),
+        ),
+        `${label}: neo ${kind} marker should have a generated ID suffix; found ${markers.map((marker) => marker.id).join(", ")}`,
+      );
+  }
   const kindOf = (marker) =>
     marker.id.match(
       /classDiagram-(extension|aggregation|composition|dependency|lollipop)/,
@@ -3764,7 +3773,7 @@ async function nativePreviewChecks(page) {
       document.querySelectorAll(".markdown-body .mm-mermaid"),
     );
     return (
-      diagrams.length === 9 &&
+      diagrams.length === 10 &&
       diagrams.every((diagram) => diagram.querySelector("svg"))
     );
   });
@@ -3835,6 +3844,17 @@ async function nativePreviewChecks(page) {
         expectedKinds: ["dependency"],
         minimumCards: 2,
         minimumRelations: 1,
+      },
+    );
+    const nativeClassNeo = nativeClasses.nth(2);
+    await assertClassDiagramMarkerPresentation(
+      nativeClassNeo,
+      theme.backdrop,
+      `native neo class diagram ${theme.id}`,
+      {
+        minimumCards: 5,
+        minimumRelations: 4,
+        requireSuffixedHollowMarkerIds: true,
       },
     );
     const suffix = theme.id.replace("vscode-", "");

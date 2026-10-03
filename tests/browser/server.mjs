@@ -122,6 +122,17 @@ const nativeMermaidSources = [
     '    Customer "1" --> "many" Order : places',
   ].join("\n"),
   [
+    "---",
+    "config:",
+    "  look: neo",
+    "---",
+    "classDiagram",
+    "    Animal <|-- Duck",
+    "    Vehicle o-- Wheel",
+    "    House *-- Room",
+    "    User ..> Order : uses",
+  ].join("\n"),
+  [
     "gantt",
     "    title Project schedule",
     "    dateFormat YYYY-MM-DD",
