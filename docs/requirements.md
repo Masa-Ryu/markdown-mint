@@ -18,7 +18,7 @@ system IME candidate UI remains unverified.
 | R07         | GitHub and GitLab profiles                       | `github`, `gitlab`, and `commonmark` are validated protocol/profile values. Profile settings reach the editor, dedicated preview, and native adapter. The 0.0.3 native acceptance suite verified GitHub versus CommonMark table output; GitLab-specific fixtures remain a follow-up compatibility check.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | R08         | Safe formatting and format-on-save               | Prettier runs with the bundled Markdown parser/plugin, after/before core validation, project `.prettierrc` JSON/YAML options, `.editorconfig` EOL settings, `.prettierignore`, and explicit extension option overrides. Save-time failures leave the source unchanged, write diagnostics to the Markdown Mint output channel, and use a standard VS Code error notification when user action is required. The VS Code auto-save setting is not changed by the extension.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 
-## Issue #141 Mermaid templates and live preview (0.8.0)
+## Issue #141 Mermaid templates and live preview (0.9.0)
 
 In GitHub/GitLab profiles, an unselected Mermaid insertion opens a grouped
 single-selection template list in the existing modal. The 13 examples cover
@@ -103,20 +103,18 @@ announcements were not rerun or inspected for this final footer revision.
 The existing HTML/PDF export browser suites passed earlier with the shared
 rendering helper (HTML CSP violations: zero; PDF: 13 A4 pages).
 
-The 2026-10-03 Mermaid editor header follow-up passed `npm run compile`, all
-1,317 unit tests across 63 files, `npm run lint` (zero errors; 94 existing
-warnings), `npm run format:check`, `npm run test:browser:mermaid`,
-`npm run test:browser:blocks`, `npm run test:browser:html-export`,
-`npm run test:browser:pdf-export`, `npm run test:extension`, and
-`npm run package` (76 files; 4,613,425 bytes). Browser checks covered all 13
-templates and 16 variants, four Git graph themes, the editor-first navigation
-button and narrow layout, replacement confirmation for existing, selected,
-and edited code, and document Undo/Redo. All five AGENTS fixtures passed
-Rich/Preview/native display checks. HTML export reported zero CSP violations;
-PDF export generated 13 A4 pages. The initial picker, revisited picker, new
-editor, existing editor, and replacement confirmation screenshots are retained
-under `docs/screenshots/issue-141/`. Native OS IME candidate UI and
-screen-reader announcements remain unverified; no release, tag, or workflow
+The final 0.9.0 Mermaid editor navigation revision on 2026-10-03 passed
+`npm run compile`, `npm test` (1,317 tests across 63 files),
+`npm run lint` (zero errors; 94 warnings), `npm run format:check`,
+`npm run test:browser:mermaid`, `npm run test:browser:blocks`,
+`npm run test:extension`, and `npm run package` (76 files; 4,613,481 bytes).
+Browser checks cover the
+editor-first navigation button, replacement confirmation for existing,
+selected, and edited code, IME guards, and document Undo/Redo. All five AGENTS
+fixtures pass Rich/Preview/native display checks. The initial picker, revisited
+picker, new editor, existing editor, and replacement confirmation screenshots
+are retained under `docs/screenshots/issue-141/`. The real OS IME candidate UI
+and screen-reader announcements remain unverified; no release, tag, or workflow
 was run.
 
 PR #145 CSP follow-up on 2026-10-03 reproduced Git graph paint loss with the
