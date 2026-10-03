@@ -58,4 +58,16 @@ describe("GitHub Release workflow", () => {
       /marketplace|oidc|VSCE_PAT|id-token|production environment|vsce publish/i,
     );
   });
+
+  it("preserves release-note bytes and propagates recovery-planner failures", () => {
+    expect(releaseJob).toContain("releaseNotes: $releaseNotes");
+    expect(releaseJob).not.toMatch(/releaseNotes: \(\$releaseNotes \| sub\(/);
+    expect(releaseJob).toContain(
+      'if ! node scripts/release-recovery.mjs plan-current < "$state_json" > "$plan_json"; then',
+    );
+    expect(releaseJob).toContain('if ! action="$(make_recovery_plan)"; then');
+    expect(releaseJob).toContain(
+      "jq -er '.plan.action // empty' \"$plan_json\"",
+    );
+  });
 });
