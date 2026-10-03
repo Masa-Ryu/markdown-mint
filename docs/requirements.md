@@ -367,10 +367,13 @@ Before-fix Light/Dark Mindmap and Gantt captures remain alongside the corrected
 images. The in-session native UI check also confirmed Escape closes the
 candidate picker without changing the open safeprobe. A native after-change
 screenshot was not captured. A separate isolated VS Code Development Host
-could not start (`task_name_for_pid` failure, `kLSNoExecutableErr`, and a
-direct `Code` launch ending in `SIGABRT`); no further attempt was made, and the
-open VS Code window and `scrach.md` were preserved. The isolated `npm run
-test:extension` host also exited with `SIGABRT` before producing results.
+could not start: `code --extensionDevelopmentPath ...` printed
+`task_name_for_pid ... failure (5)` and exited 0 without opening a new window;
+`open -n -a '/Applications/Visual Studio Code.app' ...` returned
+`kLSNoExecutableErr (-10827)`; and direct `Contents/MacOS/Code` launch exited
+134 with `SIGABRT`. No retry was made, and the open VS Code window and
+`scrach.md` were preserved. The isolated `npm run test:extension` host also
+exited with `SIGABRT` before producing results.
 
 Final checks on 2026-10-04 passed `npm run compile`, `npm test` (1,341 tests /
 64 files), `npm run lint` (zero errors; 94 existing warnings), and
