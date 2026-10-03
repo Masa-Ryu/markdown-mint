@@ -5,10 +5,8 @@ import {
   type MermaidTemplateDirection,
 } from "./mermaidTemplates";
 import {
-  ensureMermaidRuntime,
   mermaidRuntimeVersionFromGlobal,
   normalizeMermaidSource,
-  validateMermaidSource,
   type MermaidValidationSnapshot,
 } from "./mermaidValidation";
 
@@ -41,7 +39,7 @@ function markPerformance(name: string, request: PreviewRequest): void {
   }
 }
 
-/** One running validation/render and one latest pending candidate per session. */
+/** One running render and one latest pending candidate per session. */
 export class MermaidPreview {
   readonly element: HTMLElement;
   readonly status: HTMLElement;
@@ -63,7 +61,6 @@ export class MermaidPreview {
     ownerDocument: Document = document,
     private readonly render = renderSafeMermaidSvg,
     private readonly onRuntimeReady?: () => void,
-    private readonly validate = validateMermaidSource,
   ) {
     this.element = ownerDocument.createElement("section");
     this.element.className = "mm-mermaid-preview mm-document-content";
@@ -117,7 +114,7 @@ export class MermaidPreview {
     );
   }
 
-  /** Validate and render a built-in candidate immediately through the shared queue. */
+  /** Render a built-in candidate directly through the shared queue. */
   renderTemplate(
     templateId: string,
     direction: MermaidTemplateDirection | undefined,
@@ -255,41 +252,11 @@ export class MermaidPreview {
     if (!request || this.disposed) return;
     this.running = true;
     try {
-      if (request.kind === "built-in-template") {
-        const runtime = await ensureMermaidRuntime();
-        if (!this.isCurrent(request)) return;
-        if (runtime)
-          markPerformance(
-            "markdown-mint-mermaid-template-runtime-ready",
-            request,
-          );
-        const validation = await this.validate(request.source, runtime);
-        this.onRuntimeReady?.();
-        if (!this.isCurrent(request)) return;
-        markPerformance(
-          "markdown-mint-mermaid-template-validation-end",
-          request,
-        );
-        if (!validation.valid) {
-          this.diagram.replaceChildren();
-          this.setStatus(
-            validation.errorKind === "runtime" ? "unavailable" : "invalid",
-            {
-              message:
-                validation.error?.trim() ||
-                (validation.errorKind === "runtime"
-                  ? "Mermaid validator is unavailable."
-                  : "Template syntax is invalid."),
-            },
-          );
-          return;
-        }
-      }
       if (!this.isCurrent(request)) return;
       if (request.kind === "built-in-template")
         markPerformance("markdown-mint-mermaid-template-render-start", request);
       const svg = await this.render(request.source, this.element);
-      if (request.kind !== "built-in-template") this.onRuntimeReady?.();
+      this.onRuntimeReady?.();
       if (request.kind === "built-in-template")
         markPerformance("markdown-mint-mermaid-template-render-end", request);
       if (!this.isCurrent(request)) return;

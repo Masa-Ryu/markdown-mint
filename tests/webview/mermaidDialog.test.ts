@@ -338,14 +338,14 @@ describe("Mermaid modal integration guards", () => {
     open();
     button("Next: Edit code").click();
     await vi.advanceTimersByTimeAsync(0);
-    expect(parse).toHaveBeenCalledTimes(1);
+    expect(parse).not.toHaveBeenCalled();
     expect(
       root.querySelector<HTMLElement>(".mm-mermaid-validation-status")!.dataset
         .validationState,
     ).toBe("template");
     expect(button("Insert diagram").disabled).toBe(false);
     button("Insert diagram").click();
-    expect(parse).toHaveBeenCalledTimes(1);
+    expect(parse).not.toHaveBeenCalled();
     expect(editCount()).toBe(1);
     expect(dialog().open).toBe(false);
   });

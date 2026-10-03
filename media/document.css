@@ -1436,6 +1436,498 @@ body {
   stroke: var(--mm-mermaid-foreground) !important;
   stroke-width: 1.5px !important;
 }
+/* Mermaid 11.17.2 emits Mindmap paint rules in an SVG <style> element. Restore
+ * only its semantic node/edge classes in both native and editor documents. */
+:is(.markdown-body, .mm-document-content)
+  .mm-mermaid
+  svg[aria-roledescription="mindmap"]
+  .mindmap-node.section-0:not(.section-root) {
+  --mm-mindmap-node-background: var(--mm-mermaid-chart-0, #0969da);
+  --mm-mindmap-node-foreground: var(--mm-mermaid-chart-text-0, #ffffff);
+}
+:is(.markdown-body, .mm-document-content)
+  .mm-mermaid
+  svg[aria-roledescription="mindmap"]
+  .mindmap-node.section-1:not(.section-root) {
+  --mm-mindmap-node-background: var(--mm-mermaid-chart-1, #bc4c00);
+  --mm-mindmap-node-foreground: var(--mm-mermaid-chart-text-1, #ffffff);
+}
+:is(.markdown-body, .mm-document-content)
+  .mm-mermaid
+  svg[aria-roledescription="mindmap"]
+  .mindmap-node.section-2:not(.section-root) {
+  --mm-mindmap-node-background: var(--mm-mermaid-chart-2, #1a7f37);
+  --mm-mindmap-node-foreground: var(--mm-mermaid-chart-text-2, #ffffff);
+}
+:is(.markdown-body, .mm-document-content)
+  .mm-mermaid
+  svg[aria-roledescription="mindmap"]
+  .mindmap-node.section-3:not(.section-root) {
+  --mm-mindmap-node-background: var(--mm-mermaid-chart-3, #cf222e);
+  --mm-mindmap-node-foreground: var(--mm-mermaid-chart-text-3, #ffffff);
+}
+:is(.markdown-body, .mm-document-content)
+  .mm-mermaid
+  svg[aria-roledescription="mindmap"]
+  .mindmap-node.section-4:not(.section-root) {
+  --mm-mindmap-node-background: var(--mm-mermaid-chart-4, #8250df);
+  --mm-mindmap-node-foreground: var(--mm-mermaid-chart-text-4, #ffffff);
+}
+:is(.markdown-body, .mm-document-content)
+  .mm-mermaid
+  svg[aria-roledescription="mindmap"]
+  .mindmap-node.section-5:not(.section-root) {
+  --mm-mindmap-node-background: var(--mm-mermaid-chart-5, #bf3989);
+  --mm-mindmap-node-foreground: var(--mm-mermaid-chart-text-5, #ffffff);
+}
+:is(.markdown-body, .mm-document-content)
+  .mm-mermaid
+  svg[aria-roledescription="mindmap"]
+  .mindmap-node.section-6:not(.section-root) {
+  --mm-mindmap-node-background: var(--mm-mermaid-chart-6, #007c84);
+  --mm-mindmap-node-foreground: var(--mm-mermaid-chart-text-6, #ffffff);
+}
+:is(.markdown-body, .mm-document-content)
+  .mm-mermaid
+  svg[aria-roledescription="mindmap"]
+  .mindmap-node.section-7:not(.section-root) {
+  --mm-mindmap-node-background: var(--mm-mermaid-chart-7, #9a6700);
+  --mm-mindmap-node-foreground: var(--mm-mermaid-chart-text-7, #ffffff);
+}
+:is(.markdown-body, .mm-document-content)
+  .mm-mermaid
+  svg[aria-roledescription="mindmap"]
+  .mindmap-node:not(.section-root)
+  .node-bkg {
+  fill: var(--mm-mindmap-node-background, var(--mm-mermaid-surface)) !important;
+  stroke: var(--mm-mermaid-line) !important;
+  stroke-width: 1.5px !important;
+}
+:is(.markdown-body, .mm-document-content)
+  .mm-mermaid
+  svg[aria-roledescription="mindmap"]
+  .mindmap-node:not(.section-root)
+  text,
+:is(.markdown-body, .mm-document-content)
+  .mm-mermaid
+  svg[aria-roledescription="mindmap"]
+  .mindmap-node:not(.section-root)
+  tspan {
+  fill: var(
+    --mm-mindmap-node-foreground,
+    var(--mm-mermaid-foreground)
+  ) !important;
+  color: var(
+    --mm-mindmap-node-foreground,
+    var(--mm-mermaid-foreground)
+  ) !important;
+}
+/* Root has both section-root and section--1; this rule deliberately wins over
+ * the generated section--1 palette rule and keeps the center neutral. */
+:is(.markdown-body, .mm-document-content)
+  .mm-mermaid
+  svg[aria-roledescription="mindmap"]
+  .mindmap-node.section-root.section--1
+  .label-container {
+  fill: var(--mm-mermaid-surface, #252526) !important;
+  stroke: var(--mm-mermaid-line) !important;
+  stroke-width: 1.5px !important;
+}
+:is(.markdown-body, .mm-document-content)
+  .mm-mermaid
+  svg[aria-roledescription="mindmap"]
+  .mindmap-node.section-root.section--1
+  text,
+:is(.markdown-body, .mm-document-content)
+  .mm-mermaid
+  svg[aria-roledescription="mindmap"]
+  .mindmap-node.section-root.section--1
+  tspan {
+  fill: var(--mm-mermaid-foreground) !important;
+  color: var(--mm-mermaid-foreground) !important;
+}
+:is(.markdown-body, .mm-document-content)
+  .mm-mermaid
+  svg[aria-roledescription="mindmap"]
+  .mindmap-node
+  .node-line {
+  fill: none !important;
+  stroke: var(--mm-mermaid-line) !important;
+  stroke-width: 1.5px !important;
+  stroke-linecap: round !important;
+}
+:is(.markdown-body, .mm-document-content)
+  .mm-mermaid
+  svg[aria-roledescription="mindmap"]
+  path.edge {
+  fill: none !important;
+  stroke: var(--mm-mermaid-line) !important;
+  stroke-width: 2px !important;
+  stroke-linecap: round !important;
+  stroke-linejoin: round !important;
+}
+:is(.markdown-body, .mm-document-content)
+  .mm-mermaid
+  svg[aria-roledescription="mindmap"]
+  .section-edge-0 {
+  stroke: var(--mm-mermaid-chart-0, #0969da) !important;
+}
+:is(.markdown-body, .mm-document-content)
+  .mm-mermaid
+  svg[aria-roledescription="mindmap"]
+  .section-edge-1 {
+  stroke: var(--mm-mermaid-chart-1, #bc4c00) !important;
+}
+:is(.markdown-body, .mm-document-content)
+  .mm-mermaid
+  svg[aria-roledescription="mindmap"]
+  .section-edge-2 {
+  stroke: var(--mm-mermaid-chart-2, #1a7f37) !important;
+}
+:is(.markdown-body, .mm-document-content)
+  .mm-mermaid
+  svg[aria-roledescription="mindmap"]
+  .section-edge-3 {
+  stroke: var(--mm-mermaid-chart-3, #cf222e) !important;
+}
+:is(.markdown-body, .mm-document-content)
+  .mm-mermaid
+  svg[aria-roledescription="mindmap"]
+  .section-edge-4 {
+  stroke: var(--mm-mermaid-chart-4, #8250df) !important;
+}
+:is(.markdown-body, .mm-document-content)
+  .mm-mermaid
+  svg[aria-roledescription="mindmap"]
+  .section-edge-5 {
+  stroke: var(--mm-mermaid-chart-5, #bf3989) !important;
+}
+:is(.markdown-body, .mm-document-content)
+  .mm-mermaid
+  svg[aria-roledescription="mindmap"]
+  .section-edge-6 {
+  stroke: var(--mm-mermaid-chart-6, #007c84) !important;
+}
+:is(.markdown-body, .mm-document-content)
+  .mm-mermaid
+  svg[aria-roledescription="mindmap"]
+  .section-edge-7 {
+  stroke: var(--mm-mermaid-chart-7, #9a6700) !important;
+}
+:is(.markdown-body, .mm-document-content)
+  .mm-mermaid
+  svg[aria-roledescription="mindmap"]
+  [class*="edge-depth-"] {
+  stroke-width: 2px !important;
+}
+:is(.markdown-body, .mm-document-content)
+  .mm-mermaid
+  svg[aria-roledescription="mindmap"]
+  .edge-depth-1 {
+  stroke-width: 3.5px !important;
+}
+:is(.markdown-body, .mm-document-content)
+  .mm-mermaid
+  svg[aria-roledescription="mindmap"]
+  .edge-depth-2 {
+  stroke-width: 3.1px !important;
+}
+:is(.markdown-body, .mm-document-content)
+  .mm-mermaid
+  svg[aria-roledescription="mindmap"]
+  .edge-depth-3 {
+  stroke-width: 2.7px !important;
+}
+:is(.markdown-body, .mm-document-content)
+  .mm-mermaid
+  svg[aria-roledescription="mindmap"]
+  .edge-depth-4 {
+  stroke-width: 2.3px !important;
+}
+:is(.markdown-body, .mm-document-content)
+  .mm-mermaid
+  svg[aria-roledescription="mindmap"]
+  .edge-depth-5 {
+  stroke-width: 1.9px !important;
+}
+/* Only Mermaid's optional label class receives the official centering rule;
+ * translated tspan labels in the built-in SVG are already centered. */
+:is(.markdown-body, .mm-document-content)
+  .mm-mermaid
+  svg[aria-roledescription="mindmap"]
+  .mindmap-node-label {
+  text-anchor: middle !important;
+  alignment-baseline: middle !important;
+  dominant-baseline: middle !important;
+  text-align: center !important;
+}
+
+/* Gantt's .section class is also used elsewhere, so every restoration rule is
+ * scoped to the runtime's aria-roledescription="gantt" SVG. */
+:is(.markdown-body, .mm-document-content)
+  .mm-mermaid
+  svg[aria-roledescription="gantt"] {
+  --mm-gantt-section-odd: var(--mm-mermaid-row-odd, #f6f8fa);
+  --mm-gantt-section-even: var(--mm-mermaid-row-even, #ffffff);
+  --mm-gantt-task: var(--mm-mermaid-chart-0, #0969da);
+  --mm-gantt-task-border: var(--mm-mermaid-line, #57606a);
+  --mm-gantt-task-text: var(--mm-mermaid-chart-text-0, #ffffff);
+  --mm-gantt-outside-text: var(--mm-mermaid-foreground, #1f2328);
+  --mm-gantt-active: var(--mm-mermaid-chart-1, #bc4c00);
+  --mm-gantt-active-border: var(--mm-mermaid-line, #57606a);
+  --mm-gantt-active-text: var(--mm-mermaid-chart-text-1, #ffffff);
+  --mm-gantt-done: var(--mm-mermaid-chart-2, #1a7f37);
+  --mm-gantt-done-border: var(--mm-mermaid-line, #57606a);
+  --mm-gantt-done-text: var(--mm-mermaid-chart-text-2, #ffffff);
+  --mm-gantt-crit: var(--mm-mermaid-chart-3, #cf222e);
+  --mm-gantt-crit-border: var(--mm-mermaid-line, #57606a);
+  --mm-gantt-crit-text: var(--mm-mermaid-chart-text-3, #ffffff);
+  --mm-gantt-grid: var(--mm-mermaid-line, #57606a);
+  --mm-gantt-today: var(--vscode-focusBorder, #0969da);
+}
+:is(.markdown-body, .mm-document-content)
+  .mm-mermaid
+  svg[aria-roledescription="gantt"]
+  .section.section0,
+:is(.markdown-body, .mm-document-content)
+  .mm-mermaid
+  svg[aria-roledescription="gantt"]
+  .section.section2 {
+  fill: var(--mm-gantt-section-odd) !important;
+  opacity: 1 !important;
+  stroke: none !important;
+}
+:is(.markdown-body, .mm-document-content)
+  .mm-mermaid
+  svg[aria-roledescription="gantt"]
+  .section.section1,
+:is(.markdown-body, .mm-document-content)
+  .mm-mermaid
+  svg[aria-roledescription="gantt"]
+  .section.section3 {
+  fill: var(--mm-gantt-section-even) !important;
+  opacity: 1 !important;
+  stroke: none !important;
+}
+:is(.markdown-body, .mm-document-content)
+  .mm-mermaid
+  svg[aria-roledescription="gantt"]
+  .task {
+  fill: var(--mm-gantt-task) !important;
+  stroke: var(--mm-gantt-task-border) !important;
+  stroke-width: 1.5px !important;
+  opacity: 1 !important;
+}
+:is(.markdown-body, .mm-document-content)
+  .mm-mermaid
+  svg[aria-roledescription="gantt"]
+  .task:is(
+    .active0,
+    .active1,
+    .active2,
+    .active3,
+    .activeCrit0,
+    .activeCrit1,
+    .activeCrit2,
+    .activeCrit3
+  ) {
+  fill: var(--mm-gantt-active) !important;
+  stroke: var(--mm-gantt-active-border) !important;
+}
+:is(.markdown-body, .mm-document-content)
+  .mm-mermaid
+  svg[aria-roledescription="gantt"]
+  .task:is(
+    .done0,
+    .done1,
+    .done2,
+    .done3,
+    .doneCrit0,
+    .doneCrit1,
+    .doneCrit2,
+    .doneCrit3
+  ) {
+  fill: var(--mm-gantt-done) !important;
+  stroke: var(--mm-gantt-done-border) !important;
+}
+:is(.markdown-body, .mm-document-content)
+  .mm-mermaid
+  svg[aria-roledescription="gantt"]
+  .task:is(
+    .crit0,
+    .crit1,
+    .crit2,
+    .crit3,
+    .activeCrit0,
+    .activeCrit1,
+    .activeCrit2,
+    .activeCrit3,
+    .doneCrit0,
+    .doneCrit1,
+    .doneCrit2,
+    .doneCrit3
+  ) {
+  stroke: var(--mm-gantt-crit-border) !important;
+}
+:is(.markdown-body, .mm-document-content)
+  .mm-mermaid
+  svg[aria-roledescription="gantt"]
+  .task:is(.crit0, .crit1, .crit2, .crit3) {
+  fill: var(--mm-gantt-crit) !important;
+}
+:is(.markdown-body, .mm-document-content)
+  .mm-mermaid
+  svg[aria-roledescription="gantt"]
+  .taskText {
+  fill: var(--mm-gantt-task-text) !important;
+  text-anchor: middle !important;
+}
+:is(.markdown-body, .mm-document-content)
+  .mm-mermaid
+  svg[aria-roledescription="gantt"]
+  .taskText:is(
+    .activeText0,
+    .activeText1,
+    .activeText2,
+    .activeText3,
+    .activeCritText0,
+    .activeCritText1,
+    .activeCritText2,
+    .activeCritText3
+  ) {
+  fill: var(--mm-gantt-active-text) !important;
+}
+:is(.markdown-body, .mm-document-content)
+  .mm-mermaid
+  svg[aria-roledescription="gantt"]
+  .taskText:is(
+    .doneText0,
+    .doneText1,
+    .doneText2,
+    .doneText3,
+    .doneCritText0,
+    .doneCritText1,
+    .doneCritText2,
+    .doneCritText3
+  ) {
+  fill: var(--mm-gantt-done-text) !important;
+}
+:is(.markdown-body, .mm-document-content)
+  .mm-mermaid
+  svg[aria-roledescription="gantt"]
+  .taskText:is(.critText0, .critText1, .critText2, .critText3) {
+  fill: var(--mm-gantt-crit-text) !important;
+}
+:is(.markdown-body, .mm-document-content)
+  .mm-mermaid
+  svg[aria-roledescription="gantt"]
+  .taskTextOutsideLeft,
+:is(.markdown-body, .mm-document-content)
+  .mm-mermaid
+  svg[aria-roledescription="gantt"]
+  .taskTextOutsideRight {
+  fill: var(--mm-gantt-outside-text) !important;
+}
+:is(.markdown-body, .mm-document-content)
+  .mm-mermaid
+  svg[aria-roledescription="gantt"]
+  .taskTextOutsideRight {
+  text-anchor: start !important;
+}
+:is(.markdown-body, .mm-document-content)
+  .mm-mermaid
+  svg[aria-roledescription="gantt"]
+  .taskTextOutsideLeft {
+  text-anchor: end !important;
+}
+:is(.markdown-body, .mm-document-content)
+  .mm-mermaid
+  svg[aria-roledescription="gantt"]
+  .titleText {
+  fill: var(--mm-mermaid-foreground) !important;
+  text-anchor: middle !important;
+}
+:is(.markdown-body, .mm-document-content)
+  .mm-mermaid
+  svg[aria-roledescription="gantt"]
+  .sectionTitle {
+  fill: var(--mm-mermaid-foreground) !important;
+  text-anchor: start !important;
+}
+:is(.markdown-body, .mm-document-content)
+  .mm-mermaid
+  svg[aria-roledescription="gantt"]
+  .grid
+  .tick
+  text {
+  fill: var(--mm-mermaid-foreground) !important;
+  text-anchor: middle !important;
+}
+:is(.markdown-body, .mm-document-content)
+  .mm-mermaid
+  svg[aria-roledescription="gantt"]
+  .grid
+  .tick
+  line,
+:is(.markdown-body, .mm-document-content)
+  .mm-mermaid
+  svg[aria-roledescription="gantt"]
+  .grid
+  path {
+  fill: none !important;
+  stroke: var(--mm-gantt-grid) !important;
+  stroke-width: 1px !important;
+}
+:is(.markdown-body, .mm-document-content)
+  .mm-mermaid
+  svg[aria-roledescription="gantt"]
+  .vert {
+  fill: none !important;
+  stroke: var(--mm-gantt-grid) !important;
+  stroke-width: 1px !important;
+}
+:is(.markdown-body, .mm-document-content)
+  .mm-mermaid
+  svg[aria-roledescription="gantt"]
+  .vertText {
+  fill: var(--mm-mermaid-foreground) !important;
+  text-anchor: middle !important;
+}
+:is(.markdown-body, .mm-document-content)
+  .mm-mermaid
+  svg[aria-roledescription="gantt"]
+  .today {
+  fill: none !important;
+  stroke: none !important;
+}
+:is(.markdown-body, .mm-document-content)
+  .mm-mermaid
+  svg[aria-roledescription="gantt"]
+  .today
+  line {
+  fill: none !important;
+  stroke: var(--mm-gantt-today) !important;
+  stroke-width: 2px !important;
+}
+:is(.markdown-body, .mm-document-content)
+  .mm-mermaid
+  svg[aria-roledescription="gantt"]
+  .exclude-range {
+  fill: var(--mm-gantt-section-even) !important;
+}
+:is(.markdown-body, .mm-document-content)
+  .mm-mermaid
+  svg[aria-roledescription="gantt"]
+  .milestone {
+  transform: rotate(45deg) scale(0.8, 0.8) !important;
+}
+:is(.markdown-body, .mm-document-content)
+  .mm-mermaid
+  svg[aria-roledescription="gantt"]
+  .milestoneText {
+  font-style: italic !important;
+}
+
 /* Mermaid 11.17.2 emits Git graph paint rules in an SVG <style> element,
  * which the editor CSP blocks. Restore this diagram type from static CSS so
  * its wide arrow paths, commit circles, and label backgrounds remain legible. */

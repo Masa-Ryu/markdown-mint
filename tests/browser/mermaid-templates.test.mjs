@@ -279,6 +279,52 @@ async function preview(page) {
   );
   return result;
 }
+async function captureSvgPreview(page, previewLocator, path) {
+  const [panel, svg, viewport] = await Promise.all([
+    previewLocator.boundingBox(),
+    previewLocator.locator("svg").boundingBox(),
+    page.evaluate(() => ({ width: innerWidth, height: innerHeight })),
+  ]);
+  assert.ok(panel && svg, "diagram preview is not measurable");
+  const left = Math.max(0, panel.x, svg.x - 8);
+  const top = Math.max(0, panel.y, svg.y - 8);
+  const right = Math.min(
+    viewport.width,
+    panel.x + panel.width,
+    svg.x + svg.width + 8,
+  );
+  const bottom = Math.min(
+    viewport.height,
+    panel.y + panel.height,
+    svg.y + svg.height + 8,
+  );
+  await page.screenshot({
+    path,
+    clip: { x: left, y: top, width: right - left, height: bottom - top },
+  });
+}
+async function applyThemeToOpenPreview(page, theme) {
+  const currentPreview = page.locator(`${dialogSelector} .mm-mermaid-preview`);
+  const oldStyle = await currentPreview.locator("svg").getAttribute("style");
+  await applyTheme(page, theme);
+  await page.waitForFunction(
+    ({ selector, previousStyle }) => {
+      const target = document.querySelector(selector);
+      const svg = target?.querySelector("svg");
+      return (
+        target?.dataset.previewState === "rendered" &&
+        target.getAttribute("aria-busy") === "false" &&
+        svg &&
+        svg.getAttribute("style") !== previousStyle
+      );
+    },
+    {
+      selector: `${dialogSelector} .mm-mermaid-preview`,
+      previousStyle: oldStyle,
+    },
+  );
+  return preview(page);
+}
 async function visibleLabels(locator, expected, label) {
   const text = await locator.locator("svg").evaluate((svg) =>
     Array.from(svg.querySelectorAll("text"))
@@ -629,6 +675,434 @@ async function assertTimelinePresentation(
   );
 }
 
+async function assertMindmapPresentation(
+  locator,
+  backdrop,
+  label,
+  { expectedNodes = 7, expectedEdges = 6 } = {},
+) {
+  const presentation = await locator
+    .locator('svg[aria-roledescription="mindmap"]')
+    .evaluate((svg) => {
+      const box = (element) => {
+        const value = element.getBBox();
+        return {
+          x: value.x,
+          y: value.y,
+          width: value.width,
+          height: value.height,
+        };
+      };
+      const screenBox = (element) => {
+        const value = element.getBoundingClientRect();
+        return {
+          x: value.left,
+          y: value.top,
+          width: value.width,
+          height: value.height,
+        };
+      };
+      const nodes = Array.from(
+        svg.querySelectorAll(".mindmap-node"),
+        (node) => {
+          const shape = node.querySelector(".node-bkg, .label-container");
+          return {
+            classes: node.getAttribute("class"),
+            label: node.textContent.trim(),
+            shape: shape
+              ? {
+                  fill: getComputedStyle(shape).fill,
+                  stroke: getComputedStyle(shape).stroke,
+                  box: box(shape),
+                  screenBox: screenBox(shape),
+                }
+              : null,
+          };
+        },
+      );
+      const edges = Array.from(svg.querySelectorAll("path.edge"), (edge) => {
+        const style = getComputedStyle(edge);
+        return {
+          classes: edge.getAttribute("class"),
+          fill: style.fill,
+          stroke: style.stroke,
+          strokeWidth: Number.parseFloat(style.strokeWidth),
+          strokeOpacity: Number(style.strokeOpacity) * Number(style.opacity),
+          box: box(edge),
+        };
+      });
+      const viewBox = svg.getAttribute("viewBox").split(/[ ,]+/).map(Number);
+      return {
+        role: svg.getAttribute("aria-roledescription"),
+        viewBox,
+        screenBox: screenBox(svg),
+        nodes,
+        edges,
+        optionalLabels: svg.querySelectorAll(".mindmap-node-label").length,
+      };
+    });
+
+  assert.equal(presentation.role, "mindmap", label + ": wrong diagram role");
+  assert.equal(
+    presentation.nodes.length,
+    expectedNodes,
+    label + ": node geometry changed",
+  );
+  assert.equal(
+    presentation.edges.length,
+    expectedEdges,
+    label + ": branch geometry changed",
+  );
+  assert.ok(
+    presentation.nodes.every((node) => node.shape?.box.width > 0),
+    label + ": a node surface is missing",
+  );
+  const root = presentation.nodes.find((node) =>
+    node.classes.includes("section-root"),
+  );
+  const branches = presentation.nodes.filter(
+    (node) => !node.classes.includes("section-root"),
+  );
+  assert.ok(root, label + ": center node missing");
+  assert.ok(
+    new Set(branches.map((node) => node.shape.fill)).size >= 2,
+    label + ": main and feature branch colors collapsed",
+  );
+  assert.notEqual(
+    root.shape.fill,
+    branches[0].shape.fill,
+    label + ": root surface lost precedence over its branch palette",
+  );
+  for (const edge of presentation.edges) {
+    assert.equal(edge.fill, "none", label + ": a mindmap connector is filled");
+    assert.notEqual(edge.stroke, "none", label + ": a branch has no stroke");
+    assert.ok(edge.strokeOpacity > 0, label + ": a branch is transparent");
+    assert.ok(edge.strokeWidth >= 1.5, label + ": a branch is too thin");
+    assert.ok(
+      edge.box.width > 0 || edge.box.height > 0,
+      label + ": a branch has no geometry",
+    );
+    const section = edge.classes.match(/section-edge-(\d+)/)?.[1];
+    if (section !== undefined) {
+      const node = branches.find((item) =>
+        item.classes.includes(`section-${section}`),
+      );
+      assert.ok(node, label + ": connector has no matching branch node");
+      assert.equal(
+        edge.stroke,
+        node.shape.fill,
+        label + `: section ${section} connector and node colors differ`,
+      );
+    }
+  }
+  assert.ok(
+    new Set(presentation.edges.map((edge) => edge.strokeWidth)).size > 1,
+    label + ": branch depth no longer affects connector weight",
+  );
+  const {
+    x: svgX,
+    y: svgY,
+    width: svgWidth,
+    height: svgHeight,
+  } = presentation.screenBox;
+  for (const node of presentation.nodes) {
+    const { x, y, width, height } = node.shape.screenBox;
+    assert.ok(
+      x >= svgX - 4 &&
+        y >= svgY - 4 &&
+        x + width <= svgX + svgWidth + 4 &&
+        y + height <= svgY + svgHeight + 4,
+      label + ": mindmap node clipped by viewBox: " + node.label,
+    );
+  }
+  await assertTextContrast(
+    locator,
+    ".mindmap-node text, .mindmap-node tspan",
+    ".mindmap-node .node-bkg, .mindmap-node .label-container",
+    backdrop,
+    label + " mindmap labels",
+  );
+  await assertVisibleStrokes(
+    locator,
+    "path.edge, .mindmap-node .node-line",
+    backdrop,
+    label + " mindmap branches",
+  );
+  return presentation;
+}
+
+async function assertGanttPresentation(
+  locator,
+  backdrop,
+  label,
+  {
+    requireStatuses = false,
+    requireSections = false,
+    requireTodayInRange = false,
+    requireTodayOutOfRange = false,
+    expectedTaskCount = 3,
+    checkDurationOrder = true,
+  } = {},
+) {
+  const presentation = await locator
+    .locator('svg[aria-roledescription="gantt"]')
+    .evaluate((svg) => {
+      const box = (element) => {
+        const value = element.getBBox();
+        return {
+          x: value.x,
+          y: value.y,
+          width: value.width,
+          height: value.height,
+        };
+      };
+      const screenBox = (element) => {
+        const value = element.getBoundingClientRect();
+        return {
+          x: value.left,
+          y: value.top,
+          width: value.width,
+          height: value.height,
+        };
+      };
+      const paint = (element) => {
+        const style = getComputedStyle(element);
+        return {
+          classes: element.getAttribute("class") ?? "",
+          text: element.textContent.trim(),
+          fill: style.fill,
+          stroke: style.stroke,
+          strokeWidth: Number.parseFloat(style.strokeWidth),
+          textAnchor: style.textAnchor,
+          box: box(element),
+          screenBox: screenBox(element),
+        };
+      };
+      const viewBox = svg.getAttribute("viewBox").split(/[ ,]+/).map(Number);
+      const today = svg.querySelector(".today line, line.today");
+      let todayPosition = null;
+      if (today) {
+        const point = svg.createSVGPoint();
+        point.x = Number(today.getAttribute("x1"));
+        point.y = Number(today.getAttribute("y1"));
+        todayPosition = point
+          .matrixTransform(today.getScreenCTM())
+          .matrixTransform(svg.getScreenCTM().inverse()).x;
+      }
+      return {
+        role: svg.getAttribute("aria-roledescription"),
+        viewBox,
+        screenBox: screenBox(svg),
+        sections: Array.from(svg.querySelectorAll("rect.section"), paint),
+        tasks: Array.from(svg.querySelectorAll("rect.task"), paint),
+        labels: Array.from(
+          svg.querySelectorAll(
+            ".taskText, .taskTextOutsideLeft, .taskTextOutsideRight",
+          ),
+          paint,
+        ),
+        titles: Array.from(
+          svg.querySelectorAll(".titleText, .sectionTitle"),
+          paint,
+        ),
+        ticks: Array.from(svg.querySelectorAll(".grid .tick text"), paint),
+        grid: Array.from(
+          svg.querySelectorAll(".grid .tick line, .grid path"),
+          paint,
+        ),
+        today: today ? paint(today) : null,
+        todayPosition,
+        milestone: svg.querySelector(".milestone"),
+        milestoneTransform: svg.querySelector(".milestone")
+          ? getComputedStyle(svg.querySelector(".milestone")).transform
+          : null,
+      };
+    });
+  assert.equal(presentation.role, "gantt", label + ": wrong diagram role");
+  assert.equal(
+    presentation.tasks.length,
+    expectedTaskCount,
+    label + ": task geometry changed",
+  );
+  assert.equal(
+    presentation.labels.length,
+    expectedTaskCount,
+    label + ": task labels missing",
+  );
+  assert.ok(
+    presentation.sections.length >= expectedTaskCount,
+    label + ": section bands missing",
+  );
+  assert.ok(
+    presentation.tasks.every(
+      (task) =>
+        task.box.width > 0 &&
+        task.box.height > 0 &&
+        task.fill !== "none" &&
+        task.stroke !== "none",
+    ),
+    label + ": task bar has no visible paint or geometry",
+  );
+  if (checkDurationOrder)
+    assert.ok(
+      presentation.tasks[1].box.width > presentation.tasks[0].box.width &&
+        presentation.tasks[0].box.width > presentation.tasks[2].box.width,
+      label + ": source task durations/order changed",
+    );
+  assert.ok(
+    presentation.ticks.length >= 5,
+    label + ": date axis labels are missing",
+  );
+  assert.ok(presentation.grid.length > 0, label + ": date grid is missing");
+  assert.ok(
+    presentation.titles.some((title) => title.classes.includes("titleText")),
+    label + ": title is missing",
+  );
+  assert.ok(
+    presentation.titles.some((title) => title.classes.includes("sectionTitle")),
+    label + ": section title is missing",
+  );
+  const mainTitle = presentation.titles.find((title) =>
+    title.classes.includes("titleText"),
+  );
+  assert.equal(
+    mainTitle.textAnchor,
+    "middle",
+    label + ": title anchor changed",
+  );
+  const {
+    x: svgX,
+    y: svgY,
+    width: svgWidth,
+    height: svgHeight,
+  } = presentation.screenBox;
+  for (const task of presentation.tasks) {
+    const { x, y, width, height } = task.screenBox;
+    assert.ok(
+      x >= svgX - 4 &&
+        y >= svgY - 4 &&
+        x + width <= svgX + svgWidth + 4 &&
+        y + height <= svgY + svgHeight + 4,
+      label + ": task is clipped by viewBox: " + task.classes,
+    );
+  }
+  for (const text of presentation.labels) {
+    if (text.classes.includes("taskTextOutsideRight"))
+      assert.equal(
+        text.textAnchor,
+        "start",
+        label + ": right label anchor changed",
+      );
+    else if (text.classes.includes("taskTextOutsideLeft"))
+      assert.equal(
+        text.textAnchor,
+        "end",
+        label + ": left label anchor changed",
+      );
+    else
+      assert.equal(
+        text.textAnchor,
+        "middle",
+        label + ": bar label anchor changed",
+      );
+  }
+  await assertTextContrast(
+    locator,
+    ".taskText",
+    ".task",
+    backdrop,
+    label + " task labels",
+  );
+  await assertExternalTextContrast(
+    locator,
+    ".taskTextOutsideLeft, .taskTextOutsideRight, .titleText, .sectionTitle, .grid .tick text, .vertText",
+    backdrop,
+    label + " axis, titles, and outside task labels",
+  );
+  await assertVisibleStrokes(
+    locator,
+    ".grid .tick line, .grid path, .vert, .today line, line.today",
+    backdrop,
+    label + " grid and today marker",
+  );
+  if (requireStatuses) {
+    const active = presentation.tasks.find((task) =>
+      /\bactive(?:Crit)?[0-3]\b/.test(task.classes),
+    );
+    const done = presentation.tasks.find((task) =>
+      /\bdone(?:Crit)?[0-3]\b/.test(task.classes),
+    );
+    const critical = presentation.tasks.find((task) =>
+      /\bcrit[0-3]\b/.test(task.classes),
+    );
+    assert.ok(
+      active && done && critical,
+      label + ": active/done/critical task states missing",
+    );
+    assert.ok(
+      new Set([active.fill, done.fill, critical.fill]).size >= 3,
+      label + ": task status colors collapsed",
+    );
+    assert.ok(presentation.milestone, label + ": milestone missing");
+    assert.notEqual(
+      presentation.milestoneTransform,
+      "none",
+      label + ": milestone diamond transform missing",
+    );
+    assert.ok(
+      presentation.labels.some((item) =>
+        item.classes.includes("taskTextOutside"),
+      ),
+      label + ": long task label did not exercise outside-bar placement",
+    );
+  }
+  if (requireSections)
+    assert.ok(
+      new Set(presentation.sections.map((section) => section.fill)).size >= 2,
+      label + ": multiple section bands are not differentiated",
+    );
+  if (requireTodayInRange) {
+    assert.ok(presentation.today, label + ": today marker missing");
+    assert.notEqual(
+      presentation.today.stroke,
+      "none",
+      label + ": today marker has no stroke",
+    );
+    assert.ok(
+      presentation.todayPosition >= presentation.viewBox[0] &&
+        presentation.todayPosition <=
+          presentation.viewBox[0] + presentation.viewBox[2],
+      label + ": today marker is outside the current date range",
+    );
+  }
+  if (requireTodayOutOfRange) {
+    assert.ok(presentation.today, label + ": today marker missing");
+    assert.ok(
+      presentation.todayPosition < presentation.viewBox[0] ||
+        presentation.todayPosition >
+          presentation.viewBox[0] + presentation.viewBox[2],
+      label + ": fixed task dates no longer keep today outside their range",
+    );
+  }
+  return presentation;
+}
+
+const templatePresentationKinds = new Map([
+  ["flowchart-basic", "flowchart"],
+  ["flowchart-decision", "flowchart"],
+  ["flowchart-grouped", "flowchart"],
+  ["sequence-request-response", "sequence"],
+  ["sequence-alternative", "sequence"],
+  ["state-workflow", "state"],
+  ["class-basic", "class"],
+  ["er-order", "er"],
+  ["gantt-project", "gantt"],
+  ["mindmap-basic", "mindmap"],
+  ["timeline-roadmap", "timeline"],
+  ["pie-composition", "pie"],
+  ["gitgraph-branch-merge", "gitGraph"],
+]);
+
 async function assertDiagramPresentation(
   locator,
   id,
@@ -636,16 +1110,30 @@ async function assertDiagramPresentation(
   label,
   options = {},
 ) {
-  if (id === "er-order") return assertErPresentation(locator, backdrop, label);
-  if (id === "pie-composition")
-    return assertPiePresentation(locator, backdrop, label);
-  if (id === "timeline-roadmap")
+  const kind = templatePresentationKinds.get(id);
+  assert.ok(kind, `${label}: no visual assertion registered for ${id}`);
+  if (kind === "er") return assertErPresentation(locator, backdrop, label);
+  if (kind === "pie") return assertPiePresentation(locator, backdrop, label);
+  if (kind === "mindmap")
+    return assertMindmapPresentation(locator, backdrop, label);
+  if (kind === "gantt")
+    return assertGanttPresentation(locator, backdrop, label, options);
+  if (kind === "timeline")
     return assertTimelinePresentation(
       locator,
       backdrop,
       label,
       options.requireTimelineCategories,
     );
+  if (kind === "gitGraph") return assertGitGraphPresentation(locator, label);
+  if (
+    kind === "flowchart" ||
+    kind === "sequence" ||
+    kind === "state" ||
+    kind === "class"
+  )
+    return assertOtherDiagramPaint(locator, id, label);
+  assert.fail(`${label}: unsupported visual assertion kind ${kind}`);
 }
 
 async function assertGitGraphPresentation(locator, label) {
@@ -876,7 +1364,20 @@ async function assertOtherDiagramPaint(locator, templateId, label) {
         slices: Array.from(svg.querySelectorAll("path.pieCircle"), paint),
       };
     }
-    return { role };
+    return {
+      role,
+      shapes: Array.from(
+        svg.querySelectorAll("path, rect, circle, polygon, ellipse, line"),
+        paint,
+      ),
+      texts: Array.from(svg.querySelectorAll("text"), (element) => ({
+        text: element.textContent.trim(),
+        box: {
+          width: element.getBBox().width,
+          height: element.getBBox().height,
+        },
+      })),
+    };
   });
   const isPainted = (paint) =>
     paint !== "none" &&
@@ -957,6 +1458,21 @@ async function assertOtherDiagramPaint(locator, templateId, label) {
     assert.ok(
       fills.size > 1,
       label + ": pie slices have collapsed to one fill",
+    );
+  } else if (templateId === "state-workflow" || templateId === "class-basic") {
+    assert.ok(presentation.role, label + ": diagram role missing");
+    const visibleGeometry = presentation.shapes.filter(
+      (shape) => shape.box.width > 0 || shape.box.height > 0,
+    );
+    assert.ok(
+      visibleGeometry.length >= 4,
+      label + ": structural diagram shapes are missing",
+    );
+    assert.ok(
+      presentation.texts.filter(
+        (text) => text.text && text.box.width > 0 && text.box.height > 0,
+      ).length >= 3,
+      label + ": structural diagram labels are missing",
     );
   }
 }
@@ -1065,8 +1581,8 @@ async function catalogChecks(page, templates, buildSource) {
       );
       assert.equal(
         initialStats.explicitValidationParses,
-        1,
-        "the first built-in candidate should validate once without a debounce",
+        0,
+        "the first built-in candidate must skip user-input validation",
       );
       assert.equal(
         initialStats.renderCalls,
@@ -1103,11 +1619,10 @@ async function catalogChecks(page, templates, buildSource) {
           tdSource !== buildSource("flowchart-basic", { direction: "TD" }),
         ) +
         Number(targetSource !== tdSource);
-      const expectedCandidateParses = expectedCandidateRenders;
       assert.equal(
         statsAtCandidate.explicitValidationParses,
-        expectedCandidateParses,
-        `${template.id}: candidate validation did not match its cache misses`,
+        0,
+        `${template.id}: selecting a built-in candidate ran prevalidation`,
       );
       assert.equal(
         statsAtCandidate.renderCalls,
@@ -1163,8 +1678,8 @@ async function catalogChecks(page, templates, buildSource) {
       const unchangedTemplateStats = await mermaidRuntimeStats(page);
       assert.equal(
         unchangedTemplateStats.explicitValidationParses,
-        expectedCandidateParses,
-        `${template.id}: editor entry repeated candidate validation`,
+        0,
+        `${template.id}: editor entry prevalidated an unchanged template`,
       );
       assert.equal(
         unchangedTemplateStats.renderCalls,
@@ -1204,7 +1719,7 @@ async function catalogChecks(page, templates, buildSource) {
       );
       assert.equal(
         (await mermaidRuntimeStats(page)).explicitValidationParses,
-        expectedCandidateParses + 1,
+        1,
         `${template.id}: user input did not use ordinary validation exactly once`,
       );
       await dialog
@@ -1218,7 +1733,7 @@ async function catalogChecks(page, templates, buildSource) {
       );
       assert.equal(
         (await mermaidRuntimeStats(page)).explicitValidationParses,
-        expectedCandidateParses + 1,
+        1,
         `${template.id}: insert repeated validation for the successful snapshot`,
       );
       const markdown = await saved(page);
@@ -1242,7 +1757,7 @@ async function catalogChecks(page, templates, buildSource) {
       await preview(page);
       assert.equal(
         (await mermaidRuntimeStats(page)).explicitValidationParses,
-        expectedCandidateParses + 2,
+        2,
         `${template.id}: existing source did not use ordinary validation`,
       );
       assert.equal(
@@ -1301,7 +1816,7 @@ async function catalogChecks(page, templates, buildSource) {
       );
       assert.equal(
         (await mermaidRuntimeStats(page)).explicitValidationParses,
-        expectedCandidateParses + 2,
+        2,
         `${template.id}: no-op update repeated existing-source validation`,
       );
       results.push({
@@ -1967,7 +2482,11 @@ async function inputValidationChecks(page) {
     .getByRole("button", { name: "Next: Edit code", exact: true })
     .click();
   await preview(page);
-  assert.equal((await mermaidRuntimeStats(page)).explicitValidationParses, 1);
+  assert.equal(
+    (await mermaidRuntimeStats(page)).explicitValidationParses,
+    0,
+    "entering the applied built-in template should not prevalidate",
+  );
 
   const input = dialog.locator(sourceSelector);
   await input.fill("flowchart TD\n    A -->");
@@ -1977,7 +2496,7 @@ async function inputValidationChecks(page) {
       "invalid",
     `${dialogSelector} .mm-mermaid-preview`,
   );
-  assert.equal((await mermaidRuntimeStats(page)).explicitValidationParses, 2);
+  assert.equal((await mermaidRuntimeStats(page)).explicitValidationParses, 1);
   assert.equal(
     await dialog.getByRole("button", { name: "Insert diagram" }).isDisabled(),
     true,
@@ -1988,7 +2507,7 @@ async function inputValidationChecks(page) {
     .click();
   await dialog.locator('[data-template-id="gitgraph-branch-merge"]').click();
   await preview(page);
-  assert.equal((await mermaidRuntimeStats(page)).explicitValidationParses, 3);
+  assert.equal((await mermaidRuntimeStats(page)).explicitValidationParses, 1);
   await dialog
     .getByRole("button", { name: "Back to code", exact: true })
     .click();
@@ -2003,7 +2522,7 @@ async function inputValidationChecks(page) {
     await dialog.locator(".mm-mermaid-validation-status").textContent(),
     /Syntax error/i,
   );
-  assert.equal((await mermaidRuntimeStats(page)).explicitValidationParses, 3);
+  assert.equal((await mermaidRuntimeStats(page)).explicitValidationParses, 1);
 
   await dialog.locator("form").evaluate((form) => {
     form.dispatchEvent(
@@ -2013,7 +2532,7 @@ async function inputValidationChecks(page) {
   await page.waitForFunction(
     () =>
       performance.getEntriesByName("markdown-mint-mermaid-validation-parse")
-        .length === 4,
+        .length === 2,
   );
   assert.equal(await saved(page), before, "invalid input was inserted");
   assert.equal(await edits(page), count, "invalid input emitted an edit");
@@ -2191,33 +2710,104 @@ async function themeChecks(page) {
     "docs/screenshots/issue-141",
   );
   await mkdir(presentationDirectory, { recursive: true });
-  const diagramIds = ["er-order", "pie-composition", "timeline-roadmap"];
-  for (const theme of themeCases) {
-    const previous = await mermaidRuntimeStats(page);
-    await applyTheme(page, theme);
-    await page.waitForFunction(
-      (renderCalls) =>
-        window.__markdownMintMermaidTemplateStats?.renderCalls > renderCalls,
-      previous.renderCalls,
+  const screenshotIds = new Set(["mindmap-basic", "gantt-project"]);
+  const templates = getMermaidTemplates();
+  assert.equal(templates.length, 13, "visual registry expects 13 templates");
+  assert.equal(
+    templatePresentationKinds.size,
+    templates.length,
+    "every built-in template must have a presentation assertion",
+  );
+  for (const template of templates)
+    assert.ok(
+      templatePresentationKinds.has(template.id),
+      `visual registry is missing ${template.id}`,
     );
-    await preview(page);
-    for (const id of diagramIds) {
-      await dialog.locator(`[data-template-id="${id}"]`).click();
-      const diagramPreview = await preview(page);
-      await visibleLabels(diagramPreview, labels[id], `${id} ${theme.id}`);
-      await assertDiagramPresentation(
-        diagramPreview,
-        id,
-        theme.backdrop,
-        `${id} candidate preview in ${theme.id}`,
-      );
-      const suffix = theme.id.replace("vscode-", "");
-      await diagramPreview.locator("svg").screenshot({
-        path: resolve(presentationDirectory, `${id}-${suffix}.png`),
-      });
-      await diagramPreview.screenshot({
-        path: resolve(output, `${id}-${suffix}.png`),
-      });
+  assert.equal(
+    templates.reduce(
+      (total, template) => total + (template.directions?.length ?? 1),
+      0,
+    ),
+    16,
+    "visual registry expects 16 source variants",
+  );
+  const themeGeometry = new Map();
+  for (const theme of themeCases) {
+    await applyThemeToOpenPreview(page, theme);
+    for (const template of templates) {
+      for (const direction of template.directions ?? [undefined]) {
+        const id = template.id;
+        await dialog.locator(`[data-template-id="${id}"]`).click();
+        if (direction)
+          await dialog.getByLabel("Template direction").selectOption(direction);
+        const diagramPreview = await preview(page);
+        await visibleLabels(
+          diagramPreview,
+          labels[id],
+          `${id} ${direction ?? ""} ${theme.id}`,
+        );
+        const presentation = await assertDiagramPresentation(
+          diagramPreview,
+          id,
+          theme.backdrop,
+          `${id} ${direction ?? ""} candidate preview in ${theme.id}`,
+        );
+        const variantId = `${id}${direction ? `-${direction}` : ""}`;
+        const themeSuffix = theme.id.replace("vscode-", "");
+        await captureSvgPreview(
+          page,
+          diagramPreview,
+          resolve(output, `catalog-${variantId}-${themeSuffix}.png`),
+        );
+        if (id === "mindmap-basic" || id === "gantt-project") {
+          const geometry =
+            id === "mindmap-basic"
+              ? {
+                  viewBox: presentation.viewBox,
+                  nodes: presentation.nodes.map((node) => ({
+                    classes: node.classes,
+                    label: node.label,
+                    box: node.shape.box,
+                  })),
+                  edges: presentation.edges.map((edge) => ({
+                    classes: edge.classes,
+                    box: edge.box,
+                  })),
+                }
+              : {
+                  viewBox: presentation.viewBox,
+                  tasks: presentation.tasks.map((task) => ({
+                    classes: task.classes,
+                    box: task.box,
+                  })),
+                  labels: presentation.labels.map((item) => ({
+                    text: item.text,
+                    box: item.box,
+                  })),
+                };
+          const previous = themeGeometry.get(id);
+          if (previous)
+            assert.deepEqual(
+              geometry,
+              previous,
+              `${id}: theme switching changed source-driven geometry`,
+            );
+          else themeGeometry.set(id, geometry);
+        }
+        if (screenshotIds.has(id)) {
+          const suffix = theme.id.replace("vscode-", "");
+          await captureSvgPreview(
+            page,
+            diagramPreview,
+            resolve(presentationDirectory, `${id}-${suffix}.png`),
+          );
+          await captureSvgPreview(
+            page,
+            diagramPreview,
+            resolve(output, `${id}-${suffix}.png`),
+          );
+        }
+      }
     }
     await page.screenshot({
       path: resolve(output, `${theme.id}-picker.png`),
@@ -2241,7 +2831,7 @@ async function themeChecks(page) {
     customThemeBefore.renderCalls,
   );
   await preview(page);
-  for (const id of diagramIds) {
+  for (const id of ["er-order", "pie-composition", "timeline-roadmap"]) {
     await dialog.locator(`[data-template-id="${id}"]`).click();
     const diagramPreview = await preview(page);
     await assertDiagramPresentation(
@@ -2320,14 +2910,7 @@ async function themeChecks(page) {
   assert.equal(requests, 1, "first-use runtime request was not shared");
   await dialog.locator('[data-template-id="gitgraph-branch-merge"]').click();
   for (const theme of themeCases) {
-    const previous = await mermaidRuntimeStats(page);
-    await applyTheme(page, theme);
-    await page.waitForFunction(
-      (renderCalls) =>
-        window.__markdownMintMermaidTemplateStats?.renderCalls > renderCalls,
-      previous.renderCalls,
-    );
-    const graphPreview = await preview(page);
+    const graphPreview = await applyThemeToOpenPreview(page, theme);
     await visibleLabels(
       graphPreview,
       labels["gitgraph-branch-merge"],
@@ -2343,7 +2926,7 @@ async function themeChecks(page) {
     });
   }
   console.log(
-    "Passed ER, pie, timeline, and Git graph in live themes; captured 16 SVG screenshots and checked narrow layout and lazy runtime loading",
+    "Passed all 13 templates and 16 variants in four live themes, plus Git graph theme switching, Mindmap/Gantt captures, narrow layout, and lazy runtime loading",
   );
 }
 
@@ -2437,7 +3020,13 @@ function templateMarkdown(templates, buildSource, ids) {
 }
 
 async function dedicatedPreviewChecks(page, templates, buildSource) {
-  const ids = ["er-order", "pie-composition", "timeline-roadmap"];
+  const ids = [
+    "er-order",
+    "pie-composition",
+    "timeline-roadmap",
+    "gantt-project",
+    "mindmap-basic",
+  ];
   const markdown = templateMarkdown(templates, buildSource, ids);
   await page.goto(`${baseUrl}/?mode=preview`, {
     waitUntil: "domcontentloaded",
@@ -2478,7 +3067,7 @@ async function nativePreviewChecks(page) {
       document.querySelectorAll(".markdown-body .mm-mermaid"),
     );
     return (
-      diagrams.length === 5 &&
+      diagrams.length === 7 &&
       diagrams.every((diagram) => diagram.querySelector("svg"))
     );
   });
@@ -2515,6 +3104,16 @@ async function nativePreviewChecks(page) {
       content.locator('.mm-mermaid:has(svg[aria-roledescription="timeline"])'),
       theme.backdrop,
       `native timeline preview ${theme.id}`,
+    );
+    await assertGanttPresentation(
+      content.locator('.mm-mermaid:has(svg[aria-roledescription="gantt"])'),
+      theme.backdrop,
+      `native Gantt preview ${theme.id}`,
+    );
+    await assertMindmapPresentation(
+      content.locator('.mm-mermaid:has(svg[aria-roledescription="mindmap"])'),
+      theme.backdrop,
+      `native Mindmap preview ${theme.id}`,
     );
   }
 }
@@ -2630,8 +3229,181 @@ async function complexDiagramInputChecks(page, templates, buildSource) {
   );
 }
 
+async function mindmapGanttFixtureChecks(page) {
+  await load(page);
+  await applyTheme(page, themeCases[0]);
+  await instrumentMermaidRuntime(page);
+  let dialog = await open(page);
+  await preview(page);
+  await dialog.locator('[data-template-id="mindmap-basic"]').click();
+  await dialog
+    .getByRole("button", { name: "Next: Edit code", exact: true })
+    .click();
+  const mindmapSource = [
+    "mindmap",
+    "    root((日本語の中心テーマ))",
+    "        機能設計",
+    "            入力と編集の流れをわかりやすく整理する長いラベル",
+    "            表示設計<br/>二行目",
+    "                モーダル内のプレビュー",
+    "        利用者",
+    "            開発チーム",
+    "            読者",
+  ].join("\n");
+  await dialog.locator(sourceSelector).fill(mindmapSource);
+  const mindmap = await preview(page);
+  await visibleLabels(
+    mindmap,
+    [
+      "日本語の中心テーマ",
+      "機能設計",
+      "入力と編集の流れ",
+      "表示設計",
+      "二行目",
+      "モーダル内のプレビュー",
+      "利用者",
+      "開発チーム",
+      "読者",
+    ],
+    "Japanese and deep mindmap fixture",
+  );
+  await assertMindmapPresentation(
+    mindmap,
+    themeCases[0].backdrop,
+    "Japanese and deep mindmap fixture",
+    { expectedNodes: 8, expectedEdges: 7 },
+  );
+  for (const theme of themeCases.slice(1)) {
+    const before = await mermaidRuntimeStats(page);
+    await applyTheme(page, theme);
+    await page.waitForFunction(
+      (renderCalls) =>
+        window.__markdownMintMermaidTemplateStats?.renderCalls > renderCalls,
+      before.renderCalls,
+    );
+    const themedMindmap = await preview(page);
+    await assertMindmapPresentation(
+      themedMindmap,
+      theme.backdrop,
+      `Japanese and deep Mindmap in ${theme.id}`,
+      { expectedNodes: 8, expectedEdges: 7 },
+    );
+  }
+
+  const dates = await page.evaluate(() => {
+    const date = (offset) => {
+      const value = new Date();
+      value.setDate(value.getDate() + offset);
+      const pad = (part) => String(part).padStart(2, "0");
+      return `${value.getFullYear()}-${pad(value.getMonth() + 1)}-${pad(value.getDate())}`;
+    };
+    return [-2, -1, 0, 1, 2, 4].map(date);
+  });
+  const ganttSource = [
+    "gantt",
+    "    title 日本語の短期リリース計画",
+    "    dateFormat YYYY-MM-DD",
+    "    axisFormat %m/%d",
+    "    section 開発",
+    `    仕様と実装をまとめて確認する長いタスク名 :long, ${dates[0]}, 1d`,
+    `    Active critical task :active, crit, active, ${dates[1]}, 2d`,
+    `    Done task :done, done, ${dates[2]}, 1d`,
+    `    Release milestone :milestone, release, ${dates[3]}, 0d`,
+    "    section 検証",
+    `    Critical task :crit, critical, ${dates[4]}, 1d`,
+  ].join("\n");
+  await load(page);
+  await applyTheme(page, themeCases[0]);
+  await instrumentMermaidRuntime(page);
+  dialog = await open(page);
+  await preview(page);
+  await dialog.locator('[data-template-id="gantt-project"]').click();
+  await dialog
+    .getByRole("button", { name: "Next: Edit code", exact: true })
+    .click();
+  await dialog.locator(sourceSelector).fill(ganttSource);
+  const gantt = await preview(page);
+  await visibleLabels(
+    gantt,
+    [
+      "日本語の短期リリース計画",
+      "開発",
+      "検証",
+      "仕様と実装をまとめて確認する長いタスク名",
+      "Active critical task",
+      "Done task",
+      "Release milestone",
+      "Critical task",
+    ],
+    "Gantt status and milestone fixture",
+  );
+  let ganttPresentation = await assertGanttPresentation(
+    gantt,
+    themeCases[0].backdrop,
+    "Gantt status and milestone fixture",
+    {
+      expectedTaskCount: 5,
+      checkDurationOrder: false,
+      requireStatuses: true,
+      requireSections: true,
+      requireTodayInRange: true,
+    },
+  );
+  assert.ok(
+    ganttPresentation.labels.some((item) =>
+      item.classes.includes("taskTextOutside"),
+    ),
+    "the long short-duration task should exercise an outside label",
+  );
+  for (const theme of themeCases.slice(1)) {
+    const before = await mermaidRuntimeStats(page);
+    await applyTheme(page, theme);
+    await page.waitForFunction(
+      (renderCalls) =>
+        window.__markdownMintMermaidTemplateStats?.renderCalls > renderCalls,
+      before.renderCalls,
+    );
+    const themedGantt = await preview(page);
+    ganttPresentation = await assertGanttPresentation(
+      themedGantt,
+      theme.backdrop,
+      `Gantt status and milestone fixture in ${theme.id}`,
+      {
+        expectedTaskCount: 5,
+        checkDurationOrder: false,
+        requireStatuses: true,
+        requireSections: true,
+        requireTodayInRange: true,
+      },
+    );
+  }
+
+  const outOfRangeSource = [
+    "gantt",
+    "    title Historical task range",
+    "    dateFormat YYYY-MM-DD",
+    "    axisFormat %Y-%m-%d",
+    "    section Archive",
+    "    Archived task :archive, 2000-01-01, 1d",
+  ].join("\n");
+  await dialog.locator(sourceSelector).fill(outOfRangeSource);
+  const outOfRange = await preview(page);
+  await assertGanttPresentation(
+    outOfRange,
+    themeCases.at(-1).backdrop,
+    "Gantt out-of-range today fixture",
+    {
+      expectedTaskCount: 1,
+      checkDurationOrder: false,
+      requireTodayOutOfRange: true,
+    },
+  );
+  console.log(
+    "Passed Japanese/deep Mindmap geometry and Gantt short-duration labels, status colors, milestone, multiple sections, and today inside/outside the date range",
+  );
+}
+
 async function templatePerformanceChecks(page) {
-  const baselineMode = process.env.MM_PERF_BASELINE === "1";
   const coldPage = await browser.newPage({
     viewport: { width: 1280, height: 900 },
   });
@@ -2642,7 +3414,7 @@ async function templatePerformanceChecks(page) {
   const coldStarted = performance.now();
   const coldDialog = await open(coldPage);
   await preview(coldPage);
-  await waitForCandidateFrame(coldPage, "flowchart-basic", baselineMode);
+  await waitForCandidateFrame(coldPage, "flowchart-basic");
   const coldElapsed = performance.now() - coldStarted;
   const coldMarks = await candidatePerformanceMarks(coldPage);
   const coldStats = await mermaidRuntimeStats(coldPage);
@@ -2652,19 +3424,13 @@ async function templatePerformanceChecks(page) {
         .getEntriesByType("resource")
         .find((entry) => entry.name.endsWith("/mermaid.js"))?.duration ?? 0,
   );
-  assert.equal(coldStats.explicitValidationParses, baselineMode ? 0 : 1);
+  assert.equal(coldStats.explicitValidationParses, 0);
   assert.equal(coldStats.renderCalls, 1);
   const firstUse = {
     openToDisplayedMs: Number(coldElapsed.toFixed(2)),
     runtimeResourceMs: Number((runtimeResource ?? 0).toFixed(2)),
-    validationMs: Number(
-      millisecondsBetween(
-        coldMarks,
-        "runtime-ready",
-        "validation-end",
-        "flowchart-basic",
-      ).toFixed(2),
-    ),
+    mintPrevalidationCalls: coldStats.explicitValidationParses,
+    mintPrevalidationMs: 0,
     renderMs: Number(
       (
         millisecondsBetween(
@@ -2699,7 +3465,11 @@ async function templatePerformanceChecks(page) {
     const wallMs = performance.now() - started;
     const marks = await candidatePerformanceMarks(page);
     const after = await mermaidRuntimeStats(page);
-    assert.equal(after.parseCalls - before.parseCalls, baselineMode ? 0 : 1);
+    assert.equal(
+      after.explicitValidationParses,
+      before.explicitValidationParses,
+      "built-in cache miss ran user-input prevalidation",
+    );
     assert.equal(
       await page
         .locator(`${dialogSelector} .mm-mermaid-preview`)
@@ -2711,25 +3481,10 @@ async function templatePerformanceChecks(page) {
     warmMissSamples.push({
       browserDisplayMs,
       wallMs,
-      mintParseCalls:
+      prevalidationCalls:
         after.explicitValidationParses - before.explicitValidationParses,
       renderCalls: candidateRenderCalls,
-      selectionToRuntimeMs: millisecondsBetween(
-        marks,
-        "selected",
-        "runtime-ready",
-        "er-order",
-      ),
-      validationMs: millisecondsBetween(
-        marks,
-        "runtime-ready",
-        "validation-end",
-        "er-order",
-      ),
-      parseMs:
-        after.parseDurations.length > before.parseDurations.length
-          ? after.parseDurations.at(-1)
-          : 0,
+      mintPrevalidationMs: 0,
       renderMs:
         millisecondsBetween(marks, "render-start", "render-end", "er-order") ||
         after.renderDurations.at(-1),
@@ -2740,9 +3495,12 @@ async function templatePerformanceChecks(page) {
         "dom",
         "er-order",
       ),
-      selectionToDisplayMs: baselineMode
-        ? wallMs
-        : millisecondsBetween(marks, "selected", "next-frame", "er-order"),
+      selectionToDisplayMs: millisecondsBetween(
+        marks,
+        "selected",
+        "next-frame",
+        "er-order",
+      ),
     });
   }
 
@@ -2786,12 +3544,13 @@ async function templatePerformanceChecks(page) {
     hitSamples.push({
       browserDisplayMs,
       wallMs,
-      selectionToDisplayMs: baselineMode
-        ? wallMs
-        : millisecondsBetween(marks, "selected", "next-frame", "er-order"),
-      renderToDomMs: baselineMode
-        ? 0
-        : millisecondsBetween(marks, "selected", "dom", "er-order"),
+      selectionToDisplayMs: millisecondsBetween(
+        marks,
+        "selected",
+        "next-frame",
+        "er-order",
+      ),
+      renderToDomMs: millisecondsBetween(marks, "selected", "dom", "er-order"),
     });
   }
 
@@ -2814,14 +3573,16 @@ async function templatePerformanceChecks(page) {
     const burstWallMs = performance.now() - burstStarted;
     const marks = await candidatePerformanceMarks(page);
     const after = await mermaidRuntimeStats(page);
-    assert.equal(after.parseCalls - before.parseCalls, baselineMode ? 0 : 1);
+    assert.equal(
+      after.explicitValidationParses,
+      before.explicitValidationParses,
+      "built-in burst ran user-input prevalidation",
+    );
     const burstRenderCalls = after.renderCalls - before.renderCalls;
-    if (baselineMode)
-      assert.ok(
-        burstRenderCalls >= 1 && burstRenderCalls <= 2,
-        `baseline burst rendered ${burstRenderCalls} candidates`,
-      );
-    else assert.equal(burstRenderCalls, 1);
+    assert.ok(
+      burstRenderCalls >= 1 && burstRenderCalls <= 2,
+      `one running and one latest pending render expected, got ${burstRenderCalls}`,
+    );
     assert.equal(
       await page
         .locator(`${dialogSelector} .mm-mermaid-preview svg`)
@@ -2832,29 +3593,16 @@ async function templatePerformanceChecks(page) {
     burstSamples.push({
       browserDisplayMs,
       wallMs: burstWallMs,
-      mintParseCalls:
+      prevalidationCalls:
         after.explicitValidationParses - before.explicitValidationParses,
       renderCalls: burstRenderCalls,
-      lastSelectionToDisplayMs: baselineMode
-        ? burstWallMs
-        : millisecondsBetween(
-            marks,
-            "selected",
-            "next-frame",
-            "pie-composition",
-          ),
-      selectionToRuntimeMs: millisecondsBetween(
+      lastSelectionToDisplayMs: millisecondsBetween(
         marks,
         "selected",
-        "runtime-ready",
+        "next-frame",
         "pie-composition",
       ),
-      validationMs: millisecondsBetween(
-        marks,
-        "runtime-ready",
-        "validation-end",
-        "pie-composition",
-      ),
+      mintPrevalidationMs: 0,
       renderMs: millisecondsBetween(
         marks,
         "render-start",
@@ -2878,11 +3626,12 @@ async function templatePerformanceChecks(page) {
     firstUse,
     warmCacheMiss: {
       samples: warmMissSamples.length,
-      mintParseCallsPerSample: summarize(warmMissSamples, "mintParseCalls"),
+      mintPrevalidationCallsPerSample: summarize(
+        warmMissSamples,
+        "prevalidationCalls",
+      ),
       rendererCallsPerSample: summarize(warmMissSamples, "renderCalls"),
-      selectionToRuntimeMs: summarize(warmMissSamples, "selectionToRuntimeMs"),
-      validationMs: summarize(warmMissSamples, "validationMs"),
-      parseMs: summarize(warmMissSamples, "parseMs"),
+      mintPrevalidationMs: 0,
       renderMs: summarize(warmMissSamples, "renderMs"),
       rendererMs: summarize(warmMissSamples, "rendererMs"),
       renderToDomMs: summarize(warmMissSamples, "renderToDomMs"),
@@ -2899,12 +3648,14 @@ async function templatePerformanceChecks(page) {
     },
     rapidLatestOnlyBurst: {
       samples: burstSamples.length,
-      mintParseCallsPerSample: summarize(burstSamples, "mintParseCalls"),
+      mintPrevalidationCallsPerSample: summarize(
+        burstSamples,
+        "prevalidationCalls",
+      ),
       rendererCallsPerSample: summarize(burstSamples, "renderCalls"),
       selectionToDisplayMs: summarize(burstSamples, "browserDisplayMs"),
       playwrightRoundTripMs: summarize(burstSamples, "wallMs"),
-      selectionToRuntimeMs: summarize(burstSamples, "selectionToRuntimeMs"),
-      validationMs: summarize(burstSamples, "validationMs"),
+      mintPrevalidationMs: 0,
       renderMs: summarize(burstSamples, "renderMs"),
       renderToDomMs: summarize(burstSamples, "renderToDomMs"),
       endToEndMs: summarize(burstSamples, "wallMs"),
@@ -3018,6 +3769,7 @@ try {
     guardChecks,
     themeChecks,
     complexDiagramInputChecks,
+    mindmapGanttFixtureChecks,
     dedicatedPreviewChecks,
     nativePreviewChecks,
     templatePerformanceChecks,

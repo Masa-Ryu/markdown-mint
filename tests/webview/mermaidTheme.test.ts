@@ -64,6 +64,22 @@ describe("Mermaid chart and surface palette", () => {
         expect(
           mermaidContrastRatio(palette.foreground, row),
         ).toBeGreaterThanOrEqual(4.5);
+      expect(colors.gantt.section).toBe(colors.rowOdd);
+      expect(colors.gantt.alternateSection).toBe(colors.rowEven);
+      for (const [text, surface] of [
+        [colors.gantt.taskText, colors.gantt.task],
+        [colors.gantt.activeTaskText, colors.gantt.activeTask],
+        [colors.gantt.doneTaskText, colors.gantt.doneTask],
+        [colors.gantt.criticalTaskText, colors.gantt.criticalTask],
+      ] as const)
+        expect(mermaidContrastRatio(text, surface)).toBeGreaterThanOrEqual(4.5);
+      for (const [border, surface] of [
+        [colors.gantt.taskBorder, colors.gantt.task],
+        [colors.gantt.activeTaskBorder, colors.gantt.activeTask],
+        [colors.gantt.doneTaskBorder, colors.gantt.doneTask],
+        [colors.gantt.criticalTaskBorder, colors.gantt.criticalTask],
+      ] as const)
+        expect(mermaidContrastRatio(border, surface)).toBeGreaterThanOrEqual(3);
     }
   });
 

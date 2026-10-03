@@ -253,8 +253,25 @@ function themeVariables(palette: MermaidPalette): Record<string, unknown> {
     activationBorderColor: line,
     activationBkgColor: surface,
     sequenceNumberColor: foreground,
-    taskBkgColor: surface,
-    taskTextColor: foreground,
+    sectionBkgColor: diagramColors.gantt.section,
+    sectionBkgColor2: diagramColors.gantt.alternateSection,
+    altSectionBkgColor: diagramColors.gantt.alternateSection,
+    gridColor: diagramColors.gantt.grid,
+    taskBkgColor: diagramColors.gantt.task,
+    taskBorderColor: diagramColors.gantt.taskBorder,
+    taskTextColor: diagramColors.gantt.taskText,
+    taskTextOutsideColor: diagramColors.gantt.outsideText,
+    taskTextDarkColor: diagramColors.gantt.taskText,
+    taskTextClickableColor: accent,
+    activeTaskBkgColor: diagramColors.gantt.activeTask,
+    activeTaskBorderColor: diagramColors.gantt.activeTaskBorder,
+    doneTaskBkgColor: diagramColors.gantt.doneTask,
+    doneTaskBorderColor: diagramColors.gantt.doneTaskBorder,
+    critBkgColor: diagramColors.gantt.criticalTask,
+    critBorderColor: diagramColors.gantt.criticalTaskBorder,
+    todayLineColor: diagramColors.gantt.today,
+    vertLineColor: diagramColors.gantt.grid,
+    excludeBkgColor: diagramColors.gantt.alternateSection,
     transitionColor: line,
     transitionLabelColor: foreground,
     stateLabelColor: foreground,
@@ -733,6 +750,268 @@ function normalizeTimelineSvg(svg: SVGElement, palette: MermaidPalette): void {
   }
 }
 
+function sectionIndex(element: Element, prefix: string): number | undefined {
+  for (const className of Array.from(element.classList)) {
+    const match = new RegExp(`^${prefix}-(\\d+)$`).exec(className);
+    if (match) return Number(match[1]);
+  }
+  return undefined;
+}
+
+function normalizeMindmapSvg(svg: SVGElement, palette: MermaidPalette): void {
+  if (svg.getAttribute("aria-roledescription") !== "mindmap") return;
+  const colors = mermaidDiagramColors(palette);
+  const branchColor = (index: number | undefined): string =>
+    index === undefined
+      ? palette.line
+      : (colors.chart[index % colors.chart.length] ?? palette.line);
+
+  for (const node of Array.from(
+    svg.querySelectorAll<SVGGElement>(".mindmap-node"),
+  )) {
+    const center = node.classList.contains("section-root");
+    const index = sectionIndex(node, "section");
+    const background = center ? palette.surface : branchColor(index);
+    const foreground = center
+      ? palette.foreground
+      : (colors.chartText[
+          index === undefined ? 0 : index % colors.chartText.length
+        ] ?? palette.foreground);
+    const border = mermaidTextColorForBackground(background, palette.line, 3);
+
+    // Only generated node backgrounds receive node paint. In particular, keep
+    // the separately-classed .edge paths out of this selection.
+    for (const shape of Array.from(
+      node.querySelectorAll<SVGElement>(".node-bkg, .label-container"),
+    )) {
+      setImportantStyle(shape, "fill", background);
+      setImportantStyle(shape, "stroke", border);
+      setImportantStyle(shape, "stroke-width", "1.5px");
+    }
+    for (const line of Array.from(
+      node.querySelectorAll<SVGElement>(".node-line"),
+    )) {
+      setImportantStyle(line, "fill", "none");
+      setImportantStyle(line, "stroke", border);
+      setImportantStyle(line, "stroke-width", "1.5px");
+      setImportantStyle(line, "stroke-linecap", "round");
+    }
+    for (const text of Array.from(
+      node.querySelectorAll<SVGElement>("text, tspan"),
+    )) {
+      setImportantStyle(text, "fill", foreground);
+      setImportantStyle(text, "color", foreground);
+    }
+    for (const backgroundShape of Array.from(
+      node.querySelectorAll<SVGElement>(".label rect.background"),
+    )) {
+      setImportantStyle(backgroundShape, "fill", "transparent");
+      setImportantStyle(backgroundShape, "stroke", "none");
+    }
+  }
+
+  for (const edge of Array.from(
+    svg.querySelectorAll<SVGPathElement>("path.edge"),
+  )) {
+    const index = sectionIndex(edge, "section-edge");
+    const depth = sectionIndex(edge, "edge-depth") ?? 1;
+    const strokeWidth = Math.max(1.5, 3.5 - Math.max(0, depth - 1) * 0.4);
+    setImportantStyle(edge, "fill", "none");
+    setImportantStyle(edge, "stroke", branchColor(index));
+    setImportantStyle(edge, "stroke-width", `${strokeWidth}px`);
+    setImportantStyle(edge, "stroke-linecap", "round");
+    setImportantStyle(edge, "stroke-linejoin", "round");
+  }
+
+  // Mermaid's official rule applies only to its optional .mindmap-node-label
+  // class. The shipped basic template instead positions <text> with a
+  // translated label group and explicit tspan coordinates; leave that path
+  // untouched to avoid centering it twice.
+  for (const label of Array.from(
+    svg.querySelectorAll<SVGElement>(".mindmap-node-label"),
+  )) {
+    setImportantStyle(label, "text-anchor", "middle");
+    setImportantStyle(label, "alignment-baseline", "middle");
+    setImportantStyle(label, "dominant-baseline", "middle");
+    setImportantStyle(label, "text-align", "center");
+  }
+}
+
+function normalizeGanttSvg(svg: SVGElement, palette: MermaidPalette): void {
+  if (svg.getAttribute("aria-roledescription") !== "gantt") return;
+  const gantt = mermaidDiagramColors(palette).gantt;
+  const variables: Readonly<Record<string, string>> = {
+    "section-odd": gantt.section,
+    "section-even": gantt.alternateSection,
+    task: gantt.task,
+    "task-border": gantt.taskBorder,
+    "task-text": gantt.taskText,
+    "outside-text": gantt.outsideText,
+    active: gantt.activeTask,
+    "active-border": gantt.activeTaskBorder,
+    "active-text": gantt.activeTaskText,
+    done: gantt.doneTask,
+    "done-border": gantt.doneTaskBorder,
+    "done-text": gantt.doneTaskText,
+    crit: gantt.criticalTask,
+    "crit-border": gantt.criticalTaskBorder,
+    "crit-text": gantt.criticalTaskText,
+    grid: gantt.grid,
+    today: gantt.today,
+  };
+  for (const [name, value] of Object.entries(variables))
+    svg.style.setProperty(`--mm-gantt-${name}`, value);
+
+  for (const section of Array.from(
+    svg.querySelectorAll<SVGElement>(".section"),
+  )) {
+    const alternate =
+      section.classList.contains("section1") ||
+      section.classList.contains("section3");
+    setImportantStyle(
+      section,
+      "fill",
+      alternate ? gantt.alternateSection : gantt.section,
+    );
+    setImportantStyle(section, "stroke", "none");
+    setImportantStyle(section, "opacity", "1");
+  }
+
+  for (const task of Array.from(svg.querySelectorAll<SVGElement>(".task"))) {
+    const active =
+      task.classList.contains("active0") ||
+      task.classList.contains("active1") ||
+      task.classList.contains("active2") ||
+      task.classList.contains("active3") ||
+      task.classList.contains("activeCrit0") ||
+      task.classList.contains("activeCrit1") ||
+      task.classList.contains("activeCrit2") ||
+      task.classList.contains("activeCrit3");
+    const done =
+      task.classList.contains("done0") ||
+      task.classList.contains("done1") ||
+      task.classList.contains("done2") ||
+      task.classList.contains("done3") ||
+      task.classList.contains("doneCrit0") ||
+      task.classList.contains("doneCrit1") ||
+      task.classList.contains("doneCrit2") ||
+      task.classList.contains("doneCrit3");
+    const critical = Array.from(task.classList).some((className) =>
+      /^(?:crit|activeCrit|doneCrit)[0-3]$/.test(className),
+    );
+    setImportantStyle(
+      task,
+      "fill",
+      active
+        ? gantt.activeTask
+        : done
+          ? gantt.doneTask
+          : critical
+            ? gantt.criticalTask
+            : gantt.task,
+    );
+    setImportantStyle(
+      task,
+      "stroke",
+      critical
+        ? gantt.criticalTaskBorder
+        : active
+          ? gantt.activeTaskBorder
+          : done
+            ? gantt.doneTaskBorder
+            : gantt.taskBorder,
+    );
+    setImportantStyle(task, "stroke-width", "1.5px");
+    setImportantStyle(task, "opacity", "1");
+  }
+
+  for (const label of Array.from(
+    svg.querySelectorAll<SVGTextElement>(
+      ".taskText, .taskTextOutsideLeft, .taskTextOutsideRight",
+    ),
+  )) {
+    const outside =
+      label.classList.contains("taskTextOutsideLeft") ||
+      label.classList.contains("taskTextOutsideRight");
+    const textColor = outside
+      ? gantt.outsideText
+      : label.classList.contains("doneCritText0") ||
+          label.classList.contains("doneCritText1") ||
+          label.classList.contains("doneCritText2") ||
+          label.classList.contains("doneCritText3") ||
+          label.classList.contains("doneText0") ||
+          label.classList.contains("doneText1") ||
+          label.classList.contains("doneText2") ||
+          label.classList.contains("doneText3")
+        ? gantt.doneTaskText
+        : label.classList.contains("activeCritText0") ||
+            label.classList.contains("activeCritText1") ||
+            label.classList.contains("activeCritText2") ||
+            label.classList.contains("activeCritText3") ||
+            label.classList.contains("activeText0") ||
+            label.classList.contains("activeText1") ||
+            label.classList.contains("activeText2") ||
+            label.classList.contains("activeText3")
+          ? gantt.activeTaskText
+          : label.classList.contains("critText0") ||
+              label.classList.contains("critText1") ||
+              label.classList.contains("critText2") ||
+              label.classList.contains("critText3")
+            ? gantt.criticalTaskText
+            : gantt.taskText;
+    setImportantStyle(label, "fill", textColor);
+    setImportantStyle(label, "color", textColor);
+    setImportantStyle(
+      label,
+      "text-anchor",
+      label.classList.contains("taskTextOutsideRight")
+        ? "start"
+        : label.classList.contains("taskTextOutsideLeft")
+          ? "end"
+          : "middle",
+    );
+  }
+
+  for (const title of Array.from(
+    svg.querySelectorAll<SVGTextElement>(".titleText"),
+  )) {
+    setImportantStyle(title, "fill", palette.foreground);
+    setImportantStyle(title, "color", palette.foreground);
+    setImportantStyle(title, "text-anchor", "middle");
+  }
+  for (const title of Array.from(
+    svg.querySelectorAll<SVGTextElement>(".sectionTitle"),
+  )) {
+    setImportantStyle(title, "fill", palette.foreground);
+    setImportantStyle(title, "color", palette.foreground);
+    setImportantStyle(title, "text-anchor", "start");
+  }
+  for (const label of Array.from(
+    svg.querySelectorAll<SVGTextElement>(".grid .tick text, .vertText"),
+  )) {
+    setImportantStyle(label, "fill", palette.foreground);
+    setImportantStyle(label, "color", palette.foreground);
+  }
+  for (const line of Array.from(
+    svg.querySelectorAll<SVGElement>(".grid .tick line, .grid path, .vert"),
+  )) {
+    setImportantStyle(line, "fill", "none");
+    setImportantStyle(line, "stroke", gantt.grid);
+    setImportantStyle(line, "stroke-width", "1px");
+  }
+  for (const line of Array.from(
+    svg.querySelectorAll<SVGElement>(".today line, line.today"),
+  )) {
+    setImportantStyle(line, "fill", "none");
+    setImportantStyle(line, "stroke", gantt.today);
+    setImportantStyle(line, "stroke-width", "2px");
+  }
+  for (const excluded of Array.from(
+    svg.querySelectorAll<SVGElement>(".exclude-range"),
+  ))
+    setImportantStyle(excluded, "fill", gantt.alternateSection);
+}
+
 /**
  * Mermaid's generated stylesheet varies between diagram types. Normalize the
  * presentation properties that otherwise fall back to SVG's black paint,
@@ -783,6 +1062,8 @@ function normalizeMermaidSvg(svg: SVGElement, palette: MermaidPalette): void {
   if (role === "er") normalizeErSvg(svg, palette);
   else if (role === "pie") normalizePieSvg(svg, palette);
   else if (role === "timeline") normalizeTimelineSvg(svg, palette);
+  else if (role === "mindmap") normalizeMindmapSvg(svg, palette);
+  else if (role === "gantt") normalizeGanttSvg(svg, palette);
 }
 
 function asSvgMarkup(value: string | { svg?: string }): string | undefined {

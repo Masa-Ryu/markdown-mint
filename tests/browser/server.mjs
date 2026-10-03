@@ -108,6 +108,25 @@ const nativeMermaidSources = [
     "    Q2 : Develop",
     "    Q3 : Release",
   ].join("\n"),
+  [
+    "gantt",
+    "    title Project schedule",
+    "    dateFormat YYYY-MM-DD",
+    "    section Project",
+    "    Design :design, 2026-01-05, 3d",
+    "    Implement :build, after design, 5d",
+    "    Test :test, after build, 2d",
+  ].join("\n"),
+  [
+    "mindmap",
+    "    root((Project))",
+    "        Goals",
+    "            Quality",
+    "            Simplicity",
+    "        People",
+    "            Team",
+    "            Users",
+  ].join("\n"),
 ];
 
 function escapeHtml(value) {

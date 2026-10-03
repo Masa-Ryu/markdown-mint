@@ -15,6 +15,27 @@ export interface MermaidDiagramColors {
   readonly chartText: readonly string[];
   readonly rowOdd: string;
   readonly rowEven: string;
+  readonly gantt: MermaidGanttColors;
+}
+
+export interface MermaidGanttColors {
+  readonly section: string;
+  readonly alternateSection: string;
+  readonly task: string;
+  readonly taskBorder: string;
+  readonly taskText: string;
+  readonly outsideText: string;
+  readonly activeTask: string;
+  readonly activeTaskBorder: string;
+  readonly activeTaskText: string;
+  readonly doneTask: string;
+  readonly doneTaskBorder: string;
+  readonly doneTaskText: string;
+  readonly criticalTask: string;
+  readonly criticalTaskBorder: string;
+  readonly criticalTaskText: string;
+  readonly grid: string;
+  readonly today: string;
 }
 
 interface RgbColor {
@@ -341,5 +362,30 @@ export function mermaidDiagramColors(
     palette.highContrast ? 0.06 : 0.08,
     palette.background,
   );
-  return { chart, chartText, rowOdd, rowEven };
+  const task = chart[0]!;
+  const activeTask = chart[1]!;
+  const doneTask = chart[2]!;
+  const criticalTask = chart[3]!;
+  const contrastingBorder = (surface: string): string =>
+    mermaidTextColorForBackground(surface, palette.line, 3);
+  const gantt: MermaidGanttColors = {
+    section: rowOdd,
+    alternateSection: rowEven,
+    task,
+    taskBorder: contrastingBorder(task),
+    taskText: chartText[0]!,
+    outsideText: palette.foreground,
+    activeTask,
+    activeTaskBorder: contrastingBorder(activeTask),
+    activeTaskText: chartText[1]!,
+    doneTask,
+    doneTaskBorder: contrastingBorder(doneTask),
+    doneTaskText: chartText[2]!,
+    criticalTask,
+    criticalTaskBorder: contrastingBorder(criticalTask),
+    criticalTaskText: chartText[3]!,
+    grid: palette.line,
+    today: palette.accent,
+  };
+  return { chart, chartText, rowOdd, rowEven, gantt };
 }

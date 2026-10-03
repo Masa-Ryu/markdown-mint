@@ -422,6 +422,120 @@ describe("local Mermaid rendering lifecycle", () => {
     enhancer.dispose();
   });
 
+  it("normalizes only Mindmap nodes and edges, preserving node shapes and branch colors", async () => {
+    const runtime: MermaidRuntime = {
+      render: () =>
+        '<svg aria-roledescription="mindmap">' +
+        '<g class="mindmap-node section-root section--1"><circle class="label-container" />' +
+        "<text><tspan>Center</tspan></text></g>" +
+        '<g class="mindmap-node section-0"><path class="node-bkg" fill="black" />' +
+        '<path class="compound-outline" fill="none" />' +
+        '<line class="node-line-0" /><text><tspan>Branch</tspan></text></g>' +
+        '<path class="edge section-edge-0 edge-depth-1" fill="black" />' +
+        "</svg>",
+    };
+    (globalThis as Record<string, unknown>).markdownMintMermaid = runtime;
+    const element = diagram("mindmap\n root((Center))\n  Branch");
+    const enhancer = enhanceRenderedContent(document.body);
+    await flush();
+
+    const svg = element.querySelector<SVGElement>("svg")!;
+    const center = svg.querySelector<SVGCircleElement>(".section-root circle")!;
+    const branch = svg.querySelector<SVGPathElement>(".section-0 .node-bkg")!;
+    const outline = svg.querySelector<SVGPathElement>(".compound-outline")!;
+    const edge = svg.querySelector<SVGPathElement>("path.edge")!;
+    expect(center.style.fill).not.toBe("black");
+    expect(branch.style.fill).not.toBe("black");
+    expect(branch.style.stroke).not.toBe("");
+    expect(outline.style.fill).toBe("");
+    expect(edge.style.fill).toBe("none");
+    expect(edge.style.stroke).not.toBe("");
+    expect(Number.parseFloat(edge.style.strokeWidth)).toBeGreaterThan(0);
+    expect(
+      svg.querySelector<SVGTextElement>(".section-0 text tspan")?.style.fill,
+    ).not.toBe("");
+    enhancer.dispose();
+  });
+
+  it("normalizes Gantt state colors and inside/outside label alignment", async () => {
+    const calls: Array<Record<string, unknown>> = [];
+    const runtime: MermaidRuntime = {
+      initialize: (options) => calls.push(options),
+      render: () =>
+        '<svg aria-roledescription="gantt">' +
+        '<rect class="section section0" />' +
+        '<rect class="task task0" />' +
+        '<rect class="task activeCrit0" />' +
+        '<rect class="task doneCrit0" />' +
+        '<text class="taskText taskText0">Inside</text>' +
+        '<text class="taskTextOutsideRight taskTextOutside0">Outside</text>' +
+        '<text class="titleText">Schedule</text>' +
+        '<text class="sectionTitle">Build</text>' +
+        '<g class="grid"><path class="domain" fill="black" />' +
+        '<g class="tick"><line /><text>Date</text></g></g>' +
+        '<line class="today" />' +
+        "</svg>",
+    };
+    (globalThis as Record<string, unknown>).markdownMintMermaid = runtime;
+    const element = diagram("gantt\n title Schedule");
+    const enhancer = enhanceRenderedContent(document.body);
+    await flush();
+
+    const svg = element.querySelector<SVGElement>("svg")!;
+    const tasks = svg.querySelectorAll<SVGRectElement>("rect.task");
+    const inside = svg.querySelector<SVGTextElement>(".taskText")!;
+    const outside = svg.querySelector<SVGTextElement>(".taskTextOutsideRight")!;
+    expect(calls[0]).toMatchObject({
+      themeVariables: {
+        sectionBkgColor: expect.any(String),
+        sectionBkgColor2: expect.any(String),
+        altSectionBkgColor: expect.any(String),
+        gridColor: expect.any(String),
+        taskBkgColor: expect.any(String),
+        taskBorderColor: expect.any(String),
+        activeTaskBkgColor: expect.any(String),
+        doneTaskBkgColor: expect.any(String),
+        critBkgColor: expect.any(String),
+        critBorderColor: expect.any(String),
+        todayLineColor: expect.any(String),
+      },
+    });
+    expect(svg.querySelector<SVGRectElement>(".section")?.style.fill).not.toBe(
+      "black",
+    );
+    expect(tasks[0]?.style.fill).not.toBe("black");
+    expect(tasks[1]?.style.fill).not.toBe(tasks[0]?.style.fill);
+    expect(tasks[1]?.style.stroke).toBe(tasks[2]?.style.stroke);
+    expect(inside.style.textAnchor).toBe("middle");
+    expect(outside.style.textAnchor).toBe("start");
+    expect(outside.style.fill).not.toBe(inside.style.fill);
+    expect(svg.querySelector<SVGPathElement>(".grid path")?.style.fill).toBe(
+      "none",
+    );
+    expect(
+      svg.querySelector<SVGLineElement>("line.today")?.style.stroke,
+    ).not.toBe("none");
+    enhancer.dispose();
+  });
+
+  it("does not apply Mindmap or Gantt corrections to diagrams with other roles", async () => {
+    const runtime: MermaidRuntime = {
+      render: () =>
+        '<svg aria-roledescription="timeline">' +
+        '<g class="section-0"><path class="node-bkg" fill="black" />' +
+        '<path class="edge" fill="black" /></g></svg>',
+    };
+    (globalThis as Record<string, unknown>).markdownMintMermaid = runtime;
+    const element = diagram("timeline\n Q1 : Plan");
+    const enhancer = enhanceRenderedContent(document.body);
+    await flush();
+
+    const svg = element.querySelector<SVGElement>("svg")!;
+    expect(svg.querySelector<SVGPathElement>(".node-bkg")?.style.fill).toBe("");
+    expect(svg.querySelector<SVGPathElement>(".edge")?.style.fill).toBe("");
+    enhancer.dispose();
+  });
+
   it("leaves filled paths in non-Git graph diagrams unchanged", async () => {
     const runtime: MermaidRuntime = {
       render: () => '<svg><path class="arrow" fill="red" /></svg>',

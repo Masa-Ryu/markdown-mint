@@ -4,10 +4,7 @@ import {
   buildMermaidTemplateSource,
   getMermaidTemplates,
 } from "../../src/webview/mermaidTemplates";
-import type {
-  MermaidValidationResult,
-  MermaidValidationSnapshot,
-} from "../../src/webview/mermaidValidation";
+import type { MermaidValidationSnapshot } from "../../src/webview/mermaidValidation";
 
 const previews: MermaidPreview[] = [];
 afterEach(() => {
@@ -22,10 +19,6 @@ const valid = (source: string): MermaidValidationSnapshot => ({
   valid: true,
   diagramType: "flowchart",
 });
-const candidateValid: MermaidValidationResult = {
-  valid: true,
-  diagramType: "flowchart",
-};
 const candidate = (
   id: string,
   direction: "TD" | "LR" | undefined = undefined,
@@ -160,16 +153,10 @@ describe("Mermaid modal preview requests", () => {
     expect(preview.diagram.textContent).toBe("");
   });
 
-  it("validates an internal candidate immediately, then reuses its theme-scoped SVG cache", async () => {
+  it("renders an internal candidate directly, then reuses its theme-scoped SVG cache", async () => {
     const render = vi.fn(async (source: string) => svg(source));
-    const validate = vi.fn(async () => candidateValid);
     const onRuntimeReady = vi.fn();
-    const preview = new MermaidPreview(
-      document,
-      render,
-      onRuntimeReady,
-      validate,
-    );
+    const preview = new MermaidPreview(document, render, onRuntimeReady);
     previews.push(preview);
 
     const flowchart = candidate("flowchart-basic", "TD");
@@ -179,10 +166,7 @@ describe("Mermaid modal preview requests", () => {
       flowchart.source,
       "1:candidate",
     );
-    await Promise.resolve();
-    expect(validate).toHaveBeenCalledTimes(1);
     await flush();
-    expect(validate).toHaveBeenCalledTimes(1);
     expect(render).toHaveBeenCalledTimes(1);
     expect(preview.diagram.textContent).toBe(flowchart.source);
     expect(preview.element.dataset.previewCache).toBe("miss");
@@ -195,7 +179,6 @@ describe("Mermaid modal preview requests", () => {
       "1:candidate",
     );
     await flush();
-    expect(validate).toHaveBeenCalledTimes(2);
     expect(render).toHaveBeenCalledTimes(2);
 
     preview.renderTemplate(
@@ -205,16 +188,14 @@ describe("Mermaid modal preview requests", () => {
       "2:draft",
     );
     expect(render).toHaveBeenCalledTimes(2);
-    expect(validate).toHaveBeenCalledTimes(2);
     expect(preview.diagram.textContent).toBe(flowchart.source);
     expect(preview.element.dataset.previewCache).toBe("hit");
     expect(onRuntimeReady).toHaveBeenCalledTimes(3);
   });
 
-  it("revalidates and rerenders a candidate after the active theme changes", async () => {
+  it("rerenders a candidate after the active theme changes", async () => {
     const render = vi.fn(async (source: string) => svg(source));
-    const validate = vi.fn(async () => candidateValid);
-    const preview = new MermaidPreview(document, render, undefined, validate);
+    const preview = new MermaidPreview(document, render);
     previews.push(preview);
     document.body.className = "vscode-light";
     await flush();
@@ -232,46 +213,10 @@ describe("Mermaid modal preview requests", () => {
     await flush();
     await flush();
     expect(render).toHaveBeenCalledTimes(2);
-    expect(validate).toHaveBeenCalledTimes(2);
     expect(preview.element.dataset.previewCache).toBe("miss");
   });
 
-  it("coalesces candidate validation and rendering to one running plus the latest pending request", async () => {
-    const validationResolvers: Array<
-      (result: MermaidValidationResult) => void
-    > = [];
-    const validate = vi.fn(
-      (_source: string) =>
-        new Promise<MermaidValidationResult>((resolve) =>
-          validationResolvers.push(resolve),
-        ),
-    );
-    const render = vi.fn(async (source: string) => svg(source));
-    const preview = new MermaidPreview(document, render, undefined, validate);
-    previews.push(preview);
-    const A = candidate("flowchart-basic", "TD");
-    const B = candidate("flowchart-decision", "TD");
-    const C = candidate("flowchart-grouped", "TD");
-    preview.renderTemplate(A.id, A.direction, A.source, "1:candidate");
-    await Promise.resolve();
-    expect(validate).toHaveBeenCalledTimes(1);
-    preview.renderTemplate(B.id, B.direction, B.source, "1:candidate");
-    preview.renderTemplate(C.id, C.direction, C.source, "1:candidate");
-    expect(render).toHaveBeenCalledTimes(0);
-    validationResolvers[0]!(candidateValid);
-    await flush();
-    expect(validate).toHaveBeenCalledTimes(2);
-    expect(validate.mock.calls[1]?.[0]).toBe(C.source);
-    expect(render).toHaveBeenCalledTimes(0);
-    validationResolvers[1]!(candidateValid);
-    await flush();
-    expect(render).toHaveBeenCalledTimes(1);
-    expect(render.mock.calls[0]?.[0]).toBe(C.source);
-    expect(preview.diagram.textContent).toBe(C.source);
-    expect(preview.element.dataset.templateCacheEntries).toBe("1");
-  });
-
-  it("keeps one running render while candidates change and does not cache stale output", async () => {
+  it("coalesces candidate rendering to one running plus the latest pending request", async () => {
     const renderResolvers: Array<(svg: SVGElement) => void> = [];
     const render = vi.fn(
       (source: string) =>
@@ -282,43 +227,34 @@ describe("Mermaid modal preview requests", () => {
           });
         }),
     );
-    const validate = vi.fn(async () => candidateValid);
-    const preview = new MermaidPreview(document, render, undefined, validate);
+    const preview = new MermaidPreview(document, render);
     previews.push(preview);
     const A = candidate("flowchart-basic", "TD");
     const B = candidate("flowchart-decision", "TD");
     const C = candidate("flowchart-grouped", "TD");
     preview.renderTemplate(A.id, A.direction, A.source, "1:candidate");
-    await flush();
     expect(render).toHaveBeenCalledTimes(1);
     preview.renderTemplate(B.id, B.direction, B.source, "1:candidate");
     preview.renderTemplate(C.id, C.direction, C.source, "1:candidate");
-    expect(validate).toHaveBeenCalledTimes(1);
+    expect(render).toHaveBeenCalledTimes(1);
     renderResolvers[0]!(svg("stale"));
     await flush();
-    expect(validate).toHaveBeenCalledTimes(2);
     expect(render).toHaveBeenCalledTimes(2);
     expect(render.mock.calls[1]?.[0]).toBe(C.source);
     renderResolvers[1]!(svg("current"));
     await flush();
     expect(preview.diagram.textContent).toBe("current");
+    expect(preview.element.dataset.templateCacheEntries).toBe("1");
 
     preview.renderTemplate(A.id, A.direction, A.source, "1:candidate");
     await flush();
-    expect(validate).toHaveBeenCalledTimes(3);
     expect(render).toHaveBeenCalledTimes(3);
   });
 
-  it("rejects invalid candidates, limits the cache to the built-in catalog, and clears it on close", async () => {
+  it("does not pre-validate built-ins, limits their cache to the catalog, and clears it on close", async () => {
     const render = vi.fn(async (source: string) => svg(source));
-    const validate = vi.fn(async () => candidateValid);
-    const preview = new MermaidPreview(document, render, undefined, validate);
+    const preview = new MermaidPreview(document, render);
     previews.push(preview);
-    validate.mockResolvedValueOnce({
-      valid: false,
-      error: "Invalid built-in source",
-      errorKind: "syntax",
-    });
     const first = candidate("flowchart-basic", "TD");
     preview.renderTemplate(
       first.id,
@@ -327,8 +263,8 @@ describe("Mermaid modal preview requests", () => {
       "1:candidate",
     );
     await flush();
-    expect(preview.element.dataset.previewState).toBe("invalid");
-    expect(render).not.toHaveBeenCalled();
+    expect(preview.element.dataset.previewState).toBe("rendered");
+    expect(render).toHaveBeenCalledTimes(1);
 
     for (const template of getMermaidTemplates()) {
       const directions = template.directions ?? [undefined];
@@ -356,7 +292,7 @@ describe("Mermaid modal preview requests", () => {
       "2:candidate",
     );
     await flush();
-    expect(validate).toHaveBeenCalled();
+    expect(render).toHaveBeenCalledTimes(17);
     expect(preview.element.dataset.previewCache).toBe("miss");
   });
 });

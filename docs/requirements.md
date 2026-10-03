@@ -63,17 +63,18 @@ shortcuts and composition events cannot commit from the picker or replacement
 confirmation.
 
 User-authored drafts keep the existing 300ms debounced validation and
-200,000-character limit. A built-in candidate enters its own immediate,
-bounded validation-and-render queue: there is one running request and one
-latest pending candidate, and an outdated validation is stopped before render
-when possible. Cache misses use the existing `validateMermaidSource()` and
-`renderSafeMermaidSvg()`; cache hits run neither. Candidate validation never
-enables Insert/Update. Applying an internal template records its id, direction,
-and exact source only in the open modal session. Insert/Update may skip the
-extra user-input validation only while that exact applied source remains
-unchanged; any input event returns the draft to normal validation. Merely
-browsing a candidate, existing Mermaid, and selected text do not get this
-exception.
+200,000-character limit. Built-in candidates use an immediate direct-render
+queue with one running request and one latest pending candidate; a newer
+request replaces the pending one, and outdated render results are discarded.
+Candidate selection never calls `validateMermaidSource()`. Cache misses go
+directly to the shared `renderSafeMermaidSvg()` path; cache hits reuse a
+sanitized, normalized SVG clone without parsing or rendering. A preview render
+result never substitutes for a successful user-input validation. Applying an
+internal template records its id, direction, and exact source only in the open
+modal session. Insert/Update may skip the extra user-input validation only
+while that exact applied source remains unchanged; actual user input returns
+the draft to normal validation. Merely browsing a candidate, existing
+Mermaid, and selected text do not get this exception.
 
 Successfully rendered candidates use a session-only LRU cache capped at the 16
 built-in template variants. Its key includes template id, direction, exact
@@ -103,15 +104,17 @@ restart preview work, progress is conveyed through `aria-busy`, and list
 navigation does not move the dialog or page. No external template requests
 occur.
 
-The ER, Pie, and Timeline assertions inspect rendered SVG text against the
-actual fill under each text position, including ER alternating rows and
-relationship labels, Pie category swatches and arc-matched percentage labels,
-and Timeline event surfaces and connectors. They run in the candidate picker,
-code editor, inserted document, existing-diagram editor, dedicated Preview, and
-native preview. The four VS Code theme classes and custom chart variables are
-covered; duplicate Pie values, reordered sectors, commented ER attributes, and
-a sectionless Timeline exercise source-driven rendering. PNG captures for each
-of the three diagrams in all four themes are kept under
+The ER, Pie, Timeline, Mindmap, and Gantt assertions inspect rendered SVG
+geometry and paint, including text-to-background contrast, labels, connectors,
+and status surfaces. They run across the candidate picker, code editor,
+inserted document, existing-diagram editor, dedicated Preview, and native
+preview. The four VS Code theme classes are switched while the dialog remains
+open; all 13 templates and 16 variants are asserted under each theme. Japanese
+deep Mindmap labels and Gantt short tasks, statuses, milestones, multiple
+sections, and today markers inside and outside the date range are covered.
+Duplicate Pie values, reordered sectors, commented ER attributes, and a
+sectionless Timeline exercise source-driven rendering. PNG captures for the
+five asserted diagram families in all four themes are kept under
 `docs/screenshots/issue-141/`.
 
 On 2026-10-03, the final footer revision passed `npm run compile`, all 1,268
@@ -180,22 +183,53 @@ current live PR head f31139 had already removed that debounce in a later
 commit. The table keeps both baselines visible so the later correction is not
 mistaken for this review pass:
 
-| Revision               | Cold open to first SVG | Warm miss, selection to display (p50/p95) |      Revisit, selection to display (p50/p95) | Three-candidate burst, last visible (p50/p95) |
-| ---------------------- | ---------------------: | ----------------------------------------: | -------------------------------------------: | --------------------------------------------: |
-| ca945 review reference |              616.07 ms |      337.4 / 342.3 ms (1 parse, 1 render) | 334 / 337.5 ms (1 parse, 1 render; no cache) |          324.5 / 337.8 ms (1 parse, 1 render) |
-| f31139 live PR head    |               295.5 ms |            20 / 22 ms (0 parse, 1 render) |             8.8 / 9.9 ms (0 parse, 0 render) |           29.1 / 31.4 ms (0 parse, 2 renders) |
-| review working tree    |              294.04 ms |          23.9 / 27 ms (1 parse, 1 render) |             8.8 / 9.5 ms (0 parse, 0 render) |            18.4 / 19.3 ms (1 parse, 1 render) |
+| Revision                             | Cold open to first SVG | Warm miss, selection to display (p50/p95) |      Revisit, selection to display (p50/p95) | Three-candidate burst, last visible (p50/p95) |
+| ------------------------------------ | ---------------------: | ----------------------------------------: | -------------------------------------------: | --------------------------------------------: |
+| ca945 review reference               |              616.07 ms |      337.4 / 342.3 ms (1 parse, 1 render) | 334 / 337.5 ms (1 parse, 1 render; no cache) |          324.5 / 337.8 ms (1 parse, 1 render) |
+| f31139 live PR head                  |               295.5 ms |            20 / 22 ms (0 parse, 1 render) |             8.8 / 9.9 ms (0 parse, 0 render) |           29.1 / 31.4 ms (0 parse, 2 renders) |
+| review working tree (pre-correction) |              294.04 ms |          23.9 / 27 ms (1 parse, 1 render) |             8.8 / 9.5 ms (0 parse, 0 render) |            18.4 / 19.3 ms (1 parse, 1 render) |
 
-The updated picker starts runtime loading immediately and has no fixed 300ms
-wait. Against ca945, the warm miss and burst remove the debounce delay; the
-warm path spends 2.2 / 2.4 ms (p50/p95) in validation and 18.1 / 18.9 ms in
-render. Against the later f31139 head, the newly required cache-miss parse
-adds a small amount to warm selection-to-display time, while a latest-only
-burst renders one candidate instead of two. Cache hits remain next-frame
-updates with zero parse and render calls. These are local measurements, not a
-hardware-independent performance claim.
+The picker has no fixed 300ms wait. The `review working tree (pre-correction)`
+row records an earlier implementation that explicitly parsed a built-in on a
+cache miss; the current policy below removes that parser call entirely. The
+historical rows remain for comparison, not as evidence for the current
+candidate path. These are local measurements, not a hardware-independent
+performance claim.
 
-This final review pass passed `npm run compile`, `npm test` (1,332 tests / 64
+The 2026-10-03 Mindmap/Gantt follow-up reproduced both failures in the shipped
+Mermaid 11.17.2 runtime with the browser harness's current CSP. Mermaid's
+inline SVG stylesheet was blocked, leaving Mindmap branch surfaces and Gantt
+task bars with black fallback paint. The shared safe renderer now applies
+role-gated Mindmap/Gantt SVG normalization, and static CSS supplies theme-aware
+node, branch, task, section, label, grid, and today-marker styles. The CSP,
+shared renderer, and sanitizer remain unchanged. The root Mindmap node keeps
+its neutral surface and original layout; Gantt source dates, task durations,
+dependencies, and milestone geometry remain renderer-owned.
+
+The CSP browser suite checks computed fill/stroke/width, node-to-branch and
+task-status colors, >=4.5:1 label contrast, axis/today visibility, text anchors,
+viewBox clipping, and unchanged geometry across theme switches. The candidate
+picker checks all 13 templates and 16 variants under Light, Dark, High Contrast,
+and High Contrast Light. It checks every template in code editing, insertion,
+and existing-diagram re-editing; dedicated Preview covers ER, Pie, Timeline,
+Mindmap, and Gantt, while native Preview checks seven diagram types under all
+four themes. Separate fixtures cover Japanese/deep Mindmap and Gantt
+short-duration, long-label, active/done/critical, milestone, multi-section, and
+today-in/out-of-range cases. Four final captures per Mindmap/Gantt diagram and
+the pre-fix Light/Dark captures plus computed-style evidence are kept in
+`docs/screenshots/issue-141/`.
+
+Interactive built-in template selection, editor entry, and unchanged
+Insert/Update use zero explicit Mint-side syntax parses. User edits still run
+the existing debounced validation and invalid text stays uncommittable. In
+Headless Chrome 153 at 1280x900, Light theme, and 20 warm samples, cold open
+was 295.76 ms; a warm cache miss was 22.3 / 23.1 ms p50/p95 (zero prevalidation,
+one render); a cache hit was 8.8 / 9.6 ms (zero parse/render); a three-candidate
+latest-only burst was 30.8 / 34.1 ms (zero prevalidation, two renders: the
+already-running request and the latest pending request). These local numbers
+do not imply a hardware-independent performance budget.
+
+This final review pass passed `npm run compile`, `npm test` (1,335 tests / 64
 files), `npm run lint` (zero errors; 94 warnings), `npm run format:check`,
 `npm run test:browser:mermaid` (all 13 templates / 16 variants, current CSP,
 four themes, Escape, rendering paths, and performance cases),
@@ -203,7 +237,7 @@ four themes, Escape, rendering paths, and performance cases),
 `npm run test:browser:html-export` (zero CSP violations),
 `npm run test:browser:pdf-export` (334,167 bytes; 13 A4 pages),
 `npm run test:extension`, and `npm run package` (0.8.0; 76 files;
-4,627,193 bytes). The latest fetched main was already an ancestor of the PR
+4,632,692 bytes). The latest fetched main was already an ancestor of the PR
 branch, so no merge conflict remained; the release workflow and 0.8.0 package
 metadata from main are retained. Real OS IME candidate UI and screen-reader
 announcements were not manually inspected. No release, tag, or workflow was

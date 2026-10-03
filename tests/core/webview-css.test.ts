@@ -6,6 +6,10 @@ const webviewCss = readFileSync(
   resolve(process.cwd(), "media/webview.css"),
   "utf8",
 );
+const documentCss = readFileSync(
+  resolve(process.cwd(), "media/document.css"),
+  "utf8",
+);
 
 describe("Mermaid dialog styles", () => {
   it("scopes the large navigation-first editor layout to Mermaid only", () => {
@@ -48,6 +52,28 @@ describe("Mermaid dialog styles", () => {
     expect(webviewCss).not.toContain(".mm-file-autocomplete-option:hover");
     expect(webviewCss).not.toContain(
       ".mm-file-autocomplete-option:not(.is-active):hover",
+    );
+  });
+});
+
+describe("native Mermaid role-scoped rendering styles", () => {
+  it("scopes Mindmap and Gantt fixes to both document hosts and their SVG roles", () => {
+    const compactCss = documentCss.replace(/\s+/g, " ");
+    expect(compactCss).toContain(
+      ':is(.markdown-body, .mm-document-content) .mm-mermaid svg[aria-roledescription="mindmap"]',
+    );
+    expect(compactCss).toContain(
+      ':is(.markdown-body, .mm-document-content) .mm-mermaid svg[aria-roledescription="gantt"]',
+    );
+    expect(documentCss).toContain(".mindmap-node.section-root.section--1");
+    expect(documentCss).toContain(".section-edge-0");
+    expect(documentCss).toContain(".edge-depth-5");
+    expect(documentCss).toContain(".taskTextOutsideRight");
+    expect(documentCss).toContain(".activeCrit0");
+    expect(documentCss).toContain(".doneCrit0");
+    expect(documentCss).toContain(".milestone");
+    expect(documentCss).not.toMatch(
+      /(?:^|,)\s*\.mm-mermaid\s+svg\s+\.section(?:[,{\s])/m,
     );
   });
 });
