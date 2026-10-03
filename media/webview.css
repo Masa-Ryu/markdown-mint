@@ -1042,6 +1042,40 @@ textarea:focus-visible {
 .mm-profile-feature-dialog[data-profile-feature="mermaid"] .mm-dialog-actions {
   grid-area: actions;
 }
+.mm-profile-feature-dialog[data-profile-feature="mermaid"]
+  .mm-dialog-actions.mm-mermaid-footer {
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+.mm-mermaid-footer .mm-mermaid-footer-helper {
+  margin-right: auto;
+  flex: 0 1 auto;
+}
+.mm-mermaid-footer .mm-mermaid-footer-main-actions {
+  display: flex;
+  min-width: 0;
+  margin-left: auto;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+.mm-profile-feature-dialog[data-profile-feature="mermaid"]
+  .mm-dialog-actions.mm-mermaid-footer
+  .mm-mermaid-primary {
+  color: var(--vscode-button-foreground, #fff);
+  border-color: var(--vscode-button-background, #0e639c);
+  background: var(--vscode-button-background, #0e639c);
+}
+.mm-profile-feature-dialog[data-profile-feature="mermaid"]
+  .mm-dialog-actions.mm-mermaid-footer
+  .mm-mermaid-primary:hover:not(:disabled) {
+  background: var(
+    --vscode-button-hoverBackground,
+    var(--vscode-button-background, #0e639c)
+  );
+}
 .mm-mermaid-workspace {
   display: flex;
   grid-area: body;
@@ -1127,7 +1161,6 @@ textarea:focus-visible {
   color: var(--vscode-descriptionForeground, var(--mm-control-foreground));
 }
 .mm-mermaid-editor-toolbar,
-.mm-mermaid-template-actions,
 .mm-mermaid-replacement-confirmation {
   display: flex;
   flex-wrap: wrap;
@@ -1186,6 +1219,10 @@ textarea:focus-visible {
   }
   .mm-mermaid-template-picker {
     grid-template-rows: minmax(70px, 0.4fr) minmax(0, 1fr);
+  }
+  .mm-profile-feature-dialog[data-profile-feature="mermaid"]
+    .mm-dialog-actions.mm-mermaid-footer {
+    flex-wrap: wrap;
   }
 }
 .mm-emoji-dialog {

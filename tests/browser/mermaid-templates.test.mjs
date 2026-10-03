@@ -132,13 +132,106 @@ async function visibleLabels(locator, expected, label) {
   );
 }
 
+async function expectFooter(
+  dialog,
+  screen,
+  helper = null,
+  confirmation = null,
+  primary = screen === "editor" ? "Insert diagram" : "Next: Edit code",
+) {
+  assert.equal(
+    await dialog.locator("h2").textContent(),
+    screen === "picker" ? "Choose a Mermaid template" : "Edit Mermaid",
+  );
+  assert.equal(
+    await dialog.locator(".mm-mermaid-template-picker").isVisible(),
+    screen === "picker",
+  );
+  assert.equal(
+    await dialog.locator(".mm-mermaid-replacement-confirmation button").count(),
+    0,
+  );
+  assert.equal(
+    await dialog.locator(".mm-mermaid-preview-slot button:visible").count(),
+    0,
+  );
+  assert.equal(
+    (await dialog.locator(".mm-mermaid-primary:visible").count()) +
+      (await dialog.locator('button[type="submit"]:visible').count()),
+    1,
+    "each state must have one primary action",
+  );
+  assert.equal(
+    await dialog
+      .getByRole("button", { name: "Use this template", exact: true })
+      .count(),
+    0,
+  );
+  assert.equal(
+    await dialog
+      .getByRole("button", { name: "Create from code", exact: true })
+      .count(),
+    0,
+  );
+  assert.deepEqual(
+    await dialog
+      .locator(".mm-mermaid-footer-main-actions button:visible")
+      .allTextContents(),
+    confirmation
+      ? ["Cancel", confirmation]
+      : screen === "picker"
+        ? ["Cancel", "Next: Edit code"]
+        : ["Cancel", primary],
+  );
+  const primaryBackground = await dialog
+    .locator(
+      ".mm-mermaid-primary:visible, .mm-mermaid-footer-main-actions button[type=submit]:visible",
+    )
+    .evaluate((element) => getComputedStyle(element).backgroundColor);
+  const cancelBackground = await dialog
+    .getByRole("button", { name: "Cancel", exact: true })
+    .evaluate((element) => getComputedStyle(element).backgroundColor);
+  assert.notEqual(
+    primaryBackground,
+    cancelBackground,
+    "the primary action should use the prominent theme button color",
+  );
+  const helperButton = dialog.locator(".mm-mermaid-footer-helper");
+  assert.equal(await helperButton.isVisible(), Boolean(helper));
+  if (helper) assert.equal(await helperButton.textContent(), helper);
+  if (!helper) {
+    const footerBox = await dialog.locator(".mm-mermaid-footer").boundingBox();
+    const actionsBox = await dialog
+      .locator(".mm-mermaid-footer-main-actions")
+      .boundingBox();
+    assert.ok(footerBox && actionsBox);
+    assert.ok(
+      Math.abs(
+        footerBox.x + footerBox.width - actionsBox.x - actionsBox.width,
+      ) <= 1,
+      "the editor actions must stay right-aligned in the common footer",
+    );
+  }
+}
+
 async function catalogChecks(page, templates, buildSource) {
   const results = [];
+  let capturedInitial = false;
+  let capturedNewEditor = false;
+  let capturedExistingEditor = false;
   for (const template of templates) {
     for (const direction of template.directions ?? [undefined]) {
       await load(page);
       const count = await edits(page);
       const dialog = await open(page);
+      await expectFooter(dialog, "picker", "Enter code directly");
+      if (!capturedInitial) {
+        await preview(page);
+        await page.screenshot({
+          path: resolve(output, "initial-picker.png"),
+        });
+        capturedInitial = true;
+      }
       await dialog.locator(`[data-template-id="${template.id}"]`).click();
       if (direction)
         await dialog.getByLabel("Template direction").selectOption(direction);
@@ -152,15 +245,26 @@ async function catalogChecks(page, templates, buildSource) {
         count,
         "candidate preview changed document",
       );
+      assert.equal(
+        await dialog.locator(sourceSelector).inputValue(),
+        "flowchart TD\n    A[Start] --> B[End]",
+        "changing a candidate changed the editing draft",
+      );
       await dialog
-        .getByRole("button", { name: "Use this template", exact: true })
+        .getByRole("button", { name: "Next: Edit code", exact: true })
         .click();
+      await expectFooter(dialog, "editor");
+      assert.equal(await edits(page), count, "Next edited the document");
       const input = dialog.locator(sourceSelector);
       assert.equal(
         await input.inputValue(),
         buildSource(template.id, { direction }),
       );
       await visibleLabels(await preview(page), labels[template.id], "draft");
+      if (!capturedNewEditor) {
+        await page.screenshot({ path: resolve(output, "new-editor.png") });
+        capturedNewEditor = true;
+      }
       const unicodeSource = (await input.inputValue()).replace(
         labels[template.id][0],
         "日本語ラベル",
@@ -176,7 +280,9 @@ async function catalogChecks(page, templates, buildSource) {
         ["日本語ラベル"],
         "Unicode draft",
       );
-      await dialog.getByRole("button", { name: "Insert", exact: true }).click();
+      await dialog
+        .getByRole("button", { name: "Insert diagram", exact: true })
+        .click();
       await page.locator(dialogSelector).waitFor({ state: "detached" });
       assert.equal(
         await edits(page),
@@ -193,6 +299,20 @@ async function catalogChecks(page, templates, buildSource) {
         await page.locator(`${dialogSelector} ${sourceSelector}`).inputValue(),
         unicodeSource,
       );
+      await expectFooter(
+        page.locator(dialogSelector),
+        "editor",
+        null,
+        null,
+        "Update diagram",
+      );
+      await preview(page);
+      if (!capturedExistingEditor) {
+        await page.screenshot({
+          path: resolve(output, "existing-editor.png"),
+        });
+        capturedExistingEditor = true;
+      }
       assert.equal(
         await page
           .locator(`${dialogSelector} .mm-mermaid-template-picker`)
@@ -202,7 +322,7 @@ async function catalogChecks(page, templates, buildSource) {
       await preview(page);
       await page
         .locator(dialogSelector)
-        .getByRole("button", { name: "Update", exact: true })
+        .getByRole("button", { name: "Update diagram", exact: true })
         .click();
       assert.equal(
         await saved(page),
@@ -232,7 +352,10 @@ async function interactionChecks(page) {
   const before = await saved(page);
   const count = await edits(page);
   let dialog = await open(page);
-  const list = dialog.getByRole("listbox");
+  await expectFooter(dialog, "picker", "Enter code directly");
+  await preview(page);
+  await page.screenshot({ path: resolve(output, "initial-picker.png") });
+  let list = dialog.getByRole("listbox");
   await list.press("ArrowDown");
   assert.equal(
     await list
@@ -249,6 +372,15 @@ async function interactionChecks(page) {
     await dialog.locator(".mm-mermaid-template-picker").isVisible(),
     true,
   );
+  const source = dialog.locator(sourceSelector);
+  const originalDraft = await source.inputValue();
+  await dialog.locator("form").evaluate((form) => {
+    form.dispatchEvent(
+      new Event("submit", { bubbles: true, cancelable: true }),
+    );
+  });
+  assert.equal(await saved(page), before, "direct picker submit wrote a draft");
+  await expectFooter(dialog, "picker", "Enter code directly");
   await list.press("Tab");
   assert.equal(
     await dialog
@@ -256,11 +388,45 @@ async function interactionChecks(page) {
       .evaluate((element) => document.activeElement === element),
     true,
   );
-  await page.keyboard.press("Escape");
+  await page.keyboard.press("Tab");
   assert.equal(
-    await dialog.locator(sourceSelector).inputValue(),
-    "flowchart TD\n    A[Start] --> B[End]",
+    await dialog
+      .getByRole("button", { name: "Enter code directly", exact: true })
+      .evaluate((element) => document.activeElement === element),
+    true,
   );
+  await page.keyboard.press("Tab");
+  assert.equal(
+    await dialog
+      .getByRole("button", { name: "Cancel", exact: true })
+      .evaluate((element) => document.activeElement === element),
+    true,
+  );
+  await page.keyboard.press("Tab");
+  assert.equal(
+    await dialog
+      .getByRole("button", { name: "Next: Edit code", exact: true })
+      .evaluate((element) => document.activeElement === element),
+    true,
+    "picker Tab order should skip the hidden submit button",
+  );
+  await dialog.locator('[data-template-id="gitgraph-branch-merge"]').click();
+  assert.equal(await source.inputValue(), originalDraft);
+  assert.equal(await saved(page), before);
+  assert.equal(await edits(page), count);
+  await dialog
+    .getByRole("button", { name: "Enter code directly", exact: true })
+    .click();
+  await expectFooter(dialog, "editor");
+  let input = dialog.locator(sourceSelector);
+  assert.equal(
+    await input.inputValue(),
+    originalDraft,
+    "Enter code directly imported the selected candidate",
+  );
+  assert.equal(await edits(page), count);
+  await preview(page);
+  await page.screenshot({ path: resolve(output, "new-editor.png") });
   await page.keyboard.press("Escape");
   assert.equal(await page.locator(dialogSelector).count(), 0);
   assert.equal(
@@ -272,11 +438,38 @@ async function interactionChecks(page) {
   assert.equal(await saved(page), before);
 
   dialog = await open(page);
-  await dialog
-    .getByRole("button", { name: "Use this template", exact: true })
-    .focus();
+  list = dialog.getByRole("listbox");
+  await list.press("ArrowDown");
+  const next = dialog.getByRole("button", {
+    name: "Next: Edit code",
+    exact: true,
+  });
+  assert.equal(await next.isEnabled(), true);
+  await next.focus();
   await page.keyboard.press("Space");
-  const input = dialog.locator(sourceSelector);
+  await expectFooter(dialog, "editor");
+  assert.equal(await edits(page), count, "Next: Edit code submitted the form");
+  input = dialog.locator(sourceSelector);
+  assert.equal(
+    await input.inputValue(),
+    buildMermaidTemplateSource("flowchart-decision"),
+    "Next: Edit code did not use the selected candidate",
+  );
+  await preview(page);
+  await page.screenshot({ path: resolve(output, "new-editor.png") });
+  await dialog.getByRole("button", { name: "Templates", exact: true }).click();
+  await expectFooter(dialog, "picker", "Back to code");
+  await page.screenshot({ path: resolve(output, "revisit-picker.png") });
+  await dialog.locator('[data-template-id="gitgraph-branch-merge"]').click();
+  await dialog
+    .getByRole("button", { name: "Back to code", exact: true })
+    .click();
+  await expectFooter(dialog, "editor");
+  assert.equal(
+    await input.inputValue(),
+    buildMermaidTemplateSource("flowchart-decision"),
+    "Back to code applied the unconfirmed candidate",
+  );
   const original =
     "flowchart TD\n    A[日本語 🐈] --> B[End]\n" +
     Array.from({ length: 70 }, (_, index) => "    %% comment " + index).join(
@@ -295,15 +488,35 @@ async function interactionChecks(page) {
     ];
   });
   await dialog.getByRole("button", { name: "Templates", exact: true }).click();
+  await expectFooter(dialog, "picker", "Back to code");
+  await page.screenshot({ path: resolve(output, "revisit-picker.png") });
   await dialog.locator('[data-template-id="gantt-project"]').click();
+  assert.equal(await input.inputValue(), original);
   await dialog
-    .getByRole("button", { name: "Use this template", exact: true })
+    .getByRole("button", { name: "Next: Edit code", exact: true })
     .click();
+  await expectFooter(dialog, "picker", "Keep current code", "Replace and edit");
+  await page.screenshot({
+    path: resolve(output, "replacement-confirmation.png"),
+  });
+  await dialog.locator("form").evaluate((form) => form.requestSubmit());
   assert.equal(
     await dialog.locator(".mm-mermaid-replacement-confirmation").isVisible(),
     true,
   );
   assert.equal(await input.inputValue(), original);
+  assert.equal(await saved(page), before);
+  assert.equal(await edits(page), count, "confirmation submit wrote a draft");
+  await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+  await page
+    .locator(".mm-discard-changes-dialog")
+    .getByRole("button", { name: "Keep editing", exact: true })
+    .click();
+  assert.equal(
+    await dialog.locator(".mm-mermaid-replacement-confirmation").isVisible(),
+    true,
+    "Cancel skipped the standard discard-change confirmation",
+  );
   await page.keyboard.press("Escape");
   assert.equal(
     await dialog.locator(".mm-mermaid-replacement-confirmation").isVisible(),
@@ -327,11 +540,20 @@ async function interactionChecks(page) {
   );
   await dialog.getByRole("button", { name: "Templates", exact: true }).click();
   await dialog
-    .getByRole("button", { name: "Use this template", exact: true })
+    .getByRole("button", { name: "Next: Edit code", exact: true })
     .click();
+  await expectFooter(dialog, "picker", "Keep current code", "Replace and edit");
+  assert.equal(
+    await dialog
+      .getByRole("button", { name: "Replace and edit", exact: true })
+      .evaluate((element) => document.activeElement === element),
+    true,
+    "the active confirmation action should receive keyboard focus",
+  );
   await dialog
-    .getByRole("button", { name: "Replace code", exact: true })
+    .getByRole("button", { name: "Replace and edit", exact: true })
     .click();
+  await expectFooter(dialog, "editor");
   await dialog
     .getByRole("button", { name: "Undo replacement", exact: true })
     .click();
@@ -348,17 +570,20 @@ async function interactionChecks(page) {
   );
   await dialog.getByRole("button", { name: "Templates", exact: true }).click();
   await dialog
-    .getByRole("button", { name: "Use this template", exact: true })
+    .getByRole("button", { name: "Next: Edit code", exact: true })
     .click();
+  await expectFooter(dialog, "picker", "Keep current code", "Replace and edit");
   await dialog
-    .getByRole("button", { name: "Replace code", exact: true })
+    .getByRole("button", { name: "Replace and edit", exact: true })
     .click();
+  await expectFooter(dialog, "editor");
   await input.fill(
     (await input.inputValue()) + "\n    %% typed after replacement",
   );
   await dialog
     .getByRole("button", { name: "Undo replacement", exact: true })
     .click();
+  await expectFooter(dialog, "editor", "Keep current code", "Restore code");
   await dialog
     .getByRole("button", { name: "Keep current code", exact: true })
     .click();
@@ -369,6 +594,7 @@ async function interactionChecks(page) {
   await dialog
     .getByRole("button", { name: "Restore code", exact: true })
     .click();
+  await expectFooter(dialog, "editor");
   assert.equal(await input.inputValue(), original);
   assert.equal(await edits(page), count);
   await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
@@ -379,6 +605,7 @@ async function interactionChecks(page) {
   assert.equal(await saved(page), before);
 
   dialog = await open(page);
+  await expectFooter(dialog, "picker", "Enter code directly");
   assert.equal(
     await dialog
       .getByRole("button", { name: "Undo replacement", exact: true })
@@ -396,6 +623,11 @@ async function interactionChecks(page) {
         new CompositionEvent("compositionstart", { bubbles: true }),
       ),
     );
+  assert.equal(
+    await dialog.getByRole("button", { name: "Next: Edit code" }).isDisabled(),
+    true,
+    "navigation should be blocked during composition",
+  );
   await dialog.getByRole("listbox").press("ArrowDown");
   await page.keyboard.press("Escape");
   assert.equal(
@@ -418,10 +650,13 @@ async function interactionChecks(page) {
     );
   await page.waitForTimeout(60);
   await dialog
-    .getByRole("button", { name: "Use this template", exact: true })
+    .getByRole("button", { name: "Next: Edit code", exact: true })
     .click();
+  await expectFooter(dialog, "editor");
   await preview(page);
-  await dialog.getByRole("button", { name: "Insert", exact: true }).click();
+  await dialog
+    .getByRole("button", { name: "Insert diagram", exact: true })
+    .click();
   const inserted = await saved(page);
   await page.keyboard.press(
     process.platform === "darwin" ? "Meta+z" : "Control+z",
@@ -460,7 +695,9 @@ async function guardChecks(page) {
   await dialog.locator('[data-template-id="mindmap-basic"]').click();
   await preview(page);
   await page.keyboard.press("Escape");
-  await dialog.getByRole("button", { name: "Update", exact: true }).click();
+  await dialog
+    .getByRole("button", { name: "Update diagram", exact: true })
+    .click();
   assert.equal(
     await saved(page),
     source,
@@ -476,7 +713,9 @@ async function guardChecks(page) {
   await page.evaluate(() =>
     window.markdownMint.view.setProps({ editable: () => false }),
   );
-  await dialog.getByRole("button", { name: "Update", exact: true }).click();
+  await dialog
+    .getByRole("button", { name: "Update diagram", exact: true })
+    .click();
   assert.equal(await edits(page), count, "read-only dialog wrote to document");
   assert.equal(
     await dialog.locator(sourceSelector).inputValue(),
@@ -527,10 +766,12 @@ async function guardChecks(page) {
   await load(page, "Before", "gitlab");
   dialog = await open(page);
   await dialog
-    .getByRole("button", { name: "Use this template", exact: true })
+    .getByRole("button", { name: "Next: Edit code", exact: true })
     .click();
   await preview(page);
-  await dialog.getByRole("button", { name: "Insert", exact: true }).click();
+  await dialog
+    .getByRole("button", { name: "Insert diagram", exact: true })
+    .click();
   assert.ok((await saved(page)).includes("```mermaid"));
   await load(page, "Before", "commonmark");
   assert.equal(
@@ -581,7 +822,7 @@ async function themeChecks(page) {
     await page.screenshot({ path: resolve(output, `${theme}-picker.png`) });
   }
   await dialog
-    .getByRole("button", { name: "Use this template", exact: true })
+    .getByRole("button", { name: "Next: Edit code", exact: true })
     .click();
   await preview(page);
   await page.setViewportSize({ width: 380, height: 640 });
@@ -605,7 +846,7 @@ async function themeChecks(page) {
   await preview(page);
   await page.screenshot({ path: resolve(output, "narrow-picker.png") });
   const box = await dialog
-    .getByRole("button", { name: "Use this template", exact: true })
+    .getByRole("button", { name: "Next: Edit code", exact: true })
     .boundingBox();
   assert.ok(box && box.y + box.height <= 640);
   await page.setViewportSize({ width: 1280, height: 900 });

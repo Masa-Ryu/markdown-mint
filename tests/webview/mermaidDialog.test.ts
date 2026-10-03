@@ -96,12 +96,12 @@ describe("Mermaid modal integration guards", () => {
 
   it("confirms loss against the opening snapshot across multiple pristine replacements", async () => {
     open();
-    button("Use this template").click();
+    button("Next: Edit code").click();
     button("Templates").click();
     root
       .querySelector<HTMLElement>('[data-template-id="state-workflow"]')!
       .click();
-    button("Use this template").click();
+    button("Next: Edit code").click();
     expect(
       root.querySelector<HTMLElement>(".mm-mermaid-replacement-confirmation")!
         .hidden,
@@ -139,7 +139,7 @@ describe("Mermaid modal integration guards", () => {
       root.querySelector<HTMLElement>(".mm-mermaid-template-picker")!.hidden,
     ).toBe(true);
     button("Templates").click();
-    button("Use this template").click();
+    button("Next: Edit code").click();
     expect(input().value).toBe("日本語の図");
     expect(
       root.querySelector<HTMLElement>(".mm-mermaid-replacement-confirmation")!
@@ -158,7 +158,7 @@ describe("Mermaid modal integration guards", () => {
       },
     };
     open();
-    button("Create from code").click();
+    button("Enter code directly").click();
     await settle();
     expect(
       root.querySelector<HTMLElement>(".mm-mermaid-preview")!.dataset
@@ -168,7 +168,7 @@ describe("Mermaid modal integration guards", () => {
       root.querySelector<HTMLElement>(".mm-mermaid-validation-status")!.dataset
         .validationState,
     ).toBe("valid");
-    button("Insert").click();
+    button("Insert diagram").click();
     expect(editCount()).toBe(1);
     expect(dialog().open).toBe(false);
   });
@@ -183,7 +183,7 @@ describe("Mermaid modal integration guards", () => {
     );
     globals.markdownMintMermaid = { parse, render: () => "<svg />" };
     open();
-    button("Create from code").click();
+    button("Enter code directly").click();
     submit();
     submit();
     expect(parse).toHaveBeenCalledTimes(1);
@@ -200,7 +200,7 @@ describe("Mermaid modal integration guards", () => {
 
   it("blocks composition commits and revalidates after composition ends", async () => {
     open();
-    button("Create from code").click();
+    button("Enter code directly").click();
     await settle();
     input().dispatchEvent(
       new CompositionEvent("compositionstart", { bubbles: true }),
@@ -211,8 +211,8 @@ describe("Mermaid modal integration guards", () => {
       new CompositionEvent("compositionend", { bubbles: true }),
     );
     await settle();
-    expect(button("Insert").disabled).toBe(false);
-    button("Insert").click();
+    expect(button("Insert diagram").disabled).toBe(false);
+    button("Insert diagram").click();
     expect(editCount()).toBe(1);
   });
 });

@@ -138,7 +138,7 @@ import {
   MermaidValidationController,
   type MermaidValidationSnapshot,
 } from "./mermaidValidation";
-import { MermaidDialog } from "./mermaidDialog";
+import { MermaidDialog, type MermaidDialogDisplayState } from "./mermaidDialog";
 import {
   copyCodeText as copyClipboardText,
   enhanceCodeBlockControls,
@@ -2687,6 +2687,13 @@ export class MarkdownEditorApp {
   private profileFeatureMermaidStatus!: HTMLSpanElement;
   private profileFeatureError!: HTMLElement;
   private profileFeatureApplyButton!: HTMLButtonElement;
+  private profileFeatureMermaidActions!: HTMLElement;
+  private profileFeatureMermaidCancelButton!: HTMLButtonElement;
+  private profileFeatureMermaidHelperButton!: HTMLButtonElement;
+  private profileFeatureMermaidRightActions!: HTMLElement;
+  private profileFeatureMermaidNextButton!: HTMLButtonElement;
+  private profileFeatureMermaidConfirmButton!: HTMLButtonElement;
+  private profileFeatureMermaidConfirmation: "apply" | "restore" | null = null;
   private mermaidValidation!: MermaidValidationController;
   private mermaidDialog!: MermaidDialog;
   private mermaidCommitRequest: object | null = null;
@@ -5808,11 +5815,45 @@ export class MarkdownEditorApp {
     cancel.addEventListener("click", () =>
       this.requestDialogCancel(dialog, "cancel-button"),
     );
+    this.profileFeatureMermaidCancelButton = cancel;
     const apply = document.createElement("button");
     apply.type = "submit";
     apply.textContent = "Insert";
     this.profileFeatureApplyButton = apply;
-    actions.append(cancel, apply);
+    this.profileFeatureMermaidActions = actions;
+    const helper = document.createElement("button");
+    helper.type = "button";
+    helper.className = "mm-mermaid-footer-helper";
+    helper.hidden = true;
+    helper.addEventListener("click", () => {
+      if (this.mermaidDialog.displayState.confirmation)
+        this.mermaidDialog.cancelReplacement();
+      else this.mermaidDialog.returnToCode();
+    });
+    this.profileFeatureMermaidHelperButton = helper;
+    const rightActions = document.createElement("div");
+    rightActions.className = "mm-mermaid-footer-main-actions";
+    rightActions.hidden = true;
+    this.profileFeatureMermaidRightActions = rightActions;
+    const next = document.createElement("button");
+    next.type = "button";
+    next.className = "mm-mermaid-primary";
+    next.textContent = "Next: Edit code";
+    next.hidden = true;
+    next.addEventListener("click", () =>
+      this.mermaidDialog.continueWithTemplate(),
+    );
+    this.profileFeatureMermaidNextButton = next;
+    const confirm = document.createElement("button");
+    confirm.type = "button";
+    confirm.className = "mm-mermaid-primary";
+    confirm.hidden = true;
+    confirm.addEventListener("click", () =>
+      this.mermaidDialog.confirmReplacement(),
+    );
+    this.profileFeatureMermaidConfirmButton = confirm;
+    rightActions.append(cancel, next, apply, confirm);
+    actions.append(helper, rightActions);
     this.mermaidDialog = new MermaidDialog({
       dialog,
       bodyField,
@@ -5827,7 +5868,17 @@ export class MarkdownEditorApp {
         if (editing) this.scheduleMermaidValidation();
         else this.mermaidValidation.cancel();
       },
+      onDisplayStateChange: (state) => {
+        const enteringConfirmation =
+          this.profileFeatureMermaidConfirmation === null &&
+          state.confirmation !== null;
+        this.profileFeatureMermaidConfirmation = state.confirmation;
+        this.updateMermaidDialogActions(state);
+        if (enteringConfirmation)
+          this.profileFeatureMermaidConfirmButton.focus();
+      },
     });
+    this.updateMermaidDialogActions(this.mermaidDialog.displayState);
     form.append(
       title,
       this.profileFeatureMermaidMeta,
@@ -5978,6 +6029,70 @@ export class MarkdownEditorApp {
     this.profileFeatureMermaidVersion.textContent =
       "Mermaid " + mermaidRuntimeVersionFromGlobal();
     this.mermaidDialog.acceptDraftValidation(snapshot);
+  }
+
+  private updateMermaidDialogActions(state: MermaidDialogDisplayState): void {
+    const isMermaid = this.profileFeatureId === "mermaid";
+    const active =
+      isMermaid && this.profileFeatureDialogOpen && state.screen !== "closed";
+    this.profileFeatureMermaidActions.classList.toggle(
+      "mm-mermaid-footer",
+      active,
+    );
+    if (!active) {
+      this.profileFeatureMermaidHelperButton.hidden = true;
+      this.profileFeatureMermaidNextButton.hidden = true;
+      this.profileFeatureMermaidConfirmButton.hidden = true;
+      this.profileFeatureApplyButton.hidden = false;
+      this.profileFeatureMermaidRightActions.hidden = true;
+      this.profileFeatureMermaidActions.append(
+        this.profileFeatureMermaidCancelButton,
+        this.profileFeatureApplyButton,
+      );
+      return;
+    }
+
+    this.profileFeatureMermaidRightActions.hidden = false;
+    this.profileFeatureMermaidRightActions.append(
+      this.profileFeatureMermaidCancelButton,
+      this.profileFeatureMermaidNextButton,
+      this.profileFeatureApplyButton,
+      this.profileFeatureMermaidConfirmButton,
+    );
+    this.profileFeatureMermaidActions.append(
+      this.profileFeatureMermaidHelperButton,
+      this.profileFeatureMermaidRightActions,
+    );
+    const picker = state.screen === "picker";
+    const confirming = state.confirmation !== null;
+    this.profileFeatureDialog.querySelector("h2")!.textContent = picker
+      ? "Choose a Mermaid template"
+      : "Edit Mermaid";
+    this.profileFeatureMermaidHelperButton.hidden = !picker && !confirming;
+    this.profileFeatureMermaidHelperButton.textContent = confirming
+      ? "Keep current code"
+      : state.pickerOrigin === "initial"
+        ? "Enter code directly"
+        : "Back to code";
+    this.profileFeatureMermaidHelperButton.disabled = state.imeActive;
+    this.profileFeatureMermaidNextButton.hidden = !picker || confirming;
+    this.profileFeatureMermaidNextButton.disabled = state.imeActive;
+    this.profileFeatureApplyButton.hidden = picker || confirming;
+    this.profileFeatureApplyButton.textContent =
+      this.profileFeatureDialog.dataset.profileFeatureMode === "edit"
+        ? "Update diagram"
+        : "Insert diagram";
+    this.profileFeatureApplyButton.disabled =
+      !this.mermaidValidationIsCurrentAndValid(
+        this.profileFeatureBodyInput.value,
+      ) ||
+      !this.mermaidDialog.canSubmit ||
+      !this.profileFeatureDialogOpen ||
+      !this.profileFeatureError.hidden;
+    this.profileFeatureMermaidConfirmButton.hidden = !confirming;
+    this.profileFeatureMermaidConfirmButton.textContent =
+      state.confirmation === "restore" ? "Restore code" : "Replace and edit";
+    this.profileFeatureMermaidConfirmButton.disabled = state.imeActive;
   }
 
   private scheduleMermaidValidation(): void {
@@ -6210,8 +6325,10 @@ export class MarkdownEditorApp {
       sourceEditor.kind === "math" ? "Edit Math" : "Edit Mermaid";
     this.profileFeatureApplyButton.textContent = "Update";
     this.profileFeatureBodyInput.value = sourceEditor.body;
-    if (sourceEditor.kind === "mermaid")
+    if (sourceEditor.kind === "mermaid") {
       this.mermaidDialog.start(sourceEditor.body, true, false);
+      this.updateMermaidDialogActions(this.mermaidDialog.displayState);
+    }
     this.profileFeatureBodyInput.focus();
     this.captureModalCancelSnapshot(this.profileFeatureDialog);
   }

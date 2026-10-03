@@ -201,7 +201,7 @@ describe("block header actions", () => {
     expect(alertView.classList.contains("mm-alert-dialog-open")).toBe(true);
     dialog
       .querySelector<HTMLButtonElement>(
-        ".mm-dialog-actions button:not([type='submit'])",
+        ".mm-dialog-actions button:not([type='submit']):not([hidden])",
       )!
       .click();
     expect(alertView.classList.contains("mm-alert-dialog-open")).toBe(false);
@@ -247,7 +247,7 @@ describe("block header actions", () => {
     ).toBe("body");
     syntheticDialog
       .querySelector<HTMLButtonElement>(
-        ".mm-dialog-actions button:not([type='submit'])",
+        ".mm-dialog-actions button:not([type='submit']):not([hidden])",
       )!
       .click();
 
@@ -424,7 +424,7 @@ describe("block header actions", () => {
       expect(dialog.querySelector("h2")?.textContent).toBe(`Edit ${label}`);
       dialog
         .querySelector<HTMLButtonElement>(
-          ".mm-dialog-actions button:not([type='submit'])",
+          ".mm-dialog-actions button:not([type='submit']):not([hidden])",
         )!
         .click();
 
@@ -443,7 +443,7 @@ describe("block header actions", () => {
         expect(dialog).not.toBeNull();
         dialog
           .querySelector<HTMLButtonElement>(
-            ".mm-dialog-actions button:not([type='submit'])",
+            ".mm-dialog-actions button:not([type='submit']):not([hidden])",
           )!
           .click();
       }
@@ -695,7 +695,7 @@ describe("block header actions", () => {
     expect(input.value).toBe("x^2");
     dialog
       .querySelector<HTMLButtonElement>(
-        ".mm-dialog-actions button:not([type='submit'])",
+        ".mm-dialog-actions button:not([type='submit']):not([hidden])",
       )!
       .click();
     expect(serializeMarkdown(app.view.state.doc)).toBe(source);
@@ -846,7 +846,7 @@ describe("block header actions", () => {
     expect(input.value).toBe("x\\$y");
     dialog
       .querySelector<HTMLButtonElement>(
-        ".mm-dialog-actions button:not([type='submit'])",
+        ".mm-dialog-actions button:not([type='submit']):not([hidden])",
       )!
       .click();
     expect(serializeMarkdown(app.view.state.doc)).toBe(source);

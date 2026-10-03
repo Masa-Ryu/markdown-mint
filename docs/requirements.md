@@ -23,10 +23,22 @@ system IME candidate UI remains unverified.
 In GitHub/GitLab profiles, an unselected Mermaid insertion opens a grouped
 single-selection template list in the existing modal. The 13 examples cover
 10 diagram types; the three flowcharts offer TD/LR candidate generation.
-Only the selected candidate renders. **Use this template** replaces the modal
-draft and opens code editing; **Create from code** uses the previous Start→End
-default. Existing diagrams and selected text open directly in code editing.
-Code and preview use two columns at wide widths and stack below 640px.
+Only the selected candidate renders. The picker footer is the only place to
+continue: **Next: Edit code** moves its candidate into the draft and opens code
+editing, while **Enter code directly** opens the existing Start→End draft
+without applying the selected candidate. Picker changes do not alter the draft
+or document. Returning from Templates with **Back to code** preserves the draft
+and input geometry. Existing diagrams and selected text open directly in code
+editing. Code and preview use two columns at wide widths and stack below 640px.
+
+The picker footer has one primary **Next: Edit code** action, and the code
+editor footer has one primary **Insert diagram** or **Update diagram** action
+beside Cancel. The preview has no separate action buttons. Replacement
+confirmation shows only its message inside the modal, with **Keep current
+code**, Cancel, and the relevant confirmation action in the shared footer.
+Only the code editor's Insert/Update actions can change the Markdown document;
+moving between the picker, confirmation, and code editor creates no document
+transaction.
 
 **Templates** preserves the draft, input selection, and scroll position while
 browsing. Replacing existing/selected/edited source requires an inline
@@ -35,9 +47,10 @@ source and input geometry, with another confirmation if the replacement has
 since been edited. Identical source is a no-op. The opening dirty baseline is
 never recaptured during template changes, and snapshots disappear on close.
 Escape closes one layer (replacement confirmation, picker, then the normal
-modal cancellation policy). Listbox arrows select; Enter/Space apply only on
-the explicit button. Submit shortcuts and composition events cannot commit
-from the picker or replacement confirmation.
+modal cancellation policy). Listbox arrows select; Enter/Space do not apply a
+candidate. Submit shortcuts and composition events cannot commit from the
+picker or replacement confirmation. Escape returns from the picker to the
+editor, and another Escape uses the normal modal cancellation policy.
 
 Draft validation uses the existing 300ms controller and 200,000-character
 limit. Candidate validation uses the same controller separately and cannot
@@ -57,28 +70,33 @@ and modal integration tests. `npm run test:browser:mermaid` uses the shipped
 Mermaid 11.17.2 bundle and CSS to render all 16 variants, checks visible
 English/Japanese labels (including Mindmap/Timeline), inserts and reopens each
 diagram, and checks no-op updates. It also exercises caret/scroll restoration,
-inline confirmation, composition events, keyboard focus, browser-host
+inline confirmation, composition events, footer visibility, picker/editor
+transitions, direct-submit guards, tab order, keyboard focus, browser-host
 Undo/Redo, external/read-only guards, GitHub/GitLab/CommonMark, four live
 themes and a 380×640 viewport. No external template requests occur.
 
-On 2026-10-03, compile, all 1,268 unit tests, lint (existing warnings only),
-format check, the full Mermaid and block browser suites, native extension-host
-acceptance, and VSIX verification passed. The five AGENTS fixtures
-(`common-test.md`, `github-test.md`, `github-test-class-B.md`, `gitlab-test.md`,
-`gitlab-test-class-B.md`) passed Rich/Preview/native display checks, and their
-code, math, and Mermaid screenshots were visually inspected. The picker was
-also inspected across light/dark/both high-contrast themes and narrow layouts.
-The existing HTML/PDF export browser suites passed with the shared rendering
-helper (HTML CSP violations: zero; PDF: 13 A4 pages).
+On 2026-10-03, the final footer revision passed `npm run compile`, all 1,268
+unit tests, `npm run lint` (zero errors; existing warnings only),
+`npm run format:check`, both Mermaid and block browser suites, and
+`npm run package`. The five AGENTS fixtures (`common-test.md`,
+`github-test.md`, `github-test-class-B.md`, `gitlab-test.md`,
+`gitlab-test-class-B.md`) passed Rich/Preview/native display checks. The Mermaid
+browser suite checked the picker across light/dark/both high-contrast themes
+and narrow layouts, and captured the initial picker, revisited picker, new and
+existing code editors, and replacement confirmation. The five final screenshots
+are retained under `docs/screenshots/issue-141/`. Native Extension
+Development Host acceptance, real OS IME candidate UI, and screen-reader
+announcements were not rerun or inspected for this final footer revision.
+The existing HTML/PDF export browser suites passed earlier with the shared
+rendering helper (HTML CSP violations: zero; PDF: 13 A4 pages).
 
-A separate isolated VS Code smoke run inserted a Japanese Mindmap template,
-saved it, exercised native Cmd+Z / Cmd+Shift+Z and saved each result, canceled
-candidate browsing, and reopened/updated an unchanged diagram. Disk bytes,
-source, and host versions matched the expected boundaries. That check used a
-temporary CDP script under `output/playwright/native-mermaid/`; it is local
-inspection evidence, not a committed portable native test. Real OS IME
-candidate UI and screen-reader announcements were not inspected because this
-run used automated composition events and had no assistive-technology session.
+A separate isolated VS Code smoke run on the initial Issue #141 UI inserted a
+Japanese Mindmap template, saved it, exercised native Cmd+Z / Cmd+Shift+Z and
+saved each result, canceled candidate browsing, and reopened/updated an
+unchanged diagram. Disk bytes, source, and host versions matched the expected
+boundaries. That check used a temporary CDP script under
+`output/playwright/native-mermaid/`; it predates this footer revision and does
+not verify its final screen flow.
 
 The native save smoke also showed a misleading “VS Code did not save the
 Markdown document” notification despite matching saved bytes and a clean
@@ -86,18 +104,19 @@ editor. The same notification was independently reproduced using the baseline
 0.7.0 VSIX; the host save implementation is unchanged in this PR.
 
 Five fresh local Chromium contexts per case used the same
-`scripts/benchmark-mermaid-startup.mjs` command before/after. These medians are
-local measurements, not a claim of acceleration or a hardware-independent
-budget:
+`scripts/benchmark-mermaid-startup.mjs` command on `origin/main` 0.7.0 and the
+final 0.8.0 revision on 2026-10-03. The VSIX sizes were verified from the
+corresponding 76-file packages. These are local measurements, not a claim of
+acceleration or a hardware-independent budget:
 
 | Measurement                        | main 0.7.0 |     0.8.0 |
 | ---------------------------------- | ---------: | --------: |
-| Webview bundle bytes               |  1,753,249 | 1,775,705 |
+| Webview bundle bytes               |  1,753,249 | 1,779,727 |
 | Mermaid loader bytes               |    464,943 |   465,257 |
 | Mermaid bundle bytes               |  3,768,758 | 3,769,089 |
-| VSIX bytes (76 files)              |  4,603,739 | 4,611,281 |
-| Ordinary document editability      |   195.0 ms |  196.0 ms |
-| First Mermaid use to rendered SVG  |   252.1 ms |  253.7 ms |
+| VSIX bytes (76 files)              |  4,603,843 | 4,612,240 |
+| Ordinary document editability      |   222.0 ms |  221.2 ms |
+| First Mermaid use to rendered SVG  |   275.6 ms |  276.7 ms |
 | Ordinary document runtime requests |          0 |         0 |
 | First-use runtime requests         |          1 |         1 |
 
@@ -325,15 +344,16 @@ textarea retains its accessible name. The header reports the bundled Mermaid
 runtime version and the current validation state, including a humanized
 diagram type after a successful parse.
 
-The dialog titles are `Insert Mermaid` and `Edit Mermaid`; the shared feature
-labels and the existing Math, Alert, Details, and other feature dialog titles
-remain unchanged.
+An empty new Mermaid insertion opens at `Choose a Mermaid template`; the code
+editor title is `Edit Mermaid` for both new and existing diagrams. Existing
+Math, Alert, Details, and other feature dialog titles remain unchanged.
 
 Validation removes the same NUL characters and Mermaid directives as the
 renderer before calling the bundled Mermaid runtime's `parse()` method. It is
 debounced during typing, rejects empty and over-limit input, and guards
-delayed results against newer input or a closed dialog. Insert and Update,
-including Ctrl/Cmd+Enter, require a current successful validation result.
+delayed results against newer input or a closed dialog. Insert diagram and
+Update diagram, including Ctrl/Cmd+Enter, require a current successful
+validation result.
 The renderer continues to use the existing strict security configuration and
 sanitization path.
 

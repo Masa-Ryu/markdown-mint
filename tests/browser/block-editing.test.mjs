@@ -993,7 +993,7 @@ async function testProfileFeaturesAtStructuralBoundary(page) {
       id: "mermaid",
       configure: async (dialog) => {
         await dialog
-          .getByRole("button", { name: "Create from code", exact: true })
+          .getByRole("button", { name: "Enter code directly", exact: true })
           .click();
         await dialog
           .locator('[data-feature-field="body"]')
@@ -1022,7 +1022,10 @@ async function testProfileFeaturesAtStructuralBoundary(page) {
     await page.locator(`[data-profile-feature="${entry.id}"]`).click();
     await dialog.waitFor({ state: "visible" });
     await entry.configure(dialog);
-    await dialog.getByRole("button", { name: "Insert", exact: true }).click();
+    const submitLabel = entry.id === "mermaid" ? "Insert diagram" : "Insert";
+    await dialog
+      .getByRole("button", { name: submitLabel, exact: true })
+      .click();
     const committed = await saved(page);
     assert.equal(committed.markdown, entry.expected, `${entry.id}: source`);
     assert.equal(committed.edits, before.edits + 1, `${entry.id}: edit count`);
@@ -2557,7 +2560,7 @@ async function testModalEscapeCancellation(page) {
   const mermaidDialog = page.locator('[data-feature-dialog="true"][open]');
   await mermaidDialog.waitFor({ state: "visible" });
   await mermaidDialog
-    .getByRole("button", { name: "Create from code", exact: true })
+    .getByRole("button", { name: "Enter code directly", exact: true })
     .click();
   await mermaidDialog
     .locator('[data-feature-field="body"]')

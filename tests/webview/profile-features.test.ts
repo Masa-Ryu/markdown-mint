@@ -183,7 +183,7 @@ describe("profile feature toolbar", () => {
     const { root } = makeApp();
     featureButton(root, "mermaid").click();
     Array.from(root.querySelectorAll<HTMLButtonElement>("button"))
-      .find((button) => button.textContent === "Create from code")
+      .find((button) => button.textContent === "Enter code directly")
       ?.click();
     const dialog = root.querySelector<HTMLDialogElement>(
       ".mm-profile-feature-dialog",
@@ -195,7 +195,7 @@ describe("profile feature toolbar", () => {
       ".mm-mermaid-validation-status",
     )!;
     expect(dialog.dataset.profileFeature).toBe("mermaid");
-    expect(dialog.querySelector("h2")?.textContent).toBe("Insert Mermaid");
+    expect(dialog.querySelector("h2")?.textContent).toBe("Edit Mermaid");
     expect(
       dialog.querySelector<HTMLElement>(".mm-mermaid-dialog-meta")!.hidden,
     ).toBe(false);
@@ -220,21 +220,35 @@ describe("profile feature toolbar", () => {
 
     dialog
       .querySelector<HTMLButtonElement>(
-        ".mm-dialog-actions button:not([type=submit])",
+        ".mm-dialog-actions button:not([type=submit]):not([hidden])",
       )!
       .click();
     featureButton(root, "math").click();
     expect(dialog.dataset.profileFeature).toBe("math");
+    expect(dialog.querySelector("h2")?.textContent).toBe("Insert Math");
     expect(
       dialog.querySelector<HTMLElement>(".mm-mermaid-dialog-meta")!.hidden,
     ).toBe(true);
+    expect(
+      dialog.querySelector<HTMLElement>(".mm-dialog-actions")!.classList,
+    ).not.toContain("mm-mermaid-footer");
+    for (const selector of [
+      ".mm-mermaid-footer-helper",
+      ".mm-mermaid-primary",
+      ".mm-mermaid-footer-main-actions",
+    ])
+      expect(dialog.querySelector<HTMLElement>(selector)!.hidden).toBe(true);
+    expect(
+      dialog.querySelector<HTMLButtonElement>('button[type="submit"]')!
+        .textContent,
+    ).toBe("Insert");
   });
 
   it("blocks invalid and empty Mermaid source, including direct form submission", async () => {
     const { root, app, messages } = makeApp();
     featureButton(root, "mermaid").click();
     Array.from(root.querySelectorAll<HTMLButtonElement>("button"))
-      .find((button) => button.textContent === "Create from code")
+      .find((button) => button.textContent === "Enter code directly")
       ?.click();
     const dialog = root.querySelector<HTMLDialogElement>(
       ".mm-profile-feature-dialog",
@@ -278,7 +292,7 @@ describe("profile feature toolbar", () => {
     try {
       featureButton(root, "mermaid").click();
       Array.from(root.querySelectorAll<HTMLButtonElement>("button"))
-        .find((button) => button.textContent === "Create from code")
+        .find((button) => button.textContent === "Enter code directly")
         ?.click();
       const dialog = root.querySelector<HTMLDialogElement>(
         ".mm-profile-feature-dialog",
@@ -378,14 +392,14 @@ describe("profile feature toolbar", () => {
           alert: "Insert Alert",
           details: "Insert Details",
           math: "Insert Math",
-          mermaid: "Insert Mermaid",
+          mermaid: "Choose a Mermaid template",
         }[entry.id],
       );
       expect(dialog.getAttribute("data-profile-feature")).toBe(entry.id);
       entry.configure(dialog);
       if (entry.id === "mermaid") {
         Array.from(dialog.querySelectorAll<HTMLButtonElement>("button"))
-          .find((button) => button.textContent === "Create from code")
+          .find((button) => button.textContent === "Enter code directly")
           ?.click();
         dialog
           .querySelector<HTMLTextAreaElement>('[data-feature-field="body"]')!
@@ -470,7 +484,7 @@ describe("profile feature toolbar", () => {
       entry.configure(dialog);
       if (entry.id === "mermaid") {
         Array.from(dialog.querySelectorAll<HTMLButtonElement>("button"))
-          .find((button) => button.textContent === "Create from code")
+          .find((button) => button.textContent === "Enter code directly")
           ?.click();
         dialog
           .querySelector<HTMLTextAreaElement>('[data-feature-field="body"]')!
@@ -505,7 +519,7 @@ describe("profile feature toolbar", () => {
     )!;
     dialog
       .querySelector<HTMLButtonElement>(
-        ".mm-dialog-actions button:not([type='submit'])",
+        ".mm-dialog-actions button:not([type='submit']):not([hidden])",
       )!
       .click();
 
@@ -618,7 +632,7 @@ describe("profile feature toolbar", () => {
     )!.value = "Changed";
     dialog
       .querySelector<HTMLButtonElement>(
-        ".mm-dialog-actions button:not([type='submit'])",
+        ".mm-dialog-actions button:not([type='submit']):not([hidden])",
       )!
       .click();
 
@@ -627,7 +641,7 @@ describe("profile feature toolbar", () => {
     expect(root.querySelector(".mm-discard-changes-dialog")).not.toBeNull();
     root
       .querySelector<HTMLButtonElement>(
-        ".mm-discard-changes-dialog button:not([type='submit'])",
+        ".mm-discard-changes-dialog button:not([type='submit']):not([hidden])",
       )!
       .click();
     expect(dialog.hasAttribute("open")).toBe(true);
@@ -637,7 +651,7 @@ describe("profile feature toolbar", () => {
     ).toBe("Changed");
     dialog
       .querySelector<HTMLButtonElement>(
-        ".mm-dialog-actions button:not([type='submit'])",
+        ".mm-dialog-actions button:not([type='submit']):not([hidden])",
       )!
       .click();
     expect(root.querySelector(".mm-discard-changes-dialog")).not.toBeNull();
@@ -763,7 +777,7 @@ describe("profile feature toolbar", () => {
     )!;
     dialog
       .querySelector<HTMLButtonElement>(
-        ".mm-dialog-actions button:not([type='submit'])",
+        ".mm-dialog-actions button:not([type='submit']):not([hidden])",
       )!
       .click();
     expect(editCount(messages)).toBe(0);

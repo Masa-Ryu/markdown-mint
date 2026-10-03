@@ -9,6 +9,13 @@ import {
   type MermaidValidationSnapshot,
 } from "./mermaidValidation";
 
+export interface MermaidDialogDisplayState {
+  readonly screen: "closed" | "picker" | "editor";
+  readonly pickerOrigin: "initial" | "editor" | null;
+  readonly confirmation: "apply" | "restore" | null;
+  readonly imeActive: boolean;
+}
+
 /** Mermaid-only modal UI. The editor owns all document writes and draft validation. */
 export class MermaidDialog {
   readonly element: HTMLElement;
@@ -22,11 +29,11 @@ export class MermaidDialog {
   private readonly toolbar: HTMLElement;
   private readonly restore: HTMLButtonElement;
   private readonly confirmation: HTMLElement;
-  private readonly confirmButton: HTMLButtonElement;
   private readonly confirmationText: HTMLElement;
   private inputSnapshot: MermaidDraftSnapshot | null = null;
   private active = false;
   private picking = false;
+  private pickerOrigin: "initial" | "editor" | null = null;
   private sessionId = 0;
   private composing = false;
   private compositionEndedAt = -Infinity;
@@ -39,6 +46,7 @@ export class MermaidDialog {
       bodyField: HTMLElement;
       input: HTMLTextAreaElement;
       onScreenChange(editing: boolean): void;
+      onDisplayStateChange(state: MermaidDialogDisplayState): void;
       onRuntimeReady(): void;
     },
   ) {
@@ -70,8 +78,6 @@ export class MermaidDialog {
         this.preview.setSource(source, this.previewTarget);
         this.candidateValidation.schedule(source);
       },
-      apply: (source) => this.requestApply(source),
-      back: () => this.showCode(true),
     });
     this.confirmation = document.createElement("div");
     this.confirmation.className = "mm-mermaid-replacement-confirmation";
@@ -80,15 +86,7 @@ export class MermaidDialog {
     this.confirmation.hidden = true;
     this.confirmationText = document.createElement("p");
     this.confirmationText.setAttribute("role", "status");
-    this.confirmButton = this.button("Replace code", () => {
-      const snapshot = this.session.confirm();
-      this.finishReplacement(snapshot);
-    });
-    this.confirmation.append(
-      this.confirmationText,
-      this.button("Keep current code", () => this.reject()),
-      this.confirmButton,
-    );
+    this.confirmation.append(this.confirmationText);
     this.element.append(
       this.toolbar,
       this.confirmation,
@@ -114,6 +112,14 @@ export class MermaidDialog {
   get canSubmit(): boolean {
     return this.isEditing && !this.imeActive;
   }
+  get displayState(): MermaidDialogDisplayState {
+    return {
+      screen: !this.active ? "closed" : this.picking ? "picker" : "editor",
+      pickerOrigin: this.pickerOrigin,
+      confirmation: this.session.confirmation,
+      imeActive: this.imeActive,
+    };
+  }
   private get previewTarget(): string {
     return `${this.sessionId}:${this.picking ? "candidate" : "draft"}`;
   }
@@ -128,7 +134,7 @@ export class MermaidDialog {
     this.element.hidden = false;
     this.picker.reset();
     this.restore.hidden = true;
-    if (pick) this.showPicker(true);
+    if (pick) this.showPicker("initial");
     else this.showCode(false);
   }
 
@@ -143,14 +149,47 @@ export class MermaidDialog {
     if (this.isEditing) this.preview.accept(snapshot, this.previewTarget);
   }
 
+  continueWithTemplate(): void {
+    if (
+      !this.active ||
+      !this.picking ||
+      this.session.confirmation ||
+      this.imeActive
+    )
+      return;
+    this.requestApply(this.picker.source);
+  }
+
+  returnToCode(): void {
+    if (
+      !this.active ||
+      !this.picking ||
+      this.session.confirmation ||
+      this.imeActive
+    )
+      return;
+    this.showCode(true);
+  }
+
+  confirmReplacement(): void {
+    if (!this.active || !this.session.confirmation || this.imeActive) return;
+    this.finishReplacement(this.session.confirm());
+  }
+
+  cancelReplacement(): void {
+    if (!this.active || !this.session.confirmation || this.imeActive) return;
+    this.reject();
+  }
+
   handleEscape(): boolean {
     if (!this.active) return false;
+    if (this.imeActive) return true;
     if (this.session.confirmation) {
       this.reject();
       return true;
     }
     if (this.picking) {
-      this.showCode(true);
+      this.returnToCode();
       return true;
     }
     return false;
@@ -159,6 +198,7 @@ export class MermaidDialog {
   close(): void {
     this.active = false;
     this.picking = false;
+    this.pickerOrigin = null;
     ++this.sessionId;
     this.session.close();
     this.candidateValidation.cancel();
@@ -170,6 +210,7 @@ export class MermaidDialog {
     this.composing = false;
     this.compositionEndedAt = -Infinity;
     if (this.element.parentElement) this.element.after(this.options.bodyField);
+    this.options.onDisplayStateChange(this.displayState);
   }
 
   dispose(): void {
@@ -188,15 +229,17 @@ export class MermaidDialog {
     dialog.removeEventListener("compositionend", this.onCompositionEnd, true);
   }
 
-  private showPicker(initial = false): void {
-    if (!this.active || this.session.confirmation) return;
+  private showPicker(origin: "initial" | "editor" = "editor"): void {
+    if (!this.active || this.session.confirmation || this.imeActive) return;
     this.inputSnapshot = this.captureInput();
     this.picking = true;
+    this.pickerOrigin = origin;
     this.editor.hidden = this.toolbar.hidden = true;
     this.picker.element.hidden = false;
     this.options.onScreenChange(false);
     this.picker.previewSlot.append(this.preview.element);
-    this.picker.open(initial);
+    this.picker.open();
+    this.options.onDisplayStateChange(this.displayState);
   }
 
   private showCode(restoreInput: boolean): void {
@@ -211,6 +254,7 @@ export class MermaidDialog {
     this.options.input.focus({ preventScroll: true });
     if (restoreInput && this.inputSnapshot)
       this.restoreInput(this.inputSnapshot);
+    this.options.onDisplayStateChange(this.displayState);
   }
 
   private requestApply(source: string): void {
@@ -249,20 +293,19 @@ export class MermaidDialog {
       this.session.confirmation === "restore"
         ? "Restore the code before replacement? This will discard your current input."
         : "Replace your current code with this template? You can undo this replacement here.";
-    this.confirmButton.textContent =
-      this.session.confirmation === "restore" ? "Restore code" : "Replace code";
     this.confirmation.hidden = false;
     this.options.input.readOnly = true;
     this.picker.element.inert = true;
     this.toolbar.inert = true;
     this.options.onScreenChange(false);
-    this.confirmation.querySelector<HTMLButtonElement>("button")!.focus();
+    this.options.onDisplayStateChange(this.displayState);
   }
 
   private reject(): void {
     this.session.reject();
     this.hideConfirmation();
     this.options.onScreenChange(this.isEditing);
+    this.options.onDisplayStateChange(this.displayState);
     this.confirmationFocus?.focus({ preventScroll: true });
   }
 
@@ -313,11 +356,18 @@ export class MermaidDialog {
   private readonly onCompositionStart = (): void => {
     this.composing = true;
     if (this.active && !this.picking) this.options.onScreenChange(false);
+    this.options.onDisplayStateChange(this.displayState);
   };
   private readonly onCompositionEnd = (): void => {
     this.composing = false;
     this.compositionEndedAt = Date.now();
     if (this.isEditing) this.options.onScreenChange(true);
+    this.options.onDisplayStateChange(this.displayState);
+    const sessionId = this.sessionId;
+    setTimeout(() => {
+      if (this.active && this.sessionId === sessionId)
+        this.options.onDisplayStateChange(this.displayState);
+    }, 55);
   };
   private readonly onKeyDown = (event: KeyboardEvent): void => {
     if (!this.active) return;

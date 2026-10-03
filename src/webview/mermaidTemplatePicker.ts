@@ -11,8 +11,6 @@ export class MermaidTemplatePicker {
   readonly element: HTMLElement;
   readonly previewSlot: HTMLElement;
   readonly list: HTMLElement;
-  readonly back: HTMLButtonElement;
-  readonly apply: HTMLButtonElement;
   private readonly name: HTMLElement;
   private readonly description: HTMLElement;
   private readonly hint: HTMLElement;
@@ -24,8 +22,6 @@ export class MermaidTemplatePicker {
   constructor(
     private readonly callbacks: {
       select(source: string): void;
-      apply(source: string): void;
-      back(): void;
     },
   ) {
     const ownerDocument = document;
@@ -110,25 +106,12 @@ export class MermaidTemplatePicker {
     this.directionField.append(this.direction);
     this.previewSlot = ownerDocument.createElement("div");
     this.previewSlot.className = "mm-mermaid-preview-slot";
-    const actions = ownerDocument.createElement("div");
-    actions.className = "mm-mermaid-template-actions";
-    this.back = ownerDocument.createElement("button");
-    this.back.type = "button";
-    this.back.addEventListener("click", () => this.callbacks.back());
-    this.apply = ownerDocument.createElement("button");
-    this.apply.type = "button";
-    this.apply.textContent = "Use this template";
-    this.apply.addEventListener("click", () =>
-      this.callbacks.apply(this.source),
-    );
-    actions.append(this.back, this.apply);
     detail.append(
       this.name,
       this.description,
       this.hint,
       this.directionField,
       this.previewSlot,
-      actions,
     );
     this.element.append(this.list, detail);
   }
@@ -139,8 +122,7 @@ export class MermaidTemplatePicker {
     });
   }
 
-  open(initial = false): void {
-    this.back.textContent = initial ? "Create from code" : "Back to code";
+  open(): void {
     this.select(this.selectedId);
     this.list.focus();
   }
