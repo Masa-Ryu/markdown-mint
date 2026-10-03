@@ -375,6 +375,7 @@ describe("local Mermaid rendering lifecycle", () => {
       render: () =>
         '<svg><rect class="background" width="100" height="50" />' +
         '<g class="edgePaths"><path class="flowchart-link" /></g>' +
+        '<path class="messageLine0" />' +
         '<g class="edgeLabel"><rect class="labelBkg" /></g></svg>',
     };
     (globalThis as Record<string, unknown>).markdownMintMermaid = runtime;
@@ -390,9 +391,49 @@ describe("local Mermaid rendering lifecycle", () => {
     expect(svg?.querySelector<SVGElement>(".flowchart-link")?.style.fill).toBe(
       "none",
     );
+    expect(svg?.querySelector<SVGElement>(".messageLine0")?.style.fill).toBe(
+      "none",
+    );
     expect(
       svg?.querySelector<SVGElement>(".edgeLabel .labelBkg")?.style.fill,
     ).toBe("var(--mm-mermaid-background)");
+    enhancer.dispose();
+  });
+
+  it("normalizes Git graph arrows after SVG sanitization", async () => {
+    const runtime: MermaidRuntime = {
+      render: () =>
+        '<svg aria-roledescription="gitGraph">' +
+        '<path class="arrow arrow0" fill="red" onclick="alert(1)" />' +
+        "<script>alert(1)</script></svg>",
+    };
+    (globalThis as Record<string, unknown>).markdownMintMermaid = runtime;
+    const element = diagram("gitGraph\n    commit");
+    const enhancer = enhanceRenderedContent(document.body);
+    await flush();
+
+    const svg = element.querySelector("svg");
+    const arrow = svg?.querySelector<SVGPathElement>("path.arrow");
+    expect(svg?.getAttribute("aria-roledescription")).toBe("gitGraph");
+    expect(arrow?.style.getPropertyValue("fill")).toBe("none");
+    expect(arrow?.getAttribute("fill")).toBe("red");
+    expect(arrow?.hasAttribute("onclick")).toBe(false);
+    expect(svg?.querySelector("script")).toBeNull();
+    enhancer.dispose();
+  });
+
+  it("leaves filled paths in non-Git graph diagrams unchanged", async () => {
+    const runtime: MermaidRuntime = {
+      render: () => '<svg><path class="arrow" fill="red" /></svg>',
+    };
+    (globalThis as Record<string, unknown>).markdownMintMermaid = runtime;
+    const element = diagram('pie\n    "A": 1');
+    const enhancer = enhanceRenderedContent(document.body);
+    await flush();
+
+    const arrow = element.querySelector<SVGPathElement>("svg path.arrow");
+    expect(arrow?.style.getPropertyValue("fill")).toBe("");
+    expect(arrow?.getAttribute("fill")).toBe("red");
     enhancer.dispose();
   });
 

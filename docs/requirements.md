@@ -26,10 +26,11 @@ single-selection template list in the existing modal. The 13 examples cover
 Only the selected candidate renders. The picker footer is the only place to
 continue: **Next: Edit code** moves its candidate into the draft and opens code
 editing, while **Enter code directly** opens the existing Start→End draft
-without applying the selected candidate. Picker changes do not alter the draft
-or document. Returning from Templates with **Back to code** preserves the draft
-and input geometry. Existing diagrams and selected text open directly in code
-editing. Code and preview use two columns at wide widths and stack below 640px.
+without applying the selected candidate. A new insertion without selected
+Mermaid code opens the picker; selected Mermaid code and existing diagrams open
+code editing directly. Picker changes do not alter the draft or document.
+Returning from Templates with **Back to code** preserves the draft and input
+geometry. Code and preview use two columns at wide widths and stack below 640px.
 
 The picker footer has one primary **Next: Edit code** action, and the code
 editor footer has one primary **Insert diagram** or **Update diagram** action
@@ -89,6 +90,26 @@ Development Host acceptance, real OS IME candidate UI, and screen-reader
 announcements were not rerun or inspected for this final footer revision.
 The existing HTML/PDF export browser suites passed earlier with the shared
 rendering helper (HTML CSP violations: zero; PDF: 13 A4 pages).
+
+PR #145 CSP follow-up on 2026-10-03 reproduced Git graph paint loss with the
+bundled Mermaid 11.17.2 runtime under the browser suite's current CSP. The
+inline SVG stylesheet was blocked; path.arrow computed to black fill and no
+stroke, and commit/branch/label surfaces also fell back to black. The fix
+scopes SVG normalization and static theme-aware CSS to
+aria-roledescription="gitGraph"; the CSP and shared sanitizer remain unchanged.
+The browser suite checks connector paint, commit colors, merge rings, label
+contrast, and theme switching while the modal stays open. The four captures
+gitgraph-light.png, gitgraph-dark.png, gitgraph-high-contrast.png, and
+gitgraph-high-contrast-light.png are retained in docs/screenshots/issue-141/.
+
+This follow-up passed npm run compile, npm test (1,312 tests / 63 files),
+npm run lint (0 errors; 94 existing warnings), npm run format:check,
+npm run test:browser:mermaid (all 13 templates and 16 direction variants),
+npm run test:browser:blocks (all five fixtures in Rich/Preview/native),
+npm run test:browser:html-export (zero CSP violations),
+npm run test:browser:pdf-export (13 A4 pages), and npm run package
+(76 files; 4,613,418 bytes). npm run test:extension, real OS IME candidate
+UI, and screen-reader announcements were not run for this follow-up.
 
 A separate isolated VS Code smoke run on the initial Issue #141 UI inserted a
 Japanese Mindmap template, saved it, exercised native Cmd+Z / Cmd+Shift+Z and

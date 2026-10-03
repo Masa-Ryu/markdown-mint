@@ -946,6 +946,159 @@ body {
   fill: var(--mm-mermaid-foreground) !important;
   color: var(--mm-mermaid-foreground) !important;
 }
+/* Mermaid 11.17.2 emits Git graph paint rules in an SVG <style> element,
+ * which the editor CSP blocks. Restore this diagram type from static CSS so
+ * its wide arrow paths, commit circles, and label backgrounds remain legible. */
+.markdown-body .mm-mermaid svg[aria-roledescription="gitGraph"],
+.mm-document-content .mm-mermaid svg[aria-roledescription="gitGraph"] {
+  --mm-gitgraph-color-0: var(--vscode-charts-blue, #3794ff);
+  --mm-gitgraph-color-1: var(--vscode-charts-orange, #c56a24);
+  --mm-gitgraph-color-2: var(--vscode-charts-green, #3a8f3a);
+  --mm-gitgraph-color-3: var(--vscode-charts-red, #d13438);
+  --mm-gitgraph-color-4: var(--vscode-charts-purple, #8b5fbf);
+  --mm-gitgraph-color-5: var(--vscode-charts-yellow, #9a7d00);
+  --mm-gitgraph-color-6: var(--vscode-terminal-ansiCyan, #168b83);
+  --mm-gitgraph-color-7: var(--vscode-terminal-ansiMagenta, #a64d9b);
+}
+.markdown-body .mm-mermaid svg[aria-roledescription="gitGraph"] .commit-arrows path.arrow,
+.mm-document-content .mm-mermaid svg[aria-roledescription="gitGraph"] .commit-arrows path.arrow {
+  fill: none !important;
+  stroke: var(--mm-mermaid-line, #9da5b4) !important;
+  stroke-width: 8px !important;
+  stroke-linecap: round !important;
+  stroke-linejoin: round !important;
+}
+.markdown-body .mm-mermaid svg[aria-roledescription="gitGraph"] .commit-arrows path.arrow0,
+.mm-document-content .mm-mermaid svg[aria-roledescription="gitGraph"] .commit-arrows path.arrow0 {
+  stroke: var(--mm-gitgraph-color-0) !important;
+}
+.markdown-body .mm-mermaid svg[aria-roledescription="gitGraph"] .commit-arrows path.arrow1,
+.mm-document-content .mm-mermaid svg[aria-roledescription="gitGraph"] .commit-arrows path.arrow1 {
+  stroke: var(--mm-gitgraph-color-1) !important;
+}
+.markdown-body .mm-mermaid svg[aria-roledescription="gitGraph"] .commit-arrows path.arrow2,
+.mm-document-content .mm-mermaid svg[aria-roledescription="gitGraph"] .commit-arrows path.arrow2 {
+  stroke: var(--mm-gitgraph-color-2) !important;
+}
+.markdown-body .mm-mermaid svg[aria-roledescription="gitGraph"] .commit-arrows path.arrow3,
+.mm-document-content .mm-mermaid svg[aria-roledescription="gitGraph"] .commit-arrows path.arrow3 {
+  stroke: var(--mm-gitgraph-color-3) !important;
+}
+.markdown-body .mm-mermaid svg[aria-roledescription="gitGraph"] .commit-arrows path.arrow4,
+.mm-document-content .mm-mermaid svg[aria-roledescription="gitGraph"] .commit-arrows path.arrow4 {
+  stroke: var(--mm-gitgraph-color-4) !important;
+}
+.markdown-body .mm-mermaid svg[aria-roledescription="gitGraph"] .commit-arrows path.arrow5,
+.mm-document-content .mm-mermaid svg[aria-roledescription="gitGraph"] .commit-arrows path.arrow5 {
+  stroke: var(--mm-gitgraph-color-5) !important;
+}
+.markdown-body .mm-mermaid svg[aria-roledescription="gitGraph"] .commit-arrows path.arrow6,
+.mm-document-content .mm-mermaid svg[aria-roledescription="gitGraph"] .commit-arrows path.arrow6 {
+  stroke: var(--mm-gitgraph-color-6) !important;
+}
+.markdown-body .mm-mermaid svg[aria-roledescription="gitGraph"] .commit-arrows path.arrow7,
+.mm-document-content .mm-mermaid svg[aria-roledescription="gitGraph"] .commit-arrows path.arrow7 {
+  stroke: var(--mm-gitgraph-color-7) !important;
+}
+.markdown-body .mm-mermaid svg[aria-roledescription="gitGraph"] .branch,
+.mm-document-content .mm-mermaid svg[aria-roledescription="gitGraph"] .branch {
+  fill: none !important;
+  stroke: var(--mm-mermaid-line, #9da5b4) !important;
+  stroke-width: 1px !important;
+  stroke-dasharray: 2 3 !important;
+}
+.markdown-body .mm-mermaid svg[aria-roledescription="gitGraph"] circle.commit.commit0:not(.commit-merge),
+.mm-document-content .mm-mermaid svg[aria-roledescription="gitGraph"] circle.commit.commit0:not(.commit-merge),
+.markdown-body .mm-mermaid svg[aria-roledescription="gitGraph"] circle.commit.commit-merge.commit0,
+.mm-document-content .mm-mermaid svg[aria-roledescription="gitGraph"] circle.commit.commit-merge.commit0 {
+  fill: var(--mm-gitgraph-color-0) !important;
+  stroke: var(--mm-gitgraph-color-0) !important;
+}
+.markdown-body .mm-mermaid svg[aria-roledescription="gitGraph"] circle.commit.commit1:not(.commit-merge),
+.mm-document-content .mm-mermaid svg[aria-roledescription="gitGraph"] circle.commit.commit1:not(.commit-merge),
+.markdown-body .mm-mermaid svg[aria-roledescription="gitGraph"] circle.commit.commit-merge.commit1,
+.mm-document-content .mm-mermaid svg[aria-roledescription="gitGraph"] circle.commit.commit-merge.commit1 {
+  fill: var(--mm-gitgraph-color-1) !important;
+  stroke: var(--mm-gitgraph-color-1) !important;
+}
+.markdown-body .mm-mermaid svg[aria-roledescription="gitGraph"] circle.commit.commit2:not(.commit-merge),
+.mm-document-content .mm-mermaid svg[aria-roledescription="gitGraph"] circle.commit.commit2:not(.commit-merge),
+.markdown-body .mm-mermaid svg[aria-roledescription="gitGraph"] circle.commit.commit-merge.commit2,
+.mm-document-content .mm-mermaid svg[aria-roledescription="gitGraph"] circle.commit.commit-merge.commit2 {
+  fill: var(--mm-gitgraph-color-2) !important;
+  stroke: var(--mm-gitgraph-color-2) !important;
+}
+.markdown-body .mm-mermaid svg[aria-roledescription="gitGraph"] circle.commit.commit3:not(.commit-merge),
+.mm-document-content .mm-mermaid svg[aria-roledescription="gitGraph"] circle.commit.commit3:not(.commit-merge),
+.markdown-body .mm-mermaid svg[aria-roledescription="gitGraph"] circle.commit.commit-merge.commit3,
+.mm-document-content .mm-mermaid svg[aria-roledescription="gitGraph"] circle.commit.commit-merge.commit3 {
+  fill: var(--mm-gitgraph-color-3) !important;
+  stroke: var(--mm-gitgraph-color-3) !important;
+}
+.markdown-body .mm-mermaid svg[aria-roledescription="gitGraph"] circle.commit.commit4:not(.commit-merge),
+.mm-document-content .mm-mermaid svg[aria-roledescription="gitGraph"] circle.commit.commit4:not(.commit-merge),
+.markdown-body .mm-mermaid svg[aria-roledescription="gitGraph"] circle.commit.commit-merge.commit4,
+.mm-document-content .mm-mermaid svg[aria-roledescription="gitGraph"] circle.commit.commit-merge.commit4 {
+  fill: var(--mm-gitgraph-color-4) !important;
+  stroke: var(--mm-gitgraph-color-4) !important;
+}
+.markdown-body .mm-mermaid svg[aria-roledescription="gitGraph"] circle.commit.commit5:not(.commit-merge),
+.mm-document-content .mm-mermaid svg[aria-roledescription="gitGraph"] circle.commit.commit5:not(.commit-merge),
+.markdown-body .mm-mermaid svg[aria-roledescription="gitGraph"] circle.commit.commit-merge.commit5,
+.mm-document-content .mm-mermaid svg[aria-roledescription="gitGraph"] circle.commit.commit-merge.commit5 {
+  fill: var(--mm-gitgraph-color-5) !important;
+  stroke: var(--mm-gitgraph-color-5) !important;
+}
+.markdown-body .mm-mermaid svg[aria-roledescription="gitGraph"] circle.commit.commit6:not(.commit-merge),
+.mm-document-content .mm-mermaid svg[aria-roledescription="gitGraph"] circle.commit.commit6:not(.commit-merge),
+.markdown-body .mm-mermaid svg[aria-roledescription="gitGraph"] circle.commit.commit-merge.commit6,
+.mm-document-content .mm-mermaid svg[aria-roledescription="gitGraph"] circle.commit.commit-merge.commit6 {
+  fill: var(--mm-gitgraph-color-6) !important;
+  stroke: var(--mm-gitgraph-color-6) !important;
+}
+.markdown-body .mm-mermaid svg[aria-roledescription="gitGraph"] circle.commit.commit7:not(.commit-merge),
+.mm-document-content .mm-mermaid svg[aria-roledescription="gitGraph"] circle.commit.commit7:not(.commit-merge),
+.markdown-body .mm-mermaid svg[aria-roledescription="gitGraph"] circle.commit.commit-merge.commit7,
+.mm-document-content .mm-mermaid svg[aria-roledescription="gitGraph"] circle.commit.commit-merge.commit7 {
+  fill: var(--mm-gitgraph-color-7) !important;
+  stroke: var(--mm-gitgraph-color-7) !important;
+}
+.markdown-body .mm-mermaid svg[aria-roledescription="gitGraph"] .commit-bullets circle.commit,
+.mm-document-content .mm-mermaid svg[aria-roledescription="gitGraph"] .commit-bullets circle.commit {
+  stroke-width: 1.5px !important;
+}
+.markdown-body .mm-mermaid svg[aria-roledescription="gitGraph"] .commit-bullets circle.commit.commit-merge,
+.mm-document-content .mm-mermaid svg[aria-roledescription="gitGraph"] .commit-bullets circle.commit.commit-merge {
+  fill: var(--mm-mermaid-background, #1e1e1e) !important;
+  stroke-width: 2px !important;
+}
+.markdown-body .mm-mermaid svg[aria-roledescription="gitGraph"] .branchLabelBkg,
+.mm-document-content .mm-mermaid svg[aria-roledescription="gitGraph"] .branchLabelBkg {
+  fill: var(--mm-mermaid-surface, #252526) !important;
+  stroke: var(--mm-mermaid-line, #9da5b4) !important;
+  stroke-width: 1px !important;
+  opacity: 1 !important;
+}
+.markdown-body .mm-mermaid svg[aria-roledescription="gitGraph"] .branchLabel text,
+.mm-document-content .mm-mermaid svg[aria-roledescription="gitGraph"] .branchLabel text,
+.markdown-body .mm-mermaid svg[aria-roledescription="gitGraph"] .branchLabel tspan,
+.mm-document-content .mm-mermaid svg[aria-roledescription="gitGraph"] .branchLabel tspan,
+.markdown-body .mm-mermaid svg[aria-roledescription="gitGraph"] .commit-label,
+.mm-document-content .mm-mermaid svg[aria-roledescription="gitGraph"] .commit-label {
+  fill: var(--mm-mermaid-foreground, #d4d4d4) !important;
+  color: var(--mm-mermaid-foreground, #d4d4d4) !important;
+}
+.markdown-body .mm-mermaid svg[aria-roledescription="gitGraph"] .commit-label-bkg,
+.mm-document-content .mm-mermaid svg[aria-roledescription="gitGraph"] .commit-label-bkg {
+  fill: var(--mm-mermaid-background, #1e1e1e) !important;
+  stroke: var(--mm-mermaid-line, #9da5b4) !important;
+  stroke-width: 0.75px !important;
+  opacity: 1 !important;
+}
+.markdown-body .mm-mermaid svg[aria-roledescription="gitGraph"] .commit-label,
+.mm-document-content .mm-mermaid svg[aria-roledescription="gitGraph"] .commit-label {
+  font-size: 10px !important;
+}
 /* Mermaid flowchart-v2 positions node label text at x=0 and normally relies on
  * its generated SVG stylesheet for text-anchor: middle. Webview CSP blocks
  * that inline stylesheet, so restore only the flowchart node-label rule here;

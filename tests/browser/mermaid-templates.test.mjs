@@ -132,6 +132,337 @@ async function visibleLabels(locator, expected, label) {
   );
 }
 
+function contrastRatio(foreground, background) {
+  const luminance = (value) => {
+    const channels = value
+      .match(/^rgba?\(([^)]+)\)$/)?.[1]
+      ?.split(",")
+      .slice(0, 3)
+      .map((channel) => Number.parseFloat(channel.trim()) / 255);
+    assert.ok(channels?.length === 3, "unrecognized computed color: " + value);
+    const linear = channels.map((channel) =>
+      channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4,
+    );
+    return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2];
+  };
+  const first = luminance(foreground);
+  const second = luminance(background);
+  return (Math.max(first, second) + 0.05) / (Math.min(first, second) + 0.05);
+}
+
+async function assertGitGraphPresentation(locator, label) {
+  const presentation = await locator
+    .locator('svg[aria-roledescription="gitGraph"]')
+    .evaluate((svg) => {
+      const box = (element) => {
+        const value = element.getBBox();
+        return {
+          x: value.x,
+          y: value.y,
+          width: value.width,
+          height: value.height,
+        };
+      };
+      const paint = (element) => {
+        const style = getComputedStyle(element);
+        return {
+          fill: style.fill,
+          stroke: style.stroke,
+          strokeWidth: style.strokeWidth,
+          strokeOpacity: style.strokeOpacity,
+          box: box(element),
+        };
+      };
+      const textPaint = (element) => ({
+        text: element.textContent.trim(),
+        fill: getComputedStyle(element).fill,
+        box: box(element),
+      });
+      const branches = Array.from(svg.querySelectorAll(".branch"), paint);
+      const arrows = Array.from(svg.querySelectorAll("path.arrow"), (path) => ({
+        className: path.getAttribute("class"),
+        ...paint(path),
+      }));
+      const mainCommit = svg.querySelector(
+        "circle.commit.commit0:not(.commit-merge)",
+      );
+      const featureCommit = svg.querySelector("circle.commit.Change.commit1");
+      const mergeOuter = svg.querySelector(
+        "circle.commit.Merge:not(.commit-merge)",
+      );
+      const mergeInner = svg.querySelector("circle.commit-merge.Merge");
+      const branchBackgrounds = Array.from(
+        svg.querySelectorAll("rect.branchLabelBkg"),
+      );
+      const branchTexts = Array.from(svg.querySelectorAll(".branchLabel text"));
+      const commitLabelBackgrounds = Array.from(
+        svg.querySelectorAll("rect.commit-label-bkg"),
+      );
+      const commitLabelPairs = commitLabelBackgrounds.map((background) => ({
+        background: getComputedStyle(background).fill,
+        text: textPaint(
+          background.parentElement.querySelector("text.commit-label"),
+        ),
+      }));
+      const branchLabelPairs = branchBackgrounds.map((background, index) => ({
+        background: getComputedStyle(background).fill,
+        text: textPaint(branchTexts[index]),
+      }));
+      const commitsByBranch = [0, 1].map((index) => ({
+        index,
+        commit: paint(
+          svg.querySelector(
+            "circle.commit.commit" + index + ":not(.commit-merge)",
+          ),
+        ),
+        arrow: paint(svg.querySelector("path.arrow.arrow" + index)),
+      }));
+      return {
+        role: svg.getAttribute("aria-roledescription"),
+        branchLabels: Array.from(
+          svg.querySelectorAll(".branchLabel tspan"),
+          (node) => node.textContent.trim(),
+        ),
+        branches,
+        arrows,
+        mainCommit: mainCommit ? paint(mainCommit) : null,
+        featureCommit: featureCommit ? paint(featureCommit) : null,
+        merge:
+          mergeOuter && mergeInner
+            ? {
+                outer: {
+                  ...paint(mergeOuter),
+                  radius: mergeOuter.getAttribute("r"),
+                },
+                inner: {
+                  ...paint(mergeInner),
+                  radius: mergeInner.getAttribute("r"),
+                },
+                sameCenter:
+                  mergeOuter.getAttribute("cx") ===
+                    mergeInner.getAttribute("cx") &&
+                  mergeOuter.getAttribute("cy") ===
+                    mergeInner.getAttribute("cy"),
+              }
+            : null,
+        labelPairs: [...branchLabelPairs, ...commitLabelPairs].map((pair) => ({
+          text: pair.text.text,
+          foreground: pair.text.fill,
+          background: pair.background,
+          box: pair.text.box,
+        })),
+        commitsByBranch,
+      };
+    });
+
+  assert.equal(presentation.role, "gitGraph", label + ": wrong diagram role");
+  assert.ok(presentation.arrows.length > 0, label + ": no Git graph arrows");
+  for (const arrow of presentation.arrows) {
+    assert.equal(
+      arrow.fill,
+      "none",
+      label + ": " + arrow.className + " is filled",
+    );
+    assert.notEqual(arrow.stroke, "none", label + ": arrow has no stroke");
+    assert.ok(
+      Number(arrow.strokeOpacity) > 0,
+      label + ": arrow is transparent",
+    );
+    assert.equal(arrow.strokeWidth, "8px", label + ": wrong arrow width");
+    assert.ok(
+      arrow.box.width > 0 || arrow.box.height > 0,
+      label + ": arrow has no visible geometry",
+    );
+  }
+  assert.ok(presentation.branches.length > 0, label + ": no branch lines");
+  for (const branch of presentation.branches) {
+    assert.notEqual(branch.stroke, "none", label + ": branch has no stroke");
+    assert.equal(branch.strokeWidth, "1px", label + ": wrong branch width");
+  }
+  assert.ok(
+    presentation.branchLabels.includes("main"),
+    label + ": no main label",
+  );
+  assert.ok(
+    presentation.branchLabels.includes("feature"),
+    label + ": no feature label",
+  );
+  for (const commit of [presentation.mainCommit, presentation.featureCommit]) {
+    assert.ok(commit, label + ": missing main or feature commit");
+    assert.notEqual(commit.fill, "none", label + ": commit has no fill");
+    assert.notEqual(commit.stroke, "none", label + ": commit has no outline");
+    assert.ok(commit.box.width > 0, label + ": commit has no visible geometry");
+  }
+  assert.ok(presentation.merge, label + ": missing merge commit circles");
+  assert.equal(
+    presentation.merge.sameCenter,
+    true,
+    label + ": merge circles shifted",
+  );
+  assert.ok(
+    Number(presentation.merge.outer.radius) >
+      Number(presentation.merge.inner.radius),
+    label + ": merge rings are not distinct",
+  );
+  assert.notEqual(
+    presentation.merge.outer.fill,
+    presentation.merge.inner.fill,
+    label + ": merge inner and outer circles have the same fill",
+  );
+  assert.ok(
+    presentation.labelPairs.length >= 6,
+    label + ": label backgrounds missing",
+  );
+  for (const pair of presentation.labelPairs) {
+    assert.ok(
+      pair.box.width > 0 && pair.box.height > 0,
+      label + ": hidden " + pair.text,
+    );
+    assert.ok(
+      contrastRatio(pair.foreground, pair.background) >= 4.5,
+      label +
+        ": low contrast for " +
+        pair.text +
+        ": " +
+        pair.foreground +
+        " on " +
+        pair.background,
+    );
+  }
+  for (const pair of presentation.commitsByBranch) {
+    assert.equal(
+      pair.commit.fill,
+      pair.arrow.stroke,
+      label + ": branch " + pair.index + " commit and connector colors differ",
+    );
+  }
+}
+
+async function assertOtherDiagramPaint(locator, templateId, label) {
+  const presentation = await locator.locator("svg").evaluate((svg) => {
+    const paint = (element) => {
+      const style = getComputedStyle(element);
+      const box = element.getBBox();
+      return {
+        fill: style.fill,
+        fillOpacity: style.fillOpacity,
+        stroke: style.stroke,
+        strokeOpacity: style.strokeOpacity,
+        strokeWidth: style.strokeWidth,
+        box: { width: box.width, height: box.height },
+      };
+    };
+    const role = svg.getAttribute("aria-roledescription");
+    if (role === "flowchart-v2") {
+      return {
+        role,
+        edges: Array.from(svg.querySelectorAll(".flowchart-link"), paint),
+        markers: Array.from(
+          svg.querySelectorAll("marker path, .marker path, .arrowheadPath"),
+          paint,
+        ),
+      };
+    }
+    if (role === "sequence") {
+      return {
+        role,
+        edges: Array.from(
+          svg.querySelectorAll(".messageLine0, .messageLine1"),
+          paint,
+        ),
+      };
+    }
+    if (role === "pie") {
+      return {
+        role,
+        slices: Array.from(svg.querySelectorAll("path.pieCircle"), paint),
+      };
+    }
+    return { role };
+  });
+  const isPainted = (paint) =>
+    paint !== "none" &&
+    !/^rgba\([^,]+,\s*[^,]+,\s*[^,]+,\s*0(?:\.0+)?\)$/.test(paint);
+
+  if (templateId.startsWith("flowchart-")) {
+    assert.equal(
+      presentation.role,
+      "flowchart-v2",
+      label + ": wrong flowchart role",
+    );
+    assert.ok(
+      presentation.edges.length > 0,
+      label + ": no flowchart connectors",
+    );
+    for (const edge of presentation.edges) {
+      assert.equal(edge.fill, "none", label + ": filled flowchart connector");
+      assert.ok(
+        isPainted(edge.stroke),
+        label + ": invisible flowchart connector",
+      );
+      assert.ok(
+        Number.parseFloat(edge.strokeWidth) > 0,
+        label + ": zero-width connector",
+      );
+    }
+    assert.ok(
+      presentation.markers.length > 0,
+      label + ": no flowchart arrowheads",
+    );
+    for (const marker of presentation.markers) {
+      assert.ok(
+        isPainted(marker.fill),
+        label + ": invisible flowchart arrowhead",
+      );
+      assert.ok(
+        Number(marker.fillOpacity) > 0,
+        label + ": transparent flowchart arrowhead",
+      );
+    }
+  } else if (templateId.startsWith("sequence-")) {
+    assert.equal(
+      presentation.role,
+      "sequence",
+      label + ": wrong sequence role",
+    );
+    assert.ok(
+      presentation.edges.length > 0,
+      label + ": no sequence connectors",
+    );
+    for (const edge of presentation.edges) {
+      assert.equal(edge.fill, "none", label + ": filled sequence connector");
+      assert.ok(
+        isPainted(edge.stroke),
+        label + ": invisible sequence connector",
+      );
+      assert.ok(
+        Number.parseFloat(edge.strokeWidth) > 0,
+        label + ": zero-width connector",
+      );
+      assert.ok(
+        edge.box.width > 0 || edge.box.height > 0,
+        label + ": sequence connector has no geometry",
+      );
+    }
+  } else if (templateId === "pie-composition") {
+    assert.equal(presentation.role, "pie", label + ": wrong pie role");
+    assert.ok(presentation.slices.length >= 3, label + ": pie slices missing");
+    const fills = new Set();
+    for (const slice of presentation.slices) {
+      assert.ok(isPainted(slice.fill), label + ": pie slice has no fill");
+      assert.ok(
+        Number(slice.fillOpacity) > 0,
+        label + ": transparent pie slice",
+      );
+      fills.add(slice.fill);
+    }
+    assert.ok(
+      fills.size > 1,
+      label + ": pie slices have collapsed to one fill",
+    );
+  }
+}
+
 async function expectFooter(
   dialog,
   screen,
@@ -240,6 +571,24 @@ async function catalogChecks(page, templates, buildSource) {
         labels[template.id],
         `${template.id} ${direction ?? ""}`,
       );
+      if (
+        template.id.startsWith("flowchart-") ||
+        template.id.startsWith("sequence-") ||
+        template.id === "pie-composition"
+      ) {
+        await assertOtherDiagramPaint(
+          dialog.locator(".mm-mermaid-preview"),
+          template.id,
+          "candidate preview",
+        );
+      }
+      if (template.id === "gitgraph-branch-merge") {
+        const graphPreview = dialog.locator(".mm-mermaid-preview");
+        await assertGitGraphPresentation(graphPreview, "candidate preview");
+        await graphPreview.screenshot({
+          path: resolve(output, "gitgraph-candidate.png"),
+        });
+      }
       assert.equal(
         await edits(page),
         count,
@@ -260,7 +609,14 @@ async function catalogChecks(page, templates, buildSource) {
         await input.inputValue(),
         buildSource(template.id, { direction }),
       );
-      await visibleLabels(await preview(page), labels[template.id], "draft");
+      const codePreview = await preview(page);
+      await visibleLabels(codePreview, labels[template.id], "draft");
+      if (template.id === "gitgraph-branch-merge") {
+        await assertGitGraphPresentation(codePreview, "applied code preview");
+        await codePreview.screenshot({
+          path: resolve(output, "gitgraph-code-editor.png"),
+        });
+      }
       if (!capturedNewEditor) {
         await page.screenshot({ path: resolve(output, "new-editor.png") });
         capturedNewEditor = true;
@@ -294,6 +650,12 @@ async function catalogChecks(page, templates, buildSource) {
       const rendered = page.locator(".mm-rich-panel .mm-mermaid");
       await rendered.locator("svg").waitFor();
       await visibleLabels(rendered, ["日本語ラベル"], "document");
+      if (template.id === "gitgraph-branch-merge") {
+        await assertGitGraphPresentation(rendered, "inserted document");
+        await rendered.screenshot({
+          path: resolve(output, "gitgraph-document.png"),
+        });
+      }
       await rendered.dblclick();
       assert.equal(
         await page.locator(`${dialogSelector} ${sourceSelector}`).inputValue(),
@@ -306,7 +668,16 @@ async function catalogChecks(page, templates, buildSource) {
         null,
         "Update diagram",
       );
-      await preview(page);
+      const reopenedPreview = await preview(page);
+      if (template.id === "gitgraph-branch-merge") {
+        await assertGitGraphPresentation(
+          reopenedPreview,
+          "existing diagram editor",
+        );
+        await reopenedPreview.screenshot({
+          path: resolve(output, "gitgraph-existing-editor.png"),
+        });
+      }
       if (!capturedExistingEditor) {
         await page.screenshot({
           path: resolve(output, "existing-editor.png"),
@@ -857,8 +1228,34 @@ async function themeChecks(page) {
         .filter((entry) => entry.name.endsWith("/mermaid.js")).length,
   );
   assert.equal(requests, 1, "first-use runtime request was not shared");
+  await dialog.locator('[data-template-id="gitgraph-branch-merge"]').click();
+  for (const [theme, background, foreground, accent] of themes) {
+    await page.evaluate(
+      ([name, bg, fg, link]) => {
+        document.documentElement.className = document.body.className = name;
+        for (const host of [document.documentElement, document.body]) {
+          host.style.setProperty("--vscode-editor-background", bg);
+          host.style.setProperty("--vscode-editor-foreground", fg);
+          host.style.setProperty("--vscode-foreground", fg);
+          host.style.setProperty("--vscode-textCodeBlock-background", bg);
+          host.style.setProperty("--vscode-textLink-foreground", link);
+        }
+      },
+      [theme, background, foreground, accent],
+    );
+    const graphPreview = await preview(page);
+    await visibleLabels(
+      graphPreview,
+      labels["gitgraph-branch-merge"],
+      "Git graph " + theme,
+    );
+    await assertGitGraphPresentation(graphPreview, "Git graph " + theme);
+    await graphPreview.screenshot({
+      path: resolve(output, "gitgraph-" + theme + ".png"),
+    });
+  }
   console.log(
-    "Passed four live themes, narrow layouts, and lazy shared runtime loading",
+    "Passed Git graph in four live themes, narrow layouts, and lazy shared runtime loading",
   );
 }
 
@@ -890,6 +1287,21 @@ try {
     }
     await new Promise((resolvePromise) => setTimeout(resolvePromise, 50));
   }
+  const cspResponse = await fetch(baseUrl);
+  assert.equal(cspResponse.status, 200, "browser CSP endpoint unavailable");
+  const csp = cspResponse.headers.get("content-security-policy");
+  assert.ok(csp, "browser test page has no content security policy");
+  const cspDirectives = new Map(
+    csp.split(";").map((directive) => {
+      const [name, ...values] = directive.trim().split(/\s+/);
+      return [name, values.join(" ")];
+    }),
+  );
+  assert.equal(cspDirectives.get("style-src"), "'self'");
+  assert.equal(cspDirectives.get("style-src-elem"), "'self'");
+  assert.equal(cspDirectives.get("style-src-attr"), "'unsafe-inline'");
+  assert.equal(cspDirectives.get("connect-src"), "'none'");
+  assert.equal(cspDirectives.get("script-src"), "'self' 'nonce-mm-test-nonce'");
   browser = await chromium.launch({ headless: true });
   page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
   page.setDefaultTimeout(10000);

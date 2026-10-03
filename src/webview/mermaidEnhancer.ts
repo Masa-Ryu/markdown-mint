@@ -367,6 +367,17 @@ function sanitizeSvg(svg: string, ownerDocument: Document): SVGElement | null {
   return candidate as unknown as SVGElement;
 }
 
+/** Mermaid's Git graph arrows are wide paths that must remain unfilled. */
+function normalizeGitGraphSvg(svg: SVGElement): void {
+  if (svg.getAttribute("aria-roledescription") !== "gitGraph") return;
+
+  for (const arrow of Array.from(
+    svg.querySelectorAll<SVGPathElement>("path.arrow"),
+  )) {
+    arrow.style.setProperty("fill", "none", "important");
+  }
+}
+
 /**
  * Mermaid's generated stylesheet varies between diagram types. Normalize the
  * presentation properties that otherwise fall back to SVG's black paint,
@@ -375,6 +386,7 @@ function sanitizeSvg(svg: string, ownerDocument: Document): SVGElement | null {
  */
 function normalizeMermaidSvg(svg: SVGElement): void {
   svg.style.setProperty("background", "transparent", "important");
+  normalizeGitGraphSvg(svg);
 
   for (const background of Array.from(
     svg.querySelectorAll<SVGElement>("rect.background"),
