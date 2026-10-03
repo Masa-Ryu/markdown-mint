@@ -90,20 +90,26 @@ that edit only from an acknowledged base; subsequent input queues separately.
 
 Verification on 2026-10-03:
 
-- `npm run compile`, `npm test` (60 files / 1,370 tests), `npm run lint`
-  (0 errors; 94 existing warnings), and `npm run format:check` passed.
+- `npm run compile`, `npm test` (63 files / 1,415 tests), `npm run lint`
+  (0 errors; 94 warnings), and `npm run format:check` passed after merging
+  release automation from main.
 - Unit tests cover authorization and unsupported API behavior, application
   configuration, protocol bounds, forged/reused/expired invocations, token
   fitting, Unicode, bounded context, cancellation, timeout, late/erroring
   streams, request caps, stale snapshots, IME keys, manual operation while
   auto is off, host panel deactivation, and independent edit/save progress.
+- Provider regressions hold a non-mutating save in the document queue while a
+  fake model response resolves: the `ready` candidate reaches the webview and
+  native text/version remain unchanged through successful save. Format-on-save
+  applies a real test `TextDocument` version change and broadcasts the updated
+  snapshot; the old model response never returns a `ready` candidate.
 - `npm run test:browser:ai` uses the production wire validators and a fake
   provider. Real Chromium keyboard input verifies display-only integrity,
   Tab/Escape, copied/cut text excluding an unaccepted candidate, ordinary
   typing debounce, target exclusions, wrapping in Light/Dark/High Contrast,
   and preview exclusion. Screenshots and a report are written to
   `output/playwright/ai-suggestions/`.
-- The installed VS Code **1.138.0** native acceptance uses the production
+- The installed VS Code **1.140.0** native acceptance uses the production
   host, controller, SyncController, WorkspaceEdit, and resource Undo/Redo
   with a fake model/panel transport. It verifies unchanged native text/version
   while a candidate is shown, one accepted edit, Undo removing only the
@@ -113,15 +119,17 @@ Verification on 2026-10-03:
   Source snapshots, including HTML/PDF export inputs, contain no ghost data.
 - `npm run benchmark:ai-suggestions` measured debounce-time context extraction
   on macOS arm64 / Node 24.5.0, with 1,000 samples after warmup per scenario.
-  The five required fixtures had p50 0.002–0.004ms and p95 0.002–0.009ms;
-  5,000 prose blocks had p50 0.002ms / p95 0.004ms, and a 2,000-row table had
-  p50/p95 below 0.001ms because its subtree is skipped. Short English/Japanese
-  scenarios are included. `output/benchmarks/ai-suggestions/context.json`
+  The five required fixtures had p50 0.0017–0.0037ms and p95
+  0.0018–0.0080ms; 5,000 prose blocks had p50 0.0020ms / p95 0.0035ms, and a
+  2,000-row table had p50 0.0002ms / p95 0.0003ms because its subtree is
+  skipped. Short English/Japanese scenarios are included.
+  `output/benchmarks/ai-suggestions/context.json`
   records sample counts, input/context sizes and percentiles. These are local
   extraction measurements; parsing, editing/rendering, debounce, model latency,
   tokens and Copilot usage are excluded. No production diagnostics are added.
-- HTML export's Chromium smoke check and PDF export's 13-page A4/raster
-  regression passed. `npm run package` created and verified the 0.8.0 VSIX.
+- `npm run test:browser:html-export` passed its Chromium smoke check;
+  `npm run test:browser:pdf-export` passed with a 13-page A4/raster output.
+  `npm run package` created and verified the 0.8.0 VSIX.
 
 Real Copilot requests are **not** part of any automatic suite. The isolated
 native host has no signed-in Copilot model. Actual model selection/consent,
@@ -1548,6 +1556,12 @@ zoom, font loading, and operating-system IME candidate UI remain manual checks.
   exact 10,000 / 10,001-cell boundary. Actual Ctrl/Cmd clipboard gestures and
   operating system IME candidate behavior remain manual checks rather than
   claims from synthetic clipboard events.
+
+Historical record: PR #48 (`834f97e`) intentionally prepared `0.20.0` as a
+release candidate, including its package metadata, changelog entry, and VSIX.
+It did not create a Git tag or GitHub Release, or publish to the Marketplace.
+PR #49 (`97548cb`) later returned the package version to `0.3.0`; the inspected
+Git history does not record why.
 
 ## 0.0.52 Link dialog relative destinations
 
