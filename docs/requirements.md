@@ -90,9 +90,11 @@ that edit only from an acknowledged base; subsequent input queues separately.
 
 Verification on 2026-10-03:
 
-- `npm run compile`, `npm test` (63 files / 1,415 tests), `npm run lint`
+- `npm run compile`, `npm test` (63 files / 1,417 tests), `npm run lint`
   (0 errors; 94 warnings), and `npm run format:check` passed after merging
-  release automation from main.
+  the 0.7.2 GitHub Release draft-recovery updates and their tests from main.
+  The integrated suite includes 17 release-recovery tests and 5 release-
+  workflow tests.
 - Unit tests cover authorization and unsupported API behavior, application
   configuration, protocol bounds, forged/reused/expired invocations, token
   fitting, Unicode, bounded context, cancellation, timeout, late/erroring
@@ -119,17 +121,18 @@ Verification on 2026-10-03:
   Source snapshots, including HTML/PDF export inputs, contain no ghost data.
 - `npm run benchmark:ai-suggestions` measured debounce-time context extraction
   on macOS arm64 / Node 24.5.0, with 1,000 samples after warmup per scenario.
-  The five required fixtures had p50 0.0017–0.0037ms and p95
-  0.0018–0.0080ms; 5,000 prose blocks had p50 0.0020ms / p95 0.0035ms, and a
-  2,000-row table had p50 0.0002ms / p95 0.0003ms because its subtree is
+  The five required fixtures had p50 0.001791–0.003583ms and p95
+  0.001958–0.007458ms; 5,000 prose blocks had p50 0.002042ms / p95 0.003500ms,
+  and a 2,000-row table had p50 0.000209ms / p95 0.000292ms because its subtree is
   skipped. Short English/Japanese scenarios are included.
   `output/benchmarks/ai-suggestions/context.json`
   records sample counts, input/context sizes and percentiles. These are local
   extraction measurements; parsing, editing/rendering, debounce, model latency,
   tokens and Copilot usage are excluded. No production diagnostics are added.
 - `npm run test:browser:html-export` passed its Chromium smoke check;
-  `npm run test:browser:pdf-export` passed with a 13-page A4/raster output.
-  `npm run package` created and verified the 0.8.0 VSIX.
+  `npm run test:browser:pdf-export` passed with a 334,167-byte, 13-page A4
+  output and 13 raster pages. `npm run package` created and verified the
+  0.8.0 VSIX (76 files, 4.40 MiB; 4,614,981 bytes).
 
 Real Copilot requests are **not** part of any automatic suite. The isolated
 native host has no signed-in Copilot model. Actual model selection/consent,

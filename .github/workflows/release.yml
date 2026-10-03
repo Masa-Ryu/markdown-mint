@@ -279,16 +279,25 @@ jobs:
                 assetName: $assetName,
                 expectedSha256: $expectedSha256,
                 actualAssetSha256: (if $actualAssetSha256 == "" then null else $actualAssetSha256 end),
-                releaseNotes: ($releaseNotes | sub("\\n$"; ""))
+                releaseNotes: $releaseNotes
               }' > "$state_json"
-            node scripts/release-recovery.mjs plan-current < "$state_json" > "$plan_json"
-            jq -r '.plan.action' "$plan_json"
+            if ! node scripts/release-recovery.mjs plan-current < "$state_json" > "$plan_json"; then
+              return 1
+            fi
+            local action
+            if ! action="$(jq -er '.plan.action // empty' "$plan_json")" || [[ -z "$action" ]]; then
+              return 1
+            fi
+            printf '%s\n' "$action"
           }
 
           actual_asset_sha256=""
           for attempt in 1 2 3 4 5 6 7 8; do
             load_tag_target
-            action="$(make_recovery_plan)"
+            if ! action="$(make_recovery_plan)"; then
+              echo "::error::Could not plan GitHub Release recovery for ${tag}."
+              exit 1
+            fi
             case "$action" in
               create_release)
                 create_args=(release create "$tag" "$VSIX_PATH" --draft --title "$title" --notes-file "$notes_file" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA")
