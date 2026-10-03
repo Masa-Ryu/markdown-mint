@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.7.2
+
+- Preserve release-note bytes during GitHub Release draft recovery and report
+  recovery-planner failures directly.
+
 ## 0.7.1
 
 - Add an explicit GitHub Actions release workflow that validates, packages, and
