@@ -51,6 +51,7 @@ import {
   type WorkspaceFileSearchResultMessage,
 } from "../shared/protocol";
 import { isWorkspaceFileSearchQuery } from "../shared/workspaceFileSearch";
+import { AiSuggestionsController } from "./aiSuggestions";
 import {
   createStarterPlugin,
   getStarterState,
@@ -2591,6 +2592,7 @@ export class MarkdownEditorApp {
     { resolve: (success: boolean) => void; timer?: number }
   >();
   private readonly imageImport: ImageImportController;
+  private readonly aiSuggestions: AiSuggestionsController;
   private previewEnhancer: RenderingEnhancer | undefined;
   /**
    * The last Markdown snapshot produced for the current PM document.
@@ -2936,6 +2938,25 @@ export class MarkdownEditorApp {
       notify: (message) => this.notifyHost("error", message),
     };
     this.imageImport = new ImageImportController(imageImportOptions);
+    this.aiSuggestions = new AiSuggestionsController({
+      view: () => this.view,
+      canSuggest: () =>
+        this.canEditBlock() &&
+        !this.composing &&
+        !this.view.composing &&
+        !this.formatting &&
+        this.root.ownerDocument.activeElement === this.view.dom &&
+        !this.activePopup &&
+        !this.linkPickerOpen &&
+        !this.root.querySelector("dialog[open]") &&
+        !this.tableStructureSelection,
+      synced: () =>
+        !this.hasPendingHostSync() && !this.pendingExternal && !this.syncPaused,
+      version: () => this.version,
+      documentId: () => this.documentId,
+      post: (message) => this.vscode?.postMessage(message),
+      dispatch: (transaction) => this.dispatchTransaction(transaction),
+    });
     this.initialized = Boolean(options.initialDocument);
     const initial = options.initialDocument ?? {
       markdown: "",
@@ -3220,6 +3241,7 @@ export class MarkdownEditorApp {
       this.view.dom.addEventListener("click", this.richLinkClickHandler, true);
     }
     this.sync = new SyncController(this.version, this.vscode, initial.markdown);
+    this.aiSuggestions.attach(this.root);
     this.messageHandler = (event) => this.handleMessage(event.data);
     window.addEventListener("message", this.messageHandler);
     this.sourceEl.addEventListener("input", () => {
@@ -3278,6 +3300,7 @@ export class MarkdownEditorApp {
   }
 
   destroy(): void {
+    this.aiSuggestions.dispose();
     if (this.pendingRecoveryDialog?.open)
       this.closePendingRecoveryDialog(false);
     this.pendingRecoveryButton?.remove();
@@ -3416,6 +3439,7 @@ export class MarkdownEditorApp {
       createBlockBoundaryPlugin(),
       createRenderingPlugin(() => this.profile),
       this.imageImport.plugin,
+      this.aiSuggestions.plugin,
       keymap(this.createKeymap()),
       tableEditing(),
       createTableNumberingPlugin(),
@@ -4129,6 +4153,11 @@ export class MarkdownEditorApp {
     const storedMarksSet = transactions.some(
       (transaction) => transaction.storedMarksSet,
     );
+    this.aiSuggestions.transactionApplied(
+      docChanged,
+      !oldSelection.eq(this.view.state.selection),
+      storedMarksSet,
+    );
     const keepsTableStructureSelection = transactions.some(
       (transaction) => transaction.getMeta(tableOperationMetaKey) !== undefined,
     );
@@ -4658,6 +4687,7 @@ export class MarkdownEditorApp {
   }
 
   private handleBlockComposition(active: boolean): void {
+    this.aiSuggestions.invalidate();
     this.composing = active;
     if (this.blockCompositionTimer !== undefined) {
       clearTimeout(this.blockCompositionTimer);
@@ -10559,6 +10589,7 @@ export class MarkdownEditorApp {
     options: { refreshPreview?: boolean } = {},
   ): void {
     if (this.previewOnly && mode !== "preview" && mode !== "source") return;
+    if (mode !== this.mode) this.aiSuggestions.invalidate();
     if (mode !== this.mode) this.closeDiscardChangesConfirmation(true);
     this.clearTableDeletePreview();
     this.clearTableStructureSelection(false);
@@ -10855,6 +10886,7 @@ export class MarkdownEditorApp {
   }
 
   private requestSource(): void {
+    this.aiSuggestions.invalidate();
     if (!this.initialized) return;
     if (
       this.composing ||
@@ -10936,6 +10968,7 @@ export class MarkdownEditorApp {
   }
 
   private requestProfileChange(profile: DocumentProfile): void {
+    this.aiSuggestions.invalidate();
     if (
       profile !== "github" &&
       profile !== "gitlab" &&
@@ -11012,6 +11045,7 @@ export class MarkdownEditorApp {
   }
 
   private sendHostCommand(type: "undo" | "redo"): boolean {
+    this.aiSuggestions.invalidate();
     if (!this.options.hostUndo && type === "undo") return false;
     if (this.syncPaused) {
       this.setNotice(
@@ -11127,10 +11161,17 @@ export class MarkdownEditorApp {
 
   private handleMessage(message: unknown): void {
     if (!isHostMessage(message)) return;
-    if (message.type === "document") {
+    if (
+      message.type === "ai-suggestion-state" ||
+      message.type === "ai-suggestion-trigger" ||
+      message.type === "ai-suggestion-result"
+    ) {
+      this.aiSuggestions.handleMessage(message);
+    } else if (message.type === "document") {
       this.clipboardAvailable = message.clipboardAvailable === true;
       this.receiveDocument(message);
     } else if (message.type === "preview") {
+      this.aiSuggestions.invalidate();
       this.clipboardAvailable = message.clipboardAvailable === true;
       this.receivePreview(message);
     } else if (message.type === "export-html-command") {
@@ -11138,6 +11179,7 @@ export class MarkdownEditorApp {
     } else if (message.type === "export-pdf-command") {
       this.requestPdfExport();
     } else if (message.type === "edit-rejected") {
+      this.aiSuggestions.invalidate();
       if (message.operationId === this.pendingRecoveryOperationId) {
         this.pendingRecoveryOperationId = undefined;
         this.pendingRecoveryOperationIdentity = undefined;
@@ -11359,6 +11401,34 @@ export class MarkdownEditorApp {
   }
 
   receiveDocument(message: DocumentMessage): void {
+    const ownAck =
+      message.reason === "ack" &&
+      Boolean(
+        message.operationId &&
+        this.sync.isPendingOperation(message.operationId),
+      );
+    const sameDocument =
+      message.documentId === undefined ||
+      message.documentId === this.documentId;
+    const unchangedSnapshot =
+      !message.operationId &&
+      (message.reason === undefined || message.reason === "external") &&
+      message.version === this.version &&
+      message.profile === this.authoritativeProfile &&
+      message.markdown === this.authoritativeMarkdown &&
+      (message.mode === undefined ||
+        message.mode === (this.previewOnly ? "preview" : "editor"));
+    const inputEcho =
+      sameDocument &&
+      (unchangedSnapshot ||
+        (this.sync.hasPending &&
+          this.isDuplicateAuthoritativeSnapshot(message)));
+    if (
+      !ownAck &&
+      !inputEcho &&
+      (message.reason !== "save" || message.version !== this.version)
+    )
+      this.aiSuggestions.invalidate();
     this.clearWorkspaceFileSearch();
     this.clipboardAvailable = message.clipboardAvailable === true;
     if (message.documentId) {
@@ -11443,6 +11513,7 @@ export class MarkdownEditorApp {
         this.clearRecoveryIfSaved();
       this.persistRecoveryAfterAcknowledgement(message.markdown);
       this.flushDeferredHostCommand();
+      this.aiSuggestions.syncChanged();
       return;
     }
 
@@ -11471,6 +11542,7 @@ export class MarkdownEditorApp {
         this.persistRecoveryAfterAcknowledgement(message.markdown);
         this.flushDeferredHostCommand();
       }
+      this.aiSuggestions.syncChanged();
       return;
     }
     if (this.isDuplicateAuthoritativeSnapshot(message)) {

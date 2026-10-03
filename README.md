@@ -60,6 +60,46 @@ Markdown Mint includes additional tools for working with real-world Markdown doc
 
 ✅Export Markdown as standalone HTML or A4 PDF from the current document\.
 
+## Copilot prose suggestions
+
+With a Markdown Mint Rich Editor active, run **Markdown Mint: Suggest
+Continuation** from the Command Palette. On first use, Mint explains the
+bounded text it sends and lets you select an available Copilot chat model and
+authorize access. Use **Markdown Mint: Select Suggestion Model** to change it.
+You can assign a shortcut to either command; Mint adds no default shortcut.
+
+A short continuation appears in faint text at the end of a paragraph, heading,
+or list item. Press **Tab** to insert it or **Esc** to dismiss it. It remains a
+display-only suggestion until accepted, so it is excluded from your file,
+clipboard, previews, exports, and recovery draft. Ordinary Undo/Redo applies
+after acceptance. Tables, code, links, inline code, Details/Alerts, Source,
+Preview, and selected text are excluded.
+
+Automatic suggestions are initially **off**. Enable
+`markdownMint.aiSuggestions.autoTrigger` in VS Code's **User Settings** to
+request a continuation about one second after typing pauses. Turning it off
+keeps the manual command available. The selected ID is stored in
+`markdownMint.aiSuggestions.model` (initially empty). Both settings have
+application scope; workspace settings cannot enable sending or select a model.
+There is no automatic-suggestion toggle in the Mint toolbar.
+
+Mint uses VS Code's public Language Model API in the extension host, with no
+Mint API key, server, or required Copilot dependency. Regular editing works
+when that API or a Copilot model is unavailable. Automatic requests require
+confirmed model access and a trusted workspace. After a restart, access
+revocation, or model-list change, run the manual command to resume; Mint never
+silently chooses a replacement model.
+
+Only bounded prose around the current document's cursor is sent: up to 4,000
+UTF-16 units before, 1,000 after, and 512 for a nearby heading, reduced further
+to fit the model's token budget. Mint does not collect other files, paths,
+images, Git changes, or clipboard content for AI, and does not log or persist
+prompts or suggestions. Requests can consume **Copilot usage** and differ
+from standard Copilot inline completion. Cancellation does not guarantee zero
+provider usage. Content exclusion, repository context, and custom instructions
+from standard Copilot features are not guaranteed for these separate chat
+requests; follow your organization's policy for sending document text.
+
 ## Markdown stays Markdown
 
 Markdown Mint does not introduce a proprietary document format.

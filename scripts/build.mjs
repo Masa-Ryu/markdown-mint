@@ -70,6 +70,7 @@ const integrationOptions = {
   minify,
   keepNames: true,
   legalComments: "none",
+  loader: { ".svg": "text" },
 };
 
 const pdfIntegrationOptions = {
