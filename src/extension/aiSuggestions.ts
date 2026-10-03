@@ -43,8 +43,9 @@ export interface AiPanelSession {
   readonly id: string;
   documentId(): string;
   version(): number;
-  eligible(): boolean;
-  isActive?(): boolean;
+  isReady(): boolean;
+  isActive(): boolean;
+  canStartRequest(): boolean;
   focus(): void;
   post(message: AiHostMessage): void;
 }
@@ -129,7 +130,7 @@ export class AiSuggestionsHost implements vscode.Disposable {
       autoTrigger: this.settings.autoTrigger,
       modelName: this.model?.name.slice(0, 512) ?? "",
       availability: this.availability(),
-      active: session.panel.isActive?.() ?? session.panel.eligible(),
+      active: session.panel.isReady() && session.panel.isActive(),
     });
   }
   private publishAll(): void {
@@ -259,10 +260,10 @@ export class AiSuggestionsHost implements vscode.Disposable {
   public async triggerFromUserAction(id: string): Promise<void> {
     const session = this.sessions.get(id);
     if (
-      !session?.panel.eligible() ||
+      !session?.panel.canStartRequest() ||
       !(await this.initializeFromUserAction(false)) ||
       this.sessions.get(id) !== session ||
-      !session.panel.eligible()
+      !session.panel.canStartRequest()
     )
       return;
     this.cancelSession(id);
@@ -283,11 +284,11 @@ export class AiSuggestionsHost implements vscode.Disposable {
   }
   public async selectModelFromUserAction(id: string): Promise<void> {
     const session = this.sessions.get(id);
-    if (!session?.panel.eligible()) return;
+    if (!session?.panel.canStartRequest()) return;
     if (
       (await this.initializeFromUserAction(true)) &&
       this.sessions.get(id) === session &&
-      session.panel.eligible()
+      session.panel.canStartRequest()
     )
       session.panel.focus();
   }
@@ -318,7 +319,8 @@ export class AiSuggestionsHost implements vscode.Disposable {
       this.active === active &&
       !active.source.token.isCancellationRequested &&
       this.sessions.get(session.panel.id) === session &&
-      session.panel.eligible() &&
+      session.panel.isReady() &&
+      session.panel.isActive() &&
       request.settingsGeneration === this.generation &&
       request.documentId === session.panel.documentId() &&
       request.baseVersion === session.panel.version()
@@ -378,7 +380,7 @@ export class AiSuggestionsHost implements vscode.Disposable {
         return;
     }
     if (
-      !session.panel.eligible() ||
+      !session.panel.canStartRequest() ||
       request.documentId !== session.panel.documentId() ||
       request.baseVersion !== session.panel.version() ||
       request.settingsGeneration !== this.generation
