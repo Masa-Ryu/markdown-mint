@@ -18,7 +18,7 @@ system IME candidate UI remains unverified.
 | R07         | GitHub and GitLab profiles                       | `github`, `gitlab`, and `commonmark` are validated protocol/profile values. Profile settings reach the editor, dedicated preview, and native adapter. The 0.0.3 native acceptance suite verified GitHub versus CommonMark table output; GitLab-specific fixtures remain a follow-up compatibility check.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | R08         | Safe formatting and format-on-save               | Prettier runs with the bundled Markdown parser/plugin, after/before core validation, project `.prettierrc` JSON/YAML options, `.editorconfig` EOL settings, `.prettierignore`, and explicit extension option overrides. Save-time failures leave the source unchanged, write diagnostics to the Markdown Mint output channel, and use a standard VS Code error notification when user action is required. The VS Code auto-save setting is not changed by the extension.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 
-## Issue #141 Mermaid templates and live preview (0.9.0)
+## Issue #141 Mermaid templates and live preview (0.8.0)
 
 In GitHub/GitLab profiles, an unselected Mermaid insertion opens a grouped
 single-selection template list in the existing modal. The 13 examples cover
@@ -103,7 +103,7 @@ announcements were not rerun or inspected for this final footer revision.
 The existing HTML/PDF export browser suites passed earlier with the shared
 rendering helper (HTML CSP violations: zero; PDF: 13 A4 pages).
 
-The final 0.9.0 Mermaid editor navigation revision on 2026-10-03 passed
+The final 0.8.0 Mermaid editor navigation revision on 2026-10-03 passed
 `npm run compile`, `npm test` (1,317 tests across 63 files),
 `npm run lint` (zero errors; 94 warnings), `npm run format:check`,
 `npm run test:browser:mermaid`, `npm run test:browser:blocks`,

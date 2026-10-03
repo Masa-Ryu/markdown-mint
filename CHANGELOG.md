@@ -1,11 +1,5 @@
 # Changelog
 
-## 0.9.0
-
-- Move Mermaid template navigation above the code editor heading and remove the
-  modal-only replacement restore action. Keep replacement confirmation and
-  normal document Undo/Redo for committed Markdown changes.
-
 ## 0.8.0
 
 - Add a Mermaid template picker with 13 examples across 10 diagram types,
@@ -18,6 +12,9 @@
   and source/history guards across document and modal previews.
 - Preserve Git graph connector, commit, and label rendering under the strict
   content security policy.
+- Keep Mermaid template navigation above the code editor heading and remove
+  the modal-only replacement restore action. Replacement confirmation remains,
+  and committed Markdown changes use normal document Undo/Redo.
 
 ## 0.7.2
 
