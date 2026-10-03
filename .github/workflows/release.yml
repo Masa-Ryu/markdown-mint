@@ -142,94 +142,9 @@ jobs:
           if-no-files-found: error
           retention-days: 90
 
-  publish_marketplace:
-    name: Publish to VS Code Marketplace
-    needs: validate
-    runs-on: ubuntu-latest
-    environment: production
-    permissions:
-      contents: read
-      id-token: write
-    steps:
-      - name: Check out the same release commit
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.sha }}
-          fetch-depth: 1
-          persist-credentials: false
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-
-      - name: Install the locked VSCE CLI
-        run: npm ci
-
-      - name: Download the verified release payload
-        uses: actions/download-artifact@v4
-        with:
-          name: ${{ needs.validate.outputs.artifact_name }}
-          path: release-payload
-
-      - name: Verify the downloaded artifact
-        id: payload
-        env:
-          VERSION: ${{ needs.validate.outputs.version }}
-          EXPECTED_SHA256: ${{ needs.validate.outputs.sha256 }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          vsix="release-payload/markdown-mint-${VERSION}.vsix"
-          notes="release-payload/release-notes.md"
-          if [[ ! -f "$vsix" || ! -f "$notes" ]]; then
-            echo "::error::The validated VSIX or release notes are missing from the workflow artifact."
-            exit 1
-          fi
-
-          actual_sha256="$(sha256sum "$vsix" | cut -d ' ' -f 1)"
-          if [[ "$actual_sha256" != "$EXPECTED_SHA256" ]]; then
-            echo "::error::The downloaded VSIX checksum does not match the validated artifact."
-            exit 1
-          fi
-          echo "vsix_path=${vsix}" >> "$GITHUB_OUTPUT"
-          echo "The downloaded VSIX matches the validated SHA-256 ${actual_sha256}."
-
-      - name: Publish the verified VSIX to the VS Code Marketplace
-        env:
-          VERSION: ${{ needs.validate.outputs.version }}
-          ARTIFACT_NAME: ${{ needs.validate.outputs.artifact_name }}
-          VSIX_PATH: ${{ steps.payload.outputs.vsix_path }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          if ! npx --no-install vsce publish --packagePath "$VSIX_PATH" --oidc; then
-            echo "::error::Marketplace publication failed or returned an uncertain result for ${VERSION}. The unchanged VSIX is retained in workflow artifact ${ARTIFACT_NAME} from run ${GITHUB_RUN_ID}; verify Marketplace status before retrying."
-            exit 1
-          fi
-
-      - name: Record Marketplace publication details
-        env:
-          VERSION: ${{ needs.validate.outputs.version }}
-          ARTIFACT_NAME: ${{ needs.validate.outputs.artifact_name }}
-          EXPECTED_SHA256: ${{ needs.validate.outputs.sha256 }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          tag="v${VERSION}"
-          {
-            echo "Marketplace publication succeeded for ${tag}."
-            echo "Workflow run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
-            echo "Retained payload: ${ARTIFACT_NAME}"
-            echo "Target commit: ${GITHUB_SHA}"
-            echo "VSIX SHA-256: ${EXPECTED_SHA256}"
-            echo "If the GitHub Release job fails, rerun failed jobs for this run to reuse this payload without publishing to the Marketplace again."
-          } >> "$GITHUB_STEP_SUMMARY"
-
   publish_github_release:
     name: Publish GitHub Release
-    needs: [validate, publish_marketplace]
+    needs: validate
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -381,13 +296,13 @@ jobs:
                   create_args+=(--verify-tag)
                 fi
                 if ! gh "${create_args[@]}"; then
-                  echo "::error::Marketplace publication succeeded, but draft GitHub Release creation or asset upload failed for ${tag}. Rerun failed jobs for run ${GITHUB_RUN_ID}; the Marketplace job will not run again and payload ${ARTIFACT_NAME} remains available."
+                  echo "::error::Draft GitHub Release creation or asset upload failed for ${tag}. Rerun failed jobs for run ${GITHUB_RUN_ID}; retained payload ${ARTIFACT_NAME} remains available."
                   exit 1
                 fi
                 ;;
               upload_asset)
                 if ! gh release upload "$tag" "$VSIX_PATH" --repo "$GITHUB_REPOSITORY"; then
-                  echo "::error::Marketplace publication succeeded, but uploading ${asset_name} to draft ${tag} failed. Rerun failed jobs for run ${GITHUB_RUN_ID} to recover without republishing to the Marketplace."
+                  echo "::error::Uploading ${asset_name} to draft ${tag} failed. Rerun failed jobs for run ${GITHUB_RUN_ID}; retained payload ${ARTIFACT_NAME} remains available for recovery."
                   exit 1
                 fi
                 ;;
@@ -412,7 +327,7 @@ jobs:
               publish_release)
                 release_id="$(jq -r '.plan.releaseId' "$plan_json")"
                 if ! gh api --method PATCH "repos/${GITHUB_REPOSITORY}/releases/${release_id}" --field draft=false > /dev/null; then
-                  echo "::error::Marketplace publication succeeded and the expected VSIX is attached to draft ${tag}, but publishing that release failed. Rerun failed jobs for run ${GITHUB_RUN_ID} to recover without republishing to the Marketplace."
+                  echo "::error::The expected VSIX is attached to draft ${tag}, but publishing the GitHub Release failed. Rerun failed jobs for run ${GITHUB_RUN_ID}; retained payload ${ARTIFACT_NAME} remains available for recovery."
                   exit 1
                 fi
                 ;;
@@ -428,5 +343,5 @@ jobs:
             esac
           done
 
-          echo "::error::GitHub Release ${tag} did not reach a completed state after recovery attempts. Rerun failed jobs for run ${GITHUB_RUN_ID}; the Marketplace job will not run again."
+          echo "::error::GitHub Release ${tag} did not reach a completed state after recovery attempts. Rerun failed jobs for run ${GITHUB_RUN_ID}; retained payload ${ARTIFACT_NAME} remains available."
           exit 1

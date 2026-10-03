@@ -45,22 +45,13 @@ description without reconstructing intent from the diff alone.
 - Pull requests continue to update versions according to the SemVer rules
   below. Create a GitHub Release only when a version is intentionally published
   to users.
-- Publish to the VS Code Marketplace and create the GitHub Release through
-  `.github/workflows/release.yml`.
-- Before the first automated publish, configure the `masa-ryu` publisher's
-  trusted publishing policy in Visual Studio Marketplace publisher management
-  for repository `Masa-Ryu/markdown-mint` and workflow
-  `.github/workflows/release.yml`. `publish_marketplace` uses the GitHub
-  `production` Environment and `vsce publish --packagePath <verified.vsix>`
-  with `--oidc`; grant that job `id-token: write`.
-- Use OIDC as the only automated Marketplace authentication; no long-lived PAT
-  is stored or used.
-- The workflow verifies one VSIX and its SHA-256, publishes that artifact to the
-  Marketplace, then attaches the same artifact to the GitHub Release. Release
-  tags use `v<version>`.
-- If only GitHub Release publication fails after Marketplace publication
-  succeeds, rerun **failed jobs** for that workflow run. The GitHub job reuses
-  the retained VSIX and checksum without running the Marketplace job again.
+- Run `.github/workflows/release.yml` manually from `main` to validate and
+  package one VSIX, verify its SHA-256, and retain it as a workflow artifact.
+- The GitHub Release job downloads that exact VSIX, creates or recovers a draft
+  release, verifies the attached asset, and publishes the release. Release tags
+  use `v<version>`.
+- If GitHub Release publication fails, rerun **failed jobs** for that workflow
+  run. The release job reuses the retained VSIX and checksum.
 
 作業が完了したらPushしてPullrequestの内容を書き上げること。
 issueが見つからない時はissue番号はないです。

@@ -3,7 +3,7 @@
 ## 0.7.1
 
 - Add an explicit GitHub Actions release workflow that validates, packages, and
-  publishes one verified VSIX to the VS Code Marketplace and GitHub Releases.
+  attaches one verified VSIX to a GitHub Release.
 
 ## 0.7.0
 
