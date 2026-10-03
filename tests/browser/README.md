@@ -1,5 +1,15 @@
 # Browser harness
 
+`npm run test:browser:mermaid` exercises the shipped Mermaid runtime through
+the modal and document renderer. It renders all 13 templates plus the three
+horizontal flowchart variants, checks visible labels including Japanese, and
+tests replacement/restoration, keyboard and composition events, source/history
+boundaries, profiles, stale/read-only guards, four live themes, narrow layouts,
+and shared lazy loading. Results and screenshots are saved under
+`output/playwright/mermaid-templates/`. Set `MM_MERMAID_BROWSER_CASE` to
+`catalog`, `interactionChecks`, `guardChecks`, or `themeChecks` for a focused
+run. OS IME and screen-reader behavior still need native manual inspection.
+
 Build the webview bundle, start the fixture server, and open
 `http://127.0.0.1:4173/` in Playwright or Chrome:
 

@@ -182,6 +182,9 @@ describe("profile feature toolbar", () => {
   it("shows Mermaid-only metadata and keeps the accessible source label", async () => {
     const { root } = makeApp();
     featureButton(root, "mermaid").click();
+    Array.from(root.querySelectorAll<HTMLButtonElement>("button"))
+      .find((button) => button.textContent === "Create from code")
+      ?.click();
     const dialog = root.querySelector<HTMLDialogElement>(
       ".mm-profile-feature-dialog",
     )!;
@@ -216,7 +219,9 @@ describe("profile feature toolbar", () => {
     ).toBe(false);
 
     dialog
-      .querySelector<HTMLButtonElement>("button:not([type=submit])")!
+      .querySelector<HTMLButtonElement>(
+        ".mm-dialog-actions button:not([type=submit])",
+      )!
       .click();
     featureButton(root, "math").click();
     expect(dialog.dataset.profileFeature).toBe("math");
@@ -228,6 +233,9 @@ describe("profile feature toolbar", () => {
   it("blocks invalid and empty Mermaid source, including direct form submission", async () => {
     const { root, app, messages } = makeApp();
     featureButton(root, "mermaid").click();
+    Array.from(root.querySelectorAll<HTMLButtonElement>("button"))
+      .find((button) => button.textContent === "Create from code")
+      ?.click();
     const dialog = root.querySelector<HTMLDialogElement>(
       ".mm-profile-feature-dialog",
     )!;
@@ -269,6 +277,9 @@ describe("profile feature toolbar", () => {
     const disposeShortcut = installModalSubmitShortcut(root, "Linux x86_64");
     try {
       featureButton(root, "mermaid").click();
+      Array.from(root.querySelectorAll<HTMLButtonElement>("button"))
+        .find((button) => button.textContent === "Create from code")
+        ?.click();
       const dialog = root.querySelector<HTMLDialogElement>(
         ".mm-profile-feature-dialog",
       )!;
@@ -373,6 +384,9 @@ describe("profile feature toolbar", () => {
       expect(dialog.getAttribute("data-profile-feature")).toBe(entry.id);
       entry.configure(dialog);
       if (entry.id === "mermaid") {
+        Array.from(dialog.querySelectorAll<HTMLButtonElement>("button"))
+          .find((button) => button.textContent === "Create from code")
+          ?.click();
         dialog
           .querySelector<HTMLTextAreaElement>('[data-feature-field="body"]')!
           .dispatchEvent(new Event("input", { bubbles: true }));
@@ -455,6 +469,9 @@ describe("profile feature toolbar", () => {
       )!;
       entry.configure(dialog);
       if (entry.id === "mermaid") {
+        Array.from(dialog.querySelectorAll<HTMLButtonElement>("button"))
+          .find((button) => button.textContent === "Create from code")
+          ?.click();
         dialog
           .querySelector<HTMLTextAreaElement>('[data-feature-field="body"]')!
           .dispatchEvent(new Event("input", { bubbles: true }));
@@ -487,7 +504,9 @@ describe("profile feature toolbar", () => {
       '[data-feature-dialog="true"]',
     )!;
     dialog
-      .querySelector<HTMLButtonElement>("button:not([type='submit'])")!
+      .querySelector<HTMLButtonElement>(
+        ".mm-dialog-actions button:not([type='submit'])",
+      )!
       .click();
 
     expect(currentSource(app)).toBe(before);
@@ -598,7 +617,9 @@ describe("profile feature toolbar", () => {
       '[data-feature-field="body"]',
     )!.value = "Changed";
     dialog
-      .querySelector<HTMLButtonElement>("button:not([type='submit'])")!
+      .querySelector<HTMLButtonElement>(
+        ".mm-dialog-actions button:not([type='submit'])",
+      )!
       .click();
 
     expect(currentSource(app)).toBe(source);
@@ -615,7 +636,9 @@ describe("profile feature toolbar", () => {
         .value,
     ).toBe("Changed");
     dialog
-      .querySelector<HTMLButtonElement>("button:not([type='submit'])")!
+      .querySelector<HTMLButtonElement>(
+        ".mm-dialog-actions button:not([type='submit'])",
+      )!
       .click();
     expect(root.querySelector(".mm-discard-changes-dialog")).not.toBeNull();
     root
@@ -739,7 +762,9 @@ describe("profile feature toolbar", () => {
       '[data-feature-dialog="true"]',
     )!;
     dialog
-      .querySelector<HTMLButtonElement>("button:not([type='submit'])")!
+      .querySelector<HTMLButtonElement>(
+        ".mm-dialog-actions button:not([type='submit'])",
+      )!
       .click();
     expect(editCount(messages)).toBe(0);
     expect(document.activeElement).toBe(button);

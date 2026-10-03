@@ -32,6 +32,12 @@ Markdown Mint supports Markdown features provided by platforms such as GitHub an
 
 With **GitHub Mode**, you can use GitHub-specific features such as **Alerts** and **Mermaid diagrams** directly in the visual editor.
 
+In GitHub and GitLab modes, choose from 13 Mermaid templates by their finished
+diagram, then edit the code beside a live preview. **Templates** lets you try a
+different example; **Undo replacement** restores the previous code. Only
+**Insert** or **Update** changes your Markdown. Existing diagrams and selected
+code open directly in the code editor.
+
 ![platform-specific-demo](./docs/media/platform-specific-demo.gif)
 
 ## More built-in features

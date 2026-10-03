@@ -1042,6 +1042,152 @@ textarea:focus-visible {
 .mm-profile-feature-dialog[data-profile-feature="mermaid"] .mm-dialog-actions {
   grid-area: actions;
 }
+.mm-mermaid-workspace {
+  display: flex;
+  grid-area: body;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+.mm-mermaid-code-preview,
+.mm-mermaid-template-picker {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  gap: 12px;
+}
+.mm-mermaid-template-picker {
+  grid-template-columns: minmax(180px, 0.65fr) minmax(0, 1fr);
+}
+.mm-mermaid-workspace [hidden],
+.mm-mermaid-workspace[hidden] {
+  display: none !important;
+}
+.mm-mermaid-code-pane,
+.mm-mermaid-template-detail,
+.mm-mermaid-preview-slot {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+.mm-mermaid-code-pane > [data-feature-field-container="body"],
+.mm-mermaid-preview-slot {
+  flex: 1;
+}
+.mm-mermaid-template-list {
+  min-height: 0;
+  overflow: auto;
+  border: 1px solid var(--vscode-widget-border, var(--mm-control-border));
+  border-radius: 4px;
+  padding: 4px;
+}
+.mm-mermaid-template-group {
+  padding: 8px 6px 4px;
+  font-size: 0.85em;
+  color: var(--vscode-descriptionForeground, var(--mm-control-foreground));
+}
+.mm-mermaid-template-list [role="option"] {
+  padding: 7px 8px;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  cursor: pointer;
+}
+.mm-mermaid-template-list [aria-selected="true"] {
+  background: var(
+    --vscode-list-activeSelectionBackground,
+    var(--mm-control-background)
+  );
+  color: var(
+    --vscode-list-activeSelectionForeground,
+    var(--mm-control-foreground)
+  );
+  border-color: var(--vscode-focusBorder, var(--mm-control-foreground));
+}
+.mm-mermaid-template-list:focus-visible,
+.mm-mermaid-workspace button:focus-visible,
+.mm-mermaid-workspace select:focus-visible {
+  outline: 2px solid var(--vscode-focusBorder, var(--mm-control-foreground));
+  outline-offset: 1px;
+}
+.mm-mermaid-template-detail {
+  gap: 6px;
+}
+.mm-mermaid-template-detail h3,
+.mm-mermaid-template-detail p {
+  margin: 0;
+}
+.mm-mermaid-template-hint {
+  font-size: 0.9em;
+  color: var(--vscode-descriptionForeground, var(--mm-control-foreground));
+}
+.mm-mermaid-editor-toolbar,
+.mm-mermaid-template-actions,
+.mm-mermaid-replacement-confirmation {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.mm-mermaid-replacement-confirmation {
+  border: 1px solid var(--vscode-focusBorder, var(--mm-control-foreground));
+  border-radius: 4px;
+  padding: 8px;
+}
+.mm-mermaid-replacement-confirmation p {
+  flex-basis: 100%;
+  margin: 0;
+}
+.mm-mermaid-preview {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+  width: 100%;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid var(--vscode-widget-border, var(--mm-control-border));
+  border-radius: 4px;
+}
+.mm-mermaid-preview-status {
+  margin: 0 !important;
+  padding: 8px;
+  flex-shrink: 0;
+  font-size: 0.85em;
+  color: var(--vscode-descriptionForeground, var(--mm-control-foreground));
+}
+.mm-mermaid-preview-diagram {
+  min-height: 0;
+  overflow: auto;
+  flex: 1;
+  padding: 8px;
+}
+.mm-mermaid-preview-diagram svg {
+  min-width: 220px;
+  max-height: 100%;
+}
+@media (max-width: 640px) {
+  .mm-profile-feature-dialog[data-profile-feature="mermaid"] .mm-dialog-form {
+    grid-template-rows: auto auto minmax(0, 1fr) auto;
+    grid-template-areas: "title title" "meta meta" "body body" "actions actions";
+    gap: 6px;
+  }
+  .mm-mermaid-code-preview,
+  .mm-mermaid-template-picker {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(90px, 0.8fr) minmax(0, 1fr);
+    gap: 6px;
+  }
+  .mm-mermaid-template-picker {
+    grid-template-rows: minmax(70px, 0.4fr) minmax(0, 1fr);
+  }
+}
 .mm-emoji-dialog {
   width: min(420px, calc(100vw - 30px));
 }

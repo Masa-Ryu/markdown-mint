@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.8.0
+
+- Add a Mermaid template picker with 13 examples across 10 diagram types,
+  vertical/horizontal flowchart variants, and a live preview of the current
+  code. Keep selected text and existing diagrams in direct code editing.
+- Confirm replacement of existing or edited code, restore the previous code
+  with its caret and scroll position, and commit only through Insert/Update.
+  Share the existing lazy local runtime, strict rendering, SVG sanitization,
+  and source/history guards across document and modal previews.
+
 ## 0.7.0
 
 - Add A4 PDF export from the Export menu and Command Palette. Reuse the

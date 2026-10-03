@@ -408,6 +408,42 @@ function asSvgMarkup(value: string | { svg?: string }): string | undefined {
   return typeof value.svg === "string" ? value.svg : undefined;
 }
 
+let renderTail: Promise<unknown> = Promise.resolve();
+
+/** Shared strict, themed, sanitized rendering for document and modal previews. */
+export async function renderSafeMermaidSvg(
+  source: string,
+  root: ParentNode,
+  runtime?: MermaidRuntime,
+): Promise<SVGElement> {
+  const ownerDocument = documentForRoot(root);
+  if (!ownerDocument) throw new Error("Mermaid document is unavailable.");
+  if (source.length > MAX_MERMAID_SOURCE_LENGTH)
+    throw new Error("Mermaid source exceeds the character limit.");
+  const resolved = runtime ?? (await ensureMermaidRuntime());
+  if (!resolved) throw new Error("Mermaid renderer is unavailable offline.");
+  const render = renderTail.then(async () => {
+    initializeRuntimeTheme(resolved, root, ownerDocument);
+    const id = "mm-mermaid-" + String(++nextMermaidId);
+    try {
+      const result = await resolved.render(id, normalizeMermaidSource(source));
+      const markup = asSvgMarkup(result);
+      const svg = markup ? sanitizeSvg(markup, ownerDocument) : null;
+      if (!svg) throw new Error("Mermaid output was rejected.");
+      normalizeMermaidSvg(svg);
+      return svg;
+    } finally {
+      // Mermaid may leave its measuring/error container behind on rejection.
+      ownerDocument.getElementById("d" + id)?.remove();
+    }
+  });
+  renderTail = render.then(
+    () => undefined,
+    () => undefined,
+  );
+  return render;
+}
+
 function isHidden(element: HTMLElement): boolean {
   let current: Element | null = element;
   while (current) {
@@ -590,20 +626,8 @@ export function enhanceRenderedContent(
       );
       return;
     }
-    try {
-      initializeRuntimeTheme(runtime, root, ownerDocument);
-    } catch {
-      finishFailure(
-        element,
-        generation,
-        "Mermaid renderer could not be initialized; source preserved.",
-      );
-      return;
-    }
-    const safeSource = normalizeMermaidSource(source);
-    const id = "mm-mermaid-" + String(++nextMermaidId);
-    Promise.resolve(runtime.render(id, safeSource))
-      .then((result) => {
+    renderSafeMermaidSvg(source, root, runtime)
+      .then((svg) => {
         const current = jobs.get(element);
         if (
           disposed ||
@@ -613,17 +637,6 @@ export function enhanceRenderedContent(
           !connectedToRoot(root, element, ownerDocument)
         )
           return;
-        const markup = asSvgMarkup(result);
-        const svg = markup ? sanitizeSvg(markup, ownerDocument) : null;
-        if (!svg) {
-          finishFailure(
-            element,
-            generation,
-            "Mermaid output was rejected; source preserved.",
-          );
-          return;
-        }
-        normalizeMermaidSvg(svg);
         const oldSvg = element.querySelector("svg");
         oldSvg?.remove();
         element.insertBefore(svg, element.firstChild);

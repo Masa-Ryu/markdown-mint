@@ -472,8 +472,11 @@ describe("local Mermaid rendering lifecycle", () => {
     element.dataset.mermaidSource = "flowchart TD\\n A-->C";
     enhancer.invalidate();
     await flush();
-    expect(resolvers).toHaveLength(2);
+    expect(resolvers).toHaveLength(1);
     resolvers[0]?.('<svg id="PLACEHOLDER"><g>old</g></svg>');
+    await flush();
+    expect(element.querySelector("svg")).toBeNull();
+    expect(resolvers).toHaveLength(2);
     resolvers[1]?.('<svg id="PLACEHOLDER"><g>new</g></svg>');
     await flush();
     expect(element.querySelector("svg")?.textContent).toBe("new");

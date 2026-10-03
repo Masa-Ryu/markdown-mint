@@ -18,6 +18,89 @@ system IME candidate UI remains unverified.
 | R07         | GitHub and GitLab profiles                       | `github`, `gitlab`, and `commonmark` are validated protocol/profile values. Profile settings reach the editor, dedicated preview, and native adapter. The 0.0.3 native acceptance suite verified GitHub versus CommonMark table output; GitLab-specific fixtures remain a follow-up compatibility check.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | R08         | Safe formatting and format-on-save               | Prettier runs with the bundled Markdown parser/plugin, after/before core validation, project `.prettierrc` JSON/YAML options, `.editorconfig` EOL settings, `.prettierignore`, and explicit extension option overrides. Save-time failures leave the source unchanged, write diagnostics to the Markdown Mint output channel, and use a standard VS Code error notification when user action is required. The VS Code auto-save setting is not changed by the extension.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 
+## Issue #141 Mermaid templates and live preview (0.8.0)
+
+In GitHub/GitLab profiles, an unselected Mermaid insertion opens a grouped
+single-selection template list in the existing modal. The 13 examples cover
+10 diagram types; the three flowcharts offer TD/LR candidate generation.
+Only the selected candidate renders. **Use this template** replaces the modal
+draft and opens code editing; **Create from code** uses the previous Start→End
+default. Existing diagrams and selected text open directly in code editing.
+Code and preview use two columns at wide widths and stack below 640px.
+
+**Templates** preserves the draft, input selection, and scroll position while
+browsing. Replacing existing/selected/edited source requires an inline
+confirmation. **Undo replacement** restores the most recent pre-replacement
+source and input geometry, with another confirmation if the replacement has
+since been edited. Identical source is a no-op. The opening dirty baseline is
+never recaptured during template changes, and snapshots disappear on close.
+Escape closes one layer (replacement confirmation, picker, then the normal
+modal cancellation policy). Listbox arrows select; Enter/Space apply only on
+the explicit button. Submit shortcuts and composition events cannot commit
+from the picker or replacement confirmation.
+
+Draft validation uses the existing 300ms controller and 200,000-character
+limit. Candidate validation uses the same controller separately and cannot
+enable Insert/Update. Empty/checking/invalid/unavailable states remove stale
+SVG immediately. A render failure is reported separately without changing a
+valid syntax result or blocking an otherwise valid commit. Preview rendering
+keeps one running request and one latest pending request, compares generation,
+source, session and visible target, and invalidates results on live theme
+changes or closure. The document and modal share `renderSafeMermaidSvg()` for
+source normalization, strict initialization, palette, sanitation, and SVG
+normalization. No new parser, external service, renderer, cache, or persistent
+template metadata is introduced. Saved output is ordinary Mermaid fenced
+source, and only Insert/Update uses the existing document transaction path.
+
+The unit suite includes catalog, picker, replacement session, preview queue,
+and modal integration tests. `npm run test:browser:mermaid` uses the shipped
+Mermaid 11.17.2 bundle and CSS to render all 16 variants, checks visible
+English/Japanese labels (including Mindmap/Timeline), inserts and reopens each
+diagram, and checks no-op updates. It also exercises caret/scroll restoration,
+inline confirmation, composition events, keyboard focus, browser-host
+Undo/Redo, external/read-only guards, GitHub/GitLab/CommonMark, four live
+themes and a 380×640 viewport. No external template requests occur.
+
+On 2026-10-03, compile, all 1,268 unit tests, lint (existing warnings only),
+format check, the full Mermaid and block browser suites, native extension-host
+acceptance, and VSIX verification passed. The five AGENTS fixtures
+(`common-test.md`, `github-test.md`, `github-test-class-B.md`, `gitlab-test.md`,
+`gitlab-test-class-B.md`) passed Rich/Preview/native display checks, and their
+code, math, and Mermaid screenshots were visually inspected. The picker was
+also inspected across light/dark/both high-contrast themes and narrow layouts.
+The existing HTML/PDF export browser suites passed with the shared rendering
+helper (HTML CSP violations: zero; PDF: 13 A4 pages).
+
+A separate isolated VS Code smoke run inserted a Japanese Mindmap template,
+saved it, exercised native Cmd+Z / Cmd+Shift+Z and saved each result, canceled
+candidate browsing, and reopened/updated an unchanged diagram. Disk bytes,
+source, and host versions matched the expected boundaries. That check used a
+temporary CDP script under `output/playwright/native-mermaid/`; it is local
+inspection evidence, not a committed portable native test. Real OS IME
+candidate UI and screen-reader announcements were not inspected because this
+run used automated composition events and had no assistive-technology session.
+
+The native save smoke also showed a misleading “VS Code did not save the
+Markdown document” notification despite matching saved bytes and a clean
+editor. The same notification was independently reproduced using the baseline
+0.7.0 VSIX; the host save implementation is unchanged in this PR.
+
+Five fresh local Chromium contexts per case used the same
+`scripts/benchmark-mermaid-startup.mjs` command before/after. These medians are
+local measurements, not a claim of acceleration or a hardware-independent
+budget:
+
+| Measurement                        | main 0.7.0 |     0.8.0 |
+| ---------------------------------- | ---------: | --------: |
+| Webview bundle bytes               |  1,753,249 | 1,775,705 |
+| Mermaid loader bytes               |    464,943 |   465,257 |
+| Mermaid bundle bytes               |  3,768,758 | 3,769,089 |
+| VSIX bytes (76 files)              |  4,603,739 | 4,611,281 |
+| Ordinary document editability      |   195.0 ms |  196.0 ms |
+| First Mermaid use to rendered SVG  |   252.1 ms |  253.7 ms |
+| Ordinary document runtime requests |          0 |         0 |
+| First-use runtime requests         |          1 |         1 |
+
 ## Quality requirements
 
 | Requirement                            | Implementation                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |

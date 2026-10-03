@@ -993,6 +993,9 @@ async function testProfileFeaturesAtStructuralBoundary(page) {
       id: "mermaid",
       configure: async (dialog) => {
         await dialog
+          .getByRole("button", { name: "Create from code", exact: true })
+          .click();
+        await dialog
           .locator('[data-feature-field="body"]')
           .fill("graph TD\nA-->B");
       },
@@ -2553,6 +2556,9 @@ async function testModalEscapeCancellation(page) {
   await mermaidButton.click();
   const mermaidDialog = page.locator('[data-feature-dialog="true"][open]');
   await mermaidDialog.waitFor({ state: "visible" });
+  await mermaidDialog
+    .getByRole("button", { name: "Create from code", exact: true })
+    .click();
   await mermaidDialog
     .locator('[data-feature-field="body"]')
     .fill("flowchart TD\n    A --> B");

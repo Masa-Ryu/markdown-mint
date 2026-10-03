@@ -138,6 +138,7 @@ import {
   MermaidValidationController,
   type MermaidValidationSnapshot,
 } from "./mermaidValidation";
+import { MermaidDialog } from "./mermaidDialog";
 import {
   copyCodeText as copyClipboardText,
   enhanceCodeBlockControls,
@@ -2687,6 +2688,8 @@ export class MarkdownEditorApp {
   private profileFeatureError!: HTMLElement;
   private profileFeatureApplyButton!: HTMLButtonElement;
   private mermaidValidation!: MermaidValidationController;
+  private mermaidDialog!: MermaidDialog;
+  private mermaidCommitRequest: object | null = null;
   private profileFeatureMermaidSnapshot: MermaidValidationSnapshot | null =
     null;
   private profileFeatureSelection: Selection | null = null;
@@ -3354,6 +3357,7 @@ export class MarkdownEditorApp {
     this.closeEmojiPicker();
     this.closeProfileFeatureDialog();
     this.mermaidValidation.dispose();
+    this.mermaidDialog.dispose();
     this.transientBlanks = null;
     this.previewEnhancer?.dispose();
     this.previewEnhancer = undefined;
@@ -5809,12 +5813,28 @@ export class MarkdownEditorApp {
     apply.textContent = "Insert";
     this.profileFeatureApplyButton = apply;
     actions.append(cancel, apply);
+    this.mermaidDialog = new MermaidDialog({
+      dialog,
+      bodyField,
+      input: this.profileFeatureBodyInput,
+      onRuntimeReady: () => {
+        this.profileFeatureMermaidVersion.textContent =
+          "Mermaid " + mermaidRuntimeVersionFromGlobal();
+      },
+      onScreenChange: (editing) => {
+        this.profileFeatureApplyButton.disabled = true;
+        this.profileFeatureMermaidStatus.hidden = !editing;
+        if (editing) this.scheduleMermaidValidation();
+        else this.mermaidValidation.cancel();
+      },
+    });
     form.append(
       title,
       this.profileFeatureMermaidMeta,
       alertField,
       titleField,
       termField,
+      this.mermaidDialog.element,
       bodyField,
       actions,
     );
@@ -5922,6 +5942,13 @@ export class MarkdownEditorApp {
   }
 
   private updateMermaidValidation(snapshot: MermaidValidationSnapshot): void {
+    if (
+      this.profileFeatureId !== "mermaid" ||
+      !this.profileFeatureDialogOpen ||
+      !this.mermaidDialog.isEditing ||
+      snapshot.source !== this.profileFeatureBodyInput.value
+    )
+      return;
     this.profileFeatureMermaidSnapshot = snapshot;
     if (!this.profileFeatureMermaidStatus) return;
     const label =
@@ -5931,7 +5958,11 @@ export class MarkdownEditorApp {
           ? "Checking…"
           : snapshot.status === "empty"
             ? "Enter Mermaid source"
-            : "✕ Syntax error";
+            : snapshot.errorKind === "runtime"
+              ? "Validator unavailable"
+              : snapshot.errorKind === "limit"
+                ? "Source too long"
+                : "✕ Syntax error";
     this.profileFeatureMermaidStatus.dataset.validationState = snapshot.status;
     this.profileFeatureMermaidStatus.textContent = label;
     this.profileFeatureMermaidStatus.setAttribute(
@@ -5941,12 +5972,18 @@ export class MarkdownEditorApp {
     if (this.profileFeatureId === "mermaid")
       this.profileFeatureApplyButton.disabled =
         snapshot.status !== "valid" ||
+        !this.mermaidDialog.canSubmit ||
         !this.profileFeatureDialogOpen ||
         !this.profileFeatureError.hidden;
+    this.profileFeatureMermaidVersion.textContent =
+      "Mermaid " + mermaidRuntimeVersionFromGlobal();
+    this.mermaidDialog.acceptDraftValidation(snapshot);
   }
 
   private scheduleMermaidValidation(): void {
-    if (this.profileFeatureId !== "mermaid") return;
+    if (this.profileFeatureId !== "mermaid" || !this.mermaidDialog.isEditing)
+      return;
+    this.mermaidDialog.inputChanged();
     this.profileFeatureApplyButton.disabled = true;
     this.mermaidValidation.schedule(this.profileFeatureBodyInput.value);
   }
@@ -5961,24 +5998,34 @@ export class MarkdownEditorApp {
   }
 
   private async validateAndCommitMermaid(source: string): Promise<void> {
-    const snapshot = await this.mermaidValidation.validateNow(source);
-    if (
-      !snapshot ||
-      !this.profileFeatureDialogOpen ||
-      this.profileFeatureId !== "mermaid" ||
-      this.profileFeatureBodyInput.value !== source
-    )
-      return;
-    if (snapshot.status !== "valid") {
-      this.profileFeatureBodyInput.focus();
-      return;
+    if (this.mermaidCommitRequest) return;
+    const request = {};
+    this.mermaidCommitRequest = request;
+    try {
+      const snapshot = await this.mermaidValidation.validateNow(source);
+      if (
+        !snapshot ||
+        !this.profileFeatureDialogOpen ||
+        this.profileFeatureId !== "mermaid" ||
+        !this.mermaidDialog.canSubmit ||
+        this.profileFeatureBodyInput.value !== source
+      )
+        return;
+      if (snapshot.status !== "valid") {
+        this.profileFeatureBodyInput.focus();
+        return;
+      }
+      this.commitProfileFeatureDialogCore();
+    } finally {
+      if (this.mermaidCommitRequest === request)
+        this.mermaidCommitRequest = null;
     }
-    this.commitProfileFeatureDialogCore();
   }
 
   private openProfileFeatureDialog(
     id: ProfileFeatureId,
     invokingButton: HTMLButtonElement | null = null,
+    existingBody?: string,
   ): void {
     const feature = this.profileFeatureDefinition(id);
     if (!feature || !this.canUseProfileFeature(feature)) {
@@ -6012,7 +6059,7 @@ export class MarkdownEditorApp {
     this.profileFeatureTitleInput.parentElement!.hidden = id !== "details";
     this.profileFeatureTermInput.parentElement!.hidden =
       id !== "gitlab-description-list";
-    const selected = this.selectedProfileFeatureText();
+    const selected = existingBody ?? this.selectedProfileFeatureText();
     this.profileFeatureBodyInput.value = selected;
     this.profileFeatureError.hidden = true;
     this.profileFeatureError.textContent = "";
@@ -6044,9 +6091,14 @@ export class MarkdownEditorApp {
       else if (id === "details")
         this.profileFeatureBodyInput.value = "Details content";
     }
-    if (id === "mermaid") this.scheduleMermaidValidation();
     this.openDialog(this.profileFeatureDialog);
-    if (id === "details") this.profileFeatureTitleInput.focus();
+    if (id === "mermaid")
+      this.mermaidDialog.start(
+        this.profileFeatureBodyInput.value,
+        existingBody !== undefined || Boolean(selected),
+        existingBody === undefined && !selected,
+      );
+    else if (id === "details") this.profileFeatureTitleInput.focus();
     else if (id === "gitlab-description-list")
       this.profileFeatureTermInput.focus();
     else this.profileFeatureBodyInput.focus();
@@ -6141,7 +6193,7 @@ export class MarkdownEditorApp {
     const node = this.view.state.doc.nodeAt(position);
     const sourceEditor = node && blockSourceEditor(node);
     if (!node || !sourceEditor) return;
-    this.openProfileFeatureDialog(sourceEditor.kind);
+    this.openProfileFeatureDialog(sourceEditor.kind, null, sourceEditor.body);
     if (!this.profileFeatureDialogOpen) return;
     this.profileFeatureSelection = null;
     this.profileFeatureEditTarget = {
@@ -6158,7 +6210,8 @@ export class MarkdownEditorApp {
       sourceEditor.kind === "math" ? "Edit Math" : "Edit Mermaid";
     this.profileFeatureApplyButton.textContent = "Update";
     this.profileFeatureBodyInput.value = sourceEditor.body;
-    if (sourceEditor.kind === "mermaid") this.scheduleMermaidValidation();
+    if (sourceEditor.kind === "mermaid")
+      this.mermaidDialog.start(sourceEditor.body, true, false);
     this.profileFeatureBodyInput.focus();
     this.captureModalCancelSnapshot(this.profileFeatureDialog);
   }
@@ -6224,6 +6277,8 @@ export class MarkdownEditorApp {
     this.profileFeatureEditTarget = null;
     this.profileFeatureAlertNodeView = null;
     this.profileFeatureId = null;
+    this.mermaidCommitRequest = null;
+    this.mermaidDialog.close();
     this.mermaidValidation.cancel();
     this.profileFeatureMermaidSnapshot = null;
     this.profileFeatureMermaidMeta.hidden = true;
@@ -6289,6 +6344,8 @@ export class MarkdownEditorApp {
   }
 
   private commitProfileFeatureDialog(): void {
+    if (this.profileFeatureId === "mermaid" && !this.mermaidDialog.canSubmit)
+      return;
     if (
       this.profileFeatureId === "mermaid" &&
       !this.mermaidValidationIsCurrentAndValid(
@@ -6302,6 +6359,8 @@ export class MarkdownEditorApp {
   }
 
   private commitProfileFeatureDialogCore(): void {
+    if (this.profileFeatureId === "mermaid" && !this.mermaidDialog.canSubmit)
+      return;
     const editTarget = this.profileFeatureEditTarget;
     if (editTarget) {
       const stale =
@@ -6424,6 +6483,7 @@ export class MarkdownEditorApp {
     if (!saved || !id) return;
     const stale =
       !this.profileFeatureDialogOpen ||
+      !this.canEditBlock() ||
       !this.initialized ||
       this.previewOnly ||
       this.mode !== "rich" ||
@@ -8657,6 +8717,12 @@ export class MarkdownEditorApp {
     dialog: HTMLDialogElement,
     _reason: DialogCancelReason,
   ): void {
+    if (
+      dialog === this.profileFeatureDialog &&
+      _reason === "escape" &&
+      this.mermaidDialog.handleEscape()
+    )
+      return;
     const behavior = this.modalCancelBehaviors.get(dialog);
     if (!behavior || !dialog.open || this.discardChangesConfirmation !== null)
       return;
