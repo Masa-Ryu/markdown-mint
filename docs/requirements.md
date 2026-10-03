@@ -108,7 +108,7 @@ npm run test:browser:mermaid (all 13 templates and 16 direction variants),
 npm run test:browser:blocks (all five fixtures in Rich/Preview/native),
 npm run test:browser:html-export (zero CSP violations),
 npm run test:browser:pdf-export (13 A4 pages), and npm run package
-(76 files; 4,613,418 bytes). npm run test:extension, real OS IME candidate
+(76 files; 4,613,456 bytes). npm run test:extension, real OS IME candidate
 UI, and screen-reader announcements were not run for this follow-up.
 
 A separate isolated VS Code smoke run on the initial Issue #141 UI inserted a
