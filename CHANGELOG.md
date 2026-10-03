@@ -241,6 +241,9 @@
 - Preserve raw Markdown destinations, percent-encoded filenames, external
   link handling, query and fragment behavior, and remote/virtual workspace URI
   scheme and authority values.
+
+## 0.20.0
+
 - Interpret multi-cell TSV, HTML-table, and Markdown Mint internal clipboard
   payloads pasted outside the Rich Editor's existing tables as a header-first
   Markdown table, while keeping ordinary multiline text, one-cell pastes,

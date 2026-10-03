@@ -1411,7 +1411,7 @@ zoom, font loading, and operating-system IME candidate UI remain manual checks.
   rules. The native operating-system pointer/IME visual behavior remains a
   manual check.
 
-## 0.3.0 spreadsheet table paste
+## 0.20.0 spreadsheet table paste
 
 - `tableClipboard.ts` owns the bounded matrix parser/validator, clipboard
   priority detection, text-only external HTML extraction, internal rich-cell
@@ -1439,6 +1439,12 @@ zoom, font loading, and operating-system IME candidate UI remain manual checks.
   exact 10,000 / 10,001-cell boundary. Actual Ctrl/Cmd clipboard gestures and
   operating system IME candidate behavior remain manual checks rather than
   claims from synthetic clipboard events.
+
+Historical record: PR #48 (`834f97e`) intentionally prepared `0.20.0` as a
+release candidate, including its package metadata, changelog entry, and VSIX.
+It did not create a Git tag or GitHub Release, or publish to the Marketplace.
+PR #49 (`97548cb`) later returned the package version to `0.3.0`; the inspected
+Git history does not record why.
 
 ## 0.0.52 Link dialog relative destinations
 
