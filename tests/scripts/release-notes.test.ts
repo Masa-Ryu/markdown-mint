@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { extractReleaseNotes } from "../../scripts/release-notes.mjs";
+import {
+  extractReleaseNotes,
+  isValidSemVer,
+} from "../../scripts/release-notes.mjs";
 
 describe("release note extraction", () => {
   it("extracts the package version section", () => {
@@ -90,6 +93,28 @@ describe("release note extraction", () => {
 
   it("rejects malformed SemVer package versions", () => {
     expect(() => extractReleaseNotes("01.2.3", "## 1.2.3\n- Note")).toThrow(
+      "not valid SemVer",
+    );
+  });
+
+  it.each(["0.7.1", "1.0.0", "12.34.56"])(
+    "accepts numeric X.Y.Z version %s",
+    (version) => {
+      expect(isValidSemVer(version)).toBe(true);
+    },
+  );
+
+  it.each([
+    "1.2",
+    "01.2.3",
+    "1.02.3",
+    "1.2.03",
+    "1.2.3-beta.1",
+    "1.2.3+build",
+    "v1.2.3",
+  ])("rejects non-numeric-X.Y.Z version %s", (version) => {
+    expect(isValidSemVer(version)).toBe(false);
+    expect(() => extractReleaseNotes(version, "## 1.2.3\n- Note")).toThrow(
       "not valid SemVer",
     );
   });

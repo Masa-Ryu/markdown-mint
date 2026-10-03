@@ -26,7 +26,6 @@ If a behavior requires visual or IME inspection, record the manual check in
 the requirements documentation.
 
 テスト時には以下のファイルで正しく表示されていることを確認すること。
-
 - ./tests/md/common-test.md
 - ./tests/md/github-test.md
 - ./tests/md/github-test-class-B.md
@@ -54,6 +53,8 @@ description without reconstructing intent from the diff alone.
   `.github/workflows/release.yml`. `publish_marketplace` uses the GitHub
   `production` Environment and `vsce publish --packagePath <verified.vsix>`
   with `--oidc`; grant that job `id-token: write`.
+- Use OIDC as the only automated Marketplace authentication; no long-lived PAT
+  is stored or used.
 - The workflow verifies one VSIX and its SHA-256, publishes that artifact to the
   Marketplace, then attaches the same artifact to the GitHub Release. Release
   tags use `v<version>`.
@@ -79,16 +80,16 @@ required SemVer level.
 Use the same PATCH, MINOR, and MAJOR rules for all versions, including `0.x`.
 Breaking changes require a MAJOR bump.
 
-- **PATCH** (`x.y.Z`): backward-compatible fixes and maintenance that do not add
+* **PATCH** (`x.y.Z`): backward-compatible fixes and maintenance that do not add
   substantial new user-facing functionality. This includes bug fixes,
   regressions, rendering, keyboard, cursor, focus, IME, performance, stability,
   security, dependency updates, packaging, documentation, tests, and internal
   refactoring.
-- **MINOR** (`x.Y.0`): backward-compatible new user-facing functionality or a
+* **MINOR** (`x.Y.0`): backward-compatible new user-facing functionality or a
   substantial extension of an existing feature. This includes new Markdown
   capabilities, commands, settings, toolbar actions, dialogs, and editing
   workflows.
-- **MAJOR** (`X.0.0`): changes that break existing user-facing behavior or
+* **MAJOR** (`X.0.0`): changes that break existing user-facing behavior or
   compatibility. This includes removing or incompatibly changing commands,
   settings, supported Markdown behavior, serialization, source round-trip
   behavior, defaults, minimum VS Code requirements, or persistent data formats.
@@ -98,14 +99,14 @@ Breaking changes require a MAJOR bump.
 Treat changes to the following as compatibility-sensitive when deciding whether
 a change is breaking:
 
-- documented editor behavior
-- supported Markdown syntax
-- CommonMark, GitHub, and GitLab profile behavior
-- Markdown serialization and source round-trip behavior
-- VS Code command IDs
-- `markdownMint.*` configuration keys, types, defaults, and documented behavior
-- `engines.vscode`
-- persistent configuration and data formats
+* documented editor behavior
+* supported Markdown syntax
+* CommonMark, GitHub, and GitLab profile behavior
+* Markdown serialization and source round-trip behavior
+* VS Code command IDs
+* `markdownMint.*` configuration keys, types, defaults, and documented behavior
+* `engines.vscode`
+* persistent configuration and data formats
 
 Internal TypeScript APIs and implementation details are not compatibility
 boundaries unless they affect one of the items above. Internal-only changes are
