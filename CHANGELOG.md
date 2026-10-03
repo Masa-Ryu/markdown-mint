@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.7.1
+
+- Add an explicit GitHub Actions release workflow that validates, packages, and
+  attaches one verified VSIX to a GitHub Release.
+
 ## 0.7.0
 
 - Add A4 PDF export from the Export menu and Command Palette. Reuse the
