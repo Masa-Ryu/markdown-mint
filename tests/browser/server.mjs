@@ -109,6 +109,19 @@ const nativeMermaidSources = [
     "    Q3 : Release",
   ].join("\n"),
   [
+    "classDiagram",
+    "    Animal <|-- Duck",
+    "    Vehicle o-- Wheel",
+    "    House *-- Room",
+    "    User ..> Order : uses",
+    '    Customer "1" --> "many" Order : places',
+  ].join("\n"),
+  [
+    "classDiagram",
+    "    direction LR",
+    '    Customer "1" --> "many" Order : places',
+  ].join("\n"),
+  [
     "gantt",
     "    title Project schedule",
     "    dateFormat YYYY-MM-DD",

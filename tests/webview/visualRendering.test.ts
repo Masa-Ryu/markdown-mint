@@ -452,8 +452,144 @@ describe("local Mermaid rendering lifecycle", () => {
     expect(edge.style.stroke).not.toBe("");
     expect(Number.parseFloat(edge.style.strokeWidth)).toBeGreaterThan(0);
     expect(
+      svg.querySelector<SVGTextElement>(".section-root text")?.style.textAnchor,
+    ).toBe("middle");
+    expect(
+      svg.querySelector<SVGTextElement>(".section-root tspan")?.style
+        .textAnchor,
+    ).toBe("middle");
+    expect(
       svg.querySelector<SVGTextElement>(".section-0 text tspan")?.style.fill,
     ).not.toBe("");
+    expect(
+      svg.querySelector<SVGTextElement>(".section-0 text")?.style.textAnchor,
+    ).toBe("");
+    enhancer.dispose();
+  });
+
+  it("restores hollow and filled class markers only for class diagrams", async () => {
+    const runtime: MermaidRuntime = {
+      render: (_id, source) => {
+        const role = source.startsWith("classDiagram")
+          ? "classDiagram"
+          : "flowchart-v2";
+        return (
+          `<svg aria-roledescription="${role}">` +
+          '<g class="node default"><path class="label-container" fill="black" />' +
+          '<g class="divider"><path fill="black" /></g><text>Class</text></g>' +
+          (role === "classDiagram"
+            ? '<text class="edgeTerminals" transform="translate(10, 20)">1</text>'
+            : "") +
+          '<path class="relation" fill="black" />' +
+          '<marker id="mm-classDiagram-extensionEnd"><path fill="black" /></marker>' +
+          '<marker id="mm-classDiagram-aggregationEnd"><path fill="black" /></marker>' +
+          '<marker id="mm-classDiagram-compositionEnd"><path fill="black" /></marker>' +
+          '<marker id="mm-classDiagram-dependencyEnd"><path fill="black" /></marker>' +
+          '<marker id="mm-classDiagram-lollipopEnd"><circle fill="black" /></marker>' +
+          "</svg>"
+        );
+      },
+    };
+    (globalThis as Record<string, unknown>).markdownMintMermaid = runtime;
+    const classElement = diagram("classDiagram\nA <|-- B");
+    const otherElement = diagram("flowchart TD\nA --> B");
+    const enhancer = enhanceRenderedContent(document.body);
+    await flush();
+
+    const classSvg = classElement.querySelector<SVGElement>("svg")!;
+    const surface = classSvg.querySelector<SVGPathElement>(
+      ".node.default .label-container",
+    )!;
+    const divider = classSvg.querySelector<SVGPathElement>(
+      ".node.default .divider path",
+    )!;
+    const extension = classSvg.querySelector<SVGPathElement>(
+      "#mm-classDiagram-extensionEnd path",
+    )!;
+    const aggregation = classSvg.querySelector<SVGPathElement>(
+      "#mm-classDiagram-aggregationEnd path",
+    )!;
+    const composition = classSvg.querySelector<SVGPathElement>(
+      "#mm-classDiagram-compositionEnd path",
+    )!;
+    const dependency = classSvg.querySelector<SVGPathElement>(
+      "#mm-classDiagram-dependencyEnd path",
+    )!;
+    const lollipop = classSvg.querySelector<SVGCircleElement>(
+      "#mm-classDiagram-lollipopEnd circle",
+    )!;
+    expect(surface.style.fill).not.toBe("black");
+    expect(divider.style.fill).toBe("none");
+    expect(
+      classSvg.querySelector<SVGTextElement>(".node.default text")?.style.fill,
+    ).not.toBe("");
+    expect(
+      classSvg
+        .querySelector<SVGTextElement>(".edgeTerminals")
+        ?.getAttribute("transform"),
+    ).toBe("translate(10, 20)");
+    expect(extension.style.fill).toBe("transparent");
+    expect(aggregation.style.fill).toBe("transparent");
+    expect(composition.style.fill).not.toBe("transparent");
+    expect(dependency.style.fill).not.toBe("transparent");
+    expect(lollipop.style.fill).not.toBe("transparent");
+    expect(extension.style.strokeWidth).toBe("1px");
+    expect(
+      classSvg.querySelector<SVGPathElement>("path.relation")?.style.fill,
+    ).toBe("none");
+
+    const otherSvg = otherElement.querySelector<SVGElement>("svg")!;
+    expect(
+      otherSvg.querySelector<SVGPathElement>(".label-container")?.style.fill,
+    ).toBe("");
+    expect(
+      otherSvg.querySelector(".edgeTerminals")?.getAttribute("transform"),
+    ).toBeUndefined();
+    expect(
+      otherSvg.querySelector<SVGPathElement>(
+        "#mm-classDiagram-extensionEnd path",
+      )?.style.fill,
+    ).toBe("");
+    enhancer.dispose();
+  });
+
+  it("does not apply class marker paint to markers in other diagram types", async () => {
+    const runtime: MermaidRuntime = {
+      render: () =>
+        '<svg aria-roledescription="flowchart-v2">' +
+        '<marker id="flowchart-classDiagram-extensionEnd"><path fill="black" /></marker>' +
+        "</svg>",
+    };
+    (globalThis as Record<string, unknown>).markdownMintMermaid = runtime;
+    const element = diagram("flowchart TD\nA --> B");
+    const enhancer = enhanceRenderedContent(document.body);
+    await flush();
+
+    const markerPath = element.querySelector<SVGPathElement>("marker path")!;
+    expect(markerPath.style.fill).toBe("");
+    expect(markerPath.style.stroke).toBe("");
+    enhancer.dispose();
+  });
+
+  it("keeps ER relationship lines and crowfoot markers at their one-pixel stroke", async () => {
+    const runtime: MermaidRuntime = {
+      render: () =>
+        '<svg aria-roledescription="er">' +
+        '<path class="relationshipLine" />' +
+        '<g class="marker er"><path /></g></svg>',
+    };
+    (globalThis as Record<string, unknown>).markdownMintMermaid = runtime;
+    const element = diagram("erDiagram\nUSER ||--o{ ORDER");
+    const enhancer = enhanceRenderedContent(document.body);
+    await flush();
+
+    const svg = element.querySelector<SVGElement>("svg")!;
+    expect(
+      svg.querySelector<SVGPathElement>(".relationshipLine")?.style.strokeWidth,
+    ).toBe("1px");
+    expect(
+      svg.querySelector<SVGPathElement>(".marker.er path")?.style.strokeWidth,
+    ).toBe("1px");
     enhancer.dispose();
   });
 

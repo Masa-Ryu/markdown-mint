@@ -66,12 +66,18 @@ describe("native Mermaid role-scoped rendering styles", () => {
       ':is(.markdown-body, .mm-document-content) .mm-mermaid svg[aria-roledescription="gantt"]',
     );
     expect(documentCss).toContain(".mindmap-node.section-root.section--1");
+    expect(documentCss).toMatch(
+      /svg\[aria-roledescription="mindmap"\][\s\S]*?\.mindmap-node\.section-root\s+text[\s\S]*?text-anchor:\s*middle\s*!important/,
+    );
     expect(documentCss).toContain(".section-edge-0");
     expect(documentCss).toContain(".edge-depth-5");
     expect(documentCss).toContain(".taskTextOutsideRight");
     expect(documentCss).toContain(".activeCrit0");
     expect(documentCss).toContain(".doneCrit0");
     expect(documentCss).toContain(".milestone");
+    expect(documentCss).toContain('svg[aria-roledescription="classDiagram"]');
+    expect(documentCss).toContain('marker[id*="classDiagram-extension"]');
+    expect(documentCss).toContain('marker[id*="classDiagram-aggregation"]');
     expect(documentCss).not.toMatch(
       /(?:^|,)\s*\.mm-mermaid\s+svg\s+\.section(?:[,{\s])/m,
     );

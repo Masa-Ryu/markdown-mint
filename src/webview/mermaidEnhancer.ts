@@ -445,6 +445,329 @@ function normalizeGitGraphSvg(svg: SVGElement): void {
   }
 }
 
+function normalizeClassDiagramSvg(
+  svg: SVGElement,
+  palette: MermaidPalette,
+  root: ParentNode,
+  ownerDocument: Document,
+): void {
+  if (svg.getAttribute("aria-roledescription") !== "classDiagram") return;
+
+  for (const surface of Array.from(
+    svg.querySelectorAll<SVGElement>(".node.default .label-container"),
+  )) {
+    setImportantStyle(surface, "fill", palette.surface);
+    setImportantStyle(surface, "stroke", palette.accent);
+    setImportantStyle(surface, "stroke-width", "1.5px");
+  }
+  for (const divider of Array.from(
+    svg.querySelectorAll<SVGElement>(
+      ".node.default .divider path, .node.default .divider line",
+    ),
+  )) {
+    setImportantStyle(divider, "fill", "none");
+    setImportantStyle(divider, "stroke", palette.accent);
+    setImportantStyle(divider, "stroke-width", "1px");
+  }
+  for (const shape of Array.from(
+    svg.querySelectorAll<SVGElement>(".cluster rect, .classLabel .box"),
+  )) {
+    setImportantStyle(shape, "fill", palette.surface);
+    setImportantStyle(shape, "stroke", palette.line);
+  }
+  for (const text of Array.from(
+    svg.querySelectorAll<SVGElement>(
+      ".node.default text, .node.default tspan, .classLabel text, .edgeTerminals",
+    ),
+  )) {
+    setImportantStyle(text, "fill", palette.foreground);
+    setImportantStyle(text, "color", palette.foreground);
+  }
+  for (const terminal of Array.from(
+    svg.querySelectorAll<SVGTextElement>(".edgeTerminals"),
+  )) {
+    setImportantStyle(terminal, "stroke", palette.background);
+    setImportantStyle(terminal, "stroke-width", "4px");
+    setImportantStyle(terminal, "stroke-linejoin", "round");
+    setImportantStyle(terminal, "paint-order", "stroke fill");
+  }
+
+  for (const relation of Array.from(
+    svg.querySelectorAll<SVGPathElement>("path.relation"),
+  )) {
+    setImportantStyle(relation, "fill", "none");
+    setImportantStyle(relation, "stroke", palette.line);
+    setImportantStyle(relation, "stroke-width", "1px");
+  }
+
+  for (const marker of Array.from(
+    svg.querySelectorAll<SVGMarkerElement>('marker[id*="classDiagram-"]'),
+  )) {
+    const id = marker.id;
+    const hollow = /classDiagram-(?:extension|aggregation)(?:Start|End)$/.test(
+      id,
+    );
+    const surface = /classDiagram-lollipop(?:Start|End)$/.test(id);
+    const fill = hollow
+      ? "transparent"
+      : surface
+        ? palette.surface
+        : palette.line;
+    for (const shape of Array.from(
+      marker.querySelectorAll<SVGElement>("path, circle, polygon"),
+    )) {
+      setImportantStyle(shape, "fill", fill);
+      setImportantStyle(shape, "stroke", palette.line);
+      setImportantStyle(shape, "stroke-width", "1px");
+    }
+  }
+
+  separateClassDiagramTerminalLabels(svg, root, ownerDocument);
+}
+
+interface SvgScreenRect {
+  readonly x: number;
+  readonly y: number;
+  readonly width: number;
+  readonly height: number;
+}
+
+function rectsOverlap(left: SvgScreenRect, right: SvgScreenRect): boolean {
+  return (
+    left.x < right.x + right.width &&
+    left.x + left.width > right.x &&
+    left.y < right.y + right.height &&
+    left.y + left.height > right.y
+  );
+}
+
+function markerScreenRect(
+  svg: SVGElement,
+  relation: SVGPathElement,
+  side: "start" | "end",
+): SvgScreenRect | undefined {
+  if (
+    typeof relation.getTotalLength !== "function" ||
+    typeof relation.getPointAtLength !== "function" ||
+    typeof relation.getScreenCTM !== "function"
+  )
+    return undefined;
+  const reference = relation.getAttribute(`marker-${side}`);
+  const id = reference?.match(/#([^)]+)/)?.[1];
+  const marker = id ? svg.ownerDocument.getElementById(id) : null;
+  const shape = marker?.querySelector<SVGGraphicsElement>(
+    "path, circle, polygon",
+  );
+  if (!marker || !shape || typeof shape.getBBox !== "function")
+    return undefined;
+
+  try {
+    const length = relation.getTotalLength();
+    if (!Number.isFinite(length) || length <= 0) return undefined;
+    const pointLength = side === "end" ? length : 0;
+    const nearbyLength =
+      side === "end" ? Math.max(0, length - 0.1) : Math.min(length, 0.1);
+    const endpoint = relation.getPointAtLength(pointLength);
+    const nearby = relation.getPointAtLength(nearbyLength);
+    let angle = Math.atan2(endpoint.y - nearby.y, endpoint.x - nearby.x);
+    const orient = marker.getAttribute("orient")?.trim();
+    if (side === "start" && orient !== "auto-start-reverse") angle += Math.PI;
+    if (orient && orient !== "auto" && orient !== "auto-start-reverse") {
+      const degrees = Number.parseFloat(orient);
+      if (Number.isFinite(degrees)) angle = (degrees * Math.PI) / 180;
+    }
+
+    const shapeBox = shape.getBBox();
+    const refX = Number.parseFloat(marker.getAttribute("refX") ?? "0") || 0;
+    const refY = Number.parseFloat(marker.getAttribute("refY") ?? "0") || 0;
+    const matrix = relation.getScreenCTM();
+    if (!matrix) return undefined;
+    const cornerCoordinates: ReadonlyArray<readonly [number, number]> = [
+      [shapeBox.x, shapeBox.y],
+      [shapeBox.x + shapeBox.width, shapeBox.y],
+      [shapeBox.x, shapeBox.y + shapeBox.height],
+      [shapeBox.x + shapeBox.width, shapeBox.y + shapeBox.height],
+    ];
+    const corners = cornerCoordinates.map(([x, y]) => {
+      const dx = x - refX;
+      const dy = y - refY;
+      const point = (svg as SVGSVGElement).createSVGPoint();
+      point.x = endpoint.x + dx * Math.cos(angle) - dy * Math.sin(angle);
+      point.y = endpoint.y + dx * Math.sin(angle) + dy * Math.cos(angle);
+      return point.matrixTransform(matrix);
+    });
+    const xs = corners.map((point) => point.x);
+    const ys = corners.map((point) => point.y);
+    return {
+      x: Math.min(...xs),
+      y: Math.min(...ys),
+      width: Math.max(...xs) - Math.min(...xs),
+      height: Math.max(...ys) - Math.min(...ys),
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+function translateTextByScreenDelta(
+  text: SVGTextElement,
+  deltaX: number,
+  deltaY: number,
+): boolean {
+  const matrix = text.getScreenCTM();
+  if (!matrix || typeof text.getBoundingClientRect !== "function") return false;
+  try {
+    const inverse = matrix.inverse();
+    const box = text.getBoundingClientRect();
+    const centerX = box.x + box.width / 2;
+    const centerY = box.y + box.height / 2;
+    const origin = text.ownerSVGElement?.createSVGPoint();
+    if (!origin) return false;
+    origin.x = centerX;
+    origin.y = centerY;
+    const target = origin.matrixTransform(inverse);
+    origin.x += deltaX;
+    origin.y += deltaY;
+    const shifted = origin.matrixTransform(inverse);
+    const localX = shifted.x - target.x;
+    const localY = shifted.y - target.y;
+    if (!Number.isFinite(localX) || !Number.isFinite(localY)) return false;
+    const transform = text.getAttribute("transform")?.trim();
+    text.setAttribute(
+      "transform",
+      `${transform ? `${transform} ` : ""}translate(${localX} ${localY})`,
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Move class relationship labels only when they overlap another SVG item. */
+function separateClassDiagramTerminalLabels(
+  svg: SVGElement,
+  root: ParentNode,
+  ownerDocument: Document,
+): void {
+  const labels = Array.from(
+    svg.querySelectorAll<SVGTextElement>(".edgeTerminals"),
+  );
+  if (!labels.length) return;
+  const measuringHost = ownerDocument.createElement("div");
+  const diagram = ownerDocument.createElement("div");
+  measuringHost.className = "markdown-body mm-document-content";
+  diagram.className = "mm-mermaid";
+  const rootElement = root as Element;
+  const width =
+    typeof (rootElement as HTMLElement).getBoundingClientRect === "function"
+      ? (rootElement as HTMLElement).getBoundingClientRect().width
+      : 0;
+  const viewportWidth = Math.max(
+    320,
+    width || ownerDocument.documentElement?.clientWidth || 1024,
+  );
+  measuringHost.style.cssText =
+    `position:fixed;left:-100000px;top:0;width:${viewportWidth}px;` +
+    "visibility:hidden;pointer-events:none;";
+  measuringHost.setAttribute("aria-hidden", "true");
+  measuringHost.append(diagram);
+  diagram.append(svg);
+  ownerDocument.body?.append(measuringHost);
+  try {
+    const relations = Array.from(
+      svg.querySelectorAll<SVGPathElement>("path.relation"),
+    );
+    const markerRects = relations.flatMap((relation) =>
+      (["start", "end"] as const)
+        .map((side) => markerScreenRect(svg, relation, side))
+        .filter((rect): rect is SvgScreenRect => Boolean(rect)),
+    );
+    const cardRects = Array.from(
+      svg.querySelectorAll<SVGGraphicsElement>(
+        ".node.default .label-container",
+      ),
+      (card) => {
+        const rect = card.getBoundingClientRect();
+        return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+      },
+    );
+    const relatedLabels = Array.from(
+      svg.querySelectorAll<Element>(".edgeLabel, .edgeTerminals"),
+    );
+    const svgBounds = svg.getBoundingClientRect();
+    const fontSize = Number.parseFloat(getComputedStyle(svg).fontSize) || 14;
+    const gap = Math.max(2, fontSize * 0.12);
+    for (const label of labels) {
+      const rect = label.getBoundingClientRect();
+      const labelBox = {
+        x: rect.x,
+        y: rect.y,
+        width: rect.width,
+        height: rect.height,
+      };
+      if (!labelBox.width || !labelBox.height) continue;
+      const overlappingLabels = relatedLabels
+        .filter((otherLabel) => otherLabel !== label)
+        .map((otherLabel) => {
+          const otherRect = otherLabel.getBoundingClientRect();
+          return {
+            x: otherRect.x,
+            y: otherRect.y,
+            width: otherRect.width,
+            height: otherRect.height,
+          };
+        })
+        .filter((other) => rectsOverlap(labelBox, other));
+      const overlappingObstacles = [
+        ...markerRects.filter((marker) => rectsOverlap(labelBox, marker)),
+        ...cardRects.filter((card) => rectsOverlap(labelBox, card)),
+        ...overlappingLabels,
+      ];
+      if (!overlappingObstacles.length) continue;
+      const moves = overlappingObstacles.flatMap((obstacle) => [
+        { x: obstacle.x - labelBox.x - labelBox.width - gap, y: 0 },
+        { x: obstacle.x + obstacle.width - labelBox.x + gap, y: 0 },
+        { x: 0, y: obstacle.y - labelBox.y - labelBox.height - gap },
+        { x: 0, y: obstacle.y + obstacle.height - labelBox.y + gap },
+      ]);
+      moves.sort(
+        (left, right) =>
+          Math.hypot(left.x, left.y) - Math.hypot(right.x, right.y),
+      );
+      const move = moves.find((candidate) => {
+        const shifted = {
+          ...labelBox,
+          x: labelBox.x + candidate.x,
+          y: labelBox.y + candidate.y,
+        };
+        const insideSvg =
+          shifted.x >= svgBounds.x &&
+          shifted.y >= svgBounds.y &&
+          shifted.x + shifted.width <= svgBounds.x + svgBounds.width &&
+          shifted.y + shifted.height <= svgBounds.y + svgBounds.height;
+        return (
+          insideSvg &&
+          !markerRects.some((marker) => rectsOverlap(shifted, marker)) &&
+          !cardRects.some((card) => rectsOverlap(shifted, card)) &&
+          !relatedLabels.some((otherLabel) => {
+            if (otherLabel === label) return false;
+            const otherRect = otherLabel.getBoundingClientRect();
+            return rectsOverlap(shifted, {
+              x: otherRect.x,
+              y: otherRect.y,
+              width: otherRect.width,
+              height: otherRect.height,
+            });
+          })
+        );
+      });
+      if (move) translateTextByScreenDelta(label, move.x, move.y);
+    }
+  } finally {
+    measuringHost.remove();
+  }
+}
+
 function setImportantStyle(
   element: SVGElement,
   property: string,
@@ -595,14 +918,14 @@ function normalizeErSvg(svg: SVGElement, palette: MermaidPalette): void {
   )) {
     setImportantStyle(line, "fill", "none");
     setImportantStyle(line, "stroke", palette.line);
-    setImportantStyle(line, "stroke-width", "2px");
+    setImportantStyle(line, "stroke-width", "1px");
   }
   for (const marker of Array.from(
     svg.querySelectorAll<SVGElement>(".marker.er path, .marker.er circle"),
   )) {
     setImportantStyle(marker, "fill", palette.surface);
     setImportantStyle(marker, "stroke", palette.line);
-    setImportantStyle(marker, "stroke-width", "1.5px");
+    setImportantStyle(marker, "stroke-width", "1px");
   }
   for (const label of Array.from(
     svg.querySelectorAll<SVGGElement>(".edgeLabel"),
@@ -801,6 +1124,7 @@ function normalizeMindmapSvg(svg: SVGElement, palette: MermaidPalette): void {
     )) {
       setImportantStyle(text, "fill", foreground);
       setImportantStyle(text, "color", foreground);
+      if (center) setImportantStyle(text, "text-anchor", "middle");
     }
     for (const backgroundShape of Array.from(
       node.querySelectorAll<SVGElement>(".label rect.background"),
@@ -823,10 +1147,10 @@ function normalizeMindmapSvg(svg: SVGElement, palette: MermaidPalette): void {
     setImportantStyle(edge, "stroke-linejoin", "round");
   }
 
-  // Mermaid's official rule applies only to its optional .mindmap-node-label
-  // class. The shipped basic template instead positions <text> with a
-  // translated label group and explicit tspan coordinates; leave that path
-  // untouched to avoid centering it twice.
+  // Mermaid's optional .mindmap-node-label class relies on generated CSS for
+  // full label centering. The shipped template uses translated label groups;
+  // only its root circle needs a centered anchor because its tspan x=0 is the
+  // circle center. Do not alter non-root anchors or vertical baselines.
   for (const label of Array.from(
     svg.querySelectorAll<SVGElement>(".mindmap-node-label"),
   )) {
@@ -1018,7 +1342,12 @@ function normalizeGanttSvg(svg: SVGElement, palette: MermaidPalette): void {
  * while leaving node surfaces and marker arrowheads to the themed document
  * stylesheet below.
  */
-function normalizeMermaidSvg(svg: SVGElement, palette: MermaidPalette): void {
+function normalizeMermaidSvg(
+  svg: SVGElement,
+  palette: MermaidPalette,
+  root: ParentNode,
+  ownerDocument: Document,
+): void {
   const diagramColors = mermaidDiagramColors(palette);
   svg.style.setProperty("background", "transparent", "important");
   svg.style.setProperty("--mm-mermaid-row-odd", diagramColors.rowOdd);
@@ -1060,6 +1389,8 @@ function normalizeMermaidSvg(svg: SVGElement, palette: MermaidPalette): void {
 
   const role = svg.getAttribute("aria-roledescription");
   if (role === "er") normalizeErSvg(svg, palette);
+  else if (role === "classDiagram")
+    normalizeClassDiagramSvg(svg, palette, root, ownerDocument);
   else if (role === "pie") normalizePieSvg(svg, palette);
   else if (role === "timeline") normalizeTimelineSvg(svg, palette);
   else if (role === "mindmap") normalizeMindmapSvg(svg, palette);
@@ -1093,7 +1424,7 @@ export async function renderSafeMermaidSvg(
       const markup = asSvgMarkup(result);
       const svg = markup ? sanitizeSvg(markup, ownerDocument) : null;
       if (!svg) throw new Error("Mermaid output was rejected.");
-      normalizeMermaidSvg(svg, palette);
+      normalizeMermaidSvg(svg, palette, root, ownerDocument);
       return svg;
     } finally {
       // Mermaid may leave its measuring/error container behind on rejection.

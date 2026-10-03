@@ -202,9 +202,11 @@ inline SVG stylesheet was blocked, leaving Mindmap branch surfaces and Gantt
 task bars with black fallback paint. The shared safe renderer now applies
 role-gated Mindmap/Gantt SVG normalization, and static CSS supplies theme-aware
 node, branch, task, section, label, grid, and today-marker styles. The CSP,
-shared renderer, and sanitizer remain unchanged. The root Mindmap node keeps
-its neutral surface and original layout; Gantt source dates, task durations,
-dependencies, and milestone geometry remain renderer-owned.
+shared renderer, and sanitizer remain unchanged. The Mindmap root keeps its
+neutral circle and Mermaid-generated geometry, with its text anchor explicitly
+centered after the blocked inline stylesheet would otherwise leave it
+misaligned. Gantt source dates, task durations, dependencies, and milestone
+geometry remain renderer-owned.
 
 The CSP browser suite checks computed fill/stroke/width, node-to-branch and
 task-status colors, >=4.5:1 label contrast, axis/today visibility, text anchors,
@@ -219,6 +221,31 @@ today-in/out-of-range cases. Four final captures per Mindmap/Gantt diagram and
 the pre-fix Light/Dark captures plus computed-style evidence are kept in
 `docs/screenshots/issue-141/`.
 
+The final class-diagram visual review also found Mermaid's `edgeTerminals`
+multiplicity text overlapping a `userSpaceOnUse` arrowhead, and a horizontal
+relationship label could touch the start multiplicity. The shared normalizer
+now measures the generated SVG in the current document, moves only a terminal
+label that collides, and chooses the smallest free-space translation that
+keeps it clear of arrowheads, class boxes, and other labels inside the SVG
+viewport. It does not apply a fixed offset or alter Mermaid's relationship
+layout. Both TD and LR cases are checked with screen-space boxes, including
+class-box clipping, label-to-label overlap, and 4.5:1 text contrast. The eight
+native captures `class-diagram-terminals-{light,dark,high-contrast,high-contrast-light}.png`
+and `class-diagram-terminals-lr-{light,dark,high-contrast,high-contrast-light}.png`
+show the final arrowheads and multiplicities. The
+`class-basic-candidate-{light,dark,high-contrast,high-contrast-light}.png`
+captures also verify the `places` relationship label under all four themes.
+
+The subsequent ER zoom review compared each `edgeLabel` bounding box with the
+complete screen-space geometry of its two crowfoot/cardinality markers in the
+same Mermaid 11.17.2 SVG. `places` and `contains` do not intersect their marker
+bounds; the closest measured clearance is about 4.1 CSS px, and the normal-size
+Light/Dark/High Contrast screenshots keep both labels and cardinality symbols
+distinct. The browser assertion now enforces at least 1 CSS px of clearance to
+account for marker stroke. Because there is no geometric overlap in the
+rendered artifact, the ER line, markers, and label positions were left intact
+rather than changing cardinality scale or diagram layout.
+
 Interactive built-in template selection, editor entry, and unchanged
 Insert/Update use zero explicit Mint-side syntax parses. User edits still run
 the existing debounced validation and invalid text stays uncommittable. In
@@ -229,7 +256,7 @@ latest-only burst was 30.8 / 34.1 ms (zero prevalidation, two renders: the
 already-running request and the latest pending request). These local numbers
 do not imply a hardware-independent performance budget.
 
-This final review pass passed `npm run compile`, `npm test` (1,335 tests / 64
+The earlier pre-visual-correction review pass passed `npm run compile`, `npm test` (1,335 tests / 64
 files), `npm run lint` (zero errors; 94 warnings), `npm run format:check`,
 `npm run test:browser:mermaid` (all 13 templates / 16 variants, current CSP,
 four themes, Escape, rendering paths, and performance cases),
@@ -237,9 +264,13 @@ four themes, Escape, rendering paths, and performance cases),
 `npm run test:browser:html-export` (zero CSP violations),
 `npm run test:browser:pdf-export` (334,167 bytes; 13 A4 pages),
 `npm run test:extension`, and `npm run package` (0.8.0; 76 files;
-4,632,692 bytes). The latest fetched main was already an ancestor of the PR
-branch, so no merge conflict remained; the release workflow and 0.8.0 package
-metadata from main are retained. Real OS IME candidate UI and screen-reader
+4,632,692 bytes). At that review, fetched main was already an ancestor of the
+PR branch and the release workflow and 0.8.0 metadata were retained. The final
+revalidation also found cached `origin/main` (`f6ad692c4d1b10e56afaaeeba7a99c5e3bb137b7`)
+to be an ancestor. Refreshing the remote during this run was blocked by the
+shared worktree's `FETCH_HEAD` permission boundary; a read-only `git ls-remote`
+also failed because GitHub DNS was unavailable, so the live main tip could not
+be reconfirmed. Real OS IME candidate UI and screen-reader
 announcements were not manually inspected. No release, tag, or workflow was
 run.
 
@@ -255,6 +286,31 @@ The native save smoke also showed a misleading “VS Code did not save the
 Markdown document” notification despite matching saved bytes and a clean
 editor. The same notification was independently reproduced using the baseline
 0.7.0 VSIX; the host save implementation is unchanged in this PR.
+
+The final 2026-10-03 revalidation after the visual corrections passed
+`npm run compile`, `npm test` (1,338 tests / 64 files), `npm run lint` (zero
+errors; 94 existing warnings), `npm run format:check`, the full
+`npm run test:browser:mermaid` suite (13 templates / 16 variants under the
+current CSP, including live four-theme candidate screenshots and TD/LR class
+label geometry), `npm run test:browser:blocks` (all five required Markdown
+fixtures in Rich, dedicated Preview, and native Preview), HTML export (zero CSP
+violations), and PDF export (13 A4 pages). A separate four-theme `themeChecks`
+rerun refreshed and visually confirmed `catalog-class-basic-light.png`; its
+`places`, `1`, `many`, and arrowhead are visible with measured bounds and
+contrast. `npm run package` passed for version 0.8.0 (76 files; 4,638,400
+bytes). `npm run test:extension` was attempted once after these changes but
+the VS Code test process exited with `SIGABRT` before producing test results;
+it was not retried. Native OS-level IME remains unverified. The version remains
+0.8.0, and no release, tag, or workflow was run.
+
+The class-basic preview's conditional geometry pass was measured separately
+under Headless Chrome 153, Light theme, 1280x900, with 20 samples. A warm cache
+miss (one render, zero Mint-side prevalidation calls) measured 27.4 / 29.6 ms
+p50/p95 from selection to display and 22.3 / 24.2 ms for render time. Reopening
+the normalized SVG cache (zero parse/render calls) measured 8.2 / 8.6 ms p50/p95
+to display. These local measurements confirm the added geometry work is limited
+to the first class-diagram render and do not define a hardware-independent
+performance budget.
 
 Five fresh local Chromium contexts per case used the same
 `scripts/benchmark-mermaid-startup.mjs` command on `origin/main` 0.7.0 and the

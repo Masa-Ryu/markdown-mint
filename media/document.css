@@ -1035,7 +1035,7 @@ body {
   .relationshipLine {
   fill: none !important;
   stroke: var(--mm-mermaid-line) !important;
-  stroke-width: 2px !important;
+  stroke-width: 1px !important;
 }
 :is(.markdown-body, .mm-document-content)
   .mm-mermaid
@@ -1545,6 +1545,18 @@ body {
   tspan {
   fill: var(--mm-mermaid-foreground) !important;
   color: var(--mm-mermaid-foreground) !important;
+}
+:is(.markdown-body, .mm-document-content)
+  .mm-mermaid
+  svg[aria-roledescription="mindmap"]
+  .mindmap-node.section-root
+  text,
+:is(.markdown-body, .mm-document-content)
+  .mm-mermaid
+  svg[aria-roledescription="mindmap"]
+  .mindmap-node.section-root
+  tspan {
+  text-anchor: middle !important;
 }
 :is(.markdown-body, .mm-document-content)
   .mm-mermaid
@@ -2640,4 +2652,112 @@ html.vscode-high-contrast .mm-document-content .mm-mermaid svg {
   > .mm-task-content
   > :not([hidden]):not(:has(~ :not([hidden]))) {
   margin-block-end: 0;
+}
+
+/* The global Mermaid marker rule above fills every marker. Class diagrams
+ * distinguish open extension/aggregation ends from filled dependency and
+ * composition arrows, so restore those semantics after the shared rule. */
+:is(.markdown-body, .mm-document-content)
+  .mm-mermaid
+  svg[aria-roledescription="classDiagram"]
+  .node.default
+  .label-container {
+  fill: var(--mm-mermaid-surface, #ffffff) !important;
+  stroke: var(
+    --vscode-textLink-foreground,
+    var(--vscode-focusBorder, #0969da)
+  ) !important;
+  stroke-width: 1.5px !important;
+}
+:is(.markdown-body, .mm-document-content)
+  .mm-mermaid
+  svg[aria-roledescription="classDiagram"]
+  .node.default
+  .divider
+  :is(path, line) {
+  fill: none !important;
+  stroke: var(
+    --vscode-textLink-foreground,
+    var(--vscode-focusBorder, #0969da)
+  ) !important;
+  stroke-width: 1px !important;
+}
+:is(.markdown-body, .mm-document-content)
+  .mm-mermaid
+  svg[aria-roledescription="classDiagram"]
+  :is(
+    .node.default text,
+    .node.default tspan,
+    .classLabel text,
+    .edgeTerminals
+  ) {
+  fill: var(--mm-mermaid-foreground, #1f2328) !important;
+  color: var(--mm-mermaid-foreground, #1f2328) !important;
+}
+:is(.markdown-body, .mm-document-content)
+  .mm-mermaid
+  svg[aria-roledescription="classDiagram"]
+  .edgeTerminals {
+  stroke: var(--mm-mermaid-background, #ffffff) !important;
+  stroke-width: 4px !important;
+  stroke-linejoin: round !important;
+  paint-order: stroke fill !important;
+}
+:is(.markdown-body, .mm-document-content)
+  .mm-mermaid
+  svg[aria-roledescription="classDiagram"]
+  .cluster
+  rect,
+:is(.markdown-body, .mm-document-content)
+  .mm-mermaid
+  svg[aria-roledescription="classDiagram"]
+  .classLabel
+  .box {
+  fill: var(--mm-mermaid-surface, #ffffff) !important;
+  stroke: var(--mm-mermaid-line, #57606a) !important;
+}
+:is(.markdown-body, .mm-document-content)
+  .mm-mermaid
+  svg[aria-roledescription="classDiagram"]
+  path.relation {
+  fill: none !important;
+  stroke: var(--mm-mermaid-line, #57606a) !important;
+  stroke-width: 1px !important;
+}
+:is(.markdown-body, .mm-document-content)
+  .mm-mermaid
+  svg[aria-roledescription="classDiagram"]
+  marker[id*="classDiagram-extension"]
+  :is(path, circle, polygon),
+:is(.markdown-body, .mm-document-content)
+  .mm-mermaid
+  svg[aria-roledescription="classDiagram"]
+  marker[id*="classDiagram-aggregation"]
+  :is(path, circle, polygon) {
+  fill: transparent !important;
+  stroke: var(--mm-mermaid-line, #57606a) !important;
+  stroke-width: 1px !important;
+}
+:is(.markdown-body, .mm-document-content)
+  .mm-mermaid
+  svg[aria-roledescription="classDiagram"]
+  marker[id*="classDiagram-composition"]
+  :is(path, circle, polygon),
+:is(.markdown-body, .mm-document-content)
+  .mm-mermaid
+  svg[aria-roledescription="classDiagram"]
+  marker[id*="classDiagram-dependency"]
+  :is(path, circle, polygon) {
+  fill: var(--mm-mermaid-line, #57606a) !important;
+  stroke: var(--mm-mermaid-line, #57606a) !important;
+  stroke-width: 1px !important;
+}
+:is(.markdown-body, .mm-document-content)
+  .mm-mermaid
+  svg[aria-roledescription="classDiagram"]
+  marker[id*="classDiagram-lollipop"]
+  :is(path, circle, polygon) {
+  fill: var(--mm-mermaid-surface, #ffffff) !important;
+  stroke: var(--mm-mermaid-line, #57606a) !important;
+  stroke-width: 1px !important;
 }
