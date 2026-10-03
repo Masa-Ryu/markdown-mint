@@ -619,14 +619,19 @@ export class MarkdownMintEditorProvider
         id: session.aiSessionId,
         documentId: () => state.key,
         version: () => state.document.version,
+        isReady: () =>
+          this.sessions.get(panel) === session &&
+          session.ready &&
+          mode === "editor",
         isActive: () =>
-          this.sessions.get(panel) === session && session.ready && panel.active,
-        eligible: () =>
+          this.sessions.get(panel) === session &&
+          panel.active &&
+          mode === "editor",
+        canStartRequest: () =>
           this.sessions.get(panel) === session &&
           session.ready &&
           panel.active &&
           mode === "editor" &&
-          state.queueDepth === 0 &&
           state.pending.size === 0 &&
           state.pendingCommand === undefined,
         focus: () => panel.reveal(panel.viewColumn, false),

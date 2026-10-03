@@ -35,7 +35,9 @@ function response(
 function setup(autoTrigger = false) {
   let settings = { autoTrigger, model: "" };
   let permitted: boolean | undefined = true;
-  let eligible = true;
+  let ready = true;
+  let active = true;
+  let canStart = true;
   let version = 1;
   let accessChanged: () => void = () => undefined;
   let modelsChanged: () => void = () => undefined;
@@ -99,7 +101,9 @@ function setup(autoTrigger = false) {
     id: "s1",
     documentId: () => "file:///prose.md",
     version: () => version,
-    eligible: () => eligible,
+    isReady: () => ready,
+    isActive: () => active,
+    canStartRequest: () => canStart,
     focus: vi.fn(),
     post: (message: AiHostMessage) => messages.push(message),
   };
@@ -153,8 +157,14 @@ function setup(autoTrigger = false) {
       accessChanged();
     },
     modelsChanged: () => modelsChanged(),
-    setEligible: (value: boolean) => {
-      eligible = value;
+    setReady: (value: boolean) => {
+      ready = value;
+    },
+    setActive: (value: boolean) => {
+      active = value;
+    },
+    setCanStart: (value: boolean) => {
+      canStart = value;
     },
     setVersion: (value: number) => {
       version = value;
@@ -279,12 +289,42 @@ describe("AI host isolation and authorization", () => {
   it("rejects inactive panels and expired command nonces", async () => {
     const f = setup(true);
     await f.host.triggerFromUserAction("s1");
-    f.setEligible(false);
+    f.setActive(false);
     await f.host.requestSuggestion("s1", f.request("auto"));
-    f.setEligible(true);
+    f.setActive(true);
     vi.setSystemTime(AI_LIMITS.deadlineMs + 1);
     await f.host.requestSuggestion("s1", f.request());
     expect(f.model.sendRequest).not.toHaveBeenCalled();
+    f.host.dispose();
+  });
+  it("keeps an active request current while a same-version host operation is queued", async () => {
+    const f = setup(true);
+    expect(f.panel.isReady()).toBe(true);
+    expect(f.panel.isActive()).toBe(true);
+    expect(f.panel.canStartRequest()).toBe(true);
+    await f.host.triggerFromUserAction("s1");
+    let resolve!: (value: vscode.LanguageModelChatResponse) => void;
+    vi.mocked(f.model.sendRequest).mockImplementation(
+      () =>
+        new Promise((done) => {
+          resolve = done;
+        }),
+    );
+    const request = f.request("auto");
+    const pending = f.host.requestSuggestion("s1", request);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(f.model.sendRequest).toHaveBeenCalledTimes(1);
+    f.setCanStart(false); // Same document/version, ordinary save owns the queue.
+    expect(f.panel.isReady()).toBe(true);
+    expect(f.panel.isActive()).toBe(true);
+    expect(f.panel.version()).toBe(request.baseVersion);
+    expect(f.panel.canStartRequest()).toBe(false);
+    resolve(response());
+    await pending;
+    expect(f.results().at(-1)).toMatchObject({
+      reason: "ready",
+      text: " next🌿",
+    });
     f.host.dispose();
   });
   it("ignores workspace overrides when reading application settings", () => {
