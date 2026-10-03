@@ -93,6 +93,22 @@ describe("GitHub Release recovery planning", () => {
     ).toEqual({ action: "upload_asset", releaseId: 42 });
   });
 
+  it("accepts draft notes that match when they end with a newline", () => {
+    const notesWithFinalNewline = `${releaseNotes}\n`;
+
+    expect(
+      planReleaseRecovery(
+        state({
+          releaseNotes: notesWithFinalNewline,
+          release: existingRelease({
+            draft: true,
+            body: notesWithFinalNewline,
+          }),
+        }),
+      ),
+    ).toEqual({ action: "upload_asset", releaseId: 42 });
+  });
+
   it("accepts an existing verified tag when the draft target names main", () => {
     expect(
       planReleaseRecovery(
