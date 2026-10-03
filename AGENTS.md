@@ -40,6 +40,19 @@ validation performed, and update documentation when user-facing behavior or
 setup changes. Reviewers should be able to understand the change from the PR
 description without reconstructing intent from the diff alone.
 
+## Releases
+
+- Pull requests continue to update versions according to the SemVer rules
+  below. Create a GitHub Release only when a version is intentionally published
+  to users.
+- Run `.github/workflows/release.yml` manually from `main` to validate and
+  package one VSIX, verify its SHA-256, and retain it as a workflow artifact.
+- The GitHub Release job downloads that exact VSIX, creates or recovers a draft
+  release, verifies the attached asset, and publishes the release. Release tags
+  use `v<version>`.
+- If GitHub Release publication fails, rerun **failed jobs** for that workflow
+  run. The release job reuses the retained VSIX and checksum.
+
 作業が完了したらPushしてPullrequestの内容を書き上げること。
 issueが見つからない時はissue番号はないです。
 

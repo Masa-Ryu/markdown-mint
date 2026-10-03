@@ -1,0 +1,347 @@
+name: Release
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: markdown-mint-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Validate and package release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.metadata.outputs.version }}
+      artifact_name: ${{ steps.metadata.outputs.artifact_name }}
+      sha256: ${{ steps.artifact.outputs.sha256 }}
+    steps:
+      - name: Check out the selected main commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Validate release target and metadata
+        id: metadata
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ "$GITHUB_REF" != "refs/heads/main" ]]; then
+            echo "::error::Releases can only be started from main (selected ref: $GITHUB_REF)."
+            exit 1
+          fi
+          if [[ "$(git rev-parse HEAD)" != "$GITHUB_SHA" ]]; then
+            echo "::error::Checkout does not match the workflow's selected commit $GITHUB_SHA."
+            exit 1
+          fi
+
+          version="$(node --input-type=module -e 'import { readFileSync } from "node:fs"; process.stdout.write(JSON.parse(readFileSync("package.json", "utf8")).version)')"
+          tag="v${version}"
+          node scripts/release-notes.mjs > "$RUNNER_TEMP/release-notes.md"
+
+          api_status() {
+            local endpoint="$1"
+            local response_file="$2"
+            curl --silent --show-error \
+              --output "$response_file" \
+              --write-out '%{http_code}' \
+              --header 'Accept: application/vnd.github+json' \
+              --header "Authorization: Bearer $GH_TOKEN" \
+              --header 'X-GitHub-Api-Version: 2022-11-28' \
+              "https://api.github.com/repos/${GITHUB_REPOSITORY}/${endpoint}"
+          }
+
+          tag_status="$(api_status "git/ref/tags/${tag}" "$RUNNER_TEMP/tag-response.json")"
+          case "$tag_status" in
+            200)
+              echo "::error::Git tag ${tag} already exists."
+              exit 1
+              ;;
+            404) ;;
+            *)
+              cat "$RUNNER_TEMP/tag-response.json"
+              echo "::error::Could not verify whether Git tag ${tag} exists (HTTP ${tag_status})."
+              exit 1
+              ;;
+          esac
+
+          jq -n --arg repository "$GITHUB_REPOSITORY" --arg tag "$tag" \
+            '{repository: $repository, tag: $tag}' > "$RUNNER_TEMP/release-lookup.json"
+          node scripts/release-recovery.mjs lookup-release \
+            < "$RUNNER_TEMP/release-lookup.json" > "$RUNNER_TEMP/release-response.json"
+          if [[ "$(jq -r 'if . == null then "missing" else "exists" end' "$RUNNER_TEMP/release-response.json")" == "exists" ]]; then
+            echo "::error::GitHub Release or draft ${tag} already exists."
+            exit 1
+          fi
+
+          artifact_name="markdown-mint-${version}"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "artifact_name=${artifact_name}" >> "$GITHUB_OUTPUT"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Compile
+        run: npm run compile
+
+      - name: Test
+        run: npm test
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Check formatting
+        run: npm run format:check
+
+      - name: Package and verify the VSIX
+        run: npm run package
+
+      - name: Confirm the single release artifact
+        id: artifact
+        env:
+          VERSION: ${{ steps.metadata.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          packages=(markdown-mint-*.vsix)
+          expected="markdown-mint-${VERSION}.vsix"
+          if [[ ${#packages[@]} -ne 1 || "${packages[0]}" != "$expected" ]]; then
+            printf '::error::Expected exactly %s; found: %s\n' "$expected" "${packages[*]:-none}"
+            exit 1
+          fi
+
+          sha256="$(sha256sum "$expected" | cut -d ' ' -f 1)"
+          cp "$RUNNER_TEMP/release-notes.md" release-notes.md
+          printf 'sha256=%s\n' "$sha256" >> "$GITHUB_OUTPUT"
+          printf 'Verified release artifact: %s (SHA-256 %s)\n' "$expected" "$sha256"
+
+      - name: Retain the exact release payload for recovery
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.metadata.outputs.artifact_name }}
+          path: |
+            markdown-mint-${{ steps.metadata.outputs.version }}.vsix
+            release-notes.md
+          if-no-files-found: error
+          retention-days: 90
+
+  publish_github_release:
+    name: Publish GitHub Release
+    needs: validate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Check out the release commit for recovery planning
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Download the validated release payload
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.validate.outputs.artifact_name }}
+          path: release-payload
+
+      - name: Verify the downloaded artifact
+        id: payload
+        env:
+          VERSION: ${{ needs.validate.outputs.version }}
+          EXPECTED_SHA256: ${{ needs.validate.outputs.sha256 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          vsix="release-payload/markdown-mint-${VERSION}.vsix"
+          notes="release-payload/release-notes.md"
+          if [[ ! -f "$vsix" || ! -f "$notes" ]]; then
+            echo "::error::The validated VSIX or release notes are missing from the workflow artifact."
+            exit 1
+          fi
+
+          actual_sha256="$(sha256sum "$vsix" | cut -d ' ' -f 1)"
+          if [[ "$actual_sha256" != "$EXPECTED_SHA256" ]]; then
+            echo "::error::The downloaded VSIX checksum does not match the validated artifact."
+            exit 1
+          fi
+          echo "vsix_path=${vsix}" >> "$GITHUB_OUTPUT"
+          echo "The downloaded VSIX matches the validated SHA-256 ${actual_sha256}."
+
+      - name: Create or recover the GitHub Release with the same VSIX
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.validate.outputs.version }}
+          ARTIFACT_NAME: ${{ needs.validate.outputs.artifact_name }}
+          EXPECTED_SHA256: ${{ needs.validate.outputs.sha256 }}
+          VSIX_PATH: ${{ steps.payload.outputs.vsix_path }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="v${VERSION}"
+          title="Markdown Mint v${VERSION}"
+          asset_name="markdown-mint-${VERSION}.vsix"
+          notes_file="release-payload/release-notes.md"
+          tag_json="$RUNNER_TEMP/release-tag.json"
+          annotated_tag_json="$RUNNER_TEMP/annotated-tag.json"
+          state_json="$RUNNER_TEMP/release-recovery-state.json"
+          plan_json="$RUNNER_TEMP/release-recovery-plan.json"
+
+          api_get() {
+            local endpoint="$1"
+            local response_file="$2"
+            curl --silent --show-error \
+              --output "$response_file" \
+              --write-out '%{http_code}' \
+              --header 'Accept: application/vnd.github+json' \
+              --header "Authorization: Bearer $GH_TOKEN" \
+              --header 'X-GitHub-Api-Version: 2022-11-28' \
+              "https://api.github.com/repos/${GITHUB_REPOSITORY}/${endpoint}"
+          }
+
+          load_tag_target() {
+            local tag_status object_type object_sha annotated_status
+            tag_target_commit_sha=""
+            tag_status="$(api_get "git/ref/tags/${tag}" "$tag_json")"
+            case "$tag_status" in
+              200)
+                object_type="$(jq -r '.object.type' "$tag_json")"
+                object_sha="$(jq -r '.object.sha' "$tag_json")"
+                case "$object_type" in
+                  commit)
+                    tag_target_commit_sha="$object_sha"
+                    ;;
+                  tag)
+                    annotated_status="$(api_get "git/tags/${object_sha}" "$annotated_tag_json")"
+                    if [[ "$annotated_status" != "200" ]]; then
+                      cat "$annotated_tag_json"
+                      echo "::error::Could not resolve annotated Git tag ${tag} (HTTP ${annotated_status})."
+                      exit 1
+                    fi
+                    if [[ "$(jq -r '.object.type' "$annotated_tag_json")" != "commit" ]]; then
+                      echo "::error::Git tag ${tag} does not point directly to a commit."
+                      exit 1
+                    fi
+                    tag_target_commit_sha="$(jq -r '.object.sha' "$annotated_tag_json")"
+                    ;;
+                  *)
+                    echo "::error::Git tag ${tag} points to an unsupported object type: ${object_type}."
+                    exit 1
+                    ;;
+                esac
+                ;;
+              404) ;;
+              *)
+                cat "$tag_json"
+                echo "::error::Could not inspect Git tag ${tag} (HTTP ${tag_status})."
+                exit 1
+                ;;
+            esac
+          }
+
+          make_recovery_plan() {
+            jq -n \
+              --arg version "$VERSION" \
+              --arg tag "$tag" \
+              --arg targetCommitSha "$GITHUB_SHA" \
+              --arg tagTargetCommitSha "$tag_target_commit_sha" \
+              --arg assetName "$asset_name" \
+              --arg expectedSha256 "$EXPECTED_SHA256" \
+              --arg actualAssetSha256 "${actual_asset_sha256:-}" \
+              --rawfile releaseNotes "$notes_file" \
+              '{
+                version: $version,
+                tag: $tag,
+                targetCommitSha: $targetCommitSha,
+                tagTargetCommitSha: (if $tagTargetCommitSha == "" then null else $tagTargetCommitSha end),
+                assetName: $assetName,
+                expectedSha256: $expectedSha256,
+                actualAssetSha256: (if $actualAssetSha256 == "" then null else $actualAssetSha256 end),
+                releaseNotes: ($releaseNotes | sub("\\n$"; ""))
+              }' > "$state_json"
+            node scripts/release-recovery.mjs plan-current < "$state_json" > "$plan_json"
+            jq -r '.plan.action' "$plan_json"
+          }
+
+          actual_asset_sha256=""
+          for attempt in 1 2 3 4 5 6 7 8; do
+            load_tag_target
+            action="$(make_recovery_plan)"
+            case "$action" in
+              create_release)
+                create_args=(release create "$tag" "$VSIX_PATH" --draft --title "$title" --notes-file "$notes_file" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA")
+                if [[ "$(jq -r '.plan.verifyTag' "$plan_json")" == true ]]; then
+                  create_args+=(--verify-tag)
+                fi
+                if ! gh "${create_args[@]}"; then
+                  echo "::error::Draft GitHub Release creation or asset upload failed for ${tag}. Rerun failed jobs for run ${GITHUB_RUN_ID}; retained payload ${ARTIFACT_NAME} remains available."
+                  exit 1
+                fi
+                ;;
+              upload_asset)
+                if ! gh release upload "$tag" "$VSIX_PATH" --repo "$GITHUB_REPOSITORY"; then
+                  echo "::error::Uploading ${asset_name} to draft ${tag} failed. Rerun failed jobs for run ${GITHUB_RUN_ID}; retained payload ${ARTIFACT_NAME} remains available for recovery."
+                  exit 1
+                fi
+                ;;
+              delete_starter_asset)
+                release_id="$(jq -r '.plan.releaseId' "$plan_json")"
+                asset_id="$(jq -r '.plan.assetId' "$plan_json")"
+                if ! gh api --method DELETE "repos/${GITHUB_REPOSITORY}/releases/assets/${asset_id}" > /dev/null; then
+                  echo "::error::Could not remove the empty starter asset ${asset_id} from draft ${tag}. Inspect this draft manually before retrying."
+                  exit 1
+                fi
+                ;;
+              verify_asset)
+                release_id="$(jq -r '.plan.releaseId' "$plan_json")"
+                asset_dir="$RUNNER_TEMP/release-asset-${attempt}"
+                mkdir -p "$asset_dir"
+                if ! gh release download "$tag" --repo "$GITHUB_REPOSITORY" --pattern "$asset_name" --dir "$asset_dir"; then
+                  echo "::error::Could not download ${asset_name} from GitHub Release ${tag}."
+                  exit 1
+                fi
+                actual_asset_sha256="$(sha256sum "$asset_dir/$asset_name" | cut -d ' ' -f 1)"
+                ;;
+              publish_release)
+                release_id="$(jq -r '.plan.releaseId' "$plan_json")"
+                if ! gh api --method PATCH "repos/${GITHUB_REPOSITORY}/releases/${release_id}" --field draft=false > /dev/null; then
+                  echo "::error::The expected VSIX is attached to draft ${tag}, but publishing the GitHub Release failed. Rerun failed jobs for run ${GITHUB_RUN_ID}; retained payload ${ARTIFACT_NAME} remains available for recovery."
+                  exit 1
+                fi
+                ;;
+              already_published)
+                release_url="$(jq -r '.release.html_url' "$plan_json")"
+                echo "::notice::Published ${title} from ${GITHUB_SHA}: ${release_url} (VSIX SHA-256 ${EXPECTED_SHA256})"
+                exit 0
+                ;;
+              *)
+                echo "::error::Unknown GitHub Release recovery action: ${action}."
+                exit 1
+                ;;
+            esac
+          done
+
+          echo "::error::GitHub Release ${tag} did not reach a completed state after recovery attempts. Rerun failed jobs for run ${GITHUB_RUN_ID}; retained payload ${ARTIFACT_NAME} remains available."
+          exit 1
