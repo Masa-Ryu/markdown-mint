@@ -29,6 +29,8 @@ export const MERMAID_RUNTIME_READY_EVENT = "markdown-mint-mermaid-ready";
 export const MERMAID_RUNTIME_LOAD_START_MARK =
   "markdown-mint-mermaid-load-start";
 export const MERMAID_RUNTIME_LOAD_END_MARK = "markdown-mint-mermaid-load-end";
+export const MERMAID_VALIDATION_PARSE_MARK =
+  "markdown-mint-mermaid-validation-parse";
 
 export interface MermaidRuntimeLoaderOptions {
   src?: string;
@@ -272,6 +274,7 @@ export async function validateMermaidSource(
       "runtime",
     );
   try {
+    markPerformance(MERMAID_VALIDATION_PARSE_MARK);
     const parsed = await Promise.resolve(resolvedRuntime.parse(normalized));
     if (!parsed || typeof parsed !== "object")
       return invalidResult("Mermaid syntax is invalid.");

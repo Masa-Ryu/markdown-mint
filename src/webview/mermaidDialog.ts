@@ -1,16 +1,19 @@
 import { MermaidPreview } from "./mermaidPreview";
 import { MermaidTemplatePicker } from "./mermaidTemplatePicker";
 import { MermaidTemplateSession } from "./mermaidTemplateSession";
-import {
-  MermaidValidationController,
-  type MermaidValidationSnapshot,
-} from "./mermaidValidation";
+import type { MermaidTemplateApplication } from "./mermaidTemplateSession";
+import { getMermaidTemplate } from "./mermaidTemplates";
+import type { MermaidValidationSnapshot } from "./mermaidValidation";
 
 export interface MermaidDialogDisplayState {
   readonly screen: "closed" | "picker" | "editor";
   readonly pickerOrigin: "initial" | "editor" | null;
   readonly confirmation: "apply" | null;
   readonly imeActive: boolean;
+}
+
+export interface MermaidAppliedTemplate extends MermaidTemplateApplication {
+  readonly diagram: string;
 }
 
 interface MermaidInputSnapshot {
@@ -25,9 +28,8 @@ interface MermaidInputSnapshot {
 export class MermaidDialog {
   readonly element: HTMLElement;
   private readonly session = new MermaidTemplateSession();
-  private readonly preview = new MermaidPreview();
+  private readonly preview: MermaidPreview;
   private readonly picker: MermaidTemplatePicker;
-  private readonly candidateValidation: MermaidValidationController;
   private readonly editor: HTMLElement;
   private readonly codePane: HTMLElement;
   private readonly previewPane: HTMLElement;
@@ -53,6 +55,11 @@ export class MermaidDialog {
       onRuntimeReady(): void;
     },
   ) {
+    this.preview = new MermaidPreview(
+      document,
+      undefined,
+      options.onRuntimeReady,
+    );
     this.element = document.createElement("div");
     this.element.className = "mm-mermaid-workspace";
     this.element.hidden = true;
@@ -63,17 +70,10 @@ export class MermaidDialog {
     this.previewPane = document.createElement("div");
     this.previewPane.className = "mm-mermaid-preview-slot";
     this.editor.append(this.codePane, this.previewPane);
-    this.candidateValidation = new MermaidValidationController((snapshot) => {
-      if (this.active && this.picking) {
-        this.preview.accept(snapshot, this.previewTarget);
-        this.options.onRuntimeReady();
-      }
-    });
     this.picker = new MermaidTemplatePicker({
-      select: (source) => {
+      select: (selection) => {
         if (!this.active || !this.picking) return;
-        this.preview.setSource(source, this.previewTarget);
-        this.candidateValidation.schedule(source);
+        this.preview.renderTemplate(selection.source, this.previewTarget);
       },
     });
     this.confirmation = document.createElement("div");
@@ -104,6 +104,16 @@ export class MermaidDialog {
   get canSubmit(): boolean {
     return this.isEditing && !this.imeActive;
   }
+  get appliedTemplate(): MermaidAppliedTemplate | null {
+    const source = this.options.input.value;
+    const application = this.session.appliedTemplateFor(source);
+    const template = application
+      ? getMermaidTemplate(application.id)
+      : undefined;
+    return application && template
+      ? { ...application, diagram: template.diagram }
+      : null;
+  }
   get displayState(): MermaidDialogDisplayState {
     return {
       screen: !this.active ? "closed" : this.picking ? "picker" : "editor",
@@ -131,7 +141,7 @@ export class MermaidDialog {
 
   inputChanged(): void {
     if (!this.active) return;
-    this.session.edit(this.options.input.value);
+    this.session.noteUserInput(this.options.input.value);
     if (this.isEditing)
       this.preview.setSource(this.session.source, this.previewTarget);
   }
@@ -205,7 +215,6 @@ export class MermaidDialog {
     this.pickerOrigin = null;
     ++this.sessionId;
     this.session.close();
-    this.candidateValidation.cancel();
     this.preview.clear();
     this.hideConfirmation();
     this.element.hidden = true;
@@ -222,7 +231,6 @@ export class MermaidDialog {
     this.close();
     this.disposed = true;
     this.preview.dispose();
-    this.candidateValidation.dispose();
     const dialog = this.options.dialog;
     dialog.removeEventListener("keydown", this.onKeyDown, true);
     dialog.removeEventListener(
@@ -249,11 +257,16 @@ export class MermaidDialog {
   private showCode(returningFromPicker: boolean): void {
     if (!this.active || this.session.confirmation) return;
     this.picking = false;
-    this.candidateValidation.cancel();
     this.picker.element.hidden = true;
     this.editor.hidden = false;
     this.previewPane.append(this.preview.element);
-    this.preview.setSource(this.options.input.value, this.previewTarget);
+    this.session.syncDraft(this.options.input.value);
+    const appliedTemplate = this.session.appliedTemplateFor(
+      this.options.input.value,
+    );
+    if (appliedTemplate)
+      this.preview.renderTemplate(appliedTemplate.source, this.previewTarget);
+    else this.preview.setSource(this.options.input.value, this.previewTarget);
     this.options.onScreenChange(true);
     this.options.input.focus({ preventScroll: true });
     if (returningFromPicker && this.pickerReturnSnapshot)
@@ -269,8 +282,14 @@ export class MermaidDialog {
       this.imeActive
     )
       return;
-    this.session.edit(this.options.input.value);
-    const result = this.session.requestApply(source);
+    this.session.syncDraft(this.options.input.value);
+    const selected = this.picker.selection;
+    const application: MermaidTemplateApplication = {
+      id: selected.template.id,
+      ...(selected.direction ? { direction: selected.direction } : {}),
+      source,
+    };
+    const result = this.session.requestApply(application);
     if (result === "confirm") this.showConfirmation();
     else if (result === "applied") this.finishApply();
     else this.showCode(true);

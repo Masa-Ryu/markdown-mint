@@ -33,17 +33,21 @@ describe("Mermaid template catalog", () => {
   it("generates all six flowchart variants without mutating catalog or drafts", () => {
     const before = JSON.stringify(getMermaidTemplates());
     const draft = "flowchart BT\nOriginal-->Code";
+    const generated: string[] = [];
     for (const template of getMermaidTemplates().filter(
       (item) => item.directions,
     )) {
       for (const direction of template.directions!) {
         const source = buildMermaidTemplateSource(template.id, { direction });
+        generated.push(source);
         expect(source).toBe(
           buildMermaidTemplateSource(template.id, { direction }),
         );
         expect(source.split("\n")[0]).toBe("flowchart " + direction);
       }
     }
+    expect(generated).toHaveLength(6);
+    expect(new Set(generated).size).toBe(6);
     expect(JSON.stringify(getMermaidTemplates())).toBe(before);
     expect(draft).toBe("flowchart BT\nOriginal-->Code");
     expect(buildMermaidTemplateSource("gantt-project")).toContain("2026-01-05");

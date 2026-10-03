@@ -5802,7 +5802,7 @@ export class MarkdownEditorApp {
     this.profileFeatureBodyInput.setAttribute("aria-label", "Body");
     this.profileFeatureBodyInput.addEventListener("input", () => {
       if (this.profileFeatureId === "mermaid" && this.profileFeatureDialogOpen)
-        this.scheduleMermaidValidation();
+        this.handleMermaidUserInput();
     });
     bodyField.append(
       this.profileFeatureBodyLabel,
@@ -5876,7 +5876,7 @@ export class MarkdownEditorApp {
       onScreenChange: (editing) => {
         this.profileFeatureApplyButton.disabled = true;
         this.profileFeatureMermaidStatus.hidden = !editing;
-        if (editing) this.scheduleMermaidValidation();
+        if (editing) this.restoreMermaidValidationForScreen();
         else this.mermaidValidation.cancel();
       },
       onDisplayStateChange: (state) => {
@@ -6009,7 +6009,8 @@ export class MarkdownEditorApp {
       this.profileFeatureId !== "mermaid" ||
       !this.profileFeatureDialogOpen ||
       !this.mermaidDialog.isEditing ||
-      snapshot.source !== this.profileFeatureBodyInput.value
+      snapshot.source !== this.profileFeatureBodyInput.value ||
+      this.mermaidDialog.appliedTemplate?.source === snapshot.source
     )
       return;
     this.profileFeatureMermaidSnapshot = snapshot;
@@ -6032,15 +6033,10 @@ export class MarkdownEditorApp {
       "aria-label",
       `Mermaid syntax status: ${label}`,
     );
-    if (this.profileFeatureId === "mermaid")
-      this.profileFeatureApplyButton.disabled =
-        snapshot.status !== "valid" ||
-        !this.mermaidDialog.canSubmit ||
-        !this.profileFeatureDialogOpen ||
-        !this.profileFeatureError.hidden;
     this.profileFeatureMermaidVersion.textContent =
       "Mermaid " + mermaidRuntimeVersionFromGlobal();
     this.mermaidDialog.acceptDraftValidation(snapshot);
+    this.updateMermaidDialogActions(this.mermaidDialog.displayState);
   }
 
   private updateMermaidDialogActions(state: MermaidDialogDisplayState): void {
@@ -6114,22 +6110,64 @@ export class MarkdownEditorApp {
   private scheduleMermaidValidation(): void {
     if (this.profileFeatureId !== "mermaid" || !this.mermaidDialog.isEditing)
       return;
-    this.mermaidDialog.inputChanged();
+    this.profileFeatureMermaidSnapshot = null;
     this.profileFeatureApplyButton.disabled = true;
     this.mermaidValidation.schedule(this.profileFeatureBodyInput.value);
   }
 
-  private mermaidValidationIsCurrentAndValid(source: string): boolean {
+  private handleMermaidUserInput(): void {
+    if (this.profileFeatureId !== "mermaid" || !this.mermaidDialog.isEditing)
+      return;
+    this.mermaidDialog.inputChanged();
+    this.scheduleMermaidValidation();
+  }
+
+  private restoreMermaidValidationForScreen(): void {
+    if (this.profileFeatureId !== "mermaid" || !this.mermaidDialog.isEditing)
+      return;
+    const source = this.profileFeatureBodyInput.value;
+    const template = this.mermaidDialog.appliedTemplate;
+    if (template?.source === source) {
+      this.mermaidValidation.cancel();
+      this.profileFeatureMermaidSnapshot = null;
+      const label = `Built-in template · ${template.diagram}`;
+      this.profileFeatureMermaidStatus.dataset.validationState = "template";
+      this.profileFeatureMermaidStatus.textContent = label;
+      this.profileFeatureMermaidStatus.setAttribute("aria-label", label);
+      return;
+    }
     const snapshot = this.profileFeatureMermaidSnapshot;
-    return (
-      snapshot?.status === "valid" &&
-      snapshot.source === source &&
-      this.profileFeatureBodyInput.value === source
-    );
+    if (snapshot?.source === source && snapshot.status !== "checking") {
+      this.mermaidDialog.acceptDraftValidation(snapshot);
+      this.updateMermaidDialogActions(this.mermaidDialog.displayState);
+      return;
+    }
+    this.scheduleMermaidValidation();
+  }
+
+  private mermaidCommitEligibility(
+    source: string,
+  ): "template" | "validated" | null {
+    if (source !== this.profileFeatureBodyInput.value) return null;
+    const template = this.mermaidDialog.appliedTemplate;
+    if (template?.source === source) return "template";
+    const snapshot = this.profileFeatureMermaidSnapshot;
+    return snapshot?.status === "valid" && snapshot.source === source
+      ? "validated"
+      : null;
+  }
+
+  private mermaidValidationIsCurrentAndValid(source: string): boolean {
+    return this.mermaidCommitEligibility(source) !== null;
   }
 
   private async validateAndCommitMermaid(source: string): Promise<void> {
     if (this.mermaidCommitRequest) return;
+    if (!this.mermaidDialog.canSubmit || !this.profileFeatureDialogOpen) return;
+    if (this.mermaidValidationIsCurrentAndValid(source)) {
+      this.commitProfileFeatureDialogCore();
+      return;
+    }
     const request = {};
     this.mermaidCommitRequest = request;
     try {
@@ -6146,7 +6184,9 @@ export class MarkdownEditorApp {
         this.profileFeatureBodyInput.focus();
         return;
       }
-      this.commitProfileFeatureDialogCore();
+      this.profileFeatureMermaidSnapshot = snapshot;
+      if (this.mermaidValidationIsCurrentAndValid(source))
+        this.commitProfileFeatureDialogCore();
     } finally {
       if (this.mermaidCommitRequest === request)
         this.mermaidCommitRequest = null;
@@ -6477,7 +6517,10 @@ export class MarkdownEditorApp {
   }
 
   private commitProfileFeatureDialog(): void {
-    if (this.profileFeatureId === "mermaid" && !this.mermaidDialog.canSubmit)
+    if (
+      this.profileFeatureId === "mermaid" &&
+      (!this.mermaidDialog.canSubmit || !this.profileFeatureError.hidden)
+    )
       return;
     if (
       this.profileFeatureId === "mermaid" &&
@@ -6492,7 +6535,14 @@ export class MarkdownEditorApp {
   }
 
   private commitProfileFeatureDialogCore(): void {
-    if (this.profileFeatureId === "mermaid" && !this.mermaidDialog.canSubmit)
+    if (
+      this.profileFeatureId === "mermaid" &&
+      (!this.mermaidDialog.canSubmit ||
+        !this.mermaidValidationIsCurrentAndValid(
+          this.profileFeatureBodyInput.value,
+        ) ||
+        !this.profileFeatureError.hidden)
+    )
       return;
     const editTarget = this.profileFeatureEditTarget;
     if (editTarget) {

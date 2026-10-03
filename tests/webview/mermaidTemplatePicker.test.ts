@@ -27,7 +27,12 @@ describe("Mermaid template listbox", () => {
         cancelable: true,
       }),
     );
-    expect(select).toHaveBeenLastCalledWith(expect.stringContaining("Ready?"));
+    expect(select).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        source: expect.stringContaining("Ready?"),
+        template: expect.objectContaining({ id: "flowchart-decision" }),
+      }),
+    );
     const active = picker.list.getAttribute("aria-activedescendant");
     expect(picker.list.querySelector('[aria-selected="true"]')?.id).toBe(
       active,
@@ -147,7 +152,9 @@ describe("Mermaid template listbox", () => {
     direction.value = "LR";
     direction.dispatchEvent(new Event("change"));
     expect(select).toHaveBeenLastCalledWith(
-      expect.stringMatching(/^flowchart LR/),
+      expect.objectContaining({
+        source: expect.stringMatching(/^flowchart LR/),
+      }),
     );
     picker.list.dispatchEvent(
       new KeyboardEvent("keydown", { key: "ArrowDown", isComposing: true }),

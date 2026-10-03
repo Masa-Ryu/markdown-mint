@@ -140,4 +140,67 @@ describe("Mermaid modal preview requests", () => {
     await flush();
     expect(preview.diagram.textContent).toBe("");
   });
+
+  it("renders built-in sources directly and reuses its theme-scoped SVG cache", async () => {
+    const render = vi.fn(async (source: string) => svg(source));
+    const onRuntimeReady = vi.fn();
+    const preview = new MermaidPreview(document, render, onRuntimeReady);
+    previews.push(preview);
+
+    preview.renderTemplate("template source", "1:candidate");
+    await flush();
+    expect(render).toHaveBeenCalledTimes(1);
+    expect(preview.diagram.textContent).toBe("template source");
+    expect(preview.element.dataset.previewCache).toBe("miss");
+
+    preview.clear();
+    preview.renderTemplate("template source", "2:draft");
+    expect(render).toHaveBeenCalledTimes(1);
+    expect(preview.diagram.textContent).toBe("template source");
+    expect(preview.element.dataset.previewCache).toBe("hit");
+    expect(onRuntimeReady).toHaveBeenCalledTimes(2);
+  });
+
+  it("keys built-in SVG cache entries by the active Mermaid theme", async () => {
+    const render = vi.fn(async (source: string) => svg(source));
+    const preview = new MermaidPreview(document, render);
+    previews.push(preview);
+    document.body.className = "vscode-light";
+    await flush();
+
+    preview.renderTemplate("same source", "1:candidate");
+    await flush();
+    preview.clear();
+    document.body.className = "vscode-dark";
+    await flush();
+    preview.renderTemplate("same source", "2:candidate");
+    await flush();
+    expect(render).toHaveBeenCalledTimes(2);
+
+    preview.clear();
+    preview.renderTemplate("same source", "3:candidate");
+    expect(render).toHaveBeenCalledTimes(2);
+    expect(preview.element.dataset.previewCache).toBe("hit");
+  });
+
+  it("coalesces direct template requests to the latest candidate", async () => {
+    const resolvers: Array<(svg: SVGElement) => void> = [];
+    const render = vi.fn(
+      (_source: string) =>
+        new Promise<SVGElement>((resolve) => resolvers.push(resolve)),
+    );
+    const preview = new MermaidPreview(document, render);
+    previews.push(preview);
+    preview.renderTemplate("A", "1:candidate");
+    preview.renderTemplate("B", "1:candidate");
+    preview.renderTemplate("C", "1:candidate");
+    expect(render).toHaveBeenCalledTimes(1);
+    resolvers[0]!(svg("stale A"));
+    await flush();
+    expect(render).toHaveBeenCalledTimes(2);
+    expect(render.mock.calls[1]?.[0]).toBe("C");
+    resolvers[1]!(svg("latest C"));
+    await flush();
+    expect(preview.diagram.textContent).toBe("latest C");
+  });
 });

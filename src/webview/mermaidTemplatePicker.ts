@@ -21,7 +21,7 @@ export class MermaidTemplatePicker {
 
   constructor(
     private readonly callbacks: {
-      select(source: string): void;
+      select(selection: MermaidTemplatePickerSelection): void;
     },
   ) {
     const ownerDocument = document;
@@ -106,7 +106,7 @@ export class MermaidTemplatePicker {
       this.direction.append(option);
     }
     this.direction.addEventListener("change", () =>
-      this.callbacks.select(this.source),
+      this.callbacks.select(this.selection),
     );
     this.directionField.append(this.direction);
     this.previewSlot = ownerDocument.createElement("div");
@@ -122,9 +122,22 @@ export class MermaidTemplatePicker {
   }
 
   get source(): string {
-    return buildMermaidTemplateSource(this.selectedId, {
-      direction: this.direction.value as MermaidTemplateDirection,
-    });
+    return this.selection.source;
+  }
+
+  get selection(): MermaidTemplatePickerSelection {
+    const template = getMermaidTemplate(this.selectedId)!;
+    const direction = template.directions
+      ? (this.direction.value as MermaidTemplateDirection)
+      : undefined;
+    return {
+      template,
+      ...(direction ? { direction } : {}),
+      source: buildMermaidTemplateSource(
+        template.id,
+        direction ? { direction } : {},
+      ),
+    };
   }
 
   open(): void {
@@ -152,7 +165,7 @@ export class MermaidTemplatePicker {
     this.description.textContent = template.description;
     this.hint.textContent = template.hint;
     this.directionField.hidden = !template.directions;
-    this.callbacks.select(this.source);
+    this.callbacks.select(this.selection);
   }
 
   private ensureOptionVisible(option: HTMLElement): void {
@@ -165,4 +178,10 @@ export class MermaidTemplatePicker {
     else if (optionBounds.bottom > visibleBottom)
       this.list.scrollTop += optionBounds.bottom - visibleBottom;
   }
+}
+
+export interface MermaidTemplatePickerSelection {
+  readonly template: NonNullable<ReturnType<typeof getMermaidTemplate>>;
+  readonly direction?: MermaidTemplateDirection;
+  readonly source: string;
 }

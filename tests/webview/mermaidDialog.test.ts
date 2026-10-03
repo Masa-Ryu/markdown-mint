@@ -218,6 +218,8 @@ describe("Mermaid modal integration guards", () => {
     };
     open();
     button("Next: Edit code").click();
+    input().value += "\n%% user edit";
+    input().dispatchEvent(new Event("input", { bubbles: true }));
     await settle();
     expect(
       root.querySelector<HTMLElement>(".mm-mermaid-preview")!.dataset
@@ -228,6 +230,29 @@ describe("Mermaid modal integration guards", () => {
         .validationState,
     ).toBe("valid");
     button("Insert diagram").click();
+    expect(editCount()).toBe(1);
+    expect(dialog().open).toBe(false);
+  });
+
+  it("does not turn built-in render failure into a validation result", async () => {
+    const parse = vi.fn(async () => ({ diagramType: "flowchart" }));
+    globals.markdownMintMermaid = {
+      parse,
+      render: () => {
+        throw new Error("render failed");
+      },
+    };
+    open();
+    button("Next: Edit code").click();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(parse).not.toHaveBeenCalled();
+    expect(
+      root.querySelector<HTMLElement>(".mm-mermaid-validation-status")!.dataset
+        .validationState,
+    ).toBe("template");
+    expect(button("Insert diagram").disabled).toBe(false);
+    button("Insert diagram").click();
+    expect(parse).not.toHaveBeenCalled();
     expect(editCount()).toBe(1);
     expect(dialog().open).toBe(false);
   });
@@ -243,6 +268,8 @@ describe("Mermaid modal integration guards", () => {
     globals.markdownMintMermaid = { parse, render: () => "<svg />" };
     open();
     button("Next: Edit code").click();
+    input().value += "\n%% user edit";
+    input().dispatchEvent(new Event("input", { bubbles: true }));
     submit();
     submit();
     expect(parse).toHaveBeenCalledTimes(1);

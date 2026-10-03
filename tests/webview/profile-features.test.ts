@@ -215,7 +215,7 @@ describe("profile feature toolbar", () => {
     expect(
       dialog.querySelector<HTMLElement>(".mm-mermaid-version")!.textContent,
     ).toBe("Mermaid 11.17.2");
-    expect(status.textContent).toBe("Checking…");
+    expect(status.textContent).toBe("Built-in template · Flowchart");
     expect(
       dialog.querySelector("[data-feature-field-container=body] > span"),
     ).not.toBeNull();
@@ -223,7 +223,10 @@ describe("profile feature toolbar", () => {
     expect(
       dialog.querySelector<HTMLButtonElement>('button[type="submit"]')!
         .disabled,
-    ).toBe(true);
+    ).toBe(false);
+    body.value += "\n%% user edit";
+    body.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(status.textContent).toBe("Checking…");
     await settleMermaidValidation();
     expect(status.textContent).toBe("✓ Valid · Flowchart");
     expect(

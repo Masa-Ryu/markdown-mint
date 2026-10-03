@@ -534,6 +534,13 @@ function documentForRoot(root: ParentNode): Document | undefined {
   return candidate.ownerDocument ?? document;
 }
 
+/** Stable key for cached SVG rendered with the palette currently in effect. */
+export function mermaidThemeSignature(root: ParentNode): string {
+  const ownerDocument = documentForRoot(root);
+  if (!ownerDocument) return "default";
+  return JSON.stringify(themeVariables(mermaidPalette(root, ownerDocument)));
+}
+
 export function enhanceRenderedContent(
   root: ParentNode,
   codeBlockOptions: CodeBlockControlOptions = {},
