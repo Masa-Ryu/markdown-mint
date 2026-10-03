@@ -376,11 +376,9 @@ jobs:
             action="$(make_recovery_plan)"
             case "$action" in
               create_release)
-                create_args=(release create "$tag" "$VSIX_PATH" --draft --title "$title" --notes-file "$notes_file" --repo "$GITHUB_REPOSITORY")
+                create_args=(release create "$tag" "$VSIX_PATH" --draft --title "$title" --notes-file "$notes_file" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA")
                 if [[ "$(jq -r '.plan.verifyTag' "$plan_json")" == true ]]; then
                   create_args+=(--verify-tag)
-                else
-                  create_args+=(--target "$GITHUB_SHA")
                 fi
                 if ! gh "${create_args[@]}"; then
                   echo "::error::Marketplace publication succeeded, but draft GitHub Release creation or asset upload failed for ${tag}. Rerun failed jobs for run ${GITHUB_RUN_ID}; the Marketplace job will not run again and payload ${ARTIFACT_NAME} remains available."

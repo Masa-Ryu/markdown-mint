@@ -93,6 +93,27 @@ describe("GitHub Release recovery planning", () => {
     ).toEqual({ action: "upload_asset", releaseId: 42 });
   });
 
+  it("accepts an existing verified tag when the draft target names main", () => {
+    expect(
+      planReleaseRecovery(
+        state({
+          tagTargetCommitSha: targetCommitSha,
+          release: existingRelease({ draft: true, target_commitish: "main" }),
+        }),
+      ),
+    ).toEqual({ action: "upload_asset", releaseId: 42 });
+  });
+
+  it("requires a draft target to match the commit when no Git tag exists", () => {
+    expect(() =>
+      planReleaseRecovery(
+        state({
+          release: existingRelease({ draft: true, target_commitish: "main" }),
+        }),
+      ),
+    ).toThrow("targets main");
+  });
+
   it("publishes a draft with an asset matching the validated SHA-256", () => {
     expect(
       planReleaseRecovery(

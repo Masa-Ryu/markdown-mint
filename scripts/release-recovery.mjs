@@ -195,7 +195,11 @@ export function planReleaseRecovery(state) {
   if (release.tag_name !== tag) {
     throw new Error(`Existing GitHub Release tag does not match ${tag}`);
   }
-  if (release.draft && release.target_commitish !== targetCommitSha) {
+  if (
+    release.draft &&
+    tagTargetCommitSha === null &&
+    release.target_commitish !== targetCommitSha
+  ) {
     throw new Error(
       `Draft GitHub Release ${tag} targets ${String(release.target_commitish)}, not ${targetCommitSha}`,
     );
