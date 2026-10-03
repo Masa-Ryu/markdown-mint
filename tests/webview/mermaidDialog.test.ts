@@ -158,7 +158,7 @@ describe("Mermaid modal integration guards", () => {
       },
     };
     open();
-    button("Enter code directly").click();
+    button("Next: Edit code").click();
     await settle();
     expect(
       root.querySelector<HTMLElement>(".mm-mermaid-preview")!.dataset
@@ -183,7 +183,7 @@ describe("Mermaid modal integration guards", () => {
     );
     globals.markdownMintMermaid = { parse, render: () => "<svg />" };
     open();
-    button("Enter code directly").click();
+    button("Next: Edit code").click();
     submit();
     submit();
     expect(parse).toHaveBeenCalledTimes(1);
@@ -200,7 +200,7 @@ describe("Mermaid modal integration guards", () => {
 
   it("blocks composition commits and revalidates after composition ends", async () => {
     open();
-    button("Enter code directly").click();
+    button("Next: Edit code").click();
     await settle();
     input().dispatchEvent(
       new CompositionEvent("compositionstart", { bubbles: true }),

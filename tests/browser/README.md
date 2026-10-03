@@ -6,10 +6,12 @@ horizontal flowchart variants, checks visible labels including Japanese, and
 tests footer visibility, picker/editor transitions, replacement/restoration,
 keyboard and composition events, source/history
 boundaries, profiles, stale/read-only guards, four live themes, narrow layouts,
-and shared lazy loading. Results and screenshots are saved under
+and shared lazy loading. Picker checks cover no-op navigation at list
+boundaries, list-only scrolling, hidden normal progress text with `aria-busy`,
+and visible empty/invalid messages. Results and screenshots are saved under
 `output/playwright/mermaid-templates/`. Set `MM_MERMAID_BROWSER_CASE` to
-`catalog`, `interactionChecks`, `guardChecks`, or `themeChecks` for a focused
-run. The full run saves `initial-picker.png`, `revisit-picker.png`,
+`catalog`, `pickerUxChecks`, `interactionChecks`, `guardChecks`, or
+`themeChecks` for a focused run. The full run saves `initial-picker.png`, `revisit-picker.png`,
 `new-editor.png`, `existing-editor.png`, and
 `replacement-confirmation.png` for PR review. OS IME and screen-reader behavior
 still need native manual inspection.

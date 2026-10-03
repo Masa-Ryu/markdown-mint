@@ -100,6 +100,18 @@ async function preview(page) {
     "rendered",
     await result.textContent(),
   );
+  assert.equal(await result.getAttribute("aria-busy"), "false");
+  const status = result.locator(".mm-mermaid-preview-status");
+  assert.equal(
+    await status.isVisible(),
+    false,
+    "normal preview status is visible",
+  );
+  assert.equal(
+    await status.textContent(),
+    "",
+    "normal preview status has text",
+  );
   return result;
 }
 async function visibleLabels(locator, expected, label) {
@@ -555,7 +567,7 @@ async function catalogChecks(page, templates, buildSource) {
       await load(page);
       const count = await edits(page);
       const dialog = await open(page);
-      await expectFooter(dialog, "picker", "Enter code directly");
+      await expectFooter(dialog, "picker");
       if (!capturedInitial) {
         await preview(page);
         await page.screenshot({
@@ -718,12 +730,223 @@ async function catalogChecks(page, templates, buildSource) {
   return results;
 }
 
+async function pickerUxChecks(page) {
+  await load(page);
+  const dialog = await open(page);
+  const list = dialog.getByRole("listbox");
+  const previewElement = dialog.locator(".mm-mermaid-preview");
+  const status = previewElement.locator(".mm-mermaid-preview-status");
+  assert.equal(
+    await previewElement.getAttribute("data-preview-state"),
+    "checking",
+  );
+  assert.equal(await previewElement.getAttribute("aria-busy"), "true");
+  assert.equal(await status.isVisible(), false);
+  assert.equal(await status.textContent(), "");
+  await preview(page);
+
+  await list.evaluate((element) => {
+    element.style.height = "160px";
+    element.style.maxHeight = "160px";
+    element.style.alignSelf = "start";
+  });
+  const listMetrics = await list.evaluate((element) => ({
+    clientHeight: element.clientHeight,
+    scrollHeight: element.scrollHeight,
+  }));
+  assert.ok(
+    listMetrics.scrollHeight > listMetrics.clientHeight,
+    `template list should scroll: ${JSON.stringify(listMetrics)}`,
+  );
+  const outsideScroll = await dialog.evaluate((element) => {
+    const form = element.querySelector(".mm-dialog-form");
+    const workspace = element.querySelector(".mm-mermaid-workspace");
+    return [
+      element.scrollTop,
+      form?.scrollTop ?? 0,
+      workspace?.scrollTop ?? 0,
+      window.scrollY,
+      document.scrollingElement?.scrollTop ?? 0,
+    ];
+  });
+
+  await list.press("End");
+  assert.equal(
+    await previewElement.getAttribute("data-preview-state"),
+    "checking",
+  );
+  assert.equal(await previewElement.getAttribute("aria-busy"), "true");
+  assert.equal(await status.isVisible(), false);
+  await preview(page);
+  assert.equal(
+    await list
+      .locator('[aria-selected="true"]')
+      .getAttribute("data-template-id"),
+    "gitgraph-branch-merge",
+  );
+  const listScrollAtEnd = await list.evaluate((element) => element.scrollTop);
+  assert.ok(listScrollAtEnd > 0, "End did not scroll the template list");
+  for (let index = 0; index < 3; index++) await list.press("ArrowDown");
+  assert.equal(
+    await list
+      .locator('[aria-selected="true"]')
+      .getAttribute("data-template-id"),
+    "gitgraph-branch-merge",
+  );
+  assert.equal(
+    await previewElement.getAttribute("data-preview-state"),
+    "rendered",
+    "ArrowDown at the last item restarted the preview",
+  );
+  assert.equal(await previewElement.locator("svg").count(), 1);
+  assert.equal(await status.isVisible(), false);
+  assert.equal(
+    await list.evaluate((element) => element.scrollTop),
+    listScrollAtEnd,
+  );
+  assert.deepEqual(
+    await dialog.evaluate((element) => {
+      const form = element.querySelector(".mm-dialog-form");
+      const workspace = element.querySelector(".mm-mermaid-workspace");
+      return [
+        element.scrollTop,
+        form?.scrollTop ?? 0,
+        workspace?.scrollTop ?? 0,
+        window.scrollY,
+        document.scrollingElement?.scrollTop ?? 0,
+      ];
+    }),
+    outsideScroll,
+  );
+
+  await list.press("Home");
+  await preview(page);
+  assert.equal(
+    await list
+      .locator('[aria-selected="true"]')
+      .getAttribute("data-template-id"),
+    "flowchart-basic",
+  );
+  const listScrollAtStart = await list.evaluate((element) => element.scrollTop);
+  for (let index = 0; index < 3; index++) await list.press("ArrowUp");
+  assert.equal(
+    await list
+      .locator('[aria-selected="true"]')
+      .getAttribute("data-template-id"),
+    "flowchart-basic",
+  );
+  assert.equal(
+    await previewElement.getAttribute("data-preview-state"),
+    "rendered",
+    "ArrowUp at the first item restarted the preview",
+  );
+  assert.equal(await previewElement.locator("svg").count(), 1);
+  assert.equal(
+    await list.evaluate((element) => element.scrollTop),
+    listScrollAtStart,
+  );
+  assert.deepEqual(
+    await dialog.evaluate((element) => {
+      const form = element.querySelector(".mm-dialog-form");
+      const workspace = element.querySelector(".mm-mermaid-workspace");
+      return [
+        element.scrollTop,
+        form?.scrollTop ?? 0,
+        workspace?.scrollTop ?? 0,
+        window.scrollY,
+        document.scrollingElement?.scrollTop ?? 0,
+      ];
+    }),
+    outsideScroll,
+  );
+
+  await dialog
+    .getByRole("button", { name: "Next: Edit code", exact: true })
+    .click();
+  await preview(page);
+  const input = dialog.locator(sourceSelector);
+  const gateInstalled = await page.evaluate(() => {
+    const runtime =
+      window.markdownMintMermaid ?? window.mermaid ?? window.mermaidRuntime;
+    if (!runtime || typeof runtime.render !== "function") return false;
+    const original = runtime.render;
+    window.__mmOriginalMermaidRender = original;
+    window.__mmMermaidRenderRuntime = runtime;
+    window.__mmMermaidRenderGateArmed = true;
+    runtime.render = async (...args) => {
+      if (window.__mmMermaidRenderGateArmed) {
+        window.__mmMermaidRenderGateArmed = false;
+        await new Promise((resolve) => {
+          window.__mmReleaseMermaidRender = resolve;
+        });
+      }
+      return original.apply(runtime, args);
+    };
+    return true;
+  });
+  assert.equal(
+    gateInstalled,
+    true,
+    "could not gate the bundled Mermaid renderer",
+  );
+  await input.fill("flowchart TD\n    A[Render gate] --> B[Done]");
+  await page.waitForFunction(
+    () => typeof window.__mmReleaseMermaidRender === "function",
+  );
+  assert.equal(
+    await previewElement.getAttribute("data-preview-state"),
+    "rendering",
+  );
+  assert.equal(await previewElement.getAttribute("aria-busy"), "true");
+  assert.equal(await status.isVisible(), false);
+  assert.equal(await status.textContent(), "");
+  await page.evaluate(() => window.__mmReleaseMermaidRender());
+  await preview(page);
+  await page.evaluate(() => {
+    window.__mmMermaidRenderRuntime.render = window.__mmOriginalMermaidRender;
+    delete window.__mmOriginalMermaidRender;
+    delete window.__mmMermaidRenderRuntime;
+    delete window.__mmReleaseMermaidRender;
+  });
+
+  await input.fill("flowchart TD\n    A -->");
+  assert.equal(await previewElement.getAttribute("aria-busy"), "true");
+  assert.equal(await status.isVisible(), false);
+  await page.waitForFunction(
+    (selector) =>
+      document.querySelector(selector)?.getAttribute("data-preview-state") ===
+      "invalid",
+    ".mm-mermaid-preview",
+  );
+  assert.equal(await previewElement.getAttribute("aria-busy"), "false");
+  assert.equal(await status.isVisible(), true);
+  assert.match(await status.textContent(), /syntax|parse|invalid/i);
+
+  await input.fill("");
+  assert.equal(await previewElement.getAttribute("aria-busy"), "false");
+  await page.waitForFunction(
+    (selector) =>
+      document.querySelector(selector)?.getAttribute("data-preview-state") ===
+      "empty",
+    ".mm-mermaid-preview",
+  );
+  assert.equal(await previewElement.getAttribute("aria-busy"), "false");
+  assert.equal(await status.isVisible(), true);
+  assert.equal(
+    await status.textContent(),
+    "Enter Mermaid code to see a preview.",
+  );
+  console.log(
+    "Passed picker boundaries, list-only scrolling, and preview busy/error states",
+  );
+}
+
 async function interactionChecks(page) {
   await load(page);
   const before = await saved(page);
   const count = await edits(page);
   let dialog = await open(page);
-  await expectFooter(dialog, "picker", "Enter code directly");
+  await expectFooter(dialog, "picker");
   await preview(page);
   await page.screenshot({ path: resolve(output, "initial-picker.png") });
   let list = dialog.getByRole("listbox");
@@ -751,18 +974,11 @@ async function interactionChecks(page) {
     );
   });
   assert.equal(await saved(page), before, "direct picker submit wrote a draft");
-  await expectFooter(dialog, "picker", "Enter code directly");
+  await expectFooter(dialog, "picker");
   await list.press("Tab");
   assert.equal(
     await dialog
       .getByLabel("Template direction")
-      .evaluate((element) => document.activeElement === element),
-    true,
-  );
-  await page.keyboard.press("Tab");
-  assert.equal(
-    await dialog
-      .getByRole("button", { name: "Enter code directly", exact: true })
       .evaluate((element) => document.activeElement === element),
     true,
   );
@@ -785,20 +1001,25 @@ async function interactionChecks(page) {
   assert.equal(await source.inputValue(), originalDraft);
   assert.equal(await saved(page), before);
   assert.equal(await edits(page), count);
+  await dialog.locator('[data-template-id="flowchart-basic"]').click();
   await dialog
-    .getByRole("button", { name: "Enter code directly", exact: true })
+    .getByRole("button", { name: "Next: Edit code", exact: true })
     .click();
   await expectFooter(dialog, "editor");
   let input = dialog.locator(sourceSelector);
   assert.equal(
     await input.inputValue(),
-    originalDraft,
-    "Enter code directly imported the selected candidate",
+    buildMermaidTemplateSource("flowchart-basic"),
+    "Next: Edit code did not open the selected default candidate",
   );
   assert.equal(await edits(page), count);
   await preview(page);
   await page.screenshot({ path: resolve(output, "new-editor.png") });
   await page.keyboard.press("Escape");
+  await page
+    .locator(".mm-discard-changes-dialog")
+    .getByRole("button", { name: "Discard", exact: true })
+    .click();
   assert.equal(await page.locator(dialogSelector).count(), 0);
   assert.equal(
     await page
@@ -830,6 +1051,7 @@ async function interactionChecks(page) {
   await page.screenshot({ path: resolve(output, "new-editor.png") });
   await dialog.getByRole("button", { name: "Templates", exact: true }).click();
   await expectFooter(dialog, "picker", "Back to code");
+  await preview(page);
   await page.screenshot({ path: resolve(output, "revisit-picker.png") });
   await dialog.locator('[data-template-id="gitgraph-branch-merge"]').click();
   await dialog
@@ -860,6 +1082,7 @@ async function interactionChecks(page) {
   });
   await dialog.getByRole("button", { name: "Templates", exact: true }).click();
   await expectFooter(dialog, "picker", "Back to code");
+  await preview(page);
   await page.screenshot({ path: resolve(output, "revisit-picker.png") });
   await dialog.locator('[data-template-id="gantt-project"]').click();
   assert.equal(await input.inputValue(), original);
@@ -976,7 +1199,7 @@ async function interactionChecks(page) {
   assert.equal(await saved(page), before);
 
   dialog = await open(page);
-  await expectFooter(dialog, "picker", "Enter code directly");
+  await expectFooter(dialog, "picker");
   assert.equal(
     await dialog
       .getByRole("button", { name: "Undo replacement", exact: true })
@@ -1319,7 +1542,12 @@ try {
           buildMermaidTemplateSource,
         )
       : [];
-  for (const check of [interactionChecks, guardChecks, themeChecks]) {
+  for (const check of [
+    pickerUxChecks,
+    interactionChecks,
+    guardChecks,
+    themeChecks,
+  ]) {
     if (!filter || check.name.includes(filter)) await check(page);
   }
   assert.deepEqual(external, [], "template flow requested external resources");

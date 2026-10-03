@@ -34,9 +34,10 @@ Markdown Mint は、GitHub や GitLab などのプラットフォームが提供
 
 GitHub／GitLab モードでは、完成図を見ながら13件のMermaidテンプレートから選び、
 **Next: Edit code**で候補を下書きへ取り込んでライブプレビューの隣で編集します。
-**Enter code directly**はStart→Endの初期コードを保ち、**Back to code**は現在の下書きへ
-戻ります。**Undo replacement**で置換前のコードへ戻せます。Markdown本文を変更するのは
-**Insert diagram**／**Update diagram**だけです。既存図や選択したコードは直接コード編集で開きます。
+選択コードのない新規作成では最初にテンプレートを選びます。再訪した一覧の
+**Back to code**では現在の下書きへ戻れます。**Undo replacement**で置換前のコードへ
+戻せます。Markdown本文を変更するのは**Insert diagram**／**Update diagram**だけです。
+既存図や選択したコードは直接コード編集で開きます。
 
 ![プラットフォーム固有の機能のデモ](../media/platform-specific-demo.gif)
 

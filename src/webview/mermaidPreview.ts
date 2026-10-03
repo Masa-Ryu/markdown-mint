@@ -67,11 +67,12 @@ export class MermaidPreview {
     this.valid = false;
     this.pending = null;
     this.diagram.replaceChildren();
+    const hasSource = Boolean(normalizeMermaidSource(source));
     this.setStatus(
-      normalizeMermaidSource(source) ? "checking" : "empty",
-      normalizeMermaidSource(source)
-        ? "Checking current code…"
-        : "Enter Mermaid source to see a preview.",
+      hasSource ? "checking" : "empty",
+      hasSource
+        ? { busy: true }
+        : { message: "Enter Mermaid code to see a preview." },
     );
   }
 
@@ -96,10 +97,16 @@ export class MermaidPreview {
       this.setStatus(
         state,
         snapshot.status === "checking"
-          ? "Checking current code…"
-          : snapshot.status === "empty"
-            ? "Enter Mermaid source to see a preview."
-            : (snapshot.error ?? "Mermaid syntax is invalid."),
+          ? { busy: true }
+          : {
+              message:
+                snapshot.status === "empty"
+                  ? "Enter Mermaid code to see a preview."
+                  : snapshot.error?.trim() ||
+                    (state === "unavailable"
+                      ? "Mermaid validator is unavailable."
+                      : "Mermaid syntax is invalid."),
+            },
       );
     }
   }
@@ -110,7 +117,7 @@ export class MermaidPreview {
     ++this.generation;
     this.pending = null;
     this.diagram.replaceChildren();
-    this.setStatus("empty", "");
+    this.setStatus("empty");
   }
 
   dispose(): void {
@@ -126,7 +133,7 @@ export class MermaidPreview {
       target: this.target,
       generation: this.generation,
     };
-    this.setStatus("rendering", "Rendering current code…");
+    this.setStatus("rendering", { busy: true });
     if (!this.running) void this.run();
   }
 
@@ -139,7 +146,7 @@ export class MermaidPreview {
       const svg = await this.render(request.source, this.element);
       if (!this.isCurrent(request)) return;
       this.diagram.replaceChildren(svg);
-      this.setStatus("rendered", "Preview of current code");
+      this.setStatus("rendered");
     } catch (error) {
       if (!this.isCurrent(request)) return;
       this.diagram.replaceChildren();
@@ -147,11 +154,11 @@ export class MermaidPreview {
         error instanceof Error
           ? error.message.replace(/\s+/g, " ").slice(0, 250)
           : "";
-      this.setStatus(
-        "failed",
-        "Preview could not render. Syntax validation still controls insertion." +
+      this.setStatus("failed", {
+        message:
+          "Preview could not render. Syntax validation still controls insertion." +
           (detail ? " " + detail : ""),
-      );
+      });
     } finally {
       this.running = false;
       if (this.pending && !this.disposed) void this.run();
@@ -168,8 +175,13 @@ export class MermaidPreview {
     );
   }
 
-  private setStatus(state: string, label: string): void {
+  private setStatus(
+    state: string,
+    options: { message?: string; busy?: boolean } = {},
+  ): void {
     this.element.dataset.previewState = state;
-    this.status.textContent = label;
+    this.element.setAttribute("aria-busy", String(options.busy ?? false));
+    this.status.textContent = options.message ?? "";
+    this.status.hidden = !options.message;
   }
 }

@@ -78,9 +78,41 @@ describe("Mermaid modal preview requests", () => {
     expect(preview.element.dataset.previewState).toBe("unavailable");
     preview.setSource("B", "draft");
     expect(preview.element.dataset.previewState).toBe("checking");
+    expect(preview.element.getAttribute("aria-busy")).toBe("true");
+    expect(preview.status.hidden).toBe(true);
+    expect(preview.status.textContent).toBe("");
     preview.setSource("", "draft");
     expect(preview.element.dataset.previewState).toBe("empty");
+    expect(preview.element.getAttribute("aria-busy")).toBe("false");
+    expect(preview.status.hidden).toBe(false);
+    expect(preview.status.textContent).toBe(
+      "Enter Mermaid code to see a preview.",
+    );
     expect(preview.diagram.childElementCount).toBe(0);
+  });
+
+  it("uses aria-busy without progress text while checking and rendering", async () => {
+    let finish!: (svg: SVGElement) => void;
+    const preview = new MermaidPreview(
+      document,
+      () => new Promise<SVGElement>((resolve) => (finish = resolve)),
+    );
+    previews.push(preview);
+    preview.setSource("A", "draft");
+    expect(preview.element.getAttribute("aria-busy")).toBe("true");
+    expect(preview.status.hidden).toBe(true);
+    expect(preview.status.textContent).toBe("");
+    preview.accept(valid("A"), "draft");
+    expect(preview.element.dataset.previewState).toBe("rendering");
+    expect(preview.element.getAttribute("aria-busy")).toBe("true");
+    expect(preview.status.hidden).toBe(true);
+    expect(preview.status.textContent).toBe("");
+    finish(svg("rendered"));
+    await flush();
+    expect(preview.element.dataset.previewState).toBe("rendered");
+    expect(preview.element.getAttribute("aria-busy")).toBe("false");
+    expect(preview.status.hidden).toBe(true);
+    expect(preview.status.textContent).toBe("");
   });
 
   it("invalidates old targets, sessions, themes, and disposed results", async () => {

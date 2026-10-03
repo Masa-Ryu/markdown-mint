@@ -34,10 +34,11 @@ With **GitHub Mode**, you can use GitHub-specific features such as **Alerts** an
 
 In GitHub and GitLab modes, choose from 13 Mermaid templates by their finished
 diagram, then select **Next: Edit code** to edit the candidate beside a live
-preview. **Enter code directly** keeps the default Start→End example, while
-**Back to code** returns to the current draft. **Undo replacement** restores
-the previous code. Only **Insert diagram** or **Update diagram** changes your
-Markdown. Existing diagrams and selected code open directly in the code editor.
+preview. A new diagram without selected code opens the template picker first;
+**Back to code** returns to an existing draft when you revisit the picker.
+**Undo replacement** restores the previous code. Only **Insert diagram** or
+**Update diagram** changes your Markdown. Existing diagrams and selected code
+open directly in the code editor.
 
 ![platform-specific-demo](./docs/media/platform-specific-demo.gif)
 

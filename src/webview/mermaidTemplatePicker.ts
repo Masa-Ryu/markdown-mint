@@ -65,6 +65,14 @@ export class MermaidTemplatePicker {
       const index = this.options.findIndex(
         (option) => option.dataset.templateId === this.selectedId,
       );
+      const navigates = ["ArrowDown", "ArrowUp", "Home", "End"].includes(
+        event.key,
+      );
+      if (!navigates) {
+        if (event.key === "Enter" || event.key === " ") event.preventDefault();
+        return;
+      }
+      event.preventDefault();
       const next =
         event.key === "ArrowDown"
           ? Math.min(index + 1, this.options.length - 1)
@@ -75,11 +83,8 @@ export class MermaidTemplatePicker {
               : event.key === "End"
                 ? this.options.length - 1
                 : -1;
-      if (next >= 0) {
-        event.preventDefault();
-        this.select(this.options[next]!.dataset.templateId!);
-      } else if (event.key === "Enter" || event.key === " ")
-        event.preventDefault();
+      if (next < 0 || next === index) return;
+      this.select(this.options[next]!.dataset.templateId!);
     });
     const detail = ownerDocument.createElement("div");
     detail.className = "mm-mermaid-template-detail";
@@ -140,7 +145,7 @@ export class MermaidTemplatePicker {
       option.setAttribute("aria-selected", String(selected));
       if (selected) {
         this.list.setAttribute("aria-activedescendant", option.id);
-        option.scrollIntoView?.({ block: "nearest" });
+        this.ensureOptionVisible(option);
       }
     }
     this.name.textContent = template.diagram + ": " + template.name;
@@ -148,5 +153,16 @@ export class MermaidTemplatePicker {
     this.hint.textContent = template.hint;
     this.directionField.hidden = !template.directions;
     this.callbacks.select(this.source);
+  }
+
+  private ensureOptionVisible(option: HTMLElement): void {
+    const listBounds = this.list.getBoundingClientRect();
+    const visibleTop = listBounds.top + this.list.clientTop;
+    const visibleBottom = visibleTop + this.list.clientHeight;
+    const optionBounds = option.getBoundingClientRect();
+    if (optionBounds.top < visibleTop)
+      this.list.scrollTop -= visibleTop - optionBounds.top;
+    else if (optionBounds.bottom > visibleBottom)
+      this.list.scrollTop += optionBounds.bottom - visibleBottom;
   }
 }

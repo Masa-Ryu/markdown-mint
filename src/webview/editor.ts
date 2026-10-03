@@ -5826,9 +5826,10 @@ export class MarkdownEditorApp {
     helper.className = "mm-mermaid-footer-helper";
     helper.hidden = true;
     helper.addEventListener("click", () => {
-      if (this.mermaidDialog.displayState.confirmation)
-        this.mermaidDialog.cancelReplacement();
-      else this.mermaidDialog.returnToCode();
+      const state = this.mermaidDialog.displayState;
+      if (state.confirmation) this.mermaidDialog.cancelReplacement();
+      else if (state.pickerOrigin === "editor")
+        this.mermaidDialog.returnToCode();
     });
     this.profileFeatureMermaidHelperButton = helper;
     const rightActions = document.createElement("div");
@@ -6068,12 +6069,11 @@ export class MarkdownEditorApp {
     this.profileFeatureDialog.querySelector("h2")!.textContent = picker
       ? "Choose a Mermaid template"
       : "Edit Mermaid";
-    this.profileFeatureMermaidHelperButton.hidden = !picker && !confirming;
+    this.profileFeatureMermaidHelperButton.hidden =
+      !confirming && !(picker && state.pickerOrigin === "editor");
     this.profileFeatureMermaidHelperButton.textContent = confirming
       ? "Keep current code"
-      : state.pickerOrigin === "initial"
-        ? "Enter code directly"
-        : "Back to code";
+      : "Back to code";
     this.profileFeatureMermaidHelperButton.disabled = state.imeActive;
     this.profileFeatureMermaidNextButton.hidden = !picker || confirming;
     this.profileFeatureMermaidNextButton.disabled = state.imeActive;

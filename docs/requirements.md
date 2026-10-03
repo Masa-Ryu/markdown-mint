@@ -23,12 +23,12 @@ system IME candidate UI remains unverified.
 In GitHub/GitLab profiles, an unselected Mermaid insertion opens a grouped
 single-selection template list in the existing modal. The 13 examples cover
 10 diagram types; the three flowcharts offer TD/LR candidate generation.
-Only the selected candidate renders. The picker footer is the only place to
-continue: **Next: Edit code** moves its candidate into the draft and opens code
-editing, while **Enter code directly** opens the existing Start→End draft
-without applying the selected candidate. A new insertion without selected
-Mermaid code opens the picker; selected Mermaid code and existing diagrams open
-code editing directly. Picker changes do not alter the draft or document.
+Only the selected candidate renders. A new insertion without selected Mermaid
+code opens the picker, where **Next: Edit code** moves the candidate into the
+draft and opens code editing. Selected Mermaid code and existing diagrams open
+code editing directly. **Back to code** appears only when returning to the
+picker from the editor. The initial picker footer contains only Cancel and
+**Next: Edit code**. Picker changes do not alter the draft or document.
 Returning from Templates with **Back to code** preserves the draft and input
 geometry. Code and preview use two columns at wide widths and stack below 640px.
 
@@ -48,17 +48,22 @@ source and input geometry, with another confirmation if the replacement has
 since been edited. Identical source is a no-op. The opening dirty baseline is
 never recaptured during template changes, and snapshots disappear on close.
 Escape closes one layer (replacement confirmation, picker, then the normal
-modal cancellation policy). Listbox arrows select; Enter/Space do not apply a
-candidate. Submit shortcuts and composition events cannot commit from the
-picker or replacement confirmation. Escape returns from the picker to the
-editor, and another Escape uses the normal modal cancellation policy.
+modal cancellation policy). Listbox arrows select; Home and End jump to the
+first and last templates. Navigation at an already selected boundary is a
+no-op, and only the template list scrolls to reveal a keyboard selection.
+Enter/Space do not apply a candidate. Submit shortcuts and composition events
+cannot commit from the picker or replacement confirmation. Escape returns from
+the picker to the editor, and another Escape uses the normal modal cancellation
+policy.
 
 Draft validation uses the existing 300ms controller and 200,000-character
 limit. Candidate validation uses the same controller separately and cannot
-enable Insert/Update. Empty/checking/invalid/unavailable states remove stale
-SVG immediately. A render failure is reported separately without changing a
-valid syntax result or blocking an otherwise valid commit. Preview rendering
-keeps one running request and one latest pending request, compares generation,
+enable Insert/Update. Checking and rendering clear stale SVG and expose progress
+through `aria-busy` without status text. Empty, invalid, and unavailable states
+show actionable messages and remove stale SVG immediately. A render failure is
+reported separately without changing a valid syntax result or blocking an
+otherwise valid commit. Preview rendering keeps one running request and one
+latest pending request, compares generation,
 source, session and visible target, and invalidates results on live theme
 changes or closure. The document and modal share `renderSafeMermaidSvg()` for
 source normalization, strict initialization, palette, sanitation, and SVG
@@ -66,15 +71,19 @@ normalization. No new parser, external service, renderer, cache, or persistent
 template metadata is introduced. Saved output is ordinary Mermaid fenced
 source, and only Insert/Update uses the existing document transaction path.
 
-The unit suite includes catalog, picker, replacement session, preview queue,
-and modal integration tests. `npm run test:browser:mermaid` uses the shipped
+The unit suite includes catalog, picker navigation boundaries and list-only
+scrolling, replacement session, preview queue and status accessibility, and
+modal integration tests. `npm run test:browser:mermaid` uses the shipped
 Mermaid 11.17.2 bundle and CSS to render all 16 variants, checks visible
 English/Japanese labels (including Mindmap/Timeline), inserts and reopens each
 diagram, and checks no-op updates. It also exercises caret/scroll restoration,
 inline confirmation, composition events, footer visibility, picker/editor
 transitions, direct-submit guards, tab order, keyboard focus, browser-host
 Undo/Redo, external/read-only guards, GitHub/GitLab/CommonMark, four live
-themes and a 380×640 viewport. No external template requests occur.
+themes and a 380×640 viewport. It also checks that boundary navigation does not
+restart preview work, progress is conveyed through `aria-busy`, and list
+navigation does not move the dialog or page. No external template requests
+occur.
 
 On 2026-10-03, the final footer revision passed `npm run compile`, all 1,268
 unit tests, `npm run lint` (zero errors; existing warnings only),
@@ -90,6 +99,20 @@ Development Host acceptance, real OS IME candidate UI, and screen-reader
 announcements were not rerun or inspected for this final footer revision.
 The existing HTML/PDF export browser suites passed earlier with the shared
 rendering helper (HTML CSP violations: zero; PDF: 13 A4 pages).
+
+The 2026-10-03 picker UX follow-up passed `npm run compile`, all 1,317 unit
+tests across 63 files, `npm run lint` (zero errors; 94 existing warnings),
+`npm run format:check`, `npm run test:browser:mermaid`,
+`npm run test:browser:blocks`, `npm run test:extension`, and `npm run package`
+(76 files; 4,613,579 bytes). Browser checks covered all 13 templates and 16
+variants, four Git graph themes, initial and revisited picker actions, no-op
+keyboard boundaries, list-only scrolling, hidden normal progress text,
+`aria-busy` during validation/rendering, and visible empty/invalid messages.
+All five AGENTS fixtures passed Rich/Preview/native display checks. The
+initial picker and four related UI screenshots were refreshed under
+`docs/screenshots/issue-141/`. HTML/PDF export browser suites were not rerun
+for this picker-only follow-up. Native OS IME candidate UI and screen-reader
+announcements remain unverified; no release, tag, or workflow was run.
 
 PR #145 CSP follow-up on 2026-10-03 reproduced Git graph paint loss with the
 bundled Mermaid 11.17.2 runtime under the browser suite's current CSP. The

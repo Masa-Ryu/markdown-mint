@@ -183,7 +183,7 @@ describe("profile feature toolbar", () => {
     const { root } = makeApp();
     featureButton(root, "mermaid").click();
     Array.from(root.querySelectorAll<HTMLButtonElement>("button"))
-      .find((button) => button.textContent === "Enter code directly")
+      .find((button) => button.textContent === "Next: Edit code")
       ?.click();
     const dialog = root.querySelector<HTMLDialogElement>(
       ".mm-profile-feature-dialog",
@@ -223,6 +223,13 @@ describe("profile feature toolbar", () => {
         ".mm-dialog-actions button:not([type=submit]):not([hidden])",
       )!
       .click();
+    const discard = root.querySelector<HTMLDialogElement>(
+      ".mm-discard-changes-dialog",
+    );
+    if (discard?.open)
+      Array.from(discard.querySelectorAll<HTMLButtonElement>("button"))
+        .find((button) => button.textContent === "Discard")
+        ?.click();
     featureButton(root, "math").click();
     expect(dialog.dataset.profileFeature).toBe("math");
     expect(dialog.querySelector("h2")?.textContent).toBe("Insert Math");
@@ -248,7 +255,7 @@ describe("profile feature toolbar", () => {
     const { root, app, messages } = makeApp();
     featureButton(root, "mermaid").click();
     Array.from(root.querySelectorAll<HTMLButtonElement>("button"))
-      .find((button) => button.textContent === "Enter code directly")
+      .find((button) => button.textContent === "Next: Edit code")
       ?.click();
     const dialog = root.querySelector<HTMLDialogElement>(
       ".mm-profile-feature-dialog",
@@ -292,7 +299,7 @@ describe("profile feature toolbar", () => {
     try {
       featureButton(root, "mermaid").click();
       Array.from(root.querySelectorAll<HTMLButtonElement>("button"))
-        .find((button) => button.textContent === "Enter code directly")
+        .find((button) => button.textContent === "Next: Edit code")
         ?.click();
       const dialog = root.querySelector<HTMLDialogElement>(
         ".mm-profile-feature-dialog",
@@ -396,11 +403,13 @@ describe("profile feature toolbar", () => {
         }[entry.id],
       );
       expect(dialog.getAttribute("data-profile-feature")).toBe(entry.id);
-      entry.configure(dialog);
       if (entry.id === "mermaid") {
         Array.from(dialog.querySelectorAll<HTMLButtonElement>("button"))
-          .find((button) => button.textContent === "Enter code directly")
+          .find((button) => button.textContent === "Next: Edit code")
           ?.click();
+      }
+      entry.configure(dialog);
+      if (entry.id === "mermaid") {
         dialog
           .querySelector<HTMLTextAreaElement>('[data-feature-field="body"]')!
           .dispatchEvent(new Event("input", { bubbles: true }));
@@ -481,11 +490,12 @@ describe("profile feature toolbar", () => {
       const dialog = root.querySelector<HTMLDialogElement>(
         '[data-feature-dialog="true"]',
       )!;
+      if (entry.id === "mermaid")
+        Array.from(dialog.querySelectorAll<HTMLButtonElement>("button"))
+          .find((button) => button.textContent === "Next: Edit code")
+          ?.click();
       entry.configure(dialog);
       if (entry.id === "mermaid") {
-        Array.from(dialog.querySelectorAll<HTMLButtonElement>("button"))
-          .find((button) => button.textContent === "Enter code directly")
-          ?.click();
         dialog
           .querySelector<HTMLTextAreaElement>('[data-feature-field="body"]')!
           .dispatchEvent(new Event("input", { bubbles: true }));
