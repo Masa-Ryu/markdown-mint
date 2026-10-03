@@ -26,10 +26,13 @@ single-selection template list in the existing modal. The 13 examples cover
 Only the selected candidate renders. A new insertion without selected Mermaid
 code opens the picker, where **Next: Edit code** moves the candidate into the
 draft and opens code editing. Selected Mermaid code and existing diagrams open
-code editing directly. **Back to code** appears only when returning to the
-picker from the editor. The initial picker footer contains only Cancel and
+code editing directly. The editor has a left-aligned **← Templates** button
+above **Edit Mermaid**; it returns to the picker for both new and existing
+diagrams. It is available only in the active editor and is disabled during
+composition or hidden during replacement confirmation. **Back to code** appears
+only on a picker revisit. The initial picker footer contains only Cancel and
 **Next: Edit code**. Picker changes do not alter the draft or document.
-Returning from Templates with **Back to code** preserves the draft and input
+Returning from the picker with **Back to code** preserves the draft and input
 geometry. Code and preview use two columns at wide widths and stack below 640px.
 
 The picker footer has one primary **Next: Edit code** action, and the code
@@ -41,12 +44,12 @@ Only the code editor's Insert/Update actions can change the Markdown document;
 moving between the picker, confirmation, and code editor creates no document
 transaction.
 
-**Templates** preserves the draft, input selection, and scroll position while
+**← Templates** preserves the draft, input selection, and scroll position while
 browsing. Replacing existing/selected/edited source requires an inline
-confirmation. **Undo replacement** restores the most recent pre-replacement
-source and input geometry, with another confirmation if the replacement has
-since been edited. Identical source is a no-op. The opening dirty baseline is
-never recaptured during template changes, and snapshots disappear on close.
+confirmation, while identical source is a no-op. The opening dirty baseline is
+never recaptured during template changes, and navigation snapshots disappear
+on close. Template selection has no separate undo action; ordinary document
+undo/redo continues to handle committed Markdown edits.
 Escape closes one layer (replacement confirmation, picker, then the normal
 modal cancellation policy). Listbox arrows select; Home and End jump to the
 first and last templates. Navigation at an already selected boundary is a
@@ -100,19 +103,21 @@ announcements were not rerun or inspected for this final footer revision.
 The existing HTML/PDF export browser suites passed earlier with the shared
 rendering helper (HTML CSP violations: zero; PDF: 13 A4 pages).
 
-The 2026-10-03 picker UX follow-up passed `npm run compile`, all 1,317 unit
-tests across 63 files, `npm run lint` (zero errors; 94 existing warnings),
-`npm run format:check`, `npm run test:browser:mermaid`,
-`npm run test:browser:blocks`, `npm run test:extension`, and `npm run package`
-(76 files; 4,613,579 bytes). Browser checks covered all 13 templates and 16
-variants, four Git graph themes, initial and revisited picker actions, no-op
-keyboard boundaries, list-only scrolling, hidden normal progress text,
-`aria-busy` during validation/rendering, and visible empty/invalid messages.
-All five AGENTS fixtures passed Rich/Preview/native display checks. The
-initial picker and four related UI screenshots were refreshed under
-`docs/screenshots/issue-141/`. HTML/PDF export browser suites were not rerun
-for this picker-only follow-up. Native OS IME candidate UI and screen-reader
-announcements remain unverified; no release, tag, or workflow was run.
+The 2026-10-03 Mermaid editor header follow-up passed `npm run compile`, all
+1,317 unit tests across 63 files, `npm run lint` (zero errors; 94 existing
+warnings), `npm run format:check`, `npm run test:browser:mermaid`,
+`npm run test:browser:blocks`, `npm run test:browser:html-export`,
+`npm run test:browser:pdf-export`, `npm run test:extension`, and
+`npm run package` (76 files; 4,613,425 bytes). Browser checks covered all 13
+templates and 16 variants, four Git graph themes, the editor-first navigation
+button and narrow layout, replacement confirmation for existing, selected,
+and edited code, and document Undo/Redo. All five AGENTS fixtures passed
+Rich/Preview/native display checks. HTML export reported zero CSP violations;
+PDF export generated 13 A4 pages. The initial picker, revisited picker, new
+editor, existing editor, and replacement confirmation screenshots are retained
+under `docs/screenshots/issue-141/`. Native OS IME candidate UI and
+screen-reader announcements remain unverified; no release, tag, or workflow
+was run.
 
 PR #145 CSP follow-up on 2026-10-03 reproduced Git graph paint loss with the
 bundled Mermaid 11.17.2 runtime under the browser suite's current CSP. The

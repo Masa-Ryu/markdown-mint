@@ -97,7 +97,7 @@ describe("Mermaid modal integration guards", () => {
   it("confirms loss against the opening snapshot across multiple pristine replacements", async () => {
     open();
     button("Next: Edit code").click();
-    button("Templates").click();
+    button("← Templates").click();
     root
       .querySelector<HTMLElement>('[data-template-id="state-workflow"]')!
       .click();
@@ -112,7 +112,66 @@ describe("Mermaid modal integration guards", () => {
     button("Discard").click();
     open();
     expect(input().value).toContain("A[Start] --> B[End]");
-    expect(button("Undo replacement").hidden).toBe(true);
+    expect(
+      dialog().querySelector<HTMLButtonElement>(
+        '[aria-label="Back to Mermaid templates"]',
+      )!.hidden,
+    ).toBe(true);
+    expect(
+      Array.from(dialog().querySelectorAll("button")).some((item) =>
+        item.textContent?.includes("Undo replacement"),
+      ),
+    ).toBe(false);
+  });
+
+  it("shows template navigation only in the active editor and guards confirmation and IME", async () => {
+    open();
+    const templates = dialog().querySelector<HTMLButtonElement>(
+      '[aria-label="Back to Mermaid templates"]',
+    )!;
+    expect(templates.hidden).toBe(true);
+    button("Next: Edit code").click();
+    await settle();
+    expect(templates.hidden).toBe(false);
+    expect(templates.textContent).toBe("← Templates");
+    expect(editCount()).toBe(0);
+    templates.click();
+    expect(
+      root.querySelector<HTMLElement>(".mm-mermaid-template-picker")!.hidden,
+    ).toBe(false);
+    expect(templates.hidden).toBe(true);
+    button("Back to code").click();
+    expect(templates.hidden).toBe(false);
+    input().value += "\n%% edited in the code editor";
+    input().dispatchEvent(new Event("input", { bubbles: true }));
+    await settle();
+
+    input().dispatchEvent(
+      new CompositionEvent("compositionstart", { bubbles: true }),
+    );
+    expect(templates.disabled).toBe(true);
+    templates.click();
+    expect(
+      root.querySelector<HTMLElement>(".mm-mermaid-template-picker")!.hidden,
+    ).toBe(true);
+    input().dispatchEvent(
+      new CompositionEvent("compositionend", { bubbles: true }),
+    );
+    await vi.advanceTimersByTimeAsync(60);
+
+    templates.click();
+    root
+      .querySelector<HTMLElement>('[data-template-id="state-workflow"]')!
+      .click();
+    button("Next: Edit code").click();
+    expect(
+      root.querySelector<HTMLElement>(".mm-mermaid-replacement-confirmation")!
+        .hidden,
+    ).toBe(false);
+    expect(templates.hidden).toBe(true);
+    button("Keep current code").click();
+    expect(templates.hidden).toBe(true);
+    expect(editCount()).toBe(0);
   });
 
   it("preserves selected Unicode code and requires confirmation before replacing it", () => {
@@ -138,7 +197,7 @@ describe("Mermaid modal integration guards", () => {
     expect(
       root.querySelector<HTMLElement>(".mm-mermaid-template-picker")!.hidden,
     ).toBe(true);
-    button("Templates").click();
+    button("← Templates").click();
     button("Next: Edit code").click();
     expect(input().value).toBe("日本語の図");
     expect(

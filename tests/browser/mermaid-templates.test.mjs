@@ -1049,7 +1049,30 @@ async function interactionChecks(page) {
   );
   await preview(page);
   await page.screenshot({ path: resolve(output, "new-editor.png") });
-  await dialog.getByRole("button", { name: "Templates", exact: true }).click();
+  const backToTemplates = dialog.getByRole("button", {
+    name: "Back to Mermaid templates",
+    exact: true,
+  });
+  assert.equal(
+    await backToTemplates.evaluate((button) =>
+      Boolean(
+        button.compareDocumentPosition(button.form.querySelector("h2")) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+      ),
+    ),
+    true,
+    "template navigation should precede the editor title in the DOM",
+  );
+  await input.focus();
+  await page.keyboard.press("Shift+Tab");
+  assert.equal(
+    await backToTemplates.evaluate(
+      (button) => document.activeElement === button,
+    ),
+    true,
+    "template navigation should be reachable from the editor input by Tab",
+  );
+  await page.keyboard.press("Space");
   await expectFooter(dialog, "picker", "Back to code");
   await preview(page);
   await page.screenshot({ path: resolve(output, "revisit-picker.png") });
@@ -1080,7 +1103,15 @@ async function interactionChecks(page) {
       element.scrollLeft,
     ];
   });
-  await dialog.getByRole("button", { name: "Templates", exact: true }).click();
+  await input.focus();
+  await page.keyboard.press("Shift+Tab");
+  assert.equal(
+    await backToTemplates.evaluate(
+      (button) => document.activeElement === button,
+    ),
+    true,
+  );
+  await page.keyboard.press("Enter");
   await expectFooter(dialog, "picker", "Back to code");
   await preview(page);
   await page.screenshot({ path: resolve(output, "revisit-picker.png") });
@@ -1132,7 +1163,9 @@ async function interactionChecks(page) {
     ]),
     snapshot,
   );
-  await dialog.getByRole("button", { name: "Templates", exact: true }).click();
+  await dialog
+    .getByRole("button", { name: "Back to Mermaid templates", exact: true })
+    .click();
   await dialog
     .getByRole("button", { name: "Next: Edit code", exact: true })
     .click();
@@ -1148,21 +1181,33 @@ async function interactionChecks(page) {
     .getByRole("button", { name: "Replace and edit", exact: true })
     .click();
   await expectFooter(dialog, "editor");
-  await dialog
-    .getByRole("button", { name: "Undo replacement", exact: true })
-    .click();
-  assert.equal(await input.inputValue(), original);
-  assert.deepEqual(
-    await input.evaluate((element) => [
-      element.selectionStart,
-      element.selectionEnd,
-      element.selectionDirection,
-      element.scrollTop,
-      element.scrollLeft,
-    ]),
-    snapshot,
+  assert.equal(
+    await input.inputValue(),
+    buildMermaidTemplateSource("gantt-project"),
+    "confirmed replacement did not apply the selected template",
   );
-  await dialog.getByRole("button", { name: "Templates", exact: true }).click();
+  assert.equal(
+    await dialog.getByRole("button", { name: /Undo replacement/ }).count(),
+    0,
+    "the editor exposed a template-specific undo action",
+  );
+  assert.equal(await edits(page), count, "replacement edited the document");
+  await input.fill(
+    (await input.inputValue()) + "\n    %% typed after replacement",
+  );
+  await dialog
+    .getByRole("button", { name: "Back to Mermaid templates", exact: true })
+    .click();
+  await dialog.locator('[data-template-id="gitgraph-branch-merge"]').click();
+  await dialog
+    .getByRole("button", { name: "Next: Edit code", exact: true })
+    .click();
+  await expectFooter(dialog, "picker", "Keep current code", "Replace and edit");
+  assert.ok((await input.inputValue()).includes("typed after replacement"));
+  await dialog
+    .getByRole("button", { name: "Keep current code", exact: true })
+    .click();
+  assert.ok((await input.inputValue()).includes("typed after replacement"));
   await dialog
     .getByRole("button", { name: "Next: Edit code", exact: true })
     .click();
@@ -1171,25 +1216,11 @@ async function interactionChecks(page) {
     .getByRole("button", { name: "Replace and edit", exact: true })
     .click();
   await expectFooter(dialog, "editor");
-  await input.fill(
-    (await input.inputValue()) + "\n    %% typed after replacement",
+  assert.equal(
+    await input.inputValue(),
+    buildMermaidTemplateSource("gitgraph-branch-merge"),
+    "confirmed edited replacement did not apply",
   );
-  await dialog
-    .getByRole("button", { name: "Undo replacement", exact: true })
-    .click();
-  await expectFooter(dialog, "editor", "Keep current code", "Restore code");
-  await dialog
-    .getByRole("button", { name: "Keep current code", exact: true })
-    .click();
-  assert.ok((await input.inputValue()).includes("typed after replacement"));
-  await dialog
-    .getByRole("button", { name: "Undo replacement", exact: true })
-    .click();
-  await dialog
-    .getByRole("button", { name: "Restore code", exact: true })
-    .click();
-  await expectFooter(dialog, "editor");
-  assert.equal(await input.inputValue(), original);
   assert.equal(await edits(page), count);
   await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
   await page
@@ -1201,10 +1232,15 @@ async function interactionChecks(page) {
   dialog = await open(page);
   await expectFooter(dialog, "picker");
   assert.equal(
+    await dialog.getByRole("button", { name: /Undo replacement/ }).count(),
+    0,
+  );
+  assert.equal(
     await dialog
-      .getByRole("button", { name: "Undo replacement", exact: true })
-      .isVisible(),
-    false,
+      .getByRole("button", { name: "Back to Mermaid templates", exact: true })
+      .count(),
+    0,
+    "initial picker showed editor navigation",
   );
   const selected = await dialog
     .getByRole("listbox")
@@ -1267,7 +1303,7 @@ async function interactionChecks(page) {
     inserted,
   );
   console.log(
-    "Passed keyboard, replacement, restoration, composition events, cancellation, and Undo/Redo boundaries",
+    "Passed keyboard, replacement, composition events, cancellation, and Undo/Redo boundaries",
   );
 }
 
@@ -1285,10 +1321,30 @@ async function guardChecks(page) {
     await dialog.locator(".mm-mermaid-template-picker").isVisible(),
     false,
   );
-  await dialog.getByRole("button", { name: "Templates", exact: true }).click();
+  const beforeExistingTemplate = await edits(page);
+  await dialog
+    .getByRole("button", { name: "Back to Mermaid templates", exact: true })
+    .click();
   await dialog.locator('[data-template-id="mindmap-basic"]').click();
   await preview(page);
-  await page.keyboard.press("Escape");
+  await dialog
+    .getByRole("button", { name: "Next: Edit code", exact: true })
+    .click();
+  await expectFooter(dialog, "picker", "Keep current code", "Replace and edit");
+  assert.equal(
+    await dialog.locator(sourceSelector).inputValue(),
+    original,
+    "replacement confirmation changed an existing draft",
+  );
+  assert.equal(await edits(page), beforeExistingTemplate);
+  assert.equal(await saved(page), source);
+  await dialog
+    .getByRole("button", { name: "Keep current code", exact: true })
+    .click();
+  await dialog
+    .getByRole("button", { name: "Back to code", exact: true })
+    .click();
+  assert.equal(await dialog.locator(sourceSelector).inputValue(), original);
   await dialog
     .getByRole("button", { name: "Update diagram", exact: true })
     .click();
@@ -1354,6 +1410,27 @@ async function guardChecks(page) {
     await dialog.locator(".mm-mermaid-template-picker").isVisible(),
     false,
   );
+  const selectedEdits = await edits(page);
+  await dialog
+    .getByRole("button", { name: "Back to Mermaid templates", exact: true })
+    .click();
+  await dialog.locator('[data-template-id="pie-composition"]').click();
+  await dialog
+    .getByRole("button", { name: "Next: Edit code", exact: true })
+    .click();
+  await expectFooter(dialog, "picker", "Keep current code", "Replace and edit");
+  assert.equal(
+    await dialog.locator(sourceSelector).inputValue(),
+    "flowchart LR A-->B",
+  );
+  assert.equal(await edits(page), selectedEdits);
+  assert.equal(await saved(page), "flowchart LR A-->B");
+  await dialog
+    .getByRole("button", { name: "Keep current code", exact: true })
+    .click();
+  await dialog
+    .getByRole("button", { name: "Back to code", exact: true })
+    .click();
   await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
   assert.equal(await saved(page), "flowchart LR A-->B");
 
@@ -1421,6 +1498,7 @@ async function themeChecks(page) {
   await preview(page);
   await page.setViewportSize({ width: 380, height: 640 });
   for (const selector of [
+    ".mm-mermaid-back-to-templates",
     sourceSelector,
     ".mm-mermaid-preview",
     ".mm-dialog-actions",
@@ -1435,8 +1513,20 @@ async function themeChecks(page) {
       `narrow layout overflow: ${selector} ${JSON.stringify(box)}`,
     );
   }
+  const navigationBox = await dialog
+    .getByRole("button", { name: "Back to Mermaid templates", exact: true })
+    .boundingBox();
+  const titleBox = await dialog.locator("h2").boundingBox();
+  assert.ok(
+    navigationBox &&
+      titleBox &&
+      navigationBox.y + navigationBox.height <= titleBox.y,
+    "template navigation should remain above the editor title on narrow screens",
+  );
   await page.screenshot({ path: resolve(output, "narrow-code.png") });
-  await dialog.getByRole("button", { name: "Templates", exact: true }).click();
+  await dialog
+    .getByRole("button", { name: "Back to Mermaid templates", exact: true })
+    .click();
   await preview(page);
   await page.screenshot({ path: resolve(output, "narrow-picker.png") });
   const box = await dialog

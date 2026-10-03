@@ -8,15 +8,17 @@ const webviewCss = readFileSync(
 );
 
 describe("Mermaid dialog styles", () => {
-  it("scopes the large editor-first layout to Mermaid only", () => {
+  it("scopes the large navigation-first editor layout to Mermaid only", () => {
     expect(webviewCss).toContain(
       '.mm-input-dialog.mm-profile-feature-dialog[data-profile-feature="mermaid"]',
     );
     expect(webviewCss).toContain("width: min(960px, calc(100vw - 32px));");
     expect(webviewCss).toContain("height: min(760px, calc(100dvh - 32px));");
     expect(webviewCss).toContain(
-      "grid-template-rows: auto minmax(0, 1fr) auto;",
+      "grid-template-rows: auto auto minmax(0, 1fr) auto;",
     );
+    expect(webviewCss).toContain('"nav nav"');
+    expect(webviewCss).toContain(".mm-mermaid-back-to-templates");
     expect(webviewCss).toContain("flex: 1 1 auto;");
     expect(webviewCss).toContain(
       "font-family: var(--vscode-editor-font-family, monospace);",

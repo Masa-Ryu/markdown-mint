@@ -2693,7 +2693,8 @@ export class MarkdownEditorApp {
   private profileFeatureMermaidRightActions!: HTMLElement;
   private profileFeatureMermaidNextButton!: HTMLButtonElement;
   private profileFeatureMermaidConfirmButton!: HTMLButtonElement;
-  private profileFeatureMermaidConfirmation: "apply" | "restore" | null = null;
+  private profileFeatureMermaidBackToTemplatesButton!: HTMLButtonElement;
+  private profileFeatureMermaidConfirmation: "apply" | null = null;
   private mermaidValidation!: MermaidValidationController;
   private mermaidDialog!: MermaidDialog;
   private mermaidCommitRequest: object | null = null;
@@ -5716,6 +5717,15 @@ export class MarkdownEditorApp {
     const title = document.createElement("h2");
     title.id = "mm-profile-feature-dialog-title";
     title.textContent = "Insert feature";
+    const mermaidTemplates = document.createElement("button");
+    mermaidTemplates.type = "button";
+    mermaidTemplates.className = "mm-mermaid-back-to-templates";
+    mermaidTemplates.textContent = "← Templates";
+    mermaidTemplates.setAttribute("aria-label", "Back to Mermaid templates");
+    mermaidTemplates.addEventListener("click", () =>
+      this.mermaidDialog.openTemplates(),
+    );
+    this.profileFeatureMermaidBackToTemplatesButton = mermaidTemplates;
     this.profileFeatureMermaidMeta = document.createElement("div");
     this.profileFeatureMermaidMeta.className = "mm-mermaid-dialog-meta";
     this.profileFeatureMermaidMeta.hidden = true;
@@ -5881,6 +5891,7 @@ export class MarkdownEditorApp {
     });
     this.updateMermaidDialogActions(this.mermaidDialog.displayState);
     form.append(
+      mermaidTemplates,
       title,
       this.profileFeatureMermaidMeta,
       alertField,
@@ -6041,6 +6052,8 @@ export class MarkdownEditorApp {
       active,
     );
     if (!active) {
+      this.profileFeatureMermaidBackToTemplatesButton.hidden = true;
+      this.profileFeatureMermaidBackToTemplatesButton.disabled = true;
       this.profileFeatureMermaidHelperButton.hidden = true;
       this.profileFeatureMermaidNextButton.hidden = true;
       this.profileFeatureMermaidConfirmButton.hidden = true;
@@ -6066,6 +6079,10 @@ export class MarkdownEditorApp {
     );
     const picker = state.screen === "picker";
     const confirming = state.confirmation !== null;
+    this.profileFeatureMermaidBackToTemplatesButton.hidden = !(
+      !picker && !confirming
+    );
+    this.profileFeatureMermaidBackToTemplatesButton.disabled = state.imeActive;
     this.profileFeatureDialog.querySelector("h2")!.textContent = picker
       ? "Choose a Mermaid template"
       : "Edit Mermaid";
@@ -6090,8 +6107,7 @@ export class MarkdownEditorApp {
       !this.profileFeatureDialogOpen ||
       !this.profileFeatureError.hidden;
     this.profileFeatureMermaidConfirmButton.hidden = !confirming;
-    this.profileFeatureMermaidConfirmButton.textContent =
-      state.confirmation === "restore" ? "Restore code" : "Replace and edit";
+    this.profileFeatureMermaidConfirmButton.textContent = "Replace and edit";
     this.profileFeatureMermaidConfirmButton.disabled = state.imeActive;
   }
 

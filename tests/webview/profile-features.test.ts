@@ -194,8 +194,21 @@ describe("profile feature toolbar", () => {
     const status = dialog.querySelector<HTMLElement>(
       ".mm-mermaid-validation-status",
     )!;
+    const navigation = dialog.querySelector<HTMLButtonElement>(
+      ".mm-mermaid-back-to-templates",
+    )!;
+    const title = dialog.querySelector("h2")!;
     expect(dialog.dataset.profileFeature).toBe("mermaid");
-    expect(dialog.querySelector("h2")?.textContent).toBe("Edit Mermaid");
+    expect(title.textContent).toBe("Edit Mermaid");
+    expect(navigation.textContent).toBe("← Templates");
+    expect(navigation.getAttribute("aria-label")).toBe(
+      "Back to Mermaid templates",
+    );
+    expect(navigation.hidden).toBe(false);
+    expect(
+      navigation.compareDocumentPosition(title) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
     expect(
       dialog.querySelector<HTMLElement>(".mm-mermaid-dialog-meta")!.hidden,
     ).toBe(false);
@@ -233,6 +246,7 @@ describe("profile feature toolbar", () => {
     featureButton(root, "math").click();
     expect(dialog.dataset.profileFeature).toBe("math");
     expect(dialog.querySelector("h2")?.textContent).toBe("Insert Math");
+    expect(navigation.hidden).toBe(true);
     expect(
       dialog.querySelector<HTMLElement>(".mm-mermaid-dialog-meta")!.hidden,
     ).toBe(true);
@@ -403,10 +417,17 @@ describe("profile feature toolbar", () => {
         }[entry.id],
       );
       expect(dialog.getAttribute("data-profile-feature")).toBe(entry.id);
+      const navigation = dialog.querySelector<HTMLButtonElement>(
+        ".mm-mermaid-back-to-templates",
+      )!;
       if (entry.id === "mermaid") {
+        expect(navigation.hidden).toBe(true);
         Array.from(dialog.querySelectorAll<HTMLButtonElement>("button"))
           .find((button) => button.textContent === "Next: Edit code")
           ?.click();
+        expect(navigation.hidden).toBe(false);
+      } else {
+        expect(navigation.hidden).toBe(true);
       }
       entry.configure(dialog);
       if (entry.id === "mermaid") {

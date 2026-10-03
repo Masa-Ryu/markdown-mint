@@ -968,13 +968,39 @@ textarea:focus-visible {
   min-height: 0;
   height: 100%;
   grid-template-columns: auto minmax(0, 1fr);
-  grid-template-rows: auto minmax(0, 1fr) auto;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
   grid-template-areas:
+    "nav nav"
     "title meta"
     "body body"
     "actions actions";
   gap: 10px 16px;
   overflow: hidden;
+}
+.mm-profile-feature-dialog[data-profile-feature="mermaid"]
+  .mm-mermaid-back-to-templates {
+  grid-area: nav;
+  justify-self: start;
+  align-self: start;
+  padding: 2px 4px;
+  border-color: transparent;
+  color: var(--vscode-textLink-foreground, var(--vscode-focusBorder, #007fd4));
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+.mm-profile-feature-dialog[data-profile-feature="mermaid"]
+  .mm-mermaid-back-to-templates:hover:not(:disabled) {
+  color: var(
+    --vscode-textLink-activeForeground,
+    var(--vscode-textLink-foreground, var(--vscode-focusBorder, #007fd4))
+  );
+  background: var(--vscode-toolbar-hoverBackground, rgba(127, 127, 127, 0.18));
+  text-decoration: underline;
+}
+.mm-profile-feature-dialog[data-profile-feature="mermaid"]
+  .mm-mermaid-back-to-templates:disabled {
+  color: var(--vscode-descriptionForeground, var(--mm-disabled-foreground));
 }
 .mm-profile-feature-dialog[data-profile-feature="mermaid"]
   .mm-dialog-form
@@ -1160,7 +1186,6 @@ textarea:focus-visible {
   font-size: 0.9em;
   color: var(--vscode-descriptionForeground, var(--mm-control-foreground));
 }
-.mm-mermaid-editor-toolbar,
 .mm-mermaid-replacement-confirmation {
   display: flex;
   flex-wrap: wrap;
@@ -1207,8 +1232,13 @@ textarea:focus-visible {
 }
 @media (max-width: 640px) {
   .mm-profile-feature-dialog[data-profile-feature="mermaid"] .mm-dialog-form {
-    grid-template-rows: auto auto minmax(0, 1fr) auto;
-    grid-template-areas: "title title" "meta meta" "body body" "actions actions";
+    grid-template-rows: auto auto auto minmax(0, 1fr) auto;
+    grid-template-areas:
+      "nav nav"
+      "title title"
+      "meta meta"
+      "body body"
+      "actions actions";
     gap: 6px;
   }
   .mm-mermaid-code-preview,
