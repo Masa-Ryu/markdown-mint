@@ -11,6 +11,7 @@ import {
 } from "./mermaidValidation";
 import {
   mermaidDiagramColors,
+  mermaidContrastRatio,
   mermaidTextColorForBackground,
   type MermaidPalette,
 } from "./mermaidTheme";
@@ -540,6 +541,60 @@ function rectsOverlap(left: SvgScreenRect, right: SvgScreenRect): boolean {
   );
 }
 
+function screenRectInSvgCoordinates(
+  svg: SVGSVGElement,
+  rect: SvgScreenRect,
+): SvgScreenRect | undefined {
+  const matrix = svg.getScreenCTM();
+  if (!matrix) return undefined;
+  try {
+    const inverse = matrix.inverse();
+    const corners: ReadonlyArray<readonly [number, number]> = [
+      [rect.x, rect.y],
+      [rect.x + rect.width, rect.y],
+      [rect.x, rect.y + rect.height],
+      [rect.x + rect.width, rect.y + rect.height],
+    ];
+    const points = corners.map(([x, y]) => {
+      const point = svg.createSVGPoint();
+      point.x = x;
+      point.y = y;
+      return point.matrixTransform(inverse);
+    });
+    const xs = points.map((point) => point.x);
+    const ys = points.map((point) => point.y);
+    return {
+      x: Math.min(...xs),
+      y: Math.min(...ys),
+      width: Math.max(...xs) - Math.min(...xs),
+      height: Math.max(...ys) - Math.min(...ys),
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+function svgDeltaToScreen(
+  svg: SVGSVGElement,
+  deltaX: number,
+  deltaY: number,
+): { x: number; y: number } | undefined {
+  const matrix = svg.getScreenCTM();
+  if (!matrix) return undefined;
+  const origin = svg.createSVGPoint();
+  origin.x = 0;
+  origin.y = 0;
+  const shifted = svg.createSVGPoint();
+  shifted.x = deltaX;
+  shifted.y = deltaY;
+  const screenOrigin = origin.matrixTransform(matrix);
+  const screenShifted = shifted.matrixTransform(matrix);
+  return {
+    x: screenShifted.x - screenOrigin.x,
+    y: screenShifted.y - screenOrigin.y,
+  };
+}
+
 function markerScreenRect(
   svg: SVGElement,
   relation: SVGPathElement,
@@ -554,10 +609,16 @@ function markerScreenRect(
   const reference = relation.getAttribute(`marker-${side}`);
   const id = reference?.match(/#([^)]+)/)?.[1];
   const marker = id ? svg.ownerDocument.getElementById(id) : null;
-  const shape = marker?.querySelector<SVGGraphicsElement>(
-    "path, circle, polygon",
-  );
-  if (!marker || !shape || typeof shape.getBBox !== "function")
+  const shapes = marker
+    ? Array.from(
+        marker.querySelectorAll<SVGGraphicsElement>("path, circle, polygon"),
+      )
+    : [];
+  if (
+    !marker ||
+    !shapes.length ||
+    shapes.some((shape) => typeof shape.getBBox !== "function")
+  )
     return undefined;
 
   try {
@@ -568,32 +629,68 @@ function markerScreenRect(
       side === "end" ? Math.max(0, length - 0.1) : Math.min(length, 0.1);
     const endpoint = relation.getPointAtLength(pointLength);
     const nearby = relation.getPointAtLength(nearbyLength);
-    let angle = Math.atan2(endpoint.y - nearby.y, endpoint.x - nearby.x);
+    let angle =
+      side === "end"
+        ? Math.atan2(endpoint.y - nearby.y, endpoint.x - nearby.x)
+        : Math.atan2(nearby.y - endpoint.y, nearby.x - endpoint.x);
     const orient = marker.getAttribute("orient")?.trim();
-    if (side === "start" && orient !== "auto-start-reverse") angle += Math.PI;
+    if (side === "start" && orient === "auto-start-reverse") angle += Math.PI;
     if (orient && orient !== "auto" && orient !== "auto-start-reverse") {
       const degrees = Number.parseFloat(orient);
       if (Number.isFinite(degrees)) angle = (degrees * Math.PI) / 180;
     }
 
-    const shapeBox = shape.getBBox();
     const refX = Number.parseFloat(marker.getAttribute("refX") ?? "0") || 0;
     const refY = Number.parseFloat(marker.getAttribute("refY") ?? "0") || 0;
+    const markerWidth = Number.parseFloat(
+      marker.getAttribute("markerWidth") ?? "",
+    );
+    const markerHeight = Number.parseFloat(
+      marker.getAttribute("markerHeight") ?? "",
+    );
+    const viewBox = (marker.getAttribute("viewBox") ?? "")
+      .trim()
+      .split(/[ ,]+/)
+      .map(Number);
+    const viewBoxWidth = viewBox[2];
+    const viewBoxHeight = viewBox[3];
+    const viewBoxScale =
+      Number.isFinite(markerWidth) &&
+      Number.isFinite(markerHeight) &&
+      typeof viewBoxWidth === "number" &&
+      typeof viewBoxHeight === "number" &&
+      markerWidth > 0 &&
+      markerHeight > 0 &&
+      viewBoxWidth > 0 &&
+      viewBoxHeight > 0
+        ? Math.min(markerWidth / viewBoxWidth, markerHeight / viewBoxHeight)
+        : 1;
+    const strokeWidth =
+      svg.ownerDocument.defaultView?.getComputedStyle(relation).strokeWidth ??
+      "1";
+    const strokeScale =
+      marker.getAttribute("markerUnits") === "userSpaceOnUse"
+        ? 1
+        : Number.parseFloat(strokeWidth) || 1;
+    const scale = viewBoxScale * strokeScale;
     const matrix = relation.getScreenCTM();
     if (!matrix) return undefined;
-    const cornerCoordinates: ReadonlyArray<readonly [number, number]> = [
-      [shapeBox.x, shapeBox.y],
-      [shapeBox.x + shapeBox.width, shapeBox.y],
-      [shapeBox.x, shapeBox.y + shapeBox.height],
-      [shapeBox.x + shapeBox.width, shapeBox.y + shapeBox.height],
-    ];
-    const corners = cornerCoordinates.map(([x, y]) => {
-      const dx = x - refX;
-      const dy = y - refY;
-      const point = (svg as SVGSVGElement).createSVGPoint();
-      point.x = endpoint.x + dx * Math.cos(angle) - dy * Math.sin(angle);
-      point.y = endpoint.y + dx * Math.sin(angle) + dy * Math.cos(angle);
-      return point.matrixTransform(matrix);
+    const corners = shapes.flatMap((shape) => {
+      const shapeBox = shape.getBBox();
+      const cornerCoordinates: ReadonlyArray<readonly [number, number]> = [
+        [shapeBox.x, shapeBox.y],
+        [shapeBox.x + shapeBox.width, shapeBox.y],
+        [shapeBox.x, shapeBox.y + shapeBox.height],
+        [shapeBox.x + shapeBox.width, shapeBox.y + shapeBox.height],
+      ];
+      return cornerCoordinates.map(([x, y]) => {
+        const dx = (x - refX) * scale;
+        const dy = (y - refY) * scale;
+        const point = (svg as SVGSVGElement).createSVGPoint();
+        point.x = endpoint.x + dx * Math.cos(angle) - dy * Math.sin(angle);
+        point.y = endpoint.y + dx * Math.sin(angle) + dy * Math.cos(angle);
+        return point.matrixTransform(matrix);
+      });
     });
     const xs = corners.map((point) => point.x);
     const ys = corners.map((point) => point.y);
@@ -608,19 +705,20 @@ function markerScreenRect(
   }
 }
 
-function translateTextByScreenDelta(
-  text: SVGTextElement,
+function translateSvgByScreenDelta(
+  element: SVGGraphicsElement,
   deltaX: number,
   deltaY: number,
 ): boolean {
-  const matrix = text.getScreenCTM();
-  if (!matrix || typeof text.getBoundingClientRect !== "function") return false;
+  const matrix = element.getScreenCTM();
+  if (!matrix || typeof element.getBoundingClientRect !== "function")
+    return false;
   try {
     const inverse = matrix.inverse();
-    const box = text.getBoundingClientRect();
+    const box = element.getBoundingClientRect();
     const centerX = box.x + box.width / 2;
     const centerY = box.y + box.height / 2;
-    const origin = text.ownerSVGElement?.createSVGPoint();
+    const origin = element.ownerSVGElement?.createSVGPoint();
     if (!origin) return false;
     origin.x = centerX;
     origin.y = centerY;
@@ -631,14 +729,121 @@ function translateTextByScreenDelta(
     const localX = shifted.x - target.x;
     const localY = shifted.y - target.y;
     if (!Number.isFinite(localX) || !Number.isFinite(localY)) return false;
-    const transform = text.getAttribute("transform")?.trim();
-    text.setAttribute(
+    const transform = element.getAttribute("transform")?.trim();
+    element.setAttribute(
       "transform",
       `${transform ? `${transform} ` : ""}translate(${localX} ${localY})`,
     );
     return true;
   } catch {
     return false;
+  }
+}
+
+/** Move ER relationship labels only when their rendered boxes cover a marker. */
+function separateErRelationshipLabels(
+  svg: SVGElement,
+  root: ParentNode,
+  ownerDocument: Document,
+): void {
+  const labels = Array.from(svg.querySelectorAll<SVGGElement>(".edgeLabel"));
+  if (!labels.length) return;
+  const measuringHost = ownerDocument.createElement("div");
+  const diagram = ownerDocument.createElement("div");
+  measuringHost.className = "markdown-body mm-document-content";
+  diagram.className = "mm-mermaid";
+  const rootElement = root as Element;
+  const width =
+    typeof (rootElement as HTMLElement).getBoundingClientRect === "function"
+      ? (rootElement as HTMLElement).getBoundingClientRect().width
+      : 0;
+  const viewportWidth = Math.max(
+    320,
+    width || ownerDocument.documentElement?.clientWidth || 1024,
+  );
+  measuringHost.style.cssText =
+    `position:fixed;left:-100000px;top:0;width:${viewportWidth}px;` +
+    "visibility:hidden;pointer-events:none;";
+  measuringHost.setAttribute("aria-hidden", "true");
+  measuringHost.append(diagram);
+  diagram.append(svg);
+  ownerDocument.body?.append(measuringHost);
+  try {
+    const svgRoot = svg as SVGSVGElement;
+    const rootScreenMatrix = svgRoot.getScreenCTM();
+    if (!rootScreenMatrix) return;
+    const relations = Array.from(
+      svg.querySelectorAll<SVGPathElement>("path.relationshipLine"),
+    );
+    const markerRects = relations.flatMap((relation) =>
+      (["start", "end"] as const)
+        .map((side) => markerScreenRect(svg, relation, side))
+        .filter((rect): rect is SvgScreenRect => Boolean(rect))
+        .map((rect) => screenRectInSvgCoordinates(svgRoot, rect))
+        .filter((rect): rect is SvgScreenRect => Boolean(rect)),
+    );
+    const viewBox = svgRoot.viewBox.baseVal;
+    const svgBounds = {
+      x: viewBox.x,
+      y: viewBox.y,
+      width: viewBox.width,
+      height: viewBox.height,
+    };
+    const fontSize =
+      Number.parseFloat(
+        ownerDocument.defaultView?.getComputedStyle(svg).fontSize ?? "",
+      ) || 14;
+    const scale = Math.hypot(rootScreenMatrix.a, rootScreenMatrix.b) || 1;
+    const gap = Math.max(2, fontSize * 0.12) / scale;
+    for (const label of labels) {
+      const rect = label.getBoundingClientRect();
+      const screenBox = {
+        x: rect.x,
+        y: rect.y,
+        width: rect.width,
+        height: rect.height,
+      };
+      const labelBox = screenRectInSvgCoordinates(svgRoot, screenBox);
+      if (!labelBox) continue;
+      if (!labelBox.width || !labelBox.height) continue;
+      const overlappingMarkers = markerRects.filter((marker) =>
+        rectsOverlap(labelBox, marker),
+      );
+      if (!overlappingMarkers.length) continue;
+      const moves = overlappingMarkers.flatMap((marker) => [
+        { x: marker.x - labelBox.x - labelBox.width - gap, y: 0 },
+        { x: marker.x + marker.width - labelBox.x + gap, y: 0 },
+        { x: 0, y: marker.y - labelBox.y - labelBox.height - gap },
+        { x: 0, y: marker.y + marker.height - labelBox.y + gap },
+      ]);
+      moves.sort(
+        (left, right) =>
+          Math.hypot(left.x, left.y) - Math.hypot(right.x, right.y),
+      );
+      const move = moves.find((candidate) => {
+        const shifted = {
+          ...labelBox,
+          x: labelBox.x + candidate.x,
+          y: labelBox.y + candidate.y,
+        };
+        const insideSvg =
+          shifted.x >= svgBounds.x &&
+          shifted.y >= svgBounds.y &&
+          shifted.x + shifted.width <= svgBounds.x + svgBounds.width &&
+          shifted.y + shifted.height <= svgBounds.y + svgBounds.height;
+        return (
+          insideSvg &&
+          !markerRects.some((marker) => rectsOverlap(shifted, marker))
+        );
+      });
+      if (move) {
+        const screenDelta = svgDeltaToScreen(svgRoot, move.x, move.y);
+        if (screenDelta)
+          translateSvgByScreenDelta(label, screenDelta.x, screenDelta.y);
+      }
+    }
+  } finally {
+    measuringHost.remove();
   }
 }
 
@@ -760,7 +965,7 @@ function separateClassDiagramTerminalLabels(
           })
         );
       });
-      if (move) translateTextByScreenDelta(label, move.x, move.y);
+      if (move) translateSvgByScreenDelta(label, move.x, move.y);
     }
   } finally {
     measuringHost.remove();
@@ -926,6 +1131,17 @@ function normalizeErSvg(svg: SVGElement, palette: MermaidPalette): void {
     setImportantStyle(marker, "stroke", palette.line);
     setImportantStyle(marker, "stroke-width", "1px");
   }
+  for (const marker of Array.from(
+    svg.querySelectorAll<SVGMarkerElement>("marker.er"),
+  )) {
+    const direction = /(Start|End)$/.exec(marker.id)?.[1];
+    const width = Number.parseFloat(marker.getAttribute("markerWidth") ?? "");
+    if (!direction || !Number.isFinite(width) || width <= 0) continue;
+    // Mermaid 11's oneOrMore and zeroOrMore markers use centered reference
+    // points. Pin each glyph to the entity-facing edge so the complete symbol
+    // remains on the relationship side of its entity endpoint.
+    marker.setAttribute("refX", direction === "Start" ? "0" : String(width));
+  }
   for (const label of Array.from(
     svg.querySelectorAll<SVGGElement>(".edgeLabel"),
   )) {
@@ -952,14 +1168,14 @@ function normalizePieSvg(svg: SVGElement, palette: MermaidPalette): void {
   const pathCategories = paths.map((path, index) =>
     pieCategoryForPath(path, index, colors.chart),
   );
+  const sliceColors = paths.map(
+    (_, index) => colors.chart[pathCategories[index]!]!,
+  );
+  const separatorColor = pieSeparatorColor(sliceColors, palette);
   paths.forEach((path, index) => {
-    const color = colors.chart[pathCategories[index]!]!;
+    const color = sliceColors[index]!;
     setImportantStyle(path, "fill", color);
-    setImportantStyle(
-      path,
-      "stroke",
-      mermaidTextColorForBackground(color, palette.line, 3),
-    );
+    setImportantStyle(path, "stroke", separatorColor);
     setImportantStyle(path, "stroke-width", "2px");
     setImportantStyle(path, "opacity", "1");
   });
@@ -989,6 +1205,11 @@ function normalizePieSvg(svg: SVGElement, palette: MermaidPalette): void {
     setImportantStyle(circle, "fill", "none");
     setImportantStyle(circle, "stroke", palette.line);
     setImportantStyle(circle, "stroke-width", "2px");
+    if (
+      paths.length > 0 &&
+      paths.every((path) => path.parentElement === circle.parentElement)
+    )
+      circle.parentElement?.append(circle);
   }
   const legendRows = Array.from(svg.querySelectorAll<SVGGElement>(".legend"));
   legendRows.forEach((legend, index) => {
@@ -1011,6 +1232,41 @@ function normalizePieSvg(svg: SVGElement, palette: MermaidPalette): void {
     setImportantStyle(text, "fill", palette.foreground);
     setImportantStyle(text, "color", palette.foreground);
   }
+}
+
+function pieSeparatorColor(
+  sliceColors: readonly string[],
+  palette: MermaidPalette,
+): string {
+  const candidates = [
+    palette.background,
+    palette.foreground,
+    "#000000",
+    "#ffffff",
+  ].filter(
+    (candidate, index, all) =>
+      all.findIndex(
+        (other) =>
+          other.trim().toLowerCase() === candidate.trim().toLowerCase(),
+      ) === index,
+  );
+  const distinctCandidates = candidates.filter(
+    (candidate) => mermaidContrastRatio(candidate, palette.line) > 1.1,
+  );
+  const rankedCandidates = distinctCandidates.length
+    ? distinctCandidates
+    : candidates;
+  if (!sliceColors.length) return rankedCandidates[0] ?? palette.background;
+
+  return rankedCandidates.reduce((best, candidate) => {
+    const minimumContrast = Math.min(
+      ...sliceColors.map((fill) => mermaidContrastRatio(candidate, fill)),
+    );
+    const bestContrast = Math.min(
+      ...sliceColors.map((fill) => mermaidContrastRatio(best, fill)),
+    );
+    return minimumContrast > bestContrast ? candidate : best;
+  });
 }
 
 function normalizeTimelineSvg(svg: SVGElement, palette: MermaidPalette): void {
@@ -1082,6 +1338,17 @@ function sectionIndex(element: Element, prefix: string): number | undefined {
 
 function normalizeMindmapSvg(svg: SVGElement, palette: MermaidPalette): void {
   if (svg.getAttribute("aria-roledescription") !== "mindmap") return;
+  const edgeLayer = svg.querySelector<SVGGElement>("g.edgePaths");
+  const nodeLayer = svg.querySelector<SVGGElement>("g.nodes");
+  if (
+    edgeLayer?.parentElement &&
+    nodeLayer &&
+    edgeLayer.parentElement === nodeLayer.parentElement &&
+    Array.from(edgeLayer.parentElement.children).indexOf(nodeLayer) <
+      Array.from(edgeLayer.parentElement.children).indexOf(edgeLayer)
+  )
+    edgeLayer.parentElement.insertBefore(nodeLayer, edgeLayer.nextSibling);
+
   const colors = mermaidDiagramColors(palette);
   const branchColor = (index: number | undefined): string =>
     index === undefined
@@ -1387,8 +1654,10 @@ function normalizeMermaidSvg(
   }
 
   const role = svg.getAttribute("aria-roledescription");
-  if (role === "er") normalizeErSvg(svg, palette);
-  else if (role === "classDiagram")
+  if (role === "er") {
+    normalizeErSvg(svg, palette);
+    separateErRelationshipLabels(svg, root, ownerDocument);
+  } else if (role === "classDiagram")
     normalizeClassDiagramSvg(svg, palette, root, ownerDocument);
   else if (role === "pie") normalizePieSvg(svg, palette);
   else if (role === "timeline") normalizeTimelineSvg(svg, palette);

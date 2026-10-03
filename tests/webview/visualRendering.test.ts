@@ -593,6 +593,111 @@ describe("local Mermaid rendering lifecycle", () => {
     enhancer.dispose();
   });
 
+  it("anchors ER cardinality markers at the outside edge of their entity", async () => {
+    const markerKinds = [
+      ["onlyOne", 18],
+      ["zeroOrOne", 30],
+      ["oneOrMore", 45],
+      ["zeroOrMore", 57],
+    ] as const;
+    const markers = markerKinds
+      .flatMap(([kind, width]) =>
+        (["Start", "End"] as const).map((side) => {
+          const initialRefX =
+            side === "Start"
+              ? kind === "oneOrMore" || kind === "zeroOrMore"
+                ? width / 2
+                : 0
+              : kind === "oneOrMore"
+                ? 27
+                : width;
+          return (
+            `<marker id="er-${kind}${side}" class="marker er ${kind}" ` +
+            `refX="${initialRefX}" markerWidth="${width}" ` +
+            'markerHeight="36" orient="auto"><circle /><path /></marker>'
+          );
+        }),
+      )
+      .join("");
+    const runtime: MermaidRuntime = {
+      render: () => `<svg aria-roledescription="er">${markers}</svg>`,
+    };
+    (globalThis as Record<string, unknown>).markdownMintMermaid = runtime;
+    const element = diagram("erDiagram\nA ||--o{ B");
+    const enhancer = enhanceRenderedContent(document.body);
+    await flush();
+
+    const svg = element.querySelector<SVGElement>("svg")!;
+    const markerElements = Array.from(
+      svg.querySelectorAll<SVGMarkerElement>("marker.er"),
+    );
+    expect(markerElements).toHaveLength(8);
+    for (const marker of markerElements) {
+      const width = Number(marker.getAttribute("markerWidth"));
+      expect(marker.getAttribute("refX")).toBe(
+        marker.id.endsWith("Start") ? "0" : String(width),
+      );
+      expect(marker.getAttribute("orient")).toBe("auto");
+      expect(marker.querySelector("path")?.style.strokeWidth).toBe("1px");
+    }
+    enhancer.dispose();
+  });
+
+  it("paints Mindmap connectors beneath their node surfaces", async () => {
+    const runtime: MermaidRuntime = {
+      render: () =>
+        '<svg aria-roledescription="mindmap">' +
+        '<g class="nodes"><g class="mindmap-node section-root section--1">' +
+        '<circle class="node-bkg" /><text>Ideas</text></g></g>' +
+        '<g class="edgePaths"><path class="edge section-edge-0 edge-depth-1" /></g>' +
+        "</svg>",
+    };
+    (globalThis as Record<string, unknown>).markdownMintMermaid = runtime;
+    const element = diagram("mindmap\nroot((Ideas))");
+    const enhancer = enhanceRenderedContent(document.body);
+    await flush();
+
+    const svg = element.querySelector<SVGElement>("svg")!;
+    const edgeLayer = svg.querySelector("g.edgePaths")!;
+    const nodeLayer = svg.querySelector("g.nodes")!;
+    expect(edgeLayer.parentElement).toBe(nodeLayer.parentElement);
+    expect(
+      Array.from(edgeLayer.parentElement!.children).indexOf(edgeLayer),
+    ).toBeLessThan(
+      Array.from(edgeLayer.parentElement!.children).indexOf(nodeLayer),
+    );
+    enhancer.dispose();
+  });
+
+  it("uses one Pie separator color while retaining the separate outer ring", async () => {
+    const runtime: MermaidRuntime = {
+      render: () =>
+        '<svg aria-roledescription="pie">' +
+        '<circle class="pieOuterCircle" />' +
+        '<path class="pieCircle" fill="#0969da" />' +
+        '<path class="pieCircle" fill="#bc4c00" />' +
+        '<path class="pieCircle" fill="#1a7f37" />' +
+        "</svg>",
+    };
+    (globalThis as Record<string, unknown>).markdownMintMermaid = runtime;
+    const element = diagram('pie\n    "A": 50\n    "B": 30\n    "C": 20');
+    const enhancer = enhanceRenderedContent(document.body);
+    await flush();
+
+    const svg = element.querySelector<SVGElement>("svg")!;
+    const slices = Array.from(
+      svg.querySelectorAll<SVGPathElement>(".pieCircle"),
+    );
+    const separator = slices[0]?.style.stroke;
+    expect(separator).not.toBe("");
+    expect(new Set(slices.map((slice) => slice.style.stroke)).size).toBe(1);
+    const outer = svg.querySelector<SVGCircleElement>(".pieOuterCircle")!;
+    expect(outer.style.stroke).not.toBe(separator);
+    expect(new Set(slices.map((slice) => slice.style.fill)).size).toBe(3);
+    expect(Array.from(svg.children).at(-1)).toBe(outer);
+    enhancer.dispose();
+  });
+
   it("normalizes Gantt state colors and inside/outside label alignment", async () => {
     const calls: Array<Record<string, unknown>> = [];
     const runtime: MermaidRuntime = {

@@ -535,7 +535,12 @@ async function assertVisibleStrokes(locator, selector, backdrop, label) {
   }
 }
 
-async function assertErPresentation(locator, backdrop, label) {
+async function assertErPresentation(
+  locator,
+  backdrop,
+  label,
+  { requireRows = true } = {},
+) {
   await assertTextContrast(
     locator,
     ".label text, .edgeLabel text",
@@ -547,10 +552,11 @@ async function assertErPresentation(locator, backdrop, label) {
     odd: svg.querySelectorAll(".row-rect-odd > path:first-child").length,
     even: svg.querySelectorAll(".row-rect-even > path:first-child").length,
   }));
-  assert.ok(
-    rowCounts.odd > 0 && rowCounts.even > 0,
-    `${label}: missing ER row fills`,
-  );
+  if (requireRows)
+    assert.ok(
+      rowCounts.odd > 0 && rowCounts.even > 0,
+      `${label}: missing ER row fills`,
+    );
   const connectorGeometry = await locator
     .locator('svg[aria-roledescription="er"]')
     .evaluate((svg) => {
@@ -592,10 +598,27 @@ async function assertErPresentation(locator, backdrop, label) {
               marker.getAttribute("markerHeight"),
             );
             const units = marker.getAttribute("markerUnits") || "strokeWidth";
-            const scale =
-              units === "strokeWidth"
-                ? Number.parseFloat(style.strokeWidth)
+            const viewBox = (marker.getAttribute("viewBox") ?? "")
+              .trim()
+              .split(/[ ,]+/)
+              .map(Number);
+            const viewBoxWidth = viewBox[2];
+            const viewBoxHeight = viewBox[3];
+            const viewBoxScale =
+              Number.isFinite(viewBoxWidth) &&
+              Number.isFinite(viewBoxHeight) &&
+              viewBoxWidth > 0 &&
+              viewBoxHeight > 0
+                ? Math.min(
+                    markerWidth / viewBoxWidth,
+                    markerHeight / viewBoxHeight,
+                  )
                 : 1;
+            const scale =
+              viewBoxScale *
+              (units === "strokeWidth"
+                ? Number.parseFloat(style.strokeWidth)
+                : 1);
             const point = line.getPointAtLength(side === "start" ? 0 : total);
             const nearby = line.getPointAtLength(
               side === "start"
@@ -648,10 +671,16 @@ async function assertErPresentation(locator, backdrop, label) {
                 id,
                 side,
                 units,
+                orient: marker.getAttribute("orient"),
+                refX,
                 markerWidth,
                 markerHeight,
                 lineStrokeWidth: Number.parseFloat(style.strokeWidth),
                 shapes,
+                endpoint: (() => {
+                  const screen = point.matrixTransform(line.getScreenCTM());
+                  return { x: screen.x, y: screen.y };
+                })(),
                 screenBox: screenBox(bounds),
               },
             ];
@@ -676,7 +705,23 @@ async function assertErPresentation(locator, backdrop, label) {
           },
         };
       });
-      return { fontSize, lines, labels };
+      const entities = Array.from(
+        svg.querySelectorAll(".node.default"),
+        (entity) => {
+          const bounds = entity.getBoundingClientRect();
+          return {
+            label:
+              entity.querySelector(".label.name")?.textContent.trim() ?? "",
+            screenBox: {
+              x: bounds.x,
+              y: bounds.y,
+              width: bounds.width,
+              height: bounds.height,
+            },
+          };
+        },
+      );
+      return { fontSize, lines, labels, entities };
     });
   assert.ok(
     connectorGeometry.lines.length > 0,
@@ -698,6 +743,16 @@ async function assertErPresentation(locator, backdrop, label) {
     `${label}: ER cardinality markers are missing`,
   );
   for (const marker of markerInstances) {
+    assert.equal(
+      marker.orient,
+      "auto",
+      `${label}: ER markers must follow each relationship endpoint`,
+    );
+    assert.equal(
+      marker.refX,
+      marker.side === "start" ? 0 : marker.markerWidth,
+      `${label}: ER marker must stay outside its entity endpoint`,
+    );
     assert.equal(
       marker.units,
       "strokeWidth",
@@ -721,6 +776,42 @@ async function assertErPresentation(locator, backdrop, label) {
         `${label}: ER crowfoot symbol is unexpectedly large relative to entity text`,
       );
     }
+    const endpointEntity = connectorGeometry.entities
+      .map((entity) => {
+        const box = entity.screenBox;
+        const dx = Math.max(
+          box.x - marker.endpoint.x,
+          0,
+          marker.endpoint.x - (box.x + box.width),
+        );
+        const dy = Math.max(
+          box.y - marker.endpoint.y,
+          0,
+          marker.endpoint.y - (box.y + box.height),
+        );
+        return { entity, distance: Math.hypot(dx, dy) };
+      })
+      .sort((left, right) => left.distance - right.distance)[0]?.entity;
+    assert.ok(
+      endpointEntity,
+      `${label}: marker ${marker.id} has no endpoint entity`,
+    );
+    const entityBox = endpointEntity.screenBox;
+    const markerBox = marker.screenBox;
+    const overlapWidth = Math.max(
+      0,
+      Math.min(markerBox.x + markerBox.width, entityBox.x + entityBox.width) -
+        Math.max(markerBox.x, entityBox.x),
+    );
+    const overlapHeight = Math.max(
+      0,
+      Math.min(markerBox.y + markerBox.height, entityBox.y + entityBox.height) -
+        Math.max(markerBox.y, entityBox.y),
+    );
+    assert.ok(
+      overlapWidth <= 0.75 || overlapHeight <= 0.75,
+      `${label}: ER marker ${marker.id} overlaps entity ${endpointEntity.label}`,
+    );
   }
   for (const edgeLabel of connectorGeometry.labels) {
     if (!edgeLabel.text) continue;
@@ -741,20 +832,21 @@ async function assertErPresentation(locator, backdrop, label) {
     for (const marker of nearestLine.markerInstances) {
       const labelBox = edgeLabel.screenBox;
       const markerBox = marker.screenBox;
-      const gapX = Math.max(
+      const overlapWidth = Math.max(
         0,
-        markerBox.x - (labelBox.x + labelBox.width),
-        labelBox.x - (markerBox.x + markerBox.width),
+        Math.min(markerBox.x + markerBox.width, labelBox.x + labelBox.width) -
+          Math.max(markerBox.x, labelBox.x),
       );
-      const gapY = Math.max(
+      const overlapHeight = Math.max(
         0,
-        markerBox.y - (labelBox.y + labelBox.height),
-        labelBox.y - (markerBox.y + markerBox.height),
+        Math.min(markerBox.y + markerBox.height, labelBox.y + labelBox.height) -
+          Math.max(markerBox.y, labelBox.y),
       );
-      const gap = Math.hypot(gapX, gapY);
       assert.ok(
-        gap >= 1,
-        `${label}: ER label ${edgeLabel.text} is within ${gap.toFixed(1)}px of its ${marker.id} marker`,
+        overlapWidth <= 0.75 || overlapHeight <= 0.75,
+        `${label}: ER label ${edgeLabel.text} overlaps its ${marker.id} marker ` +
+          `(${overlapWidth.toFixed(2)}x${overlapHeight.toFixed(2)} CSS px; ` +
+          `${JSON.stringify({ labelBox, markerBox, endpoint: marker.endpoint, shapes: marker.shapes })})`,
       );
     }
   }
@@ -1165,6 +1257,21 @@ async function assertPiePresentation(locator, backdrop, label) {
         };
       }),
       swatches: swatches.map((element) => getComputedStyle(element).fill),
+      outer: (() => {
+        const circle = svg.querySelector(".pieOuterCircle");
+        if (!circle) return null;
+        const style = getComputedStyle(circle);
+        return {
+          stroke: style.stroke,
+          strokeWidth: Number.parseFloat(style.strokeWidth),
+          afterSectors: paths.every((path) =>
+            Boolean(
+              path.compareDocumentPosition(circle) &
+              Node.DOCUMENT_POSITION_FOLLOWING,
+            ),
+          ),
+        };
+      })(),
       slices: svg.querySelectorAll("text.slice").length,
       title: svg.querySelectorAll(".pieTitleText").length,
     };
@@ -1188,6 +1295,34 @@ async function assertPiePresentation(locator, backdrop, label) {
     presentation.swatches.length,
     3,
     `${label}: expected three legend swatches`,
+  );
+  assert.ok(presentation.outer, `${label}: Pie outer ring is missing`);
+  assert.ok(
+    presentation.outer.strokeWidth >= 1.5,
+    `${label}: Pie outer ring is too thin`,
+  );
+  assert.ok(
+    contrastRatio(presentation.outer.stroke, backdrop) >= 3,
+    `${label}: Pie outer ring is hard to distinguish from the diagram backdrop`,
+  );
+  assert.notEqual(
+    presentation.outer.stroke,
+    "none",
+    `${label}: Pie outer ring has no stroke`,
+  );
+  assert.ok(
+    presentation.outer.afterSectors,
+    `${label}: Pie outer ring must paint over the sector arcs`,
+  );
+  assert.equal(
+    new Set(presentation.paths.map((path) => path.stroke)).size,
+    1,
+    `${label}: Pie sector separators should share one color`,
+  );
+  assert.notEqual(
+    presentation.paths[0].stroke,
+    presentation.outer.stroke,
+    `${label}: Pie sector separators and outer ring should remain distinct`,
   );
   for (const path of presentation.paths) {
     assert.notEqual(path.fill, "none", `${label}: sector has no fill`);
@@ -1304,7 +1439,10 @@ async function assertMindmapPresentation(
             shape: shape
               ? {
                   tag: shape.tagName.toLowerCase(),
+                  classes: shape.getAttribute("class"),
                   fill: getComputedStyle(shape).fill,
+                  fillOpacity: Number(getComputedStyle(shape).fillOpacity),
+                  opacity: Number(getComputedStyle(shape).opacity),
                   stroke: getComputedStyle(shape).stroke,
                   box: box(shape),
                   screenBox: screenBox(shape),
@@ -1331,6 +1469,14 @@ async function assertMindmapPresentation(
           box: box(edge),
         };
       });
+      const nodeLayer = svg.querySelector("g.nodes");
+      const edgeLayer = svg.querySelector("g.edgePaths");
+      const layerOrder =
+        nodeLayer &&
+        edgeLayer &&
+        nodeLayer.parentElement === edgeLayer.parentElement
+          ? Array.from(nodeLayer.parentElement.children)
+          : [];
       const viewBox = svg.getAttribute("viewBox").split(/[ ,]+/).map(Number);
       return {
         role: svg.getAttribute("aria-roledescription"),
@@ -1338,6 +1484,8 @@ async function assertMindmapPresentation(
         screenBox: screenBox(svg),
         nodes,
         edges,
+        nodeLayerAfterEdgeLayer:
+          layerOrder.indexOf(nodeLayer) > layerOrder.indexOf(edgeLayer),
         optionalLabels: svg.querySelectorAll(".mindmap-node-label").length,
       };
     });
@@ -1352,6 +1500,10 @@ async function assertMindmapPresentation(
     presentation.edges.length,
     expectedEdges,
     label + ": branch geometry changed",
+  );
+  assert.ok(
+    presentation.nodeLayerAfterEdgeLayer,
+    label + ": branch paths must paint beneath node surfaces",
   );
   assert.ok(
     presentation.nodes.every((node) => node.shape?.box.width > 0),
@@ -1380,6 +1532,13 @@ async function assertMindmapPresentation(
     label + ": root surface lost precedence over its branch palette",
   );
   assert.equal(root.shape.tag, "circle", label + ": center node shape changed");
+  assert.ok(
+    root.shape.fill !== "none" &&
+      root.shape.fill !== "transparent" &&
+      root.shape.fillOpacity > 0.99 &&
+      root.shape.opacity > 0.99,
+    label + ": center node must have an opaque paint surface over its branches",
+  );
   assert.equal(
     root.text.anchor,
     "middle",
@@ -3416,7 +3575,12 @@ async function themeChecks(page) {
     "docs/screenshots/issue-141",
   );
   await mkdir(presentationDirectory, { recursive: true });
-  const screenshotIds = new Set(["mindmap-basic", "gantt-project"]);
+  const screenshotIds = new Set([
+    "mindmap-basic",
+    "gantt-project",
+    "er-order",
+    "pie-composition",
+  ]);
   const templates = getMermaidTemplates();
   assert.equal(templates.length, 13, "visual registry expects 13 templates");
   assert.equal(
@@ -3896,13 +4060,65 @@ async function complexDiagramInputChecks(page, templates, buildSource) {
     "    }",
   ].join("\n");
   await erInput.fill(erSource);
-  const erPreview = await preview(page);
+  let erPreview = await preview(page);
   await visibleLabels(
     erPreview,
     ["Primary key", "Display name"],
     "ER comments",
   );
   await assertErPresentation(erPreview, themeCases[0].backdrop, "ER comments");
+
+  const erMarkerVariants = [
+    "erDiagram",
+    "    A ||--|| B : alpha",
+    "    C o|--o| D : beta",
+    "    E |{--|{ F : gamma",
+    "    G }o--o{ H : delta",
+    ..."ABCDEFGH"
+      .split("")
+      .flatMap((entity) => [`    ${entity} {`, "        int id PK", "    }"]),
+  ].join("\n");
+  await erInput.fill(erMarkerVariants);
+  for (const [themeIndex, theme] of themeCases.entries()) {
+    if (themeIndex > 0) {
+      await applyTheme(page, theme);
+      // Re-enter the current source to ensure the preview has rendered with
+      // the selected palette even when a test page's document observer is
+      // unavailable.
+      await erInput.fill(`${erMarkerVariants}\n`);
+    }
+    erPreview = await preview(page);
+    await assertErPresentation(
+      erPreview,
+      theme.backdrop,
+      `all ER marker variants in ${theme.id}`,
+      { requireRows: false },
+    );
+  }
+  const markerKinds = await erPreview
+    .locator("svg marker.er")
+    .evaluateAll((markers) =>
+      markers.map(
+        (marker) =>
+          marker.id.match(
+            /-(onlyOne|zeroOrOne|oneOrMore|zeroOrMore)(Start|End)$/,
+          )?.[0],
+      ),
+    );
+  assert.deepEqual(
+    new Set(markerKinds.filter(Boolean)),
+    new Set([
+      "-onlyOneStart",
+      "-onlyOneEnd",
+      "-zeroOrOneStart",
+      "-zeroOrOneEnd",
+      "-oneOrMoreStart",
+      "-oneOrMoreEnd",
+      "-zeroOrMoreStart",
+      "-zeroOrMoreEnd",
+    ]),
+    "all ER start/end cardinality marker types must be rendered",
+  );
 
   await load(page);
   await applyTheme(page, themeCases[0]);

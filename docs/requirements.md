@@ -329,6 +329,59 @@ acceleration or a hardware-independent budget:
 | Ordinary document runtime requests |          0 |         0 |
 | First-use runtime requests         |          1 |         1 |
 
+The 2026-10-04 visual follow-up keeps version 0.8.0. A native VS Code
+safeprobe showed the Mindmap Project circle did not reliably paint above its
+orange connector. The role-gated Mindmap normalizer now places `g.nodes`
+immediately after `g.edgePaths` when they share a parent and the renderer
+returns the opposite order; the generated path geometry and node positions are
+unchanged. A unit regression constructs that reversed layer order, while the
+browser presentation assertion requires edge paths behind the node layer and
+an opaque center surface. The current Gantt implementation required no further
+source change; its existing fixture still checks task bars, statuses, dates,
+sections, milestone shape, and the today marker.
+
+The earlier ER clearance measurement above predates the cardinality endpoint
+anchoring correction. After the correction, the same `USER ||--o{ ORDER :
+places` source exposed an 18×14 CSS px overlap between the relationship label
+and the zero-or-more end marker. The renderer now measures all marker shapes in
+SVG coordinates and moves only an actually colliding `.edgeLabel` by the
+shortest available in-viewBox translation. The regression covers the eight
+marker kinds and Light, Dark, High Contrast, and High Contrast Light; no fixed
+label offset or relationship-layout change is applied.
+
+Pie sectors now share one separator paint selected against every slice fill,
+while the outer ring is painted last with the theme line color. The browser
+assertion requires at least 3:1 outer-ring contrast against the actual page
+backdrop and verifies the ring remains distinct from the internal separators
+in all four themes. The Pie source, sector fills, and label placement are
+unchanged.
+
+The current bundled-runtime browser suite passed all 13 templates and 16
+variants across four live themes, plus candidate, code-edit, insertion,
+existing-diagram re-edit, dedicated Preview, and native-preview checks. The
+four Mindmap, Gantt, ER, and Pie screenshots for each theme in
+`docs/screenshots/issue-141/` were opened and visually inspected; the orange
+Mindmap connector ends at the Project circle edge, ER labels clear their
+cardinality markers, and Pie separators and outer ring remain distinct.
+Before-fix Light/Dark Mindmap and Gantt captures remain alongside the corrected
+images. The in-session native UI check also confirmed Escape closes the
+candidate picker without changing the open safeprobe. A native after-change
+screenshot was not captured: restarting the Extension Host would close the
+user's open custom editors, and the isolated `npm run test:extension` host
+exited with `SIGABRT` before producing results.
+
+Final checks on 2026-10-04 passed `npm run compile`, `npm test` (1,341 tests /
+64 files), `npm run lint` (zero errors; 94 existing warnings), and
+`npm run format:check`; the full Mermaid browser suite passed, as did
+`npm run test:browser:blocks` for all five required Markdown fixtures in Rich,
+dedicated Preview, and native Preview. HTML export reported zero CSP
+violations; PDF export produced 334,167 bytes and 13 A4 pages. `npm run
+package` produced and verified the 0.8.0 VSIX (76 files; 4,642,227 bytes).
+The one requested `npm run test:extension` attempt ended with `SIGABRT` and was
+not retried. The live PR base and current `origin/main` both resolve to
+`f6ad692c4d1b10e56afaaeeba7a99c5e3bb137b7`, which is an ancestor of this PR
+branch. No version bump, release, tag, or workflow was run.
+
 ## Quality requirements
 
 | Requirement                            | Implementation                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
