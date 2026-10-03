@@ -27,6 +27,115 @@ system IME candidate UI remains unverified.
 | Q03 webview security                   | Webviews use a nonce-based strict CSP, bounded `localResourceRoots`, safe image/link rendering, bounded message fields, and no arbitrary command or filesystem bridge.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | Q04 profile and resource limits        | Markdown sources are capped at two million UTF-16 code units, clipboard matrices are capped at 10,000 cells with whole-paste rejection, spreadsheet TSV/HTML payloads reuse the shared clipboard text bound, and final spreadsheet serialization is checked before commit. Operation ids and resource URLs are bounded, and relative local images resolve through scoped webview resources.                                                                                                                                                                                                                                                                                                                                        |
 
+## Issue #142 Copilot prose suggestions (0.8.0)
+
+The Rich Editor can request one short continuation at the end of a paragraph,
+heading, or list-item paragraph. `markdownMint.aiSuggestions.trigger` and
+`.selectModel` target the active, ready editor panel, restore focus after the
+Command Palette/model picker, and use a fresh synchronized cursor snapshot.
+No default shortcut or toolbar toggle is added. User-only, application-scoped
+`markdownMint.aiSuggestions.autoTrigger` defaults to false; `.model` defaults
+to an empty ID. Workspace overrides cannot enable sending or choose a model.
+
+Only an actual host command can initiate model selection/consent and mint a
+single-use, expiring manual invocation. Startup, configuration changes, input
+timers, and provider events never enumerate models or prompt. A saved model ID
+requires a manual resume after restart. This deliberately avoids promising a
+silent restoration path that the
+[public Language Model API guide](https://code.visualstudio.com/api/extension-guides/ai/language-model)
+does not guarantee. Automatic sends require the real access-information API to
+return true immediately before sending. Permission revocation and model-list
+changes invalidate in-flight and visible suggestions without selecting a
+replacement. Missing APIs/models disable only AI; `engines.vscode` remains
+`^1.90.0`. Restricted Mode keeps ordinary editing enabled and blocks AI;
+workspace-defined PDF executable paths are also restricted there.
+
+Context extraction reads the current PM document only after the debounce or
+manual request. It reads at most 64 nearby block/container nodes, skips table,
+raw, code, and custom editor subtrees, and bounds inline reads. Limits are
+4,000/1,000/512 UTF-16 units for preceding prose, following prose, and a nearby
+heading, with a 6,000-unit total ceiling. The host counts both fixed
+instructions and quoted JSON context with the chosen model's tokenizer,
+reducing context to at most 4,096 input tokens and the model's limit. Output
+is plain text: at most 240 Unicode code points, or 80 for headings. English
+leading spaces and surrogate pairs survive; controls, multiline output,
+HTML, code fences, and obvious explanatory responses are rejected.
+
+Ordinary typing and IME commits start a 1,000ms debounce. Paste, programmatic
+edits, suggestion acceptance, selection, history, initialization, and ACKs do
+not start another generation. ACKs may complete an already-waiting input
+generation. Host-wide intervals are 2,000ms automatic / 1,000ms manual, with
+at most 12 sends per rolling minute, including cancelled sends. Requests have
+a 15-second deadline; transient failure suppresses automatic sends for 30
+seconds and provider blocking suppresses sends for 60 seconds. Timers do not
+retry a failed or dismissed context. Manual failures receive normalized short
+messages; automatic failures stay quiet. Model waits never enter the document
+edit/save queue. Cancellation/deadline settle locally even if a provider
+ignores its token, and token sources, timers, and iterators are released.
+A new ordinary input can recheck an expired blocking window; the host still
+checks actual access and the cooldown before any send.
+
+Candidates live in a `Decoration.widget` and controller/plugin memory, with
+`textContent`, `contenteditable=false`, nonselectable/pointer-free styles,
+theme variables, and a single polite accessibility announcement. Showing or
+dismissing one produces no document change, dirty state, serialization, edit
+request, recovery write, or history entry. The host explicitly reports panel
+deactivation, so a retained iframe cannot revive a candidate after switching
+panels even if blur is missed. Request/session/document/version/revision/
+settings/position/target/focus checks run again before display and acceptance.
+IME composition, 229 events, and the immediate composition-end window keep
+Tab/Escape priority. Tab inserts a single normal transaction with prose marks
+and no inherited link/code attributes. The existing SyncController starts
+that edit only from an acknowledged base; subsequent input queues separately.
+
+Verification on 2026-10-03:
+
+- `npm run compile`, `npm test` (60 files / 1,370 tests), `npm run lint`
+  (0 errors; 94 existing warnings), and `npm run format:check` passed.
+- Unit tests cover authorization and unsupported API behavior, application
+  configuration, protocol bounds, forged/reused/expired invocations, token
+  fitting, Unicode, bounded context, cancellation, timeout, late/erroring
+  streams, request caps, stale snapshots, IME keys, manual operation while
+  auto is off, host panel deactivation, and independent edit/save progress.
+- `npm run test:browser:ai` uses the production wire validators and a fake
+  provider. Real Chromium keyboard input verifies display-only integrity,
+  Tab/Escape, copied/cut text excluding an unaccepted candidate, ordinary
+  typing debounce, target exclusions, wrapping in Light/Dark/High Contrast,
+  and preview exclusion. Screenshots and a report are written to
+  `output/playwright/ai-suggestions/`.
+- The installed VS Code **1.138.0** native acceptance uses the production
+  host, controller, SyncController, WorkspaceEdit, and resource Undo/Redo
+  with a fake model/panel transport. It verifies unchanged native text/version
+  while a candidate is shown, one accepted edit, Undo removing only the
+  candidate, Redo restoring it, and a separate subsequent-input history entry.
+- The existing browser block suite passed all five required fixtures on Rich
+  Editor, Dedicated Preview, and the native-preview cascade (15 combinations).
+  Source snapshots, including HTML/PDF export inputs, contain no ghost data.
+- `npm run benchmark:ai-suggestions` measured debounce-time context extraction
+  on macOS arm64 / Node 24.5.0, with 1,000 samples after warmup per scenario.
+  The five required fixtures had p50 0.002–0.004ms and p95 0.002–0.009ms;
+  5,000 prose blocks had p50 0.002ms / p95 0.004ms, and a 2,000-row table had
+  p50/p95 below 0.001ms because its subtree is skipped. Short English/Japanese
+  scenarios are included. `output/benchmarks/ai-suggestions/context.json`
+  records sample counts, input/context sizes and percentiles. These are local
+  extraction measurements; parsing, editing/rendering, debounce, model latency,
+  tokens and Copilot usage are excluded. No production diagnostics are added.
+- HTML export's Chromium smoke check and PDF export's 13-page A4/raster
+  regression passed. `npm run package` created and verified the 0.8.0 VSIX.
+
+Real Copilot requests are **not** part of any automatic suite. The isolated
+native host has no signed-in Copilot model. Actual model selection/consent,
+Japanese/English generation quality, restart/revocation provider UI, Copilot
+versions, request/token counts and p50/p95 response latency remain explicit
+manual acceptance work. No real-provider speed or usage measurements are
+claimed. Live VS Code 1.90, OS Japanese IME candidate windows, native Command
+Palette/Quick Pick focus, screen-reader pronunciation, and zoom/scroll visual
+inspection also remain manual checks. API-absent behavior is covered with
+fakes; screenshot/browser composition evidence does not establish those
+native observations. Candidates/prompts are never logged or persisted in
+production. Provider usage, content exclusion, repository context, and custom
+instructions are described as boundaries in both English/Japanese READMEs.
+
 ## Issue #131 standalone HTML export (0.6.0)
 
 The toolbar's **Export** button and the `Markdown Mint: Export as HTML`

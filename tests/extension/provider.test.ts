@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import MarkdownIt from "markdown-it";
 import { isHostMessage } from "../../src/shared/protocol";
+import type { AiSuggestionsEnvironment } from "../../src/extension/aiSuggestions";
 
 const vscode = vi.hoisted(() => {
   type Listener = (...args: never[]) => void;
@@ -884,7 +885,12 @@ const pdfMocks = vi.hoisted(() => {
   };
 });
 
-vi.mock("vscode", () => vscode);
+vi.mock("vscode", () => ({
+  ...vscode,
+  lm: undefined,
+  LanguageModelChatMessage: undefined,
+  CancellationTokenSource: undefined,
+}));
 vi.mock("../../src/extension/export/browserDiscovery", () => ({
   PdfBrowserExecutableNotFoundError: pdfMocks.PdfBrowserExecutableNotFoundError,
   resolvePdfBrowserExecutable: pdfMocks.resolvePdfBrowserExecutable,
@@ -898,6 +904,129 @@ const {
   extendMarkdownIt,
   webviewContentSecurityPolicy,
 } = await import("../../src/extension/extension");
+
+it("does not put model communication into the document edit/save queue", async () => {
+  vscode.__state.reset();
+  const { panel, document } = vscode.__state;
+  let modelId = "";
+  let sends = 0;
+  let cancelled = false;
+  const response = deferred<never>();
+  const model = {
+    id: "fake",
+    name: "Fake Copilot",
+    vendor: "copilot",
+    maxInputTokens: 4096,
+    countTokens: async () => 20,
+    sendRequest: () => {
+      sends += 1;
+      return response.promise;
+    },
+  };
+  const environment: AiSuggestionsEnvironment = {
+    supported: () => true,
+    trusted: () => true,
+    settings: () => ({ autoTrigger: false, model: modelId }),
+    saveModel: async (id) => {
+      modelId = id;
+    },
+    models: async () => [model],
+    access: () => true,
+    choose: async () => model,
+    explain: async () => true,
+    notify: () => undefined,
+    user: (text) => ({ role: 1, content: [{ value: text }] }) as never,
+    tokenSource: () =>
+      ({
+        token: {
+          get isCancellationRequested() {
+            return cancelled;
+          },
+        },
+        cancel: () => {
+          cancelled = true;
+        },
+        dispose: () => undefined,
+      }) as never,
+  };
+  const provider = new MarkdownMintEditorProvider(
+    context() as never,
+    environment,
+  );
+  await provider.resolveCustomTextEditor(
+    document as never,
+    panel as never,
+    {} as never,
+  );
+  panel.webview.receive({ protocolVersion: 1, type: "ready" });
+  await provider.triggerAiSuggestion();
+  const state = panel.webview.messages
+    .filter(
+      (message) =>
+        isHostMessage(message) && message.type === "ai-suggestion-state",
+    )
+    .at(-1);
+  const trigger = panel.webview.messages
+    .filter(
+      (message) =>
+        isHostMessage(message) && message.type === "ai-suggestion-trigger",
+    )
+    .at(-1);
+  if (
+    !isHostMessage(state) ||
+    state.type !== "ai-suggestion-state" ||
+    !isHostMessage(trigger) ||
+    trigger.type !== "ai-suggestion-trigger"
+  )
+    throw Error("AI command did not publish state and invocation");
+  panel.webview.receive({
+    protocolVersion: 1,
+    type: "ai-suggestion-request",
+    requestId: "held-ai",
+    sessionId: state.sessionId,
+    documentId: document.uri.toString(),
+    baseVersion: document.version,
+    editorRevision: 1,
+    settingsGeneration: state.settingsGeneration,
+    position: 11,
+    targetKind: "heading",
+    trigger: "manual",
+    invocationId: trigger.invocationId,
+    context: { before: "Original", after: "", heading: "" },
+  });
+  await waitForCondition(() => sends === 1, "held fake model request");
+  panel.webview.receive({
+    protocolVersion: 1,
+    type: "edit",
+    baseVersion: document.version,
+    operationId: "edit-during-ai",
+    markdown: "# Edited during AI",
+  });
+  await waitForCondition(
+    () => document.getText() === "# Edited during AI",
+    "edit while model promise is unresolved",
+  );
+  panel.webview.receive({
+    protocolVersion: 1,
+    type: "save",
+    baseVersion: document.version,
+    operationId: "save-during-ai",
+  });
+  await waitForCondition(
+    () =>
+      panel.webview.messages.some(
+        (message) =>
+          isHostMessage(message) &&
+          message.type === "save-result" &&
+          message.operationId === "save-during-ai" &&
+          message.saved,
+      ),
+    "save while model promise is unresolved",
+  );
+  expect(cancelled).toBe(true);
+  expect(document.isDirty).toBe(false);
+  provider.dispose();
+});
 
 function context(): {
   extensionUri: unknown;
