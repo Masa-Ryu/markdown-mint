@@ -40,6 +40,10 @@ and selected code open directly in the code editor. Replacing the current code
 requires confirmation; only **Insert diagram** or **Update diagram** changes
 your Markdown.
 
+Pressing **Escape** follows the dialog's Cancel behavior: a clean draft closes,
+while an edited draft asks before discarding it. During IME composition, Escape
+cancels the composition first.
+
 ![platform-specific-demo](./docs/media/platform-specific-demo.gif)
 
 ## More built-in features

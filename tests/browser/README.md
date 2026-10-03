@@ -112,10 +112,12 @@ and code block, KaTeX, Mermaid, GitHub Alert, footnote, Japanese, and emoji.
 Temporary browser output is removed after the run.
 
 Open `http://127.0.0.1:4173/native.html?fixture=mermaid` to run the same
-Mermaid flowchart and sequence placeholders through the native preview script.
-Its `window.__markdownMintNative.metrics().mermaid` result reports node anchors,
-viewport-coordinate center deltas, edge labels, sequence messages, and source
-preservation.
+Mermaid flowchart, sequence, ER, Pie, and Timeline placeholders through the
+native preview script. Its `window.__markdownMintNative.metrics().mermaid`
+result reports diagram counts, node anchors, viewport-coordinate center deltas,
+edge labels, sequence messages, and source preservation. The dedicated
+`test:browser:mermaid` suite checks the ER, Pie, and Timeline theme pairing in
+this fixture across four live theme changes.
 
 ## Direct table-controls regression suite
 

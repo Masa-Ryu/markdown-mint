@@ -73,7 +73,12 @@ export class MermaidDialog {
     this.picker = new MermaidTemplatePicker({
       select: (selection) => {
         if (!this.active || !this.picking) return;
-        this.preview.renderTemplate(selection.source, this.previewTarget);
+        this.preview.renderTemplate(
+          selection.template.id,
+          selection.direction,
+          selection.source,
+          this.previewTarget,
+        );
       },
     });
     this.confirmation = document.createElement("div");
@@ -195,20 +200,6 @@ export class MermaidDialog {
     this.reject();
   }
 
-  handleEscape(): boolean {
-    if (!this.active) return false;
-    if (this.imeActive) return true;
-    if (this.session.confirmation) {
-      this.reject();
-      return true;
-    }
-    if (this.picking) {
-      this.returnToCode();
-      return true;
-    }
-    return false;
-  }
-
   close(): void {
     this.active = false;
     this.picking = false;
@@ -265,7 +256,12 @@ export class MermaidDialog {
       this.options.input.value,
     );
     if (appliedTemplate)
-      this.preview.renderTemplate(appliedTemplate.source, this.previewTarget);
+      this.preview.renderTemplate(
+        appliedTemplate.id,
+        appliedTemplate.direction,
+        appliedTemplate.source,
+        this.previewTarget,
+      );
     else this.preview.setSource(this.options.input.value, this.previewTarget);
     this.options.onScreenChange(true);
     this.options.input.focus({ preventScroll: true });
@@ -383,12 +379,7 @@ export class MermaidDialog {
       return;
     }
     if (event.key === "Escape") {
-      if (
-        event.isComposing ||
-        event.keyCode === 229 ||
-        this.imeActive ||
-        this.handleEscape()
-      ) {
+      if (event.isComposing || event.keyCode === 229 || this.imeActive) {
         event.preventDefault();
         event.stopImmediatePropagation();
       }

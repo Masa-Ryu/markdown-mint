@@ -77,6 +77,37 @@ const nativeMermaidSources = [
     "    M->>P: Render",
     "    P-->>U: Preview",
   ].join("\n"),
+  [
+    "erDiagram",
+    "    USER ||--o{ ORDER : places",
+    "    ORDER }o--o{ PRODUCT : contains",
+    "    USER {",
+    "        int id PK",
+    "        string name",
+    "    }",
+    "    ORDER {",
+    "        int id PK",
+    "        string status",
+    "    }",
+    "    PRODUCT {",
+    "        int id PK",
+    "        string name",
+    "    }",
+  ].join("\n"),
+  [
+    "pie showData",
+    "    title Work allocation",
+    '    "Build" : 50',
+    '    "Test" : 30',
+    '    "Plan" : 20',
+  ].join("\n"),
+  [
+    "timeline",
+    "    title Release roadmap",
+    "    Q1 : Plan",
+    "    Q2 : Develop",
+    "    Q3 : Release",
+  ].join("\n"),
 ];
 
 function escapeHtml(value) {

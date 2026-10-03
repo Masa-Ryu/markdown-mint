@@ -56,6 +56,79 @@ const labels = {
   "pie-composition": ["Work allocation", "Build", "Test", "Plan"],
   "gitgraph-branch-merge": ["Start", "Change", "Prepare", "Merge", "feature"],
 };
+const themeCases = [
+  {
+    id: "vscode-light",
+    backdrop: "#ffffff",
+    foreground: "#1f2328",
+    accent: "#0969da",
+    charts: ["#0969da", "#bc4c00", "#1a7f37", "#cf222e", "#8250df", "#bf3989"],
+  },
+  {
+    id: "vscode-dark",
+    backdrop: "#1e1e1e",
+    foreground: "#d4d4d4",
+    accent: "#3794ff",
+    charts: ["#4fc1ff", "#ffae57", "#89d185", "#f48771", "#b180d7", "#ee9bd3"],
+  },
+  {
+    id: "vscode-high-contrast",
+    backdrop: "#000000",
+    foreground: "#ffffff",
+    accent: "#00a8ff",
+    charts: ["#75beff", "#ffb454", "#86e89a", "#ff8080", "#d2a8ff", "#ff9bd1"],
+  },
+  {
+    id: "vscode-high-contrast-light",
+    backdrop: "#ffffff",
+    foreground: "#000000",
+    accent: "#0000ee",
+    charts: ["#005fb8", "#924800", "#0f6a23", "#c74440", "#7030a0", "#a31570"],
+  },
+];
+const chartThemeVariables = [
+  "--vscode-charts-blue",
+  "--vscode-charts-orange",
+  "--vscode-charts-green",
+  "--vscode-charts-red",
+  "--vscode-charts-purple",
+  "--vscode-charts-yellow",
+];
+async function applyTheme(page, theme) {
+  await page.evaluate(
+    ({
+      id,
+      backdrop,
+      foreground,
+      accent,
+      charts,
+      surface,
+      line,
+      chartNames,
+    }) => {
+      document.documentElement.className = document.body.className = id;
+      for (const host of [document.documentElement, document.body]) {
+        host.style.setProperty("--vscode-editor-background", backdrop);
+        host.style.setProperty("--vscode-editor-foreground", foreground);
+        host.style.setProperty("--vscode-foreground", foreground);
+        host.style.setProperty(
+          "--vscode-textCodeBlock-background",
+          surface ?? backdrop,
+        );
+        host.style.setProperty("--vscode-textLink-foreground", accent);
+        host.style.setProperty(
+          "--vscode-descriptionForeground",
+          line ?? foreground,
+        );
+        host.style.setProperty("--vscode-panel-border", line ?? foreground);
+        chartNames.forEach((name, index) =>
+          host.style.setProperty(name, charts[index]),
+        );
+      }
+    },
+    { ...theme, chartNames: chartThemeVariables },
+  );
+}
 const edits = (page) =>
   page.evaluate(
     () =>
@@ -82,16 +155,49 @@ async function load(page, source = "Before", profile = "github") {
 }
 async function instrumentMermaidRuntime(page) {
   await page.evaluate(() => {
-    const stats = { renderCalls: 0, renderSources: [], instrumented: false };
+    const stats = {
+      renderCalls: 0,
+      renderSources: [],
+      renderDurations: [],
+      parseCalls: 0,
+      parseSources: [],
+      parseDurations: [],
+      instrumented: false,
+    };
     window.__markdownMintMermaidTemplateStats = stats;
     const instrument = () => {
       const runtime = window.markdownMintMermaid;
       if (!runtime || stats.instrumented) return;
       const render = runtime.render;
+      const parse = runtime.parse;
+      const timed = (durations, callback) => {
+        const started = performance.now();
+        const finish = (value) => {
+          durations.push(performance.now() - started);
+          return value;
+        };
+        try {
+          const value = callback();
+          if (value && typeof value.then === "function")
+            return value.then(finish, (error) => {
+              finish();
+              throw error;
+            });
+          return finish(value);
+        } catch (error) {
+          finish();
+          throw error;
+        }
+      };
       runtime.render = function (...args) {
         stats.renderCalls += 1;
         stats.renderSources.push(args[1]);
-        return render.apply(this, args);
+        return timed(stats.renderDurations, () => render.apply(this, args));
+      };
+      runtime.parse = function (...args) {
+        stats.parseCalls += 1;
+        stats.parseSources.push(args[0]);
+        return timed(stats.parseDurations, () => parse.apply(this, args));
       };
       stats.instrumented = true;
     };
@@ -109,6 +215,35 @@ async function mermaidRuntimeStats(page) {
       "markdown-mint-mermaid-validation-parse",
     ).length,
   }));
+}
+async function candidatePerformanceMarks(page) {
+  return page.evaluate(() =>
+    performance
+      .getEntriesByType("mark")
+      .filter((entry) =>
+        entry.name.startsWith("markdown-mint-mermaid-template-"),
+      )
+      .map((entry) => ({
+        name: entry.name,
+        startTime: entry.startTime,
+        detail: entry.detail,
+      })),
+  );
+}
+async function clearPerformanceMarks(page) {
+  await page.evaluate(() => {
+    performance.clearMarks();
+    performance.clearMeasures();
+  });
+}
+function distribution(values) {
+  const sorted = values.toSorted((first, second) => first - second);
+  const percentile = (fraction) =>
+    sorted[Math.max(0, Math.ceil(sorted.length * fraction) - 1)] ?? 0;
+  return {
+    p50: Number(percentile(0.5).toFixed(2)),
+    p95: Number(percentile(0.95).toFixed(2)),
+  };
 }
 async function open(page) {
   await page.locator('button[data-profile-feature="mermaid"]').click();
@@ -174,22 +309,343 @@ async function visibleLabels(locator, expected, label) {
   );
 }
 
-function contrastRatio(foreground, background) {
-  const luminance = (value) => {
-    const channels = value
-      .match(/^rgba?\(([^)]+)\)$/)?.[1]
-      ?.split(",")
-      .slice(0, 3)
-      .map((channel) => Number.parseFloat(channel.trim()) / 255);
-    assert.ok(channels?.length === 3, "unrecognized computed color: " + value);
-    const linear = channels.map((channel) =>
-      channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4,
-    );
+function contrastRatio(foreground, background, backdrop = "#ffffff") {
+  const parseColor = (value) => {
+    const color = value.trim().toLowerCase();
+    if (color === "black") return [0, 0, 0, 1];
+    if (color === "white") return [255, 255, 255, 1];
+    const hex = color.match(/^#([\da-f]{3}|[\da-f]{6})$/)?.[1];
+    if (hex) {
+      const expanded =
+        hex.length === 3
+          ? [...hex].map((channel) => channel + channel).join("")
+          : hex;
+      return [
+        Number.parseInt(expanded.slice(0, 2), 16),
+        Number.parseInt(expanded.slice(2, 4), 16),
+        Number.parseInt(expanded.slice(4, 6), 16),
+        1,
+      ];
+    }
+    const match = color.match(/^rgba?\(([^)]+)\)$/);
+    const values = match?.[1].split(/[\s,/]+/).filter(Boolean);
+    assert.ok(values?.length >= 3, "unrecognized computed color: " + value);
+    const channels = values.slice(0, 3).map((channel) => {
+      const parsed = Number.parseFloat(channel);
+      return channel.endsWith("%") ? (parsed / 100) * 255 : parsed;
+    });
+    const alpha = values[3]
+      ? values[3].endsWith("%")
+        ? Number.parseFloat(values[3]) / 100
+        : Number.parseFloat(values[3])
+      : 1;
+    return [...channels, Math.min(1, Math.max(0, alpha))];
+  };
+  const composite = (front, back) => {
+    const alpha = front[3] + back[3] * (1 - front[3]);
+    if (!alpha) return [0, 0, 0, 0];
+    return [0, 1, 2]
+      .map(
+        (index) =>
+          (front[index] * front[3] + back[index] * back[3] * (1 - front[3])) /
+          alpha,
+      )
+      .concat(alpha);
+  };
+  const opaqueBackdrop = composite(parseColor(backdrop), [255, 255, 255, 1]);
+  const solidBackground = composite(parseColor(background), opaqueBackdrop);
+  const solidForeground = composite(parseColor(foreground), solidBackground);
+  const luminance = (channels) => {
+    const linear = channels.slice(0, 3).map((channel) => {
+      const normalized = channel / 255;
+      return normalized <= 0.04045
+        ? normalized / 12.92
+        : ((normalized + 0.055) / 1.055) ** 2.4;
+    });
     return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2];
   };
-  const first = luminance(foreground);
-  const second = luminance(background);
+  const first = luminance(solidForeground);
+  const second = luminance(solidBackground);
   return (Math.max(first, second) + 0.05) / (Math.min(first, second) + 0.05);
+}
+
+async function assertTextContrast(
+  locator,
+  textSelector,
+  backgroundSelector,
+  backdrop,
+  label,
+) {
+  const pairs = await locator.locator("svg").evaluate(
+    (svg, { textSelector, backgroundSelector }) => {
+      const backgroundShapes = Array.from(
+        svg.querySelectorAll(backgroundSelector),
+      );
+      const result = [];
+      for (const text of Array.from(svg.querySelectorAll(textSelector))) {
+        if (!text.textContent.trim()) continue;
+        const bounds = text.getBoundingClientRect();
+        if (!bounds.width || !bounds.height) continue;
+        const pointX = bounds.left + bounds.width / 2;
+        const pointY = bounds.top + bounds.height / 2;
+        let background;
+        let backgroundArea = Infinity;
+        for (const shape of backgroundShapes) {
+          const box = shape.getBoundingClientRect();
+          const contains =
+            pointX >= box.left &&
+            pointX <= box.right &&
+            pointY >= box.top &&
+            pointY <= box.bottom;
+          const style = getComputedStyle(shape);
+          if (
+            contains &&
+            style.fill !== "none" &&
+            Number(style.fillOpacity) > 0
+          ) {
+            const area = box.width * box.height;
+            if (area < backgroundArea) {
+              backgroundArea = area;
+              background = style.fill;
+            }
+          }
+        }
+        result.push({
+          text: text.textContent.trim(),
+          foreground: getComputedStyle(text).fill,
+          background,
+        });
+      }
+      return result;
+    },
+    { textSelector, backgroundSelector },
+  );
+  assert.ok(pairs.length > 0, `${label}: no visible text pairs were measured`);
+  for (const pair of pairs) {
+    assert.ok(
+      pair.background,
+      `${label}: no rendered background under ${pair.text}`,
+    );
+    const ratio = contrastRatio(pair.foreground, pair.background, backdrop);
+    assert.ok(
+      ratio >= 4.5,
+      `${label}: ${pair.text} contrast ${ratio.toFixed(2)}:1 against ${pair.background}`,
+    );
+  }
+  return pairs;
+}
+
+async function assertExternalTextContrast(
+  locator,
+  textSelector,
+  backdrop,
+  label,
+) {
+  const texts = await locator.locator("svg").evaluate(
+    (svg, selector) =>
+      Array.from(svg.querySelectorAll(selector))
+        .filter((text) => {
+          const box = text.getBoundingClientRect();
+          return box.width > 0 && box.height > 0 && text.textContent.trim();
+        })
+        .map((text) => ({
+          text: text.textContent.trim(),
+          fill: getComputedStyle(text).fill,
+        })),
+    textSelector,
+  );
+  assert.ok(texts.length > 0, `${label}: no visible labels were measured`);
+  for (const text of texts) {
+    const ratio = contrastRatio(text.fill, backdrop);
+    assert.ok(
+      ratio >= 4.5,
+      `${label}: ${text.text} contrast ${ratio.toFixed(2)}:1 against the document background`,
+    );
+  }
+}
+
+async function assertVisibleStrokes(locator, selector, backdrop, label) {
+  const strokes = await locator.locator("svg").evaluate(
+    (svg, query) =>
+      Array.from(svg.querySelectorAll(query)).map((element) => {
+        const style = getComputedStyle(element);
+        return {
+          stroke: style.stroke,
+          width: Number.parseFloat(style.strokeWidth),
+          opacity: Number(style.strokeOpacity) * Number(style.opacity),
+        };
+      }),
+    selector,
+  );
+  assert.ok(strokes.length > 0, `${label}: expected visible diagram lines`);
+  for (const stroke of strokes) {
+    assert.notEqual(stroke.stroke, "none", `${label}: line has no stroke`);
+    assert.ok(stroke.width >= 1, `${label}: line width ${stroke.width}px`);
+    assert.ok(stroke.opacity > 0, `${label}: line is transparent`);
+    assert.ok(
+      contrastRatio(stroke.stroke, backdrop) >= 3,
+      `${label}: line contrast is below 3:1 against the document background`,
+    );
+  }
+}
+
+async function assertErPresentation(locator, backdrop, label) {
+  await assertTextContrast(
+    locator,
+    ".label text, .edgeLabel text",
+    ".outer-path > path:first-child, .row-rect-odd > path:first-child, .row-rect-even > path:first-child, .edgeLabel rect",
+    backdrop,
+    label + " ER labels",
+  );
+  const rowCounts = await locator.locator("svg").evaluate((svg) => ({
+    odd: svg.querySelectorAll(".row-rect-odd > path:first-child").length,
+    even: svg.querySelectorAll(".row-rect-even > path:first-child").length,
+  }));
+  assert.ok(
+    rowCounts.odd > 0 && rowCounts.even > 0,
+    `${label}: missing ER row fills`,
+  );
+  await assertVisibleStrokes(
+    locator,
+    ".relationshipLine, .marker.er path, .marker.er circle",
+    backdrop,
+    label + " ER connectors",
+  );
+}
+
+async function assertPiePresentation(locator, backdrop, label) {
+  const presentation = await locator.locator("svg").evaluate((svg) => {
+    const paths = Array.from(svg.querySelectorAll("path.pieCircle"));
+    const swatches = Array.from(svg.querySelectorAll(".legend rect"));
+    return {
+      paths: paths.map((path) => {
+        const style = getComputedStyle(path);
+        return {
+          fill: style.fill,
+          stroke: style.stroke,
+          strokeWidth: Number.parseFloat(style.strokeWidth),
+          opacity: Number(style.opacity),
+        };
+      }),
+      swatches: swatches.map((element) => getComputedStyle(element).fill),
+      slices: svg.querySelectorAll("text.slice").length,
+      title: svg.querySelectorAll(".pieTitleText").length,
+    };
+  });
+  assert.equal(
+    presentation.paths.length,
+    3,
+    `${label}: expected three pie sectors`,
+  );
+  assert.equal(
+    new Set(presentation.paths.map((path) => path.fill)).size,
+    3,
+    `${label}: pie sectors must have distinct fills`,
+  );
+  assert.equal(
+    presentation.slices,
+    3,
+    `${label}: expected each percentage label`,
+  );
+  assert.equal(
+    presentation.swatches.length,
+    3,
+    `${label}: expected three legend swatches`,
+  );
+  for (const path of presentation.paths) {
+    assert.notEqual(path.fill, "none", `${label}: sector has no fill`);
+    assert.notEqual(
+      path.stroke,
+      "none",
+      `${label}: sector boundary has no stroke`,
+    );
+    assert.ok(path.strokeWidth >= 1.5, `${label}: sector boundary is too thin`);
+    assert.equal(path.opacity, 1, `${label}: pie sector should be opaque`);
+    assert.ok(
+      contrastRatio(path.stroke, path.fill) >= 3,
+      `${label}: pie sector boundary is hard to distinguish`,
+    );
+  }
+  for (const swatch of presentation.swatches)
+    assert.ok(
+      presentation.paths.some((path) => path.fill === swatch),
+      `${label}: legend swatch does not match a sector`,
+    );
+  await assertTextContrast(
+    locator,
+    "text.slice",
+    "path.pieCircle",
+    backdrop,
+    label + " pie percentages",
+  );
+  await assertExternalTextContrast(
+    locator,
+    ".pieTitleText, .legend text",
+    backdrop,
+    label + " pie title and legend",
+  );
+  return presentation;
+}
+
+async function assertTimelinePresentation(
+  locator,
+  backdrop,
+  label,
+  requireCategories = true,
+) {
+  const presentation = await locator.locator("svg").evaluate((svg) => ({
+    nodes: svg.querySelectorAll(".timeline-node .node-bkg").length,
+    sections: new Set(
+      Array.from(
+        svg.querySelectorAll(".timeline-node .node-bkg"),
+        (node) => getComputedStyle(node).fill,
+      ),
+    ).size,
+  }));
+  assert.ok(presentation.nodes >= 1, `${label}: expected timeline surfaces`);
+  if (requireCategories)
+    assert.ok(
+      presentation.sections >= 2,
+      `${label}: period/event categories were not differentiated`,
+    );
+  await assertTextContrast(
+    locator,
+    ".timeline-node text, .timeline-node tspan",
+    ".timeline-node .node-bkg",
+    backdrop,
+    label + " timeline node labels",
+  );
+  await assertExternalTextContrast(
+    locator,
+    ":scope > text",
+    backdrop,
+    label + " timeline title",
+  );
+  await assertVisibleStrokes(
+    locator,
+    ".node-line-0, .node-line-1, .node-line--1, .section-edge-0, .section-edge-1, .section-edge--1, .lineWrapper line",
+    backdrop,
+    label + " timeline connectors",
+  );
+}
+
+async function assertDiagramPresentation(
+  locator,
+  id,
+  backdrop,
+  label,
+  options = {},
+) {
+  if (id === "er-order") return assertErPresentation(locator, backdrop, label);
+  if (id === "pie-composition")
+    return assertPiePresentation(locator, backdrop, label);
+  if (id === "timeline-roadmap")
+    return assertTimelinePresentation(
+      locator,
+      backdrop,
+      label,
+      options.requireTimelineCategories,
+    );
 }
 
 async function assertGitGraphPresentation(locator, label) {
@@ -595,6 +1051,7 @@ async function catalogChecks(page, templates, buildSource) {
   for (const template of templates) {
     for (const direction of template.directions ?? [undefined]) {
       await load(page);
+      await applyTheme(page, themeCases[0]);
       await instrumentMermaidRuntime(page);
       const count = await edits(page);
       const dialog = await open(page);
@@ -608,8 +1065,8 @@ async function catalogChecks(page, templates, buildSource) {
       );
       assert.equal(
         initialStats.explicitValidationParses,
-        0,
-        "opening the built-in candidate explicitly parsed Mermaid source",
+        1,
+        "the first built-in candidate should validate once without a debounce",
       );
       assert.equal(
         initialStats.renderCalls,
@@ -631,6 +1088,12 @@ async function catalogChecks(page, templates, buildSource) {
         labels[template.id],
         `${template.id} ${direction ?? ""}`,
       );
+      await assertDiagramPresentation(
+        candidatePreview,
+        template.id,
+        themeCases[0].backdrop,
+        `${template.id} candidate preview`,
+      );
       const statsAtCandidate = await mermaidRuntimeStats(page);
       const tdSource = buildSource(template.id, { direction: "TD" });
       const targetSource = buildSource(template.id, { direction });
@@ -640,10 +1103,11 @@ async function catalogChecks(page, templates, buildSource) {
           tdSource !== buildSource("flowchart-basic", { direction: "TD" }),
         ) +
         Number(targetSource !== tdSource);
+      const expectedCandidateParses = expectedCandidateRenders;
       assert.equal(
         statsAtCandidate.explicitValidationParses,
-        0,
-        `${template.id}: candidate selection explicitly parsed Mermaid source`,
+        expectedCandidateParses,
+        `${template.id}: candidate validation did not match its cache misses`,
       );
       assert.equal(
         statsAtCandidate.renderCalls,
@@ -690,11 +1154,17 @@ async function catalogChecks(page, templates, buildSource) {
       );
       const codePreview = await preview(page);
       await visibleLabels(codePreview, labels[template.id], "draft");
+      await assertDiagramPresentation(
+        codePreview,
+        template.id,
+        themeCases[0].backdrop,
+        `${template.id} applied code preview`,
+      );
       const unchangedTemplateStats = await mermaidRuntimeStats(page);
       assert.equal(
         unchangedTemplateStats.explicitValidationParses,
-        0,
-        `${template.id}: unchanged template parsed on editor entry`,
+        expectedCandidateParses,
+        `${template.id}: editor entry repeated candidate validation`,
       );
       assert.equal(
         unchangedTemplateStats.renderCalls,
@@ -716,10 +1186,11 @@ async function catalogChecks(page, templates, buildSource) {
         await page.screenshot({ path: resolve(output, "new-editor.png") });
         capturedNewEditor = true;
       }
-      const unicodeSource = (await input.inputValue()).replace(
-        labels[template.id][0],
-        "日本語ラベル",
-      );
+      const currentSource = await input.inputValue();
+      const unicodeSource =
+        template.id === "er-order"
+          ? currentSource.replaceAll("USER", "日本語ラベル")
+          : currentSource.replace(labels[template.id][0], "日本語ラベル");
       await input.fill(unicodeSource);
       assert.equal(
         await dialog.locator(".mm-mermaid-preview svg").count(),
@@ -733,7 +1204,7 @@ async function catalogChecks(page, templates, buildSource) {
       );
       assert.equal(
         (await mermaidRuntimeStats(page)).explicitValidationParses,
-        1,
+        expectedCandidateParses + 1,
         `${template.id}: user input did not use ordinary validation exactly once`,
       );
       await dialog
@@ -747,7 +1218,7 @@ async function catalogChecks(page, templates, buildSource) {
       );
       assert.equal(
         (await mermaidRuntimeStats(page)).explicitValidationParses,
-        1,
+        expectedCandidateParses + 1,
         `${template.id}: insert repeated validation for the successful snapshot`,
       );
       const markdown = await saved(page);
@@ -755,6 +1226,12 @@ async function catalogChecks(page, templates, buildSource) {
       const rendered = page.locator(".mm-rich-panel .mm-mermaid");
       await rendered.locator("svg").waitFor();
       await visibleLabels(rendered, ["日本語ラベル"], "document");
+      await assertDiagramPresentation(
+        rendered,
+        template.id,
+        themeCases[0].backdrop,
+        `${template.id} inserted document`,
+      );
       if (template.id === "gitgraph-branch-merge") {
         await assertGitGraphPresentation(rendered, "inserted document");
         await rendered.screenshot({
@@ -765,7 +1242,7 @@ async function catalogChecks(page, templates, buildSource) {
       await preview(page);
       assert.equal(
         (await mermaidRuntimeStats(page)).explicitValidationParses,
-        2,
+        expectedCandidateParses + 2,
         `${template.id}: existing source did not use ordinary validation`,
       );
       assert.equal(
@@ -780,6 +1257,12 @@ async function catalogChecks(page, templates, buildSource) {
         "Update diagram",
       );
       const reopenedPreview = await preview(page);
+      await assertDiagramPresentation(
+        reopenedPreview,
+        template.id,
+        themeCases[0].backdrop,
+        `${template.id} existing diagram editor`,
+      );
       if (template.id === "gitgraph-branch-merge") {
         await assertGitGraphPresentation(
           reopenedPreview,
@@ -818,7 +1301,7 @@ async function catalogChecks(page, templates, buildSource) {
       );
       assert.equal(
         (await mermaidRuntimeStats(page)).explicitValidationParses,
-        2,
+        expectedCandidateParses + 2,
         `${template.id}: no-op update repeated existing-source validation`,
       );
       results.push({
@@ -1059,6 +1542,18 @@ async function interactionChecks(page) {
   await expectFooter(dialog, "picker");
   await preview(page);
   await page.screenshot({ path: resolve(output, "initial-picker.png") });
+  await page.keyboard.press("Escape");
+  await page.locator(dialogSelector).waitFor({ state: "detached" });
+  assert.equal(
+    await page.locator(".mm-discard-changes-dialog").count(),
+    0,
+    "Escape from the clean initial picker should close the modal directly",
+  );
+  assert.equal(await edits(page), count);
+
+  dialog = await open(page);
+  await expectFooter(dialog, "picker");
+  await preview(page);
   let list = dialog.getByRole("listbox");
   await list.press("ArrowDown");
   assert.equal(
@@ -1126,10 +1621,20 @@ async function interactionChecks(page) {
   await preview(page);
   await page.screenshot({ path: resolve(output, "new-editor.png") });
   await page.keyboard.press("Escape");
-  await page
-    .locator(".mm-discard-changes-dialog")
-    .getByRole("button", { name: "Discard", exact: true })
-    .click();
+  const discard = page.locator(".mm-discard-changes-dialog");
+  await discard.waitFor({ state: "visible" });
+  assert.equal(
+    await dialog.isVisible(),
+    true,
+    "Escape from an unapplied Mermaid template should keep the modal behind discard confirmation",
+  );
+  await discard.getByRole("button", { name: "Discard", exact: true }).click();
+  await page.locator(dialogSelector).waitFor({ state: "detached" });
+  assert.equal(
+    await discard.count(),
+    0,
+    "discard confirmation remained after Escape cancel",
+  );
   assert.equal(await page.locator(dialogSelector).count(), 0);
   assert.equal(
     await page
@@ -1254,6 +1759,23 @@ async function interactionChecks(page) {
   );
   await page.keyboard.press("Escape");
   assert.equal(
+    await page.locator(".mm-discard-changes-dialog").isVisible(),
+    true,
+    "Escape during replacement should enter whole-modal discard handling",
+  );
+  await page
+    .locator(".mm-discard-changes-dialog")
+    .getByRole("button", { name: "Keep editing", exact: true })
+    .click();
+  assert.equal(
+    await dialog.locator(".mm-mermaid-replacement-confirmation").isVisible(),
+    true,
+    "Escape confirmation should leave the replacement prompt intact",
+  );
+  await dialog
+    .getByRole("button", { name: "Keep current code", exact: true })
+    .click();
+  assert.equal(
     await dialog.locator(".mm-mermaid-replacement-confirmation").isVisible(),
     false,
   );
@@ -1262,7 +1784,24 @@ async function interactionChecks(page) {
     true,
   );
   await page.keyboard.press("Escape");
+  assert.equal(
+    await page.locator(".mm-discard-changes-dialog").isVisible(),
+    true,
+    "Escape in the revisit picker should use the modal's dirty policy",
+  );
+  await page
+    .locator(".mm-discard-changes-dialog")
+    .getByRole("button", { name: "Keep editing", exact: true })
+    .click();
+  assert.equal(
+    await dialog.locator(".mm-mermaid-template-picker").isVisible(),
+    true,
+  );
   assert.equal(await input.inputValue(), original);
+  await dialog
+    .getByRole("button", { name: "Back to code", exact: true })
+    .click();
+  await expectFooter(dialog, "editor");
   assert.deepEqual(
     await input.evaluate((element) => [
       element.selectionStart,
@@ -1428,7 +1967,7 @@ async function inputValidationChecks(page) {
     .getByRole("button", { name: "Next: Edit code", exact: true })
     .click();
   await preview(page);
-  assert.equal((await mermaidRuntimeStats(page)).explicitValidationParses, 0);
+  assert.equal((await mermaidRuntimeStats(page)).explicitValidationParses, 1);
 
   const input = dialog.locator(sourceSelector);
   await input.fill("flowchart TD\n    A -->");
@@ -1438,7 +1977,7 @@ async function inputValidationChecks(page) {
       "invalid",
     `${dialogSelector} .mm-mermaid-preview`,
   );
-  assert.equal((await mermaidRuntimeStats(page)).explicitValidationParses, 1);
+  assert.equal((await mermaidRuntimeStats(page)).explicitValidationParses, 2);
   assert.equal(
     await dialog.getByRole("button", { name: "Insert diagram" }).isDisabled(),
     true,
@@ -1449,7 +1988,7 @@ async function inputValidationChecks(page) {
     .click();
   await dialog.locator('[data-template-id="gitgraph-branch-merge"]').click();
   await preview(page);
-  assert.equal((await mermaidRuntimeStats(page)).explicitValidationParses, 1);
+  assert.equal((await mermaidRuntimeStats(page)).explicitValidationParses, 3);
   await dialog
     .getByRole("button", { name: "Back to code", exact: true })
     .click();
@@ -1464,7 +2003,7 @@ async function inputValidationChecks(page) {
     await dialog.locator(".mm-mermaid-validation-status").textContent(),
     /Syntax error/i,
   );
-  assert.equal((await mermaidRuntimeStats(page)).explicitValidationParses, 1);
+  assert.equal((await mermaidRuntimeStats(page)).explicitValidationParses, 3);
 
   await dialog.locator("form").evaluate((form) => {
     form.dispatchEvent(
@@ -1474,7 +2013,7 @@ async function inputValidationChecks(page) {
   await page.waitForFunction(
     () =>
       performance.getEntriesByName("markdown-mint-mermaid-validation-parse")
-        .length === 2,
+        .length === 4,
   );
   assert.equal(await saved(page), before, "invalid input was inserted");
   assert.equal(await edits(page), count, "invalid input emitted an edit");
@@ -1644,35 +2183,92 @@ async function themeChecks(page) {
         .filter((entry) => entry.name.endsWith("/mermaid.js")).length,
   );
   assert.equal(requestsBefore, 0, "ordinary document loaded Mermaid");
+  await instrumentMermaidRuntime(page);
   const dialog = await open(page);
   await preview(page);
-  const themes = [
-    ["vscode-light", "#ffffff", "#1f2328", "#0969da"],
-    ["vscode-dark", "#1e1e1e", "#d4d4d4", "#3794ff"],
-    ["vscode-high-contrast", "#000000", "#ffffff", "#00a8ff"],
-    ["vscode-high-contrast-light", "#ffffff", "#000000", "#0000ee"],
-  ];
-  for (const [theme, background, foreground, accent] of themes) {
-    await page.evaluate(
-      ([name, bg, fg, link]) => {
-        document.documentElement.className = document.body.className = name;
-        for (const host of [document.documentElement, document.body]) {
-          host.style.setProperty("--vscode-editor-background", bg);
-          host.style.setProperty("--vscode-editor-foreground", fg);
-          host.style.setProperty("--vscode-foreground", fg);
-          host.style.setProperty("--vscode-textCodeBlock-background", bg);
-          host.style.setProperty("--vscode-textLink-foreground", link);
-        }
-      },
-      [theme, background, foreground, accent],
+  const presentationDirectory = resolve(
+    repository,
+    "docs/screenshots/issue-141",
+  );
+  await mkdir(presentationDirectory, { recursive: true });
+  const diagramIds = ["er-order", "pie-composition", "timeline-roadmap"];
+  for (const theme of themeCases) {
+    const previous = await mermaidRuntimeStats(page);
+    await applyTheme(page, theme);
+    await page.waitForFunction(
+      (renderCalls) =>
+        window.__markdownMintMermaidTemplateStats?.renderCalls > renderCalls,
+      previous.renderCalls,
     );
-    await visibleLabels(
-      await preview(page),
-      ["Start", "Process", "End"],
-      theme,
-    );
-    await page.screenshot({ path: resolve(output, `${theme}-picker.png`) });
+    await preview(page);
+    for (const id of diagramIds) {
+      await dialog.locator(`[data-template-id="${id}"]`).click();
+      const diagramPreview = await preview(page);
+      await visibleLabels(diagramPreview, labels[id], `${id} ${theme.id}`);
+      await assertDiagramPresentation(
+        diagramPreview,
+        id,
+        theme.backdrop,
+        `${id} candidate preview in ${theme.id}`,
+      );
+      const suffix = theme.id.replace("vscode-", "");
+      await diagramPreview.locator("svg").screenshot({
+        path: resolve(presentationDirectory, `${id}-${suffix}.png`),
+      });
+      await diagramPreview.screenshot({
+        path: resolve(output, `${id}-${suffix}.png`),
+      });
+    }
+    await page.screenshot({
+      path: resolve(output, `${theme.id}-picker.png`),
+    });
   }
+
+  const customTheme = {
+    id: "vscode-light",
+    backdrop: "#fff8e7",
+    surface: "#e0f2fe",
+    foreground: "#182230",
+    line: "#334155",
+    accent: "#1d4ed8",
+    charts: ["#6d28d9", "#c2410c", "#166534", "#b91c1c", "#075985", "#9d174d"],
+  };
+  const customThemeBefore = await mermaidRuntimeStats(page);
+  await applyTheme(page, customTheme);
+  await page.waitForFunction(
+    (renderCalls) =>
+      window.__markdownMintMermaidTemplateStats?.renderCalls > renderCalls,
+    customThemeBefore.renderCalls,
+  );
+  await preview(page);
+  for (const id of diagramIds) {
+    await dialog.locator(`[data-template-id="${id}"]`).click();
+    const diagramPreview = await preview(page);
+    await assertDiagramPresentation(
+      diagramPreview,
+      id,
+      customTheme.backdrop,
+      `${id} custom theme preview`,
+    );
+    if (id === "pie-composition") {
+      const pie = await assertPiePresentation(
+        diagramPreview,
+        customTheme.backdrop,
+        "custom theme pie",
+      );
+      assert.deepEqual(
+        new Set(pie.paths.map((path) => path.fill)),
+        new Set(
+          customTheme.charts.slice(0, 3).map((hex) => {
+            const value = hex.slice(1);
+            return `rgb(${parseInt(value.slice(0, 2), 16)}, ${parseInt(value.slice(2, 4), 16)}, ${parseInt(value.slice(4, 6), 16)})`;
+          }),
+        ),
+        "custom VS Code chart variables should color the pie sectors",
+      );
+    }
+  }
+
   await dialog
     .getByRole("button", { name: "Next: Edit code", exact: true })
     .click();
@@ -1723,19 +2319,13 @@ async function themeChecks(page) {
   );
   assert.equal(requests, 1, "first-use runtime request was not shared");
   await dialog.locator('[data-template-id="gitgraph-branch-merge"]').click();
-  for (const [theme, background, foreground, accent] of themes) {
-    await page.evaluate(
-      ([name, bg, fg, link]) => {
-        document.documentElement.className = document.body.className = name;
-        for (const host of [document.documentElement, document.body]) {
-          host.style.setProperty("--vscode-editor-background", bg);
-          host.style.setProperty("--vscode-editor-foreground", fg);
-          host.style.setProperty("--vscode-foreground", fg);
-          host.style.setProperty("--vscode-textCodeBlock-background", bg);
-          host.style.setProperty("--vscode-textLink-foreground", link);
-        }
-      },
-      [theme, background, foreground, accent],
+  for (const theme of themeCases) {
+    const previous = await mermaidRuntimeStats(page);
+    await applyTheme(page, theme);
+    await page.waitForFunction(
+      (renderCalls) =>
+        window.__markdownMintMermaidTemplateStats?.renderCalls > renderCalls,
+      previous.renderCalls,
     );
     const graphPreview = await preview(page);
     await visibleLabels(
@@ -1744,51 +2334,583 @@ async function themeChecks(page) {
       "Git graph " + theme,
     );
     await assertGitGraphPresentation(graphPreview, "Git graph " + theme);
+    const suffix = theme.id.replace("vscode-", "");
     await graphPreview.screenshot({
-      path: resolve(output, "gitgraph-" + theme + ".png"),
+      path: resolve(presentationDirectory, `gitgraph-${suffix}.png`),
+    });
+    await graphPreview.screenshot({
+      path: resolve(output, `gitgraph-${suffix}.png`),
     });
   }
   console.log(
-    "Passed Git graph in four live themes, narrow layouts, and lazy shared runtime loading",
+    "Passed ER, pie, timeline, and Git graph in live themes; captured 16 SVG screenshots and checked narrow layout and lazy runtime loading",
+  );
+}
+
+function millisecondsBetween(marks, firstName, secondName, templateId) {
+  const find = (name) =>
+    [...marks]
+      .reverse()
+      .find(
+        (mark) =>
+          mark.name === `markdown-mint-mermaid-template-${name}` &&
+          mark.detail?.templateId === templateId,
+      );
+  const first = find(firstName);
+  const second = find(secondName);
+  return first && second ? second.startTime - first.startTime : 0;
+}
+
+async function waitForCandidateFrame(
+  page,
+  templateId,
+  useAnimationFrame = false,
+) {
+  if (useAnimationFrame) {
+    await page.evaluate(
+      () => new Promise((resolve) => requestAnimationFrame(() => resolve())),
+    );
+    return;
+  }
+  await page.waitForFunction(
+    (id) =>
+      performance
+        .getEntriesByType("mark")
+        .some(
+          (entry) =>
+            entry.name === "markdown-mint-mermaid-template-next-frame" &&
+            entry.detail?.templateId === id,
+        ),
+    templateId,
+  );
+}
+
+async function measureCandidateSelectionToPaint(page, templateIds, role) {
+  return page.evaluate(
+    ({ selector, ids, expectedRole }) => {
+      const preview = document.querySelector(`${selector} .mm-mermaid-preview`);
+      if (!preview) throw new Error("Mermaid candidate preview is missing.");
+      const started = performance.now();
+      return new Promise((resolve, reject) => {
+        const observer = new MutationObserver(() => {
+          if (preview.dataset.previewState !== "rendered") return;
+          const svg = preview.querySelector("svg");
+          if (
+            !svg ||
+            (expectedRole &&
+              svg.getAttribute("aria-roledescription") !== expectedRole)
+          )
+            return;
+          observer.disconnect();
+          requestAnimationFrame(() => resolve(performance.now() - started));
+        });
+        observer.observe(preview, {
+          attributes: true,
+          childList: true,
+          subtree: true,
+        });
+        for (const id of ids) {
+          const option = document.querySelector(
+            `${selector} [data-template-id="${id}"]`,
+          );
+          if (!option) {
+            observer.disconnect();
+            reject(new Error(`Mermaid candidate ${id} is missing.`));
+            return;
+          }
+          option.click();
+        }
+      });
+    },
+    { selector: dialogSelector, ids: templateIds, expectedRole: role },
+  );
+}
+
+function templateMarkdown(templates, buildSource, ids) {
+  return ids
+    .map((id) => {
+      const template = templates.find((item) => item.id === id);
+      assert.ok(template, `missing template ${id}`);
+      return `## ${template.name}\n\n\`\`\`mermaid\n${buildSource(id)}\n\`\`\``;
+    })
+    .join("\n\n");
+}
+
+async function dedicatedPreviewChecks(page, templates, buildSource) {
+  const ids = ["er-order", "pie-composition", "timeline-roadmap"];
+  const markdown = templateMarkdown(templates, buildSource, ids);
+  await page.goto(`${baseUrl}/?mode=preview`, {
+    waitUntil: "domcontentloaded",
+  });
+  await page.waitForFunction(() => window.markdownMint?.view);
+  await applyTheme(page, themeCases[0]);
+  await page.evaluate((source) => {
+    window.__markdownMintHarness.deliverExternal(source, "github");
+  }, markdown);
+  await page.waitForFunction((count) => {
+    const diagrams = Array.from(
+      document.querySelectorAll(".mm-preview-panel .markdown-body .mm-mermaid"),
+    );
+    return (
+      diagrams.length === count &&
+      diagrams.every((diagram) => diagram.querySelector("svg"))
+    );
+  }, ids.length);
+  const diagrams = page.locator(".mm-preview-panel .markdown-body .mm-mermaid");
+  for (const [index, id] of ids.entries()) {
+    const diagram = diagrams.nth(index);
+    await visibleLabels(diagram, labels[id], `${id} dedicated preview`);
+    await assertDiagramPresentation(
+      diagram,
+      id,
+      themeCases[0].backdrop,
+      `${id} dedicated preview`,
+    );
+  }
+}
+
+async function nativePreviewChecks(page) {
+  await page.goto(`${baseUrl}/native.html?fixture=mermaid`, {
+    waitUntil: "domcontentloaded",
+  });
+  await page.waitForFunction(() => {
+    const diagrams = Array.from(
+      document.querySelectorAll(".markdown-body .mm-mermaid"),
+    );
+    return (
+      diagrams.length === 5 &&
+      diagrams.every((diagram) => diagram.querySelector("svg"))
+    );
+  });
+  for (const theme of themeCases) {
+    const before = await page
+      .locator(".markdown-body .mm-mermaid svg")
+      .evaluateAll((svgs) => svgs.map((svg) => svg.getAttribute("style")));
+    await applyTheme(page, theme);
+    await page.waitForFunction((previous) => {
+      const svgs = Array.from(
+        document.querySelectorAll(".markdown-body .mm-mermaid svg"),
+      );
+      return (
+        svgs.length === previous.length &&
+        svgs.every(
+          (svg, index) =>
+            svg.closest(".mm-mermaid")?.dataset.mmMermaidState === "rendered" &&
+            svg.getAttribute("style") !== previous[index],
+        )
+      );
+    }, before);
+    const content = page.locator(".markdown-body");
+    await assertErPresentation(
+      content.locator('.mm-mermaid:has(svg[aria-roledescription="er"])'),
+      theme.backdrop,
+      `native ER preview ${theme.id}`,
+    );
+    await assertPiePresentation(
+      content.locator('.mm-mermaid:has(svg[aria-roledescription="pie"])'),
+      theme.backdrop,
+      `native pie preview ${theme.id}`,
+    );
+    await assertTimelinePresentation(
+      content.locator('.mm-mermaid:has(svg[aria-roledescription="timeline"])'),
+      theme.backdrop,
+      `native timeline preview ${theme.id}`,
+    );
+  }
+}
+
+async function complexDiagramInputChecks(page, templates, buildSource) {
+  await load(page);
+  await applyTheme(page, themeCases[0]);
+  let dialog = await open(page);
+  await preview(page);
+  await dialog.locator('[data-template-id="er-order"]').click();
+  await dialog
+    .getByRole("button", { name: "Next: Edit code", exact: true })
+    .click();
+  const erInput = dialog.locator(sourceSelector);
+  const erSource = [
+    "erDiagram",
+    "    USER ||--o{ ORDER : places",
+    "    USER {",
+    '        int id PK "Primary key"',
+    '        string name "Display name"',
+    "    }",
+    "    ORDER {",
+    '        int id PK "Order identifier"',
+    '        string status "Current state"',
+    "    }",
+  ].join("\n");
+  await erInput.fill(erSource);
+  const erPreview = await preview(page);
+  await visibleLabels(
+    erPreview,
+    ["Primary key", "Display name"],
+    "ER comments",
+  );
+  await assertErPresentation(erPreview, themeCases[0].backdrop, "ER comments");
+
+  await load(page);
+  await applyTheme(page, themeCases[0]);
+  dialog = await open(page);
+  await preview(page);
+  await dialog.locator('[data-template-id="pie-composition"]').click();
+  await dialog
+    .getByRole("button", { name: "Next: Edit code", exact: true })
+    .click();
+  const pieInput = dialog.locator(sourceSelector);
+  const duplicateShares = [
+    "pie showData",
+    "    title Equal category shares",
+    '    "First" : 20',
+    '    "Second" : 20',
+    '    "Third" : 60',
+  ].join("\n");
+  await pieInput.fill(duplicateShares);
+  let piePreview = await preview(page);
+  const duplicatePresentation = await assertPiePresentation(
+    piePreview,
+    themeCases[0].backdrop,
+    "duplicate percentage values",
+  );
+  const percentageLabels = await piePreview
+    .locator("text.slice")
+    .allTextContents();
+  assert.ok(
+    new Set(percentageLabels).size < percentageLabels.length,
+    "the pie fixture must contain duplicate percentage labels",
+  );
+  assert.equal(duplicatePresentation.paths.length, 3);
+
+  const reorderedShares = [
+    "pie showData",
+    "    title Reordered category shares",
+    '    "First" : 60',
+    '    "Second" : 20',
+    '    "Third" : 20',
+  ].join("\n");
+  await pieInput.fill(reorderedShares);
+  piePreview = await preview(page);
+  await assertPiePresentation(
+    piePreview,
+    themeCases[0].backdrop,
+    "reordered pie values",
+  );
+
+  await load(page);
+  await applyTheme(page, themeCases[0]);
+  dialog = await open(page);
+  await preview(page);
+  await dialog.locator('[data-template-id="timeline-roadmap"]').click();
+  await dialog
+    .getByRole("button", { name: "Next: Edit code", exact: true })
+    .click();
+  const timelineSource = [
+    "timeline",
+    "    title Roadmap without sections",
+    "    2026-01 : Design",
+    "    2026-02 : Build",
+    "    2026-03 : Release",
+  ].join("\n");
+  await dialog.locator(sourceSelector).fill(timelineSource);
+  const timelinePreview = await preview(page);
+  await visibleLabels(
+    timelinePreview,
+    ["Roadmap without sections", "Design", "Build", "Release"],
+    "sectionless timeline",
+  );
+  await assertTimelinePresentation(
+    timelinePreview,
+    themeCases[0].backdrop,
+    "sectionless timeline",
+    false,
+  );
+  console.log(
+    "Passed ER key/type/comment labels, duplicate and reordered pie values, and a sectionless timeline through the validated user-input path",
   );
 }
 
 async function templatePerformanceChecks(page) {
-  await load(page);
-  await instrumentMermaidRuntime(page);
-  const firstStart = performance.now();
-  const dialog = await open(page);
-  await preview(page);
-  const firstUseAndColdCandidateMs = performance.now() - firstStart;
-  const coldStats = await mermaidRuntimeStats(page);
-  assert.equal(coldStats.explicitValidationParses, 0);
+  const baselineMode = process.env.MM_PERF_BASELINE === "1";
+  const coldPage = await browser.newPage({
+    viewport: { width: 1280, height: 900 },
+  });
+  coldPage.setDefaultTimeout(10000);
+  await load(coldPage);
+  await instrumentMermaidRuntime(coldPage);
+  await clearPerformanceMarks(coldPage);
+  const coldStarted = performance.now();
+  const coldDialog = await open(coldPage);
+  await preview(coldPage);
+  await waitForCandidateFrame(coldPage, "flowchart-basic", baselineMode);
+  const coldElapsed = performance.now() - coldStarted;
+  const coldMarks = await candidatePerformanceMarks(coldPage);
+  const coldStats = await mermaidRuntimeStats(coldPage);
+  const runtimeResource = await coldPage.evaluate(
+    () =>
+      performance
+        .getEntriesByType("resource")
+        .find((entry) => entry.name.endsWith("/mermaid.js"))?.duration ?? 0,
+  );
+  assert.equal(coldStats.explicitValidationParses, baselineMode ? 0 : 1);
   assert.equal(coldStats.renderCalls, 1);
-
-  const warmStart = performance.now();
-  await dialog.locator('[data-template-id="gitgraph-branch-merge"]').click();
-  await preview(page);
-  const warmCandidateRenderMs = performance.now() - warmStart;
-  const warmStats = await mermaidRuntimeStats(page);
-  assert.equal(warmStats.explicitValidationParses, 0);
-  assert.equal(warmStats.renderCalls, 2);
-
-  const cacheStart = performance.now();
-  await dialog.locator('[data-template-id="flowchart-basic"]').click();
-  const cachedPreview = await preview(page);
-  const cacheHitSelectionMs = performance.now() - cacheStart;
-  const cacheStats = await mermaidRuntimeStats(page);
-  assert.equal(await cachedPreview.getAttribute("data-preview-cache"), "hit");
-  assert.equal(cacheStats.explicitValidationParses, 0);
-  assert.equal(cacheStats.renderCalls, 2);
-
-  const result = {
-    firstUseAndColdCandidateMs: Number(firstUseAndColdCandidateMs.toFixed(2)),
-    warmCandidateRenderMs: Number(warmCandidateRenderMs.toFixed(2)),
-    cacheHitSelectionMs: Number(cacheHitSelectionMs.toFixed(2)),
-    explicitValidationParses: cacheStats.explicitValidationParses,
-    rendererCalls: cacheStats.renderCalls,
+  const firstUse = {
+    openToDisplayedMs: Number(coldElapsed.toFixed(2)),
+    runtimeResourceMs: Number((runtimeResource ?? 0).toFixed(2)),
+    validationMs: Number(
+      millisecondsBetween(
+        coldMarks,
+        "runtime-ready",
+        "validation-end",
+        "flowchart-basic",
+      ).toFixed(2),
+    ),
+    renderMs: Number(
+      (
+        millisecondsBetween(
+          coldMarks,
+          "render-start",
+          "render-end",
+          "flowchart-basic",
+        ) ||
+        coldStats.renderDurations[0] ||
+        0
+      ).toFixed(2),
+    ),
   };
-  console.log("Mermaid preview measurements: " + JSON.stringify(result));
+  await coldPage.close();
+
+  const warmMissSamples = [];
+  for (let index = 0; index < 20; index += 1) {
+    await load(page);
+    await applyTheme(page, themeCases[0]);
+    await instrumentMermaidRuntime(page);
+    const dialog = await open(page);
+    await preview(page);
+    await clearPerformanceMarks(page);
+    const before = await mermaidRuntimeStats(page);
+    const started = performance.now();
+    const browserDisplayMs = await measureCandidateSelectionToPaint(
+      page,
+      ["er-order"],
+      "er",
+    );
+    await preview(page);
+    const wallMs = performance.now() - started;
+    const marks = await candidatePerformanceMarks(page);
+    const after = await mermaidRuntimeStats(page);
+    assert.equal(after.parseCalls - before.parseCalls, baselineMode ? 0 : 1);
+    assert.equal(
+      await page
+        .locator(`${dialogSelector} .mm-mermaid-preview`)
+        .getAttribute("data-preview-cache"),
+      "miss",
+    );
+    const candidateRenderCalls = after.renderCalls - before.renderCalls;
+    assert.equal(candidateRenderCalls, 1);
+    warmMissSamples.push({
+      browserDisplayMs,
+      wallMs,
+      mintParseCalls:
+        after.explicitValidationParses - before.explicitValidationParses,
+      renderCalls: candidateRenderCalls,
+      selectionToRuntimeMs: millisecondsBetween(
+        marks,
+        "selected",
+        "runtime-ready",
+        "er-order",
+      ),
+      validationMs: millisecondsBetween(
+        marks,
+        "runtime-ready",
+        "validation-end",
+        "er-order",
+      ),
+      parseMs:
+        after.parseDurations.length > before.parseDurations.length
+          ? after.parseDurations.at(-1)
+          : 0,
+      renderMs:
+        millisecondsBetween(marks, "render-start", "render-end", "er-order") ||
+        after.renderDurations.at(-1),
+      rendererMs: after.renderDurations.at(-1),
+      renderToDomMs: millisecondsBetween(
+        marks,
+        "render-end",
+        "dom",
+        "er-order",
+      ),
+      selectionToDisplayMs: baselineMode
+        ? wallMs
+        : millisecondsBetween(marks, "selected", "next-frame", "er-order"),
+    });
+  }
+
+  let dialog = page.locator(dialogSelector);
+  const currentErPreview = await preview(page);
+  assert.equal(
+    await currentErPreview.getAttribute("data-preview-cache"),
+    "miss",
+  );
+  await dialog.locator('[data-template-id="flowchart-basic"]').click();
+  await preview(page);
+  await dialog.locator('[data-template-id="er-order"]').click();
+  await preview(page);
+  const hitSamples = [];
+  for (let index = 0; index < 20; index += 1) {
+    await dialog.locator('[data-template-id="flowchart-basic"]').click();
+    await preview(page);
+    await clearPerformanceMarks(page);
+    const before = await mermaidRuntimeStats(page);
+    const started = performance.now();
+    const browserDisplayMs = await measureCandidateSelectionToPaint(
+      page,
+      ["er-order"],
+      "er",
+    );
+    const cachedPreview = await preview(page);
+    const wallMs = performance.now() - started;
+    assert.equal(await cachedPreview.getAttribute("data-preview-cache"), "hit");
+    const marks = await candidatePerformanceMarks(page);
+    const after = await mermaidRuntimeStats(page);
+    assert.equal(
+      after.parseCalls,
+      before.parseCalls,
+      "cache hit parsed a candidate",
+    );
+    assert.equal(
+      after.renderCalls,
+      before.renderCalls,
+      "cache hit rendered a candidate",
+    );
+    hitSamples.push({
+      browserDisplayMs,
+      wallMs,
+      selectionToDisplayMs: baselineMode
+        ? wallMs
+        : millisecondsBetween(marks, "selected", "next-frame", "er-order"),
+      renderToDomMs: baselineMode
+        ? 0
+        : millisecondsBetween(marks, "selected", "dom", "er-order"),
+    });
+  }
+
+  const burstSamples = [];
+  for (let index = 0; index < 20; index += 1) {
+    await load(page);
+    await applyTheme(page, themeCases[0]);
+    await instrumentMermaidRuntime(page);
+    dialog = await open(page);
+    await preview(page);
+    await clearPerformanceMarks(page);
+    const before = await mermaidRuntimeStats(page);
+    const burstStarted = performance.now();
+    const browserDisplayMs = await measureCandidateSelectionToPaint(
+      page,
+      ["sequence-alternative", "state-workflow", "pie-composition"],
+      "pie",
+    );
+    await preview(page);
+    const burstWallMs = performance.now() - burstStarted;
+    const marks = await candidatePerformanceMarks(page);
+    const after = await mermaidRuntimeStats(page);
+    assert.equal(after.parseCalls - before.parseCalls, baselineMode ? 0 : 1);
+    const burstRenderCalls = after.renderCalls - before.renderCalls;
+    if (baselineMode)
+      assert.ok(
+        burstRenderCalls >= 1 && burstRenderCalls <= 2,
+        `baseline burst rendered ${burstRenderCalls} candidates`,
+      );
+    else assert.equal(burstRenderCalls, 1);
+    assert.equal(
+      await page
+        .locator(`${dialogSelector} .mm-mermaid-preview svg`)
+        .getAttribute("aria-roledescription"),
+      "pie",
+      "burst did not render the last selected candidate",
+    );
+    burstSamples.push({
+      browserDisplayMs,
+      wallMs: burstWallMs,
+      mintParseCalls:
+        after.explicitValidationParses - before.explicitValidationParses,
+      renderCalls: burstRenderCalls,
+      lastSelectionToDisplayMs: baselineMode
+        ? burstWallMs
+        : millisecondsBetween(
+            marks,
+            "selected",
+            "next-frame",
+            "pie-composition",
+          ),
+      selectionToRuntimeMs: millisecondsBetween(
+        marks,
+        "selected",
+        "runtime-ready",
+        "pie-composition",
+      ),
+      validationMs: millisecondsBetween(
+        marks,
+        "runtime-ready",
+        "validation-end",
+        "pie-composition",
+      ),
+      renderMs: millisecondsBetween(
+        marks,
+        "render-start",
+        "render-end",
+        "pie-composition",
+      ),
+      renderToDomMs: millisecondsBetween(
+        marks,
+        "render-end",
+        "dom",
+        "pie-composition",
+      ),
+    });
+  }
+
+  const summarize = (samples, key) =>
+    distribution(samples.map((sample) => sample[key] ?? 0));
+  const result = {
+    browser: await page.evaluate(() => navigator.userAgent),
+    viewport: "1280x900",
+    firstUse,
+    warmCacheMiss: {
+      samples: warmMissSamples.length,
+      mintParseCallsPerSample: summarize(warmMissSamples, "mintParseCalls"),
+      rendererCallsPerSample: summarize(warmMissSamples, "renderCalls"),
+      selectionToRuntimeMs: summarize(warmMissSamples, "selectionToRuntimeMs"),
+      validationMs: summarize(warmMissSamples, "validationMs"),
+      parseMs: summarize(warmMissSamples, "parseMs"),
+      renderMs: summarize(warmMissSamples, "renderMs"),
+      rendererMs: summarize(warmMissSamples, "rendererMs"),
+      renderToDomMs: summarize(warmMissSamples, "renderToDomMs"),
+      selectionToDisplayMs: summarize(warmMissSamples, "browserDisplayMs"),
+      playwrightRoundTripMs: summarize(warmMissSamples, "wallMs"),
+    },
+    cacheHit: {
+      samples: hitSamples.length,
+      parseCalls: 0,
+      renderCalls: 0,
+      selectionToDomMs: summarize(hitSamples, "renderToDomMs"),
+      selectionToDisplayMs: summarize(hitSamples, "browserDisplayMs"),
+      playwrightRoundTripMs: summarize(hitSamples, "wallMs"),
+    },
+    rapidLatestOnlyBurst: {
+      samples: burstSamples.length,
+      mintParseCallsPerSample: summarize(burstSamples, "mintParseCalls"),
+      rendererCallsPerSample: summarize(burstSamples, "renderCalls"),
+      selectionToDisplayMs: summarize(burstSamples, "browserDisplayMs"),
+      playwrightRoundTripMs: summarize(burstSamples, "wallMs"),
+      selectionToRuntimeMs: summarize(burstSamples, "selectionToRuntimeMs"),
+      validationMs: summarize(burstSamples, "validationMs"),
+      renderMs: summarize(burstSamples, "renderMs"),
+      renderToDomMs: summarize(burstSamples, "renderToDomMs"),
+      endToEndMs: summarize(burstSamples, "wallMs"),
+    },
+  };
+  console.log("Mermaid template performance (ms): " + JSON.stringify(result));
   return result;
 }
 
@@ -1817,7 +2939,7 @@ async function templateRuntimeValidationChecks(page, templates, buildSource) {
   for (const [index, diagramType] of detectedTypes.entries())
     assert.ok(diagramType, `bundled parser rejected template variant ${index}`);
   console.log(
-    `Validated ${detectedTypes.length} built-in sources with the packaged Mermaid runtime; candidate selection remains parse-free.`,
+    `Release-gate test parsed all ${detectedTypes.length} built-in sources with the packaged Mermaid runtime; this test is separate from interactive candidate validation.`,
   );
   assert.equal(await dialog.isVisible(), true);
 }
@@ -1895,10 +3017,22 @@ try {
     inputValidationChecks,
     guardChecks,
     themeChecks,
+    complexDiagramInputChecks,
+    dedicatedPreviewChecks,
+    nativePreviewChecks,
     templatePerformanceChecks,
   ]) {
     if (!filter || check.name.includes(filter)) {
-      const result = await check(page);
+      const result =
+        check === complexDiagramInputChecks
+          ? await check(page, getMermaidTemplates(), buildMermaidTemplateSource)
+          : check === dedicatedPreviewChecks
+            ? await check(
+                page,
+                getMermaidTemplates(),
+                buildMermaidTemplateSource,
+              )
+            : await check(page);
       if (check === templatePerformanceChecks)
         templatePreviewPerformance = result;
     }

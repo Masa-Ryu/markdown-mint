@@ -1,6 +1,14 @@
 import { mermaidThemeSignature, renderSafeMermaidSvg } from "./mermaidEnhancer";
 import {
+  buildMermaidTemplateSource,
+  getMermaidTemplate,
+  type MermaidTemplateDirection,
+} from "./mermaidTemplates";
+import {
+  ensureMermaidRuntime,
+  mermaidRuntimeVersionFromGlobal,
   normalizeMermaidSource,
+  validateMermaidSource,
   type MermaidValidationSnapshot,
 } from "./mermaidValidation";
 
@@ -12,11 +20,28 @@ interface PreviewRequest {
   readonly target: string;
   readonly kind: PreviewRenderKind;
   readonly theme: string;
+  readonly templateId?: string;
+  readonly direction?: string;
 }
 
-const MAX_TEMPLATE_CACHE_ENTRIES = 64;
+const MAX_TEMPLATE_CACHE_ENTRIES = 16;
 
-/** One running render and one latest pending render, across modal sessions. */
+function markPerformance(name: string, request: PreviewRequest): void {
+  try {
+    globalThis.performance?.mark(name, {
+      detail: {
+        templateId: request.templateId,
+        direction: request.direction,
+        target: request.target,
+        generation: request.generation,
+      },
+    });
+  } catch {
+    // Preview measurements must not affect rendering.
+  }
+}
+
+/** One running validation/render and one latest pending candidate per session. */
 export class MermaidPreview {
   readonly element: HTMLElement;
   readonly status: HTMLElement;
@@ -25,6 +50,8 @@ export class MermaidPreview {
   private target = "";
   private generation = 0;
   private renderKind: PreviewRenderKind = "validated-input";
+  private templateIdentity:
+    { templateId: string; direction?: MermaidTemplateDirection } | undefined;
   private canRender = false;
   private running = false;
   private pending: PreviewRequest | null = null;
@@ -36,6 +63,7 @@ export class MermaidPreview {
     ownerDocument: Document = document,
     private readonly render = renderSafeMermaidSvg,
     private readonly onRuntimeReady?: () => void,
+    private readonly validate = validateMermaidSource,
   ) {
     this.element = ownerDocument.createElement("section");
     this.element.className = "mm-mermaid-preview mm-document-content";
@@ -74,6 +102,7 @@ export class MermaidPreview {
     this.source = source;
     this.target = target;
     this.renderKind = "validated-input";
+    this.templateIdentity = undefined;
     ++this.generation;
     this.canRender = false;
     this.pending = null;
@@ -88,17 +117,34 @@ export class MermaidPreview {
     );
   }
 
-  /** Render an internal catalog source directly, without a validation snapshot. */
-  renderTemplate(source: string, target: string): void {
+  /** Validate and render a built-in candidate immediately through the shared queue. */
+  renderTemplate(
+    templateId: string,
+    direction: MermaidTemplateDirection | undefined,
+    source: string,
+    target: string,
+  ): void {
     if (this.disposed || !target) return;
+    const template = getMermaidTemplate(templateId);
+    if (
+      !template ||
+      (direction && !template.directions?.includes(direction)) ||
+      source !==
+        buildMermaidTemplateSource(templateId, direction ? { direction } : {})
+    )
+      return;
     this.source = source;
     this.target = target;
     this.renderKind = "built-in-template";
+    this.templateIdentity = {
+      templateId,
+      ...(direction ? { direction } : {}),
+    };
     ++this.generation;
     this.canRender = true;
     this.pending = null;
     this.diagram.replaceChildren();
-    this.enqueue();
+    this.enqueue(this.templateIdentity);
   }
 
   /** User-authored input reaches the renderer only with its current valid snapshot. */
@@ -112,6 +158,7 @@ export class MermaidPreview {
       return;
     if (snapshot.status === "valid") {
       this.renderKind = "validated-input";
+      this.templateIdentity = undefined;
       this.canRender = true;
       this.enqueue();
     } else {
@@ -140,9 +187,12 @@ export class MermaidPreview {
 
   clear(): void {
     this.target = this.source = "";
+    this.templateIdentity = undefined;
     this.canRender = false;
     ++this.generation;
     this.pending = null;
+    this.templateSvgCache.clear();
+    this.element.dataset.templateCacheEntries = "0";
     this.element.removeAttribute("data-preview-cache");
     this.diagram.replaceChildren();
     this.setStatus("empty");
@@ -156,16 +206,27 @@ export class MermaidPreview {
     this.observer.disconnect();
   }
 
-  private enqueue(): void {
+  private enqueue(
+    identity:
+      | { templateId: string; direction?: MermaidTemplateDirection }
+      | undefined = this.templateIdentity,
+  ): void {
     const request: PreviewRequest = {
       source: this.source,
       target: this.target,
       generation: this.generation,
       kind: this.renderKind,
       theme: this.currentThemeSignature(),
+      ...(identity
+        ? {
+            templateId: identity.templateId,
+            ...(identity.direction ? { direction: identity.direction } : {}),
+          }
+        : {}),
     };
     if (request.kind === "built-in-template") {
-      const key = this.cacheKey(request);
+      markPerformance("markdown-mint-mermaid-template-selected", request);
+      const key = this.cacheKey(request, mermaidRuntimeVersionFromGlobal());
       const cached = this.templateSvgCache.get(key);
       if (cached) {
         // Refresh insertion order for bounded least-recently-used eviction.
@@ -176,6 +237,8 @@ export class MermaidPreview {
           this.diagram.replaceChildren(cached.cloneNode(true));
           this.setStatus("rendered");
           this.onRuntimeReady?.();
+          markPerformance("markdown-mint-mermaid-template-dom", request);
+          this.markNextPaint(request);
         }
         return;
       }
@@ -192,13 +255,52 @@ export class MermaidPreview {
     if (!request || this.disposed) return;
     this.running = true;
     try {
+      if (request.kind === "built-in-template") {
+        const runtime = await ensureMermaidRuntime();
+        if (!this.isCurrent(request)) return;
+        if (runtime)
+          markPerformance(
+            "markdown-mint-mermaid-template-runtime-ready",
+            request,
+          );
+        const validation = await this.validate(request.source, runtime);
+        this.onRuntimeReady?.();
+        if (!this.isCurrent(request)) return;
+        markPerformance(
+          "markdown-mint-mermaid-template-validation-end",
+          request,
+        );
+        if (!validation.valid) {
+          this.diagram.replaceChildren();
+          this.setStatus(
+            validation.errorKind === "runtime" ? "unavailable" : "invalid",
+            {
+              message:
+                validation.error?.trim() ||
+                (validation.errorKind === "runtime"
+                  ? "Mermaid validator is unavailable."
+                  : "Template syntax is invalid."),
+            },
+          );
+          return;
+        }
+      }
+      if (!this.isCurrent(request)) return;
+      if (request.kind === "built-in-template")
+        markPerformance("markdown-mint-mermaid-template-render-start", request);
       const svg = await this.render(request.source, this.element);
-      this.onRuntimeReady?.();
+      if (request.kind !== "built-in-template") this.onRuntimeReady?.();
+      if (request.kind === "built-in-template")
+        markPerformance("markdown-mint-mermaid-template-render-end", request);
       if (!this.isCurrent(request)) return;
       if (request.kind === "built-in-template")
         this.rememberTemplateSvg(request, svg);
       this.diagram.replaceChildren(svg);
       this.setStatus("rendered");
+      if (request.kind === "built-in-template") {
+        markPerformance("markdown-mint-mermaid-template-dom", request);
+        this.markNextPaint(request);
+      }
     } catch (error) {
       this.onRuntimeReady?.();
       if (!this.isCurrent(request)) return;
@@ -250,12 +352,21 @@ export class MermaidPreview {
     }
   }
 
-  private cacheKey(request: PreviewRequest): string {
-    return JSON.stringify([request.source, request.theme]);
+  private cacheKey(request: PreviewRequest, runtimeVersion: string): string {
+    const ownerDocument = this.element.ownerDocument;
+    const width = ownerDocument.defaultView?.innerWidth ?? 0;
+    return JSON.stringify([
+      request.templateId,
+      request.direction ?? "",
+      request.source,
+      request.theme,
+      runtimeVersion,
+      width,
+    ]);
   }
 
   private rememberTemplateSvg(request: PreviewRequest, svg: SVGElement): void {
-    const key = this.cacheKey(request);
+    const key = this.cacheKey(request, mermaidRuntimeVersionFromGlobal());
     this.templateSvgCache.delete(key);
     this.templateSvgCache.set(key, svg.cloneNode(true) as SVGElement);
     while (this.templateSvgCache.size > MAX_TEMPLATE_CACHE_ENTRIES) {
@@ -264,6 +375,18 @@ export class MermaidPreview {
       if (oldest === undefined) break;
       this.templateSvgCache.delete(oldest);
     }
+    this.element.dataset.templateCacheEntries = String(
+      this.templateSvgCache.size,
+    );
+  }
+
+  private markNextPaint(request: PreviewRequest): void {
+    const view = this.element.ownerDocument.defaultView;
+    if (!view?.requestAnimationFrame) return;
+    view.requestAnimationFrame(() => {
+      if (this.isCurrent(request))
+        markPerformance("markdown-mint-mermaid-template-next-frame", request);
+    });
   }
 
   private setStatus(

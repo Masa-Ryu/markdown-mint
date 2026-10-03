@@ -25,6 +25,14 @@ const input = () =>
   dialog().querySelector<HTMLTextAreaElement>('[data-feature-field="body"]')!;
 const editCount = () =>
   messages.filter((message) => message.type === "edit").length;
+const escapeFrom = (target: EventTarget) =>
+  target.dispatchEvent(
+    new KeyboardEvent("keydown", {
+      key: "Escape",
+      bubbles: true,
+      cancelable: true,
+    }),
+  );
 const submit = () =>
   dialog()
     .querySelector("form")!
@@ -74,6 +82,91 @@ const open = () =>
     .click();
 
 describe("Mermaid modal integration guards", () => {
+  it("routes Escape from the clean picker through whole-modal cancellation", async () => {
+    open();
+    await settle();
+    escapeFrom(dialog().querySelector('[role="listbox"]')!);
+    expect(dialog().open).toBe(false);
+    expect(root.querySelector(".mm-discard-changes-dialog")).toBeNull();
+    expect(editCount()).toBe(0);
+  });
+
+  it("closes an unchanged existing diagram editor on Escape", async () => {
+    const templateSource =
+      "flowchart TD\n    A[Start] --> B[Process]\n    B --> C[End]";
+    app.destroy();
+    root.replaceChildren();
+    app = createEditorApp({
+      root,
+      core: { schema, parseMarkdown, renderMarkdown, serializeMarkdown },
+      vscode: {
+        postMessage: (message) => messages.push(message as { type?: string }),
+      },
+      initialDocument: {
+        markdown: "Before\n\n```mermaid\n" + templateSource + "\n```",
+        version: 1,
+        profile: "github",
+      },
+    });
+    await settle();
+    const before = editCount();
+    const diagram = root.querySelector<HTMLElement>(".mm-mermaid")!;
+    diagram.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+    expect(dialog().open).toBe(true);
+    expect(input().value).toBe(templateSource);
+    await settle();
+    escapeFrom(input());
+    expect(dialog().open).toBe(false);
+    expect(root.querySelector(".mm-discard-changes-dialog")).toBeNull();
+    expect(editCount()).toBe(before);
+  });
+
+  it("uses dirty-modal cancellation during replacement and keeps Escape from returning to another screen", async () => {
+    open();
+    button("Next: Edit code").click();
+    await settle();
+    input().value += "\n%% changed by the user";
+    input().dispatchEvent(new Event("input", { bubbles: true }));
+    await settle();
+    const draft = input().value;
+    button("← Templates").click();
+    root
+      .querySelector<HTMLElement>('[data-template-id="state-workflow"]')!
+      .click();
+    button("Next: Edit code").click();
+    expect(
+      root.querySelector<HTMLElement>(".mm-mermaid-replacement-confirmation")!
+        .hidden,
+    ).toBe(false);
+
+    escapeFrom(dialog());
+    const discard = root.querySelector<HTMLDialogElement>(
+      ".mm-discard-changes-dialog",
+    );
+    expect(discard?.open).toBe(true);
+    button("Keep editing").click();
+    expect(
+      root.querySelector<HTMLElement>(".mm-mermaid-replacement-confirmation")!
+        .hidden,
+    ).toBe(false);
+    button("Keep current code").click();
+    expect(input().value).toBe(draft);
+    expect(
+      root.querySelector<HTMLElement>(".mm-mermaid-template-picker")!.hidden,
+    ).toBe(false);
+
+    escapeFrom(dialog());
+    expect(
+      root.querySelector<HTMLDialogElement>(".mm-discard-changes-dialog")?.open,
+    ).toBe(true);
+    button("Keep editing").click();
+    expect(
+      root.querySelector<HTMLElement>(".mm-mermaid-template-picker")!.hidden,
+    ).toBe(false);
+    expect(input().value).toBe(draft);
+    expect(editCount()).toBe(0);
+  });
+
   it("keeps candidate validation separate from draft commit and dirty state", async () => {
     open();
     await settle();
@@ -245,14 +338,14 @@ describe("Mermaid modal integration guards", () => {
     open();
     button("Next: Edit code").click();
     await vi.advanceTimersByTimeAsync(0);
-    expect(parse).not.toHaveBeenCalled();
+    expect(parse).toHaveBeenCalledTimes(1);
     expect(
       root.querySelector<HTMLElement>(".mm-mermaid-validation-status")!.dataset
         .validationState,
     ).toBe("template");
     expect(button("Insert diagram").disabled).toBe(false);
     button("Insert diagram").click();
-    expect(parse).not.toHaveBeenCalled();
+    expect(parse).toHaveBeenCalledTimes(1);
     expect(editCount()).toBe(1);
     expect(dialog().open).toBe(false);
   });

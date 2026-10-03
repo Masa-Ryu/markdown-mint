@@ -9,6 +9,11 @@ import {
   normalizeMermaidSource,
   type MermaidRuntime,
 } from "./mermaidValidation";
+import {
+  mermaidDiagramColors,
+  mermaidTextColorForBackground,
+  type MermaidPalette,
+} from "./mermaidTheme";
 
 export {
   MAX_MERMAID_SOURCE_LENGTH,
@@ -38,15 +43,6 @@ function markPerformance(name: string): void {
   } catch {
     // Performance marks are diagnostic only and must never affect rendering.
   }
-}
-
-interface MermaidPalette {
-  background: string;
-  foreground: string;
-  surface: string;
-  line: string;
-  accent: string;
-  fontFamily?: string;
 }
 
 function themeHostElement(root: ParentNode, ownerDocument: Document): Element {
@@ -109,6 +105,9 @@ function mermaidPalette(
           surface: "#000000",
           line: "#ffffff",
           accent: "#00a8ff",
+          darkMode: true,
+          highContrast: true,
+          chartColors: [],
         }
       : {
           background: "#ffffff",
@@ -116,6 +115,9 @@ function mermaidPalette(
           surface: "#ffffff",
           line: "#000000",
           accent: "#0000ee",
+          darkMode: false,
+          highContrast: true,
+          chartColors: [],
         }
     : dark
       ? {
@@ -124,6 +126,9 @@ function mermaidPalette(
           surface: "#252526",
           line: "#9da5b4",
           accent: "#3794ff",
+          darkMode: true,
+          highContrast: false,
+          chartColors: [],
         }
       : {
           background: "#ffffff",
@@ -131,6 +136,9 @@ function mermaidPalette(
           surface: "#f6f8fa",
           line: "#57606a",
           accent: "#0969da",
+          darkMode: false,
+          highContrast: false,
+          chartColors: [],
         };
   if (!style) return defaults;
   const styles = [style];
@@ -172,6 +180,21 @@ function mermaidPalette(
     ["--vscode-textLink-foreground", "--vscode-focusBorder"],
     defaults.accent,
   );
+  const defaultChartColors = mermaidDiagramColors(defaults).chart;
+  const chartVariableNames = [
+    "--vscode-charts-blue",
+    "--vscode-charts-orange",
+    "--vscode-charts-green",
+    "--vscode-charts-red",
+    "--vscode-charts-purple",
+    "--vscode-charts-yellow",
+  ];
+  const chartColors = [
+    ...chartVariableNames.map((name, index) =>
+      paletteColor(styles, [name], defaultChartColors[index]!),
+    ),
+    ...defaultChartColors.slice(chartVariableNames.length),
+  ];
   const fontFamily = style.fontFamily.trim();
   return {
     background,
@@ -179,13 +202,18 @@ function mermaidPalette(
     surface,
     line,
     accent,
+    darkMode: defaults.darkMode,
+    highContrast: defaults.highContrast,
+    chartColors,
     ...(fontFamily ? { fontFamily } : {}),
   };
 }
 
 function themeVariables(palette: MermaidPalette): Record<string, unknown> {
   const { background, foreground, surface, line, accent, fontFamily } = palette;
-  return {
+  const diagramColors = mermaidDiagramColors(palette);
+  const variables: Record<string, unknown> = {
+    darkMode: palette.darkMode,
     background,
     primaryColor: surface,
     primaryTextColor: foreground,
@@ -230,20 +258,41 @@ function themeVariables(palette: MermaidPalette): Record<string, unknown> {
     transitionColor: line,
     transitionLabelColor: foreground,
     stateLabelColor: foreground,
+    rowOdd: diagramColors.rowOdd,
+    rowEven: diagramColors.rowEven,
+    pieTitleTextColor: foreground,
+    pieSectionTextColor: foreground,
+    pieLegendTextColor: foreground,
+    pieStrokeColor: line,
+    pieStrokeWidth: "2px",
+    pieOuterStrokeColor: line,
+    pieOuterStrokeWidth: "2px",
+    pieOpacity: "1",
     ...(fontFamily ? { fontFamily } : {}),
   };
+  for (let index = 0; index < 12; index += 1) {
+    const color = diagramColors.chart[index]!;
+    variables[`pie${index + 1}`] = color;
+    variables[`cScale${index}`] = color;
+    variables[`cScaleLabel${index}`] = diagramColors.chartText[index]!;
+    variables[`cScalePeer${index}`] = color;
+    variables[`cScaleInv${index}`] = line;
+    variables[`lineColor${index}`] = line;
+  }
+  return variables;
 }
 
 function initializeRuntimeTheme(
   runtime: MermaidRuntime,
   root: ParentNode,
   ownerDocument: Document,
-): void {
+): { palette: MermaidPalette; variables: Record<string, unknown> } {
   const palette = mermaidPalette(root, ownerDocument);
   const variables = themeVariables(palette);
   const signature = JSON.stringify(variables);
   const runtimeObject = runtime as object;
-  if (configuredThemes.get(runtimeObject) === signature) return;
+  if (configuredThemes.get(runtimeObject) === signature)
+    return { palette, variables };
   runtime.initialize?.({
     startOnLoad: false,
     securityLevel: "strict",
@@ -253,6 +302,7 @@ function initializeRuntimeTheme(
     themeVariables: variables,
   });
   configuredThemes.set(runtimeObject, signature);
+  return { palette, variables };
 }
 
 export function enhanceMixedTaskCheckboxes(root: ParentNode): void {
@@ -378,14 +428,329 @@ function normalizeGitGraphSvg(svg: SVGElement): void {
   }
 }
 
+function setImportantStyle(
+  element: SVGElement,
+  property: string,
+  value: string,
+): void {
+  element.style.setProperty(property, value, "important");
+}
+
+function pieCategoryForPath(
+  path: SVGPathElement,
+  index: number,
+  colors: readonly string[],
+): number {
+  const sourceColor = path.getAttribute("fill")?.trim().toLowerCase();
+  const found = sourceColor
+    ? colors.findIndex((color) => color.toLowerCase() === sourceColor)
+    : -1;
+  return found >= 0 ? found : index % colors.length;
+}
+
+function normalizedPiePaint(value: string): string | undefined {
+  const normalized = value.trim().toLowerCase();
+  const hex = /^#([\da-f]{3}|[\da-f]{6})$/i.exec(normalized)?.[1];
+  if (hex)
+    return hex.length === 3
+      ? "#" + Array.from(hex, (channel) => channel + channel).join("")
+      : "#" + hex;
+  const channels = /^rgba?\(([^)]+)\)$/
+    .exec(normalized)?.[1]
+    ?.split(/[ ,/]+/)
+    .filter(Boolean)
+    .slice(0, 3)
+    .map((channel) => Math.min(255, Math.max(0, Number.parseFloat(channel))));
+  if (!channels || channels.length !== 3 || channels.some(Number.isNaN))
+    return undefined;
+  return (
+    "#" +
+    channels
+      .map((channel) => Math.round(channel).toString(16).padStart(2, "0"))
+      .join("")
+  );
+}
+
+function pieArc(
+  path: SVGPathElement,
+): { start: number; end: number; sweep: number } | undefined {
+  const numbers =
+    /^M\s*([-+.\deE]+)[,\s]+([-+.\deE]+)A\s*[-+.\deE]+[,\s]+[-+.\deE]+[,\s]+[-+.\deE]+[,\s]+([01])[,\s]+([01])[,\s]+([-+.\deE]+)[,\s]+([-+.\deE]+)/i.exec(
+      path.getAttribute("d") ?? "",
+    );
+  if (!numbers) return undefined;
+  const startX = Number(numbers[1]);
+  const startY = Number(numbers[2]);
+  const endX = Number(numbers[5]);
+  const endY = Number(numbers[6]);
+  const start = (Math.atan2(startY, startX) * 180) / Math.PI;
+  const end = (Math.atan2(endY, endX) * 180) / Math.PI;
+  return { start, end, sweep: Number(numbers[4]) };
+}
+
+function pieLabelPosition(
+  label: SVGTextElement,
+): { x: number; y: number } | undefined {
+  const values = /translate\(\s*([-+.\deE]+)[,\s]+([-+.\deE]+)/i.exec(
+    label.getAttribute("transform") ?? "",
+  );
+  if (!values) return undefined;
+  const x = Number(values[1]);
+  const y = Number(values[2]);
+  return Number.isFinite(x) && Number.isFinite(y) ? { x, y } : undefined;
+}
+
+function pieLabelCategory(
+  label: SVGTextElement,
+  paths: readonly SVGPathElement[],
+  pathCategories: readonly number[],
+  labelIndex: number,
+): number {
+  const position = pieLabelPosition(label);
+  if (position) {
+    const angle = (Math.atan2(position.y, position.x) * 180) / Math.PI;
+    for (let index = 0; index < paths.length; index += 1) {
+      const arc = pieArc(paths[index]!);
+      if (!arc) continue;
+      const distance =
+        arc.sweep === 1
+          ? (angle - arc.start + 360) % 360
+          : (arc.start - angle + 360) % 360;
+      const size =
+        arc.sweep === 1
+          ? (arc.end - arc.start + 360) % 360
+          : (arc.start - arc.end + 360) % 360;
+      if (distance <= size + 0.5) return pathCategories[index]!;
+    }
+  }
+  return pathCategories[labelIndex % pathCategories.length] ?? 0;
+}
+
+function normalizeErSvg(svg: SVGElement, palette: MermaidPalette): void {
+  const colors = mermaidDiagramColors(palette);
+  for (const row of Array.from(
+    svg.querySelectorAll<SVGGElement>(".row-rect-odd, .row-rect-even"),
+  )) {
+    const odd = row.classList.contains("row-rect-odd");
+    const background = row.querySelector<SVGPathElement>(":scope > path");
+    if (background) {
+      setImportantStyle(
+        background,
+        "fill",
+        odd ? colors.rowOdd : colors.rowEven,
+      );
+      setImportantStyle(background, "stroke", "none");
+    }
+    for (const border of Array.from(
+      row.querySelectorAll<SVGPathElement>(":scope > path ~ path"),
+    )) {
+      setImportantStyle(border, "fill", "none");
+      setImportantStyle(border, "stroke", palette.line);
+      setImportantStyle(border, "stroke-width", "1.3px");
+    }
+  }
+  for (const outer of Array.from(
+    svg.querySelectorAll<SVGGElement>(".outer-path"),
+  )) {
+    const [background, ...borders] = Array.from(
+      outer.querySelectorAll<SVGPathElement>(":scope > path"),
+    );
+    if (background) setImportantStyle(background, "fill", palette.surface);
+    for (const border of borders) {
+      setImportantStyle(border, "fill", "none");
+      setImportantStyle(border, "stroke", palette.line);
+    }
+  }
+  for (const divider of Array.from(
+    svg.querySelectorAll<SVGGElement>(".divider"),
+  )) {
+    const [fill, ...lines] = Array.from(
+      divider.querySelectorAll<SVGPathElement>(":scope > path"),
+    );
+    if (fill) setImportantStyle(fill, "fill", palette.line);
+    for (const line of lines) {
+      setImportantStyle(line, "fill", "none");
+      setImportantStyle(line, "stroke", palette.line);
+    }
+  }
+  for (const line of Array.from(
+    svg.querySelectorAll<SVGPathElement>(".relationshipLine"),
+  )) {
+    setImportantStyle(line, "fill", "none");
+    setImportantStyle(line, "stroke", palette.line);
+    setImportantStyle(line, "stroke-width", "2px");
+  }
+  for (const marker of Array.from(
+    svg.querySelectorAll<SVGElement>(".marker.er path, .marker.er circle"),
+  )) {
+    setImportantStyle(marker, "fill", palette.surface);
+    setImportantStyle(marker, "stroke", palette.line);
+    setImportantStyle(marker, "stroke-width", "1.5px");
+  }
+  for (const label of Array.from(
+    svg.querySelectorAll<SVGGElement>(".edgeLabel"),
+  )) {
+    for (const background of Array.from(
+      label.querySelectorAll<SVGRectElement>("rect, .background"),
+    )) {
+      setImportantStyle(background, "fill", palette.surface);
+      setImportantStyle(background, "stroke", palette.line);
+    }
+    for (const text of Array.from(
+      label.querySelectorAll<SVGTextElement>("text, tspan"),
+    )) {
+      setImportantStyle(text, "fill", palette.foreground);
+      setImportantStyle(text, "color", palette.foreground);
+    }
+  }
+}
+
+function normalizePieSvg(svg: SVGElement, palette: MermaidPalette): void {
+  const colors = mermaidDiagramColors(palette);
+  const paths = Array.from(
+    svg.querySelectorAll<SVGPathElement>("path.pieCircle"),
+  );
+  const pathCategories = paths.map((path, index) =>
+    pieCategoryForPath(path, index, colors.chart),
+  );
+  paths.forEach((path, index) => {
+    const color = colors.chart[pathCategories[index]!]!;
+    setImportantStyle(path, "fill", color);
+    setImportantStyle(
+      path,
+      "stroke",
+      mermaidTextColorForBackground(color, palette.line, 3),
+    );
+    setImportantStyle(path, "stroke-width", "2px");
+    setImportantStyle(path, "opacity", "1");
+  });
+  for (const label of Array.from(
+    svg.querySelectorAll<SVGTextElement>("text.slice"),
+  )) {
+    const group = label.parentElement;
+    const groupPaths = group
+      ? Array.from(group.querySelectorAll<SVGPathElement>("path.pieCircle"))
+      : paths;
+    const categories = groupPaths.map((path, index) =>
+      pieCategoryForPath(path, index, colors.chart),
+    );
+    const category = pieLabelCategory(
+      label,
+      groupPaths,
+      categories,
+      Array.from(svg.querySelectorAll("text.slice")).indexOf(label),
+    );
+    const textColor = colors.chartText[category] ?? palette.foreground;
+    setImportantStyle(label, "fill", textColor);
+    setImportantStyle(label, "color", textColor);
+  }
+  for (const circle of Array.from(
+    svg.querySelectorAll<SVGCircleElement>(".pieOuterCircle"),
+  )) {
+    setImportantStyle(circle, "fill", "none");
+    setImportantStyle(circle, "stroke", palette.line);
+    setImportantStyle(circle, "stroke-width", "2px");
+  }
+  const legendRows = Array.from(svg.querySelectorAll<SVGGElement>(".legend"));
+  legendRows.forEach((legend, index) => {
+    const swatch = legend.querySelector<SVGRectElement>("rect");
+    if (!swatch) return;
+    const originalColor = normalizedPiePaint(swatch.style.fill);
+    const category = colors.chart.findIndex(
+      (color) => color.toLowerCase() === originalColor,
+    );
+    const fallbackCategory =
+      pathCategories[index] ?? index % colors.chart.length;
+    const color = colors.chart[category >= 0 ? category : fallbackCategory]!;
+    setImportantStyle(swatch, "fill", color);
+    setImportantStyle(swatch, "stroke", palette.line);
+    setImportantStyle(swatch, "stroke-width", "1px");
+  });
+  for (const text of Array.from(
+    svg.querySelectorAll<SVGTextElement>(".pieTitleText, .legend text"),
+  )) {
+    setImportantStyle(text, "fill", palette.foreground);
+    setImportantStyle(text, "color", palette.foreground);
+  }
+}
+
+function normalizeTimelineSvg(svg: SVGElement, palette: MermaidPalette): void {
+  const colors = mermaidDiagramColors(palette);
+  for (const node of Array.from(
+    svg.querySelectorAll<SVGGElement>(".timeline-node"),
+  )) {
+    const section = Array.from(node.classList).find((name) =>
+      /^section-(?:-?\d+)$/.test(name),
+    );
+    const sectionIndex =
+      section === "section--1"
+        ? 0
+        : section
+          ? Number(section.slice("section-".length)) + 1
+          : 0;
+    const index =
+      ((sectionIndex % colors.chart.length) + colors.chart.length) %
+      colors.chart.length;
+    const background = colors.chart[index]!;
+    const foreground = colors.chartText[index]!;
+    const border = mermaidTextColorForBackground(background, palette.line, 3);
+    for (const shape of Array.from(
+      node.querySelectorAll<SVGElement>(".node-bkg"),
+    )) {
+      setImportantStyle(shape, "fill", background);
+      setImportantStyle(shape, "stroke", border);
+      setImportantStyle(shape, "stroke-width", "1.5px");
+    }
+    for (const text of Array.from(
+      node.querySelectorAll<SVGTextElement>("text, tspan"),
+    )) {
+      setImportantStyle(text, "fill", foreground);
+      setImportantStyle(text, "color", foreground);
+    }
+  }
+  for (const connector of Array.from(
+    svg.querySelectorAll<SVGElement>(
+      "[class^='section-edge-'], [class*=' section-edge-'], [class^='node-line-'], [class*=' node-line-']",
+    ),
+  )) {
+    const shapes = connector.matches("path, line, polyline")
+      ? [connector]
+      : Array.from(
+          connector.querySelectorAll<SVGElement>("path, line, polyline"),
+        );
+    for (const shape of shapes) {
+      setImportantStyle(shape, "fill", "none");
+      setImportantStyle(shape, "stroke", palette.line);
+      setImportantStyle(shape, "stroke-width", "2px");
+    }
+  }
+  for (const axis of Array.from(
+    svg.querySelectorAll<SVGLineElement>(".lineWrapper line"),
+  )) {
+    setImportantStyle(axis, "fill", "none");
+    setImportantStyle(axis, "stroke", palette.foreground);
+    setImportantStyle(axis, "stroke-width", "1.5px");
+  }
+}
+
 /**
  * Mermaid's generated stylesheet varies between diagram types. Normalize the
  * presentation properties that otherwise fall back to SVG's black paint,
  * while leaving node surfaces and marker arrowheads to the themed document
  * stylesheet below.
  */
-function normalizeMermaidSvg(svg: SVGElement): void {
+function normalizeMermaidSvg(svg: SVGElement, palette: MermaidPalette): void {
+  const diagramColors = mermaidDiagramColors(palette);
   svg.style.setProperty("background", "transparent", "important");
+  svg.style.setProperty("--mm-mermaid-row-odd", diagramColors.rowOdd);
+  svg.style.setProperty("--mm-mermaid-row-even", diagramColors.rowEven);
+  diagramColors.chart.forEach((color, index) => {
+    svg.style.setProperty(`--mm-mermaid-chart-${index}`, color);
+    svg.style.setProperty(
+      `--mm-mermaid-chart-text-${index}`,
+      diagramColors.chartText[index]!,
+    );
+  });
   normalizeGitGraphSvg(svg);
 
   for (const background of Array.from(
@@ -413,6 +778,11 @@ function normalizeMermaidSvg(svg: SVGElement): void {
     );
     background.style.setProperty("stroke", "none", "important");
   }
+
+  const role = svg.getAttribute("aria-roledescription");
+  if (role === "er") normalizeErSvg(svg, palette);
+  else if (role === "pie") normalizePieSvg(svg, palette);
+  else if (role === "timeline") normalizeTimelineSvg(svg, palette);
 }
 
 function asSvgMarkup(value: string | { svg?: string }): string | undefined {
@@ -435,14 +805,14 @@ export async function renderSafeMermaidSvg(
   const resolved = runtime ?? (await ensureMermaidRuntime());
   if (!resolved) throw new Error("Mermaid renderer is unavailable offline.");
   const render = renderTail.then(async () => {
-    initializeRuntimeTheme(resolved, root, ownerDocument);
+    const { palette } = initializeRuntimeTheme(resolved, root, ownerDocument);
     const id = "mm-mermaid-" + String(++nextMermaidId);
     try {
       const result = await resolved.render(id, normalizeMermaidSource(source));
       const markup = asSvgMarkup(result);
       const svg = markup ? sanitizeSvg(markup, ownerDocument) : null;
       if (!svg) throw new Error("Mermaid output was rejected.");
-      normalizeMermaidSvg(svg);
+      normalizeMermaidSvg(svg, palette);
       return svg;
     } finally {
       // Mermaid may leave its measuring/error container behind on rejection.
@@ -558,12 +928,54 @@ export function enhanceRenderedContent(
   >();
   const activeElements = new Set<HTMLElement>();
   const retryElements = new Set<HTMLElement>();
+  let themeObserver: MutationObserver | undefined;
+  let observedThemeSignature = "";
   const observer =
     typeof MutationObserver !== "undefined" &&
     typeof Node !== "undefined" &&
     root instanceof Node
       ? new MutationObserver(() => scheduleScan())
       : undefined;
+
+  const observeThemeChanges = (): void => {
+    if (
+      themeObserver ||
+      !ownerDocument ||
+      typeof MutationObserver === "undefined"
+    )
+      return;
+    observedThemeSignature = mermaidThemeSignature(root);
+    themeObserver = new MutationObserver(() => {
+      if (disposed) return;
+      const signature = mermaidThemeSignature(root);
+      if (signature === observedThemeSignature) return;
+      observedThemeSignature = signature;
+      const candidates = Array.from(
+        root.querySelectorAll<HTMLElement>(MERMAID_SELECTOR),
+      );
+      const rootElement = root as Element;
+      if (
+        typeof rootElement.matches === "function" &&
+        rootElement.matches(MERMAID_SELECTOR)
+      )
+        candidates.unshift(rootElement as HTMLElement);
+      for (const element of candidates)
+        if (element.dataset.mmMermaidState === "rendered" || jobs.has(element))
+          void renderElement(element, true);
+    });
+    const attributes = [
+      "class",
+      "style",
+      "data-vscode-theme-id",
+      "data-vscode-theme-kind",
+    ];
+    for (const element of [ownerDocument.documentElement, ownerDocument.body])
+      if (element)
+        themeObserver.observe(element, {
+          attributes: true,
+          attributeFilter: attributes,
+        });
+  };
 
   const finishFailure = (
     element: HTMLElement,
@@ -616,6 +1028,7 @@ export function enhanceRenderedContent(
     activeElements.add(element);
     retryElements.delete(element);
     element.dataset.mmMermaidState = "rendering";
+    observeThemeChanges();
     if (!firstMermaidUseMarked) {
       firstMermaidUseMarked = true;
       markPerformance(MERMAID_FIRST_USE_START_MARK);
@@ -719,6 +1132,7 @@ export function enhanceRenderedContent(
       if (disposed) return;
       disposed = true;
       observer?.disconnect();
+      themeObserver?.disconnect();
       releaseFragmentDelegation?.();
       codeBlockControls.dispose();
       ownerDocument?.defaultView?.removeEventListener(

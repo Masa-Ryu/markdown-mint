@@ -50,29 +50,44 @@ confirmation, while identical source is a no-op. The opening dirty baseline is
 never recaptured during template changes, and navigation snapshots disappear
 on close. Template selection has no separate undo action; ordinary document
 undo/redo continues to handle committed Markdown edits.
-Escape closes one layer (replacement confirmation, picker, then the normal
-modal cancellation policy). Listbox arrows select; Home and End jump to the
-first and last templates. Navigation at an already selected boundary is a
-no-op, and only the template list scrolls to reveal a keyboard selection.
-Enter/Space do not apply a candidate. Submit shortcuts and composition events
-cannot commit from the picker or replacement confirmation. Escape returns from
-the picker to the editor, and another Escape uses the normal modal cancellation
-policy.
+Escape is the Mermaid modal's whole-dialog Cancel action. It closes a clean
+draft and uses the existing discard confirmation for a changed draft, including
+when replacement confirmation is open. Only **Keep current code** rejects a
+replacement request. Escape during IME composition cancels the composition
+without closing the modal. Escape in the discard dialog keeps that dialog's
+existing local behavior and does not also cancel its parent. Listbox arrows
+select; Home and End jump to the first and last templates. Navigation at an
+already selected boundary is a no-op, and only the template list scrolls to
+reveal a keyboard selection. Enter/Space do not apply a candidate. Submit
+shortcuts and composition events cannot commit from the picker or replacement
+confirmation.
 
-Draft validation uses the existing 300ms controller and 200,000-character
-limit. Candidate validation uses the same controller separately and cannot
-enable Insert/Update. Checking and rendering clear stale SVG and expose progress
-through `aria-busy` without status text. Empty, invalid, and unavailable states
-show actionable messages and remove stale SVG immediately. A render failure is
-reported separately without changing a valid syntax result or blocking an
-otherwise valid commit. Preview rendering keeps one running request and one
-latest pending request, compares generation,
-source, session and visible target, and invalidates results on live theme
-changes or closure. The document and modal share `renderSafeMermaidSvg()` for
-source normalization, strict initialization, palette, sanitation, and SVG
-normalization. No new parser, external service, renderer, cache, or persistent
-template metadata is introduced. Saved output is ordinary Mermaid fenced
-source, and only Insert/Update uses the existing document transaction path.
+User-authored drafts keep the existing 300ms debounced validation and
+200,000-character limit. A built-in candidate enters its own immediate,
+bounded validation-and-render queue: there is one running request and one
+latest pending candidate, and an outdated validation is stopped before render
+when possible. Cache misses use the existing `validateMermaidSource()` and
+`renderSafeMermaidSvg()`; cache hits run neither. Candidate validation never
+enables Insert/Update. Applying an internal template records its id, direction,
+and exact source only in the open modal session. Insert/Update may skip the
+extra user-input validation only while that exact applied source remains
+unchanged; any input event returns the draft to normal validation. Merely
+browsing a candidate, existing Mermaid, and selected text do not get this
+exception.
+
+Successfully rendered candidates use a session-only LRU cache capped at the 16
+built-in template variants. Its key includes template id, direction, exact
+source, theme signature, bundled runtime version, and viewport width. It stores
+only sanitized, normalized SVG clones; stale, failed, and old-theme results are
+not retained, and closing the modal clears the cache. Checking and rendering
+clear stale SVG and expose progress through `aria-busy` without status text.
+Empty, invalid, and unavailable states show actionable messages and remove stale
+SVG immediately. A render failure is reported separately from syntax
+validation. Preview work compares generation, source, session, theme, and
+visible target. The document and modal share `renderSafeMermaidSvg()` for source
+normalization, strict initialization, palette, sanitation, and SVG
+normalization. Saved output remains ordinary Mermaid fenced source, and only
+Insert/Update uses the existing document transaction path.
 
 The unit suite includes catalog, picker navigation boundaries and list-only
 scrolling, replacement session, preview queue and status accessibility, and
@@ -87,6 +102,17 @@ themes and a 380×640 viewport. It also checks that boundary navigation does not
 restart preview work, progress is conveyed through `aria-busy`, and list
 navigation does not move the dialog or page. No external template requests
 occur.
+
+The ER, Pie, and Timeline assertions inspect rendered SVG text against the
+actual fill under each text position, including ER alternating rows and
+relationship labels, Pie category swatches and arc-matched percentage labels,
+and Timeline event surfaces and connectors. They run in the candidate picker,
+code editor, inserted document, existing-diagram editor, dedicated Preview, and
+native preview. The four VS Code theme classes and custom chart variables are
+covered; duplicate Pie values, reordered sectors, commented ER attributes, and
+a sectionless Timeline exercise source-driven rendering. PNG captures for each
+of the three diagrams in all four themes are kept under
+`docs/screenshots/issue-141/`.
 
 On 2026-10-03, the final footer revision passed `npm run compile`, all 1,268
 unit tests, `npm run lint` (zero errors; existing warnings only),
@@ -136,6 +162,52 @@ npm run test:browser:html-export (zero CSP violations),
 npm run test:browser:pdf-export (13 A4 pages), and npm run package
 (76 files; 4,613,456 bytes). npm run test:extension, real OS IME candidate
 UI, and screen-reader announcements were not run for this follow-up.
+
+The final PR #145 review pass on 2026-10-03 keeps version 0.8.0. Escape now
+uses the whole-dialog Cancel and existing dirty-draft confirmation from both
+the editor and replacement confirmation; IME Escape remains composition-first.
+ER, Pie, and Timeline use paired theme-aware backgrounds and text in the shared
+sanitized renderer and scoped document CSS. The browser suite measures actual
+SVG fills behind labels, not only text presence, in candidate, editor, inserted,
+re-edited, dedicated Preview, and native-preview paths. Twelve chart captures
+(three diagrams by four VS Code themes) are kept under
+`docs/screenshots/issue-141/`.
+
+Template measurements used Headless Chrome 153 on macOS, a 1280x900 viewport,
+the Light theme, and 20 samples for each warm case. Cold open was one sample.
+The ca945 review reference had the 300ms candidate validation debounce; the
+current live PR head f31139 had already removed that debounce in a later
+commit. The table keeps both baselines visible so the later correction is not
+mistaken for this review pass:
+
+| Revision               | Cold open to first SVG | Warm miss, selection to display (p50/p95) |      Revisit, selection to display (p50/p95) | Three-candidate burst, last visible (p50/p95) |
+| ---------------------- | ---------------------: | ----------------------------------------: | -------------------------------------------: | --------------------------------------------: |
+| ca945 review reference |              616.07 ms |      337.4 / 342.3 ms (1 parse, 1 render) | 334 / 337.5 ms (1 parse, 1 render; no cache) |          324.5 / 337.8 ms (1 parse, 1 render) |
+| f31139 live PR head    |               295.5 ms |            20 / 22 ms (0 parse, 1 render) |             8.8 / 9.9 ms (0 parse, 0 render) |           29.1 / 31.4 ms (0 parse, 2 renders) |
+| review working tree    |              294.04 ms |          23.9 / 27 ms (1 parse, 1 render) |             8.8 / 9.5 ms (0 parse, 0 render) |            18.4 / 19.3 ms (1 parse, 1 render) |
+
+The updated picker starts runtime loading immediately and has no fixed 300ms
+wait. Against ca945, the warm miss and burst remove the debounce delay; the
+warm path spends 2.2 / 2.4 ms (p50/p95) in validation and 18.1 / 18.9 ms in
+render. Against the later f31139 head, the newly required cache-miss parse
+adds a small amount to warm selection-to-display time, while a latest-only
+burst renders one candidate instead of two. Cache hits remain next-frame
+updates with zero parse and render calls. These are local measurements, not a
+hardware-independent performance claim.
+
+This final review pass passed `npm run compile`, `npm test` (1,332 tests / 64
+files), `npm run lint` (zero errors; 94 warnings), `npm run format:check`,
+`npm run test:browser:mermaid` (all 13 templates / 16 variants, current CSP,
+four themes, Escape, rendering paths, and performance cases),
+`npm run test:browser:blocks` (all five AGENTS fixtures in Rich/Preview/native),
+`npm run test:browser:html-export` (zero CSP violations),
+`npm run test:browser:pdf-export` (334,167 bytes; 13 A4 pages),
+`npm run test:extension`, and `npm run package` (0.8.0; 76 files;
+4,627,193 bytes). The latest fetched main was already an ancestor of the PR
+branch, so no merge conflict remained; the release workflow and 0.8.0 package
+metadata from main are retained. Real OS IME candidate UI and screen-reader
+announcements were not manually inspected. No release, tag, or workflow was
+run.
 
 A separate isolated VS Code smoke run on the initial Issue #141 UI inserted a
 Japanese Mindmap template, saved it, exercised native Cmd+Z / Cmd+Shift+Z and

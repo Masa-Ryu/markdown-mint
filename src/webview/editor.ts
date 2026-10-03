@@ -8900,12 +8900,6 @@ export class MarkdownEditorApp {
     dialog: HTMLDialogElement,
     _reason: DialogCancelReason,
   ): void {
-    if (
-      dialog === this.profileFeatureDialog &&
-      _reason === "escape" &&
-      this.mermaidDialog.handleEscape()
-    )
-      return;
     const behavior = this.modalCancelBehaviors.get(dialog);
     if (!behavior || !dialog.open || this.discardChangesConfirmation !== null)
       return;
