@@ -1,5 +1,9 @@
 import * as vscode from "vscode";
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import {
+  spawn,
+  type ChildProcess,
+  type ChildProcessWithoutNullStreams,
+} from "node:child_process";
 import { existsSync } from "node:fs";
 import { basename, dirname } from "node:path";
 
@@ -88,6 +92,7 @@ const SERVER_REQUEST_TIMEOUT_MS = 30_000;
 const EXECUTABLE_NAME = "copilot-language-server";
 const FAILED_PROCESS_TERM_GRACE_MS = 500;
 const DISPOSE_TERM_GRACE_MS = 500;
+const FINAL_PROCESS_EXIT_MS = 1_000;
 
 interface ChildListeners {
   readonly generation: number;
@@ -96,7 +101,13 @@ interface ChildListeners {
   readonly onError: (error: Error) => void;
   readonly onStreamError: (error: Error) => void;
   readonly onExit: (code: number | null, signal: NodeJS.Signals | null) => void;
+  readonly onClose: (
+    code: number | null,
+    signal: NodeJS.Signals | null,
+  ) => void;
 }
+
+const completedChildren = new WeakSet<ChildProcess>();
 
 /**
  * Owns one official Copilot Language Server process and its stdio LSP
@@ -113,7 +124,7 @@ export class CopilotLanguageServer implements vscode.Disposable {
   >();
   private readonly cleanupPromises = new Map<
     ChildProcessWithoutNullStreams,
-    Promise<void>
+    Promise<boolean>
   >();
   private buffer = Buffer.alloc(0);
   private nextRequestId = 1;
@@ -211,10 +222,12 @@ export class CopilotLanguageServer implements vscode.Disposable {
       // Drain stderr to avoid blocking the server. Copilot logs are deliberately
       // discarded rather than retained in an OutputChannel or a file.
       onStderr: () => undefined,
-      onError: (error) => this.fail(error, child, generation),
+      onError: (error) => this.handleChildError(child, generation, error),
       onStreamError: (error) => this.fail(error, child, generation),
       onExit: (code, signal) =>
         this.handleChildExit(child, generation, code, signal),
+      onClose: (code, signal) =>
+        this.handleChildClose(child, generation, code, signal),
     };
     this.childListeners.set(child, listeners);
     child.stdout.on("data", listeners.onData);
@@ -224,6 +237,7 @@ export class CopilotLanguageServer implements vscode.Disposable {
     child.stderr.on("error", listeners.onStreamError);
     child.on("error", listeners.onError);
     child.on("exit", listeners.onExit);
+    child.on("close", listeners.onClose);
 
     try {
       const initialized = await this.request("initialize", {
@@ -739,13 +753,42 @@ export class CopilotLanguageServer implements vscode.Disposable {
     for (const pending of this.pending.values()) pending.reject(error);
     this.pending.clear();
     this.detachDataListeners(child);
-    if (child.exitCode === null) {
+    if (!hasChildExited(child)) {
       const cleanup = this.terminateFailedChild(child);
       this.cleanupPromises.set(child, cleanup);
       void cleanup.finally(() => this.cleanupPromises.delete(child));
     } else {
       this.cleanupChild(child);
     }
+  }
+
+  private handleChildError(
+    child: ChildProcessWithoutNullStreams,
+    generation: number,
+    error: Error,
+  ): void {
+    // A spawn error has no process to wait for. Errors from an already spawned
+    // child (for example, a failed kill) still require exit/close confirmation.
+    if (child.pid === undefined) completedChildren.add(child);
+    this.fail(error, child, generation);
+  }
+
+  private handleChildClose(
+    child: ChildProcessWithoutNullStreams,
+    generation: number,
+    _code: number | null,
+    _signal: NodeJS.Signals | null,
+  ): void {
+    completedChildren.add(child);
+    if (this.isCurrentChild(child, generation)) {
+      this.fail(
+        new Error("Copilot Language Server closed before reporting exit."),
+        child,
+        generation,
+      );
+      return;
+    }
+    this.cleanupChild(child);
   }
 
   private isCurrentChild(
@@ -772,6 +815,7 @@ export class CopilotLanguageServer implements vscode.Disposable {
       child.stderr.removeListener("error", listeners.onStreamError);
       child.removeListener("error", listeners.onError);
       child.removeListener("exit", listeners.onExit);
+      child.removeListener("close", listeners.onClose);
       this.childListeners.delete(child);
     }
     this.ownedChildren.delete(child);
@@ -783,6 +827,7 @@ export class CopilotLanguageServer implements vscode.Disposable {
     code: number | null,
     signal: NodeJS.Signals | null,
   ): void {
+    completedChildren.add(child);
     if (this.isCurrentChild(child, generation)) {
       if (this.disposed) {
         this.child = undefined;
@@ -812,31 +857,39 @@ export class CopilotLanguageServer implements vscode.Disposable {
 
   private async terminateFailedChild(
     child: ChildProcessWithoutNullStreams,
-  ): Promise<void> {
+  ): Promise<boolean> {
     try {
       child.stdin.end();
     } catch {
       // The transport may already be closed.
     }
-    if (child.exitCode === null)
-      await waitForExit(child, FAILED_PROCESS_TERM_GRACE_MS);
-    if (child.exitCode === null) {
+    if (await waitForChildExit(child, FAILED_PROCESS_TERM_GRACE_MS)) {
+      this.cleanupChild(child);
+      return true;
+    }
+    if (!hasChildExited(child)) {
       try {
         child.kill("SIGTERM");
       } catch {
         // Continue to SIGKILL after the grace period.
       }
-      await waitForExit(child, FAILED_PROCESS_TERM_GRACE_MS);
+      if (await waitForChildExit(child, FAILED_PROCESS_TERM_GRACE_MS)) {
+        this.cleanupChild(child);
+        return true;
+      }
     }
-    if (child.exitCode === null) {
+    if (!hasChildExited(child)) {
       try {
         child.kill("SIGKILL");
       } catch {
         // The process may have exited concurrently.
       }
-      await waitForExit(child);
+      const confirmed = await waitForChildExit(child, FINAL_PROCESS_EXIT_MS);
+      this.cleanupChild(child);
+      return confirmed;
     }
-    if (child.exitCode !== null) this.cleanupChild(child);
+    this.cleanupChild(child);
+    return true;
   }
 
   private setStatus(status: CopilotServerStatus): void {
@@ -860,7 +913,8 @@ export class CopilotLanguageServer implements vscode.Disposable {
       pending.reject(new Error("Copilot Language Server was stopped."));
     this.pending.clear();
     const cleanups = [...this.cleanupPromises.values()];
-    if (child) {
+    let exitConfirmed = !child;
+    if (child && !hasChildExited(child)) {
       try {
         await this.requestBeforeDispose(child, "shutdown", null);
       } catch {
@@ -872,43 +926,53 @@ export class CopilotLanguageServer implements vscode.Disposable {
       } catch {
         // The child may have closed its input while shutdown was in flight.
       }
-      await this.escalateDispose(child);
+      exitConfirmed = await this.escalateDispose(child);
+      if (!exitConfirmed) this.cleanupChild(child);
+    } else if (child) {
+      exitConfirmed = true;
+      this.cleanupChild(child);
     }
-    await Promise.all(cleanups);
+    const cleanupResults = await Promise.all(cleanups);
+    exitConfirmed = exitConfirmed && cleanupResults.every(Boolean);
     for (const ownedChild of [...this.ownedChildren]) {
       if (ownedChild === child) continue;
       const cleanup = this.cleanupPromises.get(ownedChild);
-      if (cleanup) await cleanup;
-      else await this.terminateFailedChild(ownedChild);
+      const confirmed = cleanup
+        ? await cleanup
+        : await this.terminateFailedChild(ownedChild);
+      exitConfirmed = exitConfirmed && confirmed;
     }
-    if (child && child.exitCode !== null) this.cleanupChild(child);
+    if (child && hasChildExited(child)) this.cleanupChild(child);
     this.setStatus({
       kind: "Warning",
       busy: false,
-      message: "Copilot Language Server is stopped.",
+      message: exitConfirmed
+        ? "Copilot Language Server is stopped."
+        : "Copilot Language Server shutdown could not be confirmed.",
     });
   }
 
   private async escalateDispose(
     child: ChildProcessWithoutNullStreams,
-  ): Promise<void> {
-    if (child.exitCode === null) await waitForExit(child, 1_000);
-    if (child.exitCode === null) {
+  ): Promise<boolean> {
+    if (await waitForChildExit(child, 1_000)) return true;
+    if (!hasChildExited(child)) {
       try {
         child.kill("SIGTERM");
       } catch {
         // Continue to SIGKILL after the grace period.
       }
-      await waitForExit(child, DISPOSE_TERM_GRACE_MS);
+      if (await waitForChildExit(child, DISPOSE_TERM_GRACE_MS)) return true;
     }
-    if (child.exitCode === null) {
+    if (!hasChildExited(child)) {
       try {
         child.kill("SIGKILL");
       } catch {
         // The process may have exited concurrently.
       }
-      await waitForExit(child);
+      return waitForChildExit(child, FINAL_PROCESS_EXIT_MS);
     }
+    return true;
   }
 
   private requestBeforeDispose(
@@ -941,20 +1005,45 @@ export class CopilotLanguageServer implements vscode.Disposable {
   }
 }
 
-function waitForExit(
+function hasChildExited(child: ChildProcess): boolean {
+  return (
+    completedChildren.has(child) ||
+    child.exitCode !== null ||
+    child.signalCode !== null
+  );
+}
+
+export function waitForChildExit(
   child: ChildProcessWithoutNullStreams,
-  timeoutMs?: number,
-): Promise<void> {
-  if (child.exitCode !== null) return Promise.resolve();
+  timeoutMs: number,
+): Promise<boolean> {
+  if (hasChildExited(child)) return Promise.resolve(true);
   return new Promise((resolve) => {
-    const finish = () => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let settled = false;
+    const finish = (confirmed: boolean) => {
+      if (settled) return;
+      settled = true;
       if (timer !== undefined) clearTimeout(timer);
-      child.removeListener("exit", finish);
-      resolve();
+      if (confirmed) completedChildren.add(child);
+      child.removeListener("exit", onExit);
+      child.removeListener("close", onClose);
+      child.removeListener("error", onError);
+      resolve(confirmed);
     };
-    const timer =
-      timeoutMs === undefined ? undefined : setTimeout(finish, timeoutMs);
-    child.once("exit", finish);
+    const onExit = () => finish(true);
+    const onClose = () => finish(true);
+    const onError = () => {
+      if (child.pid === undefined) finish(true);
+    };
+    child.once("exit", onExit);
+    child.once("close", onClose);
+    child.once("error", onError);
+    if (hasChildExited(child)) {
+      finish(true);
+      return;
+    }
+    timer = setTimeout(() => finish(hasChildExited(child)), timeoutMs);
   });
 }
 
@@ -1015,22 +1104,33 @@ function minimalTextChange(
     previous.charCodeAt(start) === next.charCodeAt(start)
   )
     start += 1;
-  if (start > 0 && isLowSurrogate(previous.charCodeAt(start))) start -= 1;
-
-  let previousEnd = previous.length;
-  let nextEnd = next.length;
   while (
-    previousEnd > start &&
-    nextEnd > start &&
-    previous.charCodeAt(previousEnd - 1) === next.charCodeAt(nextEnd - 1)
+    start > 0 &&
+    (isCrLfBoundary(previous, start) ||
+      isCrLfBoundary(next, start) ||
+      isSurrogateBoundary(previous, start) ||
+      isSurrogateBoundary(next, start))
+  )
+    start -= 1;
+
+  let suffix = 0;
+  while (
+    suffix < previous.length - start &&
+    suffix < next.length - start &&
+    previous.charCodeAt(previous.length - suffix - 1) ===
+      next.charCodeAt(next.length - suffix - 1)
+  )
+    suffix += 1;
+  let previousEnd = previous.length - suffix;
+  let nextEnd = next.length - suffix;
+  while (
+    suffix > 0 &&
+    (isCrLfBoundary(previous, previousEnd) ||
+      isCrLfBoundary(next, nextEnd) ||
+      isSurrogateBoundary(previous, previousEnd) ||
+      isSurrogateBoundary(next, nextEnd))
   ) {
-    previousEnd -= 1;
-    nextEnd -= 1;
-  }
-  if (
-    previousEnd < previous.length &&
-    isLowSurrogate(previous.charCodeAt(previousEnd))
-  ) {
+    suffix -= 1;
     previousEnd += 1;
     nextEnd += 1;
   }
@@ -1046,6 +1146,10 @@ function minimalTextChange(
 export function offsetToLspPosition(text: string, offset: number): LspPosition {
   if (!Number.isSafeInteger(offset) || offset < 0 || offset > text.length)
     throw new RangeError("Markdown offset is outside the document.");
+  if (isCrLfBoundary(text, offset) || isSurrogateBoundary(text, offset))
+    throw new RangeError(
+      "Markdown offset splits a line ending or surrogate pair.",
+    );
   let line = 0;
   let lineStart = 0;
   for (let index = 0; index < offset; index += 1) {
@@ -1100,6 +1204,25 @@ export function lspPositionToOffset(
 
 function isLowSurrogate(code: number): boolean {
   return code >= 0xdc00 && code <= 0xdfff;
+}
+
+function isCrLfBoundary(text: string, offset: number): boolean {
+  return (
+    offset > 0 &&
+    offset < text.length &&
+    text.charCodeAt(offset - 1) === 0x0d &&
+    text.charCodeAt(offset) === 0x0a
+  );
+}
+
+function isSurrogateBoundary(text: string, offset: number): boolean {
+  return (
+    offset > 0 &&
+    offset < text.length &&
+    text.charCodeAt(offset - 1) >= 0xd800 &&
+    text.charCodeAt(offset - 1) <= 0xdbff &&
+    isLowSurrogate(text.charCodeAt(offset))
+  );
 }
 
 export function isInlineCompletionItem(

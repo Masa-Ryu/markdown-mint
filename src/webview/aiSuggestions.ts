@@ -14,6 +14,7 @@ import {
 import {
   AI_LIMITS,
   isAiHostMessage,
+  type AiAvailability,
   type AiHostMessage,
   type AiSuggestionFeedback,
   type AiSuggestionCandidate,
@@ -486,6 +487,7 @@ export class AiSuggestionsController {
         this.state?.sessionId !== message.sessionId ||
         this.state?.settingsGeneration !== message.settingsGeneration;
       const manualWork =
+        this.waiting?.trigger === "manual" ||
         this.pending?.request.trigger === "manual" ||
         this.candidate?.snapshot.request.trigger === "manual";
       const automaticWork =
@@ -499,7 +501,7 @@ export class AiSuggestionsController {
         (!message.autoTrigger && automaticWork) ||
         (message.availability !== "ready" &&
           this.state?.availability !== message.availability &&
-          this.candidate &&
+          (this.waiting || this.pending || this.candidate) &&
           !(
             message.availability === "disabled" &&
             !message.autoTrigger &&
@@ -621,6 +623,7 @@ export class AiSuggestionsController {
       this.options.synced() &&
       request.sessionId === this.state?.sessionId &&
       this.state.active !== false &&
+      availabilityAllowsPendingWork(this.state.availability, request.trigger) &&
       request.settingsGeneration === this.state.settingsGeneration &&
       request.documentId === this.options.documentId() &&
       request.baseVersion === this.options.version() &&
@@ -794,6 +797,11 @@ export class AiSuggestionsController {
       !candidate ||
       !target ||
       !this.options.canSuggest() ||
+      !this.state ||
+      !availabilityAllowsPendingWork(
+        this.state.availability,
+        candidate.snapshot.request.trigger,
+      ) ||
       view.state.selection.from !== target.position ||
       !view.state.selection.empty
     ) {
@@ -851,6 +859,16 @@ export class AiSuggestionsController {
     this.visibleStatus = undefined;
     this.state = undefined;
   }
+}
+
+function availabilityAllowsPendingWork(
+  availability: AiAvailability,
+  trigger: AiSuggestionRequest["trigger"],
+): boolean {
+  return (
+    availability === "ready" ||
+    (availability === "disabled" && trigger === "manual")
+  );
 }
 
 function reasonText(reason: string): string {

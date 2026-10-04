@@ -11,13 +11,34 @@ import {
   type AiSuggestionRequest,
 } from "../../src/shared/aiSuggestions";
 import {
+  AiSuggestionsHost,
+  type AiPanelSession,
+  type AiSuggestionsEnvironment,
+} from "../../src/extension/aiSuggestions";
+import type { CopilotLanguageServer } from "../../src/extension/copilotLanguageServer";
+import {
   createEditorApp,
   type MarkdownEditorApp,
 } from "../../src/webview/editor";
 
 const apps: MarkdownEditorApp[] = [];
+
+vi.mock("vscode", () => ({
+  window: { showInformationMessage: vi.fn(async () => undefined) },
+  env: { clipboard: { writeText: vi.fn() }, openExternal: vi.fn() },
+  Uri: { parse: (value: string) => ({ toString: () => value }) },
+  workspace: { isTrusted: true },
+}));
+
 function receive(data: unknown): void {
   window.dispatchEvent(new MessageEvent("message", { data }));
+}
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
 }
 function setup(source = "Hello", autoTrigger = false) {
   const root = document.createElement("div");
@@ -258,6 +279,152 @@ describe("Copilot inline completion ghost", () => {
       new CompositionEvent("compositionend", { bubbles: true, data: "あ" }),
     );
     expect(f.key("Tab", { keyCode: 229 }).defaultPrevented).toBe(false);
+  });
+
+  it.each(["needs-sign-in", "excluded"] as const)(
+    "drops a pending-only request after status becomes %s, even if ready returns",
+    async (availability) => {
+      const f = setup("Hello", false);
+      f.trigger();
+      await vi.advanceTimersByTimeAsync(0);
+      const request = f.requests()[0]!;
+
+      f.state({ availability, statusText: availability });
+      f.result(" stale", request, { candidateId: "old-after-expiry" });
+      expect(f.root.querySelector(".mm-ai-suggestion")).toBeNull();
+
+      f.state({ availability: "ready", statusText: "Ready again" });
+      f.result(" stale", request, { candidateId: "old-after-recovery" });
+      expect(f.root.querySelector(".mm-ai-suggestion")).toBeNull();
+      expect(f.key("Tab").defaultPrevented).toBe(false);
+      expect(f.messages).not.toContainEqual(
+        expect.objectContaining({
+          type: "ai-suggestion-feedback",
+          candidateId: "old-after-recovery",
+          action: "shown",
+        }),
+      );
+    },
+  );
+
+  it("connects host invalidation to the webview pending and late-result paths", async () => {
+    const f = setup("Hello", false);
+    const response = deferred<{ items: Array<{ insertText: string }> }>();
+    const documentUri = "file:///prose.md";
+    const status = {
+      kind: "Normal" as const,
+      busy: false,
+      message: "Copilot ready",
+    };
+    let statusListener:
+      | Parameters<NonNullable<AiSuggestionsEnvironment["statusChanged"]>>[0]
+      | undefined;
+    const server = {
+      get currentStatus() {
+        return status;
+      },
+      isRunning: true,
+      start: vi.fn(async () => undefined),
+      synchronizeDocument: vi.fn(async () => undefined),
+      focusDocument: vi.fn(async () => undefined),
+      requestInlineCompletion: vi.fn(() => response.promise),
+      reportShown: vi.fn(),
+      reportPartiallyAccepted: vi.fn(),
+      reportAccepted: vi.fn(async () => undefined),
+      closeDocument: vi.fn(async () => undefined),
+      signInFromUserAction: vi.fn(async () => false),
+      dispose: vi.fn(),
+    } as unknown as CopilotLanguageServer;
+    const environment: AiSuggestionsEnvironment = {
+      server,
+      supported: () => true,
+      trusted: () => true,
+      settings: () => ({ autoTrigger: false }),
+      notify: vi.fn(),
+      tokenSource: () => {
+        let cancelled = false;
+        return {
+          token: {
+            get isCancellationRequested() {
+              return cancelled;
+            },
+            onCancellationRequested: () => ({ dispose: vi.fn() }),
+          },
+          cancel: () => {
+            cancelled = true;
+          },
+          dispose: vi.fn(),
+        } as never;
+      },
+      statusChanged: (listener) => {
+        statusListener = listener;
+        listener("ready", "Copilot ready", documentUri);
+        return { dispose: vi.fn() };
+      },
+    };
+    const host = new AiSuggestionsHost(environment);
+    const panel: AiPanelSession = {
+      id: "s1",
+      documentId: () => documentUri,
+      uri: () => documentUri,
+      version: () => f.app.version,
+      markdown: () => "Hello",
+      isReady: () => true,
+      isActive: () => true,
+      canStartRequest: () => true,
+      focus: vi.fn(),
+      post: receive,
+    };
+    try {
+      host.trustChanged();
+      host.registerSession(panel);
+      await host.triggerFromUserAction("s1");
+      await vi.advanceTimersByTimeAsync(0);
+      const request = f.requests()[0]!;
+      expect(request).toBeDefined();
+      const pending = host.requestSuggestion("s1", request);
+      await vi.waitFor(() =>
+        expect(server.requestInlineCompletion).toHaveBeenCalledTimes(1),
+      );
+
+      statusListener?.("needs-sign-in", "Sign in required", documentUri);
+      await pending;
+      response.resolve({ items: [{ insertText: " stale" }] });
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(f.root.querySelector(".mm-ai-suggestion")).toBeNull();
+      expect(f.app.view.state.doc.textContent).toBe("Hello");
+      expect(
+        f.messages.some(
+          (message) =>
+            message.type === "ai-suggestion-feedback" &&
+            message.action === "shown",
+        ),
+      ).toBe(false);
+    } finally {
+      host.dispose();
+    }
+  });
+
+  it("cannot accept a displayed candidate after authentication expires", async () => {
+    const f = setup("Hello", false);
+    f.trigger();
+    await vi.advanceTimersByTimeAsync(0);
+    const request = f.requests()[0]!;
+    const nativeDoc = f.app.view.state.doc;
+    f.result(" stale", request, { candidateId: "candidate-before-expiry" });
+    expect(f.root.querySelector(".mm-ai-suggestion")).not.toBeNull();
+
+    f.state({ availability: "needs-sign-in", statusText: "Sign in required" });
+    expect(f.root.querySelector(".mm-ai-suggestion")).toBeNull();
+    expect(f.key("Tab").defaultPrevented).toBe(false);
+    expect(f.app.view.state.doc).toBe(nativeDoc);
+
+    f.state({ availability: "ready", statusText: "Ready again" });
+    expect(f.root.querySelector(".mm-ai-suggestion")).toBeNull();
+    expect(f.key("Tab").defaultPrevented).toBe(false);
+    expect(f.app.view.state.doc).toBe(nativeDoc);
   });
 
   it("starts one debounced request after composing Japanese text without a candidate", async () => {

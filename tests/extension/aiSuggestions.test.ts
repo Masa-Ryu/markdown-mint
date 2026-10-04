@@ -60,7 +60,7 @@ function fixture(autoTrigger = false) {
   let canStart = true;
   let active = true;
   let ready = true;
-  let tokenCancelled = false;
+  const tokenStates: Array<{ cancelled: boolean }> = [];
   let statusListener:
     | ((
         availability: AiAvailability,
@@ -75,6 +75,7 @@ function fixture(autoTrigger = false) {
   };
   const messages: AiHostMessage[] = [];
   const response = deferred<{ items: Array<{ insertText: string }> }>();
+  const responses = [response];
   const server = {
     get currentStatus() {
       return currentStatus;
@@ -83,7 +84,9 @@ function fixture(autoTrigger = false) {
     start: vi.fn(async () => undefined),
     synchronizeDocument: vi.fn(async () => undefined),
     focusDocument: vi.fn(async () => undefined),
-    requestInlineCompletion: vi.fn(() => response.promise),
+    requestInlineCompletion: vi.fn(
+      () => responses.shift()?.promise ?? Promise.resolve({ items: [] }),
+    ),
     reportShown: vi.fn(),
     reportPartiallyAccepted: vi.fn(),
     reportAccepted: vi.fn(async () => undefined),
@@ -97,19 +100,22 @@ function fixture(autoTrigger = false) {
     trusted: () => true,
     settings: () => ({ autoTrigger: automatic }),
     notify: vi.fn(),
-    tokenSource: () =>
-      ({
+    tokenSource: () => {
+      const tokenState = { cancelled: false };
+      tokenStates.push(tokenState);
+      return {
         token: {
           get isCancellationRequested() {
-            return tokenCancelled;
+            return tokenState.cancelled;
           },
           onCancellationRequested: () => ({ dispose: vi.fn() }),
         },
         cancel: () => {
-          tokenCancelled = true;
+          tokenState.cancelled = true;
         },
         dispose: vi.fn(),
-      }) as unknown as vscode.CancellationTokenSource,
+      } as unknown as vscode.CancellationTokenSource;
+    },
     statusChanged: (listener) => {
       statusListener = listener;
       listener("disabled", "Copilot suggestions are off.");
@@ -167,6 +173,11 @@ function fixture(autoTrigger = false) {
         (message) =>
           message.type === "ai-suggestion-result" && message.reason === "ready",
       ),
+    queueResponse: () => {
+      const next = deferred<{ items: Array<{ insertText: string }> }>();
+      responses.push(next);
+      return next;
+    },
     setQueueBusy: (value: boolean) => {
       canStart = !value;
     },
@@ -199,7 +210,7 @@ function fixture(autoTrigger = false) {
     setReady: (value: boolean) => {
       ready = value;
     },
-    cancelToken: () => tokenCancelled,
+    cancelToken: () => Boolean(tokenStates.at(-1)?.cancelled),
   };
 }
 
@@ -222,6 +233,126 @@ describe("Copilot Language Server request lifecycle", () => {
       "Hello",
     );
     expect(f.cancelToken()).toBe(true);
+    f.host.dispose();
+  });
+  it.each([
+    ["needs-sign-in", { kind: "Error", busy: false }],
+    ["excluded", { kind: "Inactive", busy: false }],
+  ] as const)(
+    "cancels a pending request after the document becomes %s",
+    async (availability, status) => {
+      const f = fixture();
+      const request = f.request();
+      const pending = f.host.requestSuggestion("s1", request);
+      await vi.waitFor(() =>
+        expect(f.server.requestInlineCompletion).toHaveBeenCalledTimes(1),
+      );
+
+      f.setServerStatus(availability, {
+        ...status,
+        message: availability,
+      });
+      expect(f.cancelToken()).toBe(true);
+      f.response.resolve({ items: [{ insertText: " stale" }] });
+      await pending;
+
+      expect(f.ready()).toHaveLength(0);
+      expect(
+        f.messages.some(
+          (message) =>
+            message.type === "ai-suggestion-result" &&
+            message.requestId === request.requestId &&
+            message.reason !== "ready",
+        ),
+      ).toBe(true);
+      f.host.dispose();
+    },
+  );
+  it("does not revive an old response after availability recovers and allows a fresh request", async () => {
+    const f = fixture();
+    const oldRequest = f.request();
+    const oldPending = f.host.requestSuggestion("s1", oldRequest);
+    await vi.waitFor(() =>
+      expect(f.server.requestInlineCompletion).toHaveBeenCalledTimes(1),
+    );
+
+    f.setServerStatus("needs-sign-in", {
+      kind: "Error",
+      busy: false,
+      message: "Sign in required",
+    });
+    f.setServerStatus("ready", {
+      kind: "Normal",
+      busy: false,
+      message: "Signed in",
+    });
+    f.response.resolve({ items: [{ insertText: " old" }] });
+    await oldPending;
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(f.ready()).toHaveLength(0);
+
+    const nextResponse = f.queueResponse();
+    const newRequest = f.request({ requestId: "fresh-after-sign-in" });
+    const newPending = f.host.requestSuggestion("s1", newRequest);
+    await vi.waitFor(() =>
+      expect(f.server.requestInlineCompletion).toHaveBeenCalledTimes(2),
+    );
+    nextResponse.resolve({ items: [{ insertText: " fresh" }] });
+    await newPending;
+    expect(f.ready()).toHaveLength(1);
+    expect(f.ready()[0]).toMatchObject({
+      requestId: "fresh-after-sign-in",
+      text: " fresh",
+      reason: "ready",
+    });
+    f.host.dispose();
+  });
+  it("does not cancel an allowed document when a different document is excluded", async () => {
+    const f = fixture();
+    const pending = f.host.requestSuggestion("s1", f.request());
+    await vi.waitFor(() =>
+      expect(f.server.requestInlineCompletion).toHaveBeenCalledTimes(1),
+    );
+    f.setServerStatus(
+      "excluded",
+      {
+        kind: "Inactive",
+        busy: false,
+        message: "Another document is excluded",
+      },
+      "file:///other.md",
+    );
+    expect(f.cancelToken()).toBe(false);
+    f.response.resolve({ items: [{ insertText: " allowed" }] });
+    await pending;
+    expect(f.ready()).toHaveLength(1);
+    f.host.dispose();
+  });
+  it("keeps connection authentication loss global after a per-document exclusion", async () => {
+    const f = fixture();
+    f.setServerStatus("needs-sign-in", {
+      kind: "Error",
+      busy: false,
+      message: "Sign in required",
+    });
+    f.setServerStatus(
+      "excluded",
+      {
+        kind: "Inactive",
+        busy: false,
+        message: "Another document is excluded",
+      },
+      "file:///other.md",
+    );
+
+    await f.host.requestSuggestion("s1", f.request());
+
+    expect(f.server.requestInlineCompletion).not.toHaveBeenCalled();
+    expect(f.messages.at(-1)).toMatchObject({
+      type: "ai-suggestion-result",
+      reason: "needs-sign-in",
+    });
     f.host.dispose();
   });
   it("cancels and settles the webview request when the actual document version changes", async () => {
@@ -489,6 +620,49 @@ describe("Copilot Language Server request lifecycle", () => {
     } satisfies AiSuggestionFeedback);
 
     expect(f.server.reportShown).not.toHaveBeenCalled();
+    f.host.dispose();
+  });
+  it("invalidates candidate feedback records on authentication loss", async () => {
+    const f = fixture();
+    const request = f.request();
+    const pending = f.host.requestSuggestion("s1", request);
+    await vi.waitFor(() =>
+      expect(f.server.requestInlineCompletion).toHaveBeenCalledTimes(1),
+    );
+    f.response.resolve({ items: [{ insertText: " next" }] });
+    await pending;
+    const result = f.ready()[0];
+    if (
+      !result ||
+      result.type !== "ai-suggestion-result" ||
+      !result.candidateId
+    )
+      throw new Error("Expected a ready candidate.");
+
+    f.host.feedback({
+      protocolVersion: 1,
+      type: "ai-suggestion-feedback",
+      requestId: request.requestId,
+      sessionId: request.sessionId,
+      candidateId: result.candidateId,
+      action: "shown",
+    });
+    expect(f.server.reportShown).toHaveBeenCalledTimes(1);
+    f.setServerStatus("needs-sign-in", {
+      kind: "Error",
+      busy: false,
+      message: "Sign in required",
+    });
+    f.host.feedback({
+      protocolVersion: 1,
+      type: "ai-suggestion-feedback",
+      requestId: request.requestId,
+      sessionId: request.sessionId,
+      candidateId: result.candidateId,
+      action: "accepted",
+    });
+
+    expect(f.server.reportAccepted).not.toHaveBeenCalled();
     f.host.dispose();
   });
 

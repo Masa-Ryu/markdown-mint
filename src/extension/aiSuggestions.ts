@@ -60,6 +60,9 @@ interface ActiveRequest {
   readonly request: AiSuggestionRequest;
   readonly source: vscode.CancellationTokenSource;
   readonly finish: (reason: AiSuggestionReason) => void;
+  readonly documentUri: string;
+  readonly connectionGeneration: number;
+  readonly documentGeneration: number;
   timer: ReturnType<typeof setTimeout>;
 }
 interface RequestOutcome {
@@ -75,6 +78,9 @@ interface CandidateRecord {
   readonly session: RegisteredSession;
   readonly requestId: string;
   readonly documentId: string;
+  readonly documentUri: string;
+  readonly connectionGeneration: number;
+  readonly documentGeneration: number;
   version: number;
   readonly item: InlineCompletionItem;
   readonly trigger: "auto" | "manual";
@@ -109,6 +115,8 @@ export class AiSuggestionsHost implements vscode.Disposable {
   private connectionAvailability: AiAvailability = "disabled";
   private serverMessage = statusText.disabled;
   private readonly excludedDocuments = new Map<string, string>();
+  private readonly documentGenerations = new Map<string, number>();
+  private connectionGeneration = 0;
   private focusedDocumentUri: string | undefined;
   private startPromise: Promise<boolean> | undefined;
 
@@ -210,13 +218,26 @@ export class AiSuggestionsHost implements vscode.Disposable {
     documentUri?: string,
   ): void {
     if (availability === "excluded") {
-      if (documentUri)
-        this.excludedDocuments.set(documentUri, message.slice(0, 512));
+      const excludedUri = documentUri ?? this.focusedDocumentUri;
+      if (excludedUri) {
+        this.excludedDocuments.set(excludedUri, message.slice(0, 512));
+        this.documentGenerations.set(
+          excludedUri,
+          this.documentGeneration(excludedUri) + 1,
+        );
+        if (this.active?.documentUri === excludedUri)
+          this.cancelActive("excluded");
+        this.deleteCandidatesForDocument(excludedUri);
+      }
       // Inactive is a per-document exclusion; it does not make the server
       // connection or authorization unavailable for other documents.
-      this.connectionAvailability = "ready";
-      this.serverMessage = statusText.ready;
       return;
+    }
+    const invalidationReason = connectionInvalidationReason(availability);
+    if (invalidationReason) {
+      this.connectionGeneration += 1;
+      this.cancelActive(invalidationReason);
+      this.deleteCandidatesForDocument();
     }
     this.connectionAvailability = availability;
     this.serverMessage = message.slice(0, 512) || statusText[availability];
@@ -247,6 +268,7 @@ export class AiSuggestionsHost implements vscode.Disposable {
   public trustChanged(): void {
     this.generation += 1;
     this.cancelActive("cancelled");
+    this.deleteCandidatesForDocument();
     for (const id of this.sessions.keys()) this.publishState(id);
   }
 
@@ -405,6 +427,7 @@ export class AiSuggestionsHost implements vscode.Disposable {
     if (!session) return;
     this.cancelSession(id);
     const uri = session.panel.uri();
+    this.deleteCandidatesForSession(id);
     const anotherActivePanel = [...this.sessions.values()].some(
       (candidate) =>
         candidate.panel.id !== id &&
@@ -468,6 +491,51 @@ export class AiSuggestionsHost implements vscode.Disposable {
     active.source.cancel();
     active.finish(reason);
   }
+  private documentGeneration(uri: string): number {
+    return this.documentGenerations.get(uri) ?? 0;
+  }
+  private captureValidity(documentUri: string): {
+    readonly documentUri: string;
+    readonly connectionGeneration: number;
+    readonly documentGeneration: number;
+  } {
+    return {
+      documentUri,
+      connectionGeneration: this.connectionGeneration,
+      documentGeneration: this.documentGeneration(documentUri),
+    };
+  }
+  private validityCurrent(validity: {
+    readonly documentUri: string;
+    readonly connectionGeneration: number;
+    readonly documentGeneration: number;
+  }): boolean {
+    return (
+      validity.connectionGeneration === this.connectionGeneration &&
+      validity.documentGeneration ===
+        this.documentGeneration(validity.documentUri)
+    );
+  }
+  private deleteCandidatesForDocument(documentUri?: string): void {
+    for (const [candidateId, candidate] of this.candidates)
+      if (!documentUri || candidate.documentUri === documentUri)
+        this.candidates.delete(candidateId);
+  }
+  private deleteCandidatesForSession(sessionId: string): void {
+    for (const [candidateId, candidate] of this.candidates)
+      if (candidate.session.panel.id === sessionId)
+        this.candidates.delete(candidateId);
+  }
+  private candidateIdentityCurrent(record: CandidateRecord): boolean {
+    return (
+      !this.disposed &&
+      this.sessions.get(record.session.panel.id) === record.session &&
+      record.session.panel.isReady() &&
+      record.session.panel.isActive() &&
+      record.session.panel.documentId() === record.documentId &&
+      this.validityCurrent(record)
+    );
+  }
   private current(active: ActiveRequest): boolean {
     const { request, session } = active;
     return (
@@ -477,6 +545,7 @@ export class AiSuggestionsHost implements vscode.Disposable {
       this.sessions.get(session.panel.id) === session &&
       session.panel.isReady() &&
       session.panel.isActive() &&
+      this.validityCurrent(active) &&
       request.settingsGeneration === this.generation &&
       request.documentId === session.panel.documentId() &&
       request.baseVersion === session.panel.version()
@@ -485,12 +554,18 @@ export class AiSuggestionsHost implements vscode.Disposable {
   private snapshotCurrent(
     session: RegisteredSession,
     request: AiSuggestionRequest,
+    validity: {
+      readonly documentUri: string;
+      readonly connectionGeneration: number;
+      readonly documentGeneration: number;
+    },
   ): boolean {
     return (
       !this.disposed &&
       this.sessions.get(session.panel.id) === session &&
       session.panel.isReady() &&
       session.panel.isActive() &&
+      this.validityCurrent(validity) &&
       request.settingsGeneration === this.generation &&
       request.documentId === session.panel.documentId() &&
       request.baseVersion === session.panel.version()
@@ -560,6 +635,21 @@ export class AiSuggestionsHost implements vscode.Disposable {
       this.reply(session, request, "untrusted");
       return;
     }
+    const documentUri = session.panel.uri();
+    const validity = this.captureValidity(documentUri);
+    const connectionState = this.connectionState(documentUri);
+    if (connectionState === "excluded") {
+      this.reply(session, request, "excluded");
+      return;
+    }
+    if (connectionState === "needs-sign-in") {
+      this.reply(session, request, "needs-sign-in");
+      return;
+    }
+    if (connectionState === "blocked") {
+      this.reply(session, request, "blocked");
+      return;
+    }
     const markdown = session.panel.markdown();
     if (
       markdown.length > AI_LIMITS.maxDocumentLength ||
@@ -573,11 +663,11 @@ export class AiSuggestionsHost implements vscode.Disposable {
       this.reply(
         session,
         request,
-        this.snapshotCurrent(session, request) ? "failed" : "stale",
+        this.snapshotCurrent(session, request, validity) ? "failed" : "stale",
       );
       return;
     }
-    if (!this.snapshotCurrent(session, request)) {
+    if (!this.snapshotCurrent(session, request, validity)) {
       this.reply(session, request, "stale");
       return;
     }
@@ -596,6 +686,7 @@ export class AiSuggestionsHost implements vscode.Disposable {
       request,
       source,
       finish,
+      ...validity,
       timer: setTimeout(
         () => this.cancelActive("timeout"),
         AI_LIMITS.deadlineMs,
@@ -617,6 +708,9 @@ export class AiSuggestionsHost implements vscode.Disposable {
                 session,
                 requestId: request.requestId,
                 documentId: request.documentId,
+                documentUri,
+                connectionGeneration: active.connectionGeneration,
+                documentGeneration: active.documentGeneration,
                 version: request.baseVersion,
                 item: candidate.item,
                 trigger: request.trigger,
@@ -707,20 +801,24 @@ export class AiSuggestionsHost implements vscode.Disposable {
     } catch (error) {
       if (!this.current(active)) return { reason: "cancelled" };
       const code = errorCode(error);
-      if (code.includes("blocked") || code.includes("limit"))
+      if (code.includes("blocked") || code.includes("limit")) {
+        this.applyServerAvailability("blocked", statusText.blocked);
+        this.publishAll();
         return { reason: "blocked" };
+      }
       if (
         code.includes("auth") ||
         code.includes("signin") ||
         code.includes("sign-in")
       ) {
-        this.connectionAvailability = "needs-sign-in";
-        this.serverMessage = statusText["needs-sign-in"];
+        this.applyServerAvailability(
+          "needs-sign-in",
+          statusText["needs-sign-in"],
+        );
         this.publishAll();
         return { reason: "needs-sign-in" };
       }
-      this.connectionAvailability = "unavailable";
-      this.serverMessage = statusText.unavailable;
+      this.applyServerAvailability("unavailable", statusText.unavailable);
       this.publishAll();
       return { reason: "failed" };
     }
@@ -733,6 +831,10 @@ export class AiSuggestionsHost implements vscode.Disposable {
       record.requestId !== message.requestId
     )
       return;
+    if (!this.candidateIdentityCurrent(record)) {
+      this.candidates.delete(message.candidateId);
+      return;
+    }
     if (message.action === "shown") {
       if (
         record.session.panel.documentId() !== record.documentId ||
@@ -866,6 +968,23 @@ function reasonMessage(reason: AiSuggestionReason): string {
       return "The Copilot suggestion request failed.";
     case "ready":
       return "A suggestion is ready.";
+  }
+}
+
+function connectionInvalidationReason(
+  availability: AiAvailability,
+): AiSuggestionReason | undefined {
+  switch (availability) {
+    case "needs-sign-in":
+      return "needs-sign-in";
+    case "unavailable":
+      return "failed";
+    case "blocked":
+      return "blocked";
+    case "untrusted":
+      return "untrusted";
+    default:
+      return undefined;
   }
 }
 
