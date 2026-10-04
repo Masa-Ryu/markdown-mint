@@ -541,60 +541,6 @@ function rectsOverlap(left: SvgScreenRect, right: SvgScreenRect): boolean {
   );
 }
 
-function screenRectInSvgCoordinates(
-  svg: SVGSVGElement,
-  rect: SvgScreenRect,
-): SvgScreenRect | undefined {
-  const matrix = svg.getScreenCTM();
-  if (!matrix) return undefined;
-  try {
-    const inverse = matrix.inverse();
-    const corners: ReadonlyArray<readonly [number, number]> = [
-      [rect.x, rect.y],
-      [rect.x + rect.width, rect.y],
-      [rect.x, rect.y + rect.height],
-      [rect.x + rect.width, rect.y + rect.height],
-    ];
-    const points = corners.map(([x, y]) => {
-      const point = svg.createSVGPoint();
-      point.x = x;
-      point.y = y;
-      return point.matrixTransform(inverse);
-    });
-    const xs = points.map((point) => point.x);
-    const ys = points.map((point) => point.y);
-    return {
-      x: Math.min(...xs),
-      y: Math.min(...ys),
-      width: Math.max(...xs) - Math.min(...xs),
-      height: Math.max(...ys) - Math.min(...ys),
-    };
-  } catch {
-    return undefined;
-  }
-}
-
-function svgDeltaToScreen(
-  svg: SVGSVGElement,
-  deltaX: number,
-  deltaY: number,
-): { x: number; y: number } | undefined {
-  const matrix = svg.getScreenCTM();
-  if (!matrix) return undefined;
-  const origin = svg.createSVGPoint();
-  origin.x = 0;
-  origin.y = 0;
-  const shifted = svg.createSVGPoint();
-  shifted.x = deltaX;
-  shifted.y = deltaY;
-  const screenOrigin = origin.matrixTransform(matrix);
-  const screenShifted = shifted.matrixTransform(matrix);
-  return {
-    x: screenShifted.x - screenOrigin.x,
-    y: screenShifted.y - screenOrigin.y,
-  };
-}
-
 function markerScreenRect(
   svg: SVGElement,
   relation: SVGPathElement,
@@ -737,113 +683,6 @@ function translateSvgByScreenDelta(
     return true;
   } catch {
     return false;
-  }
-}
-
-/** Move ER relationship labels only when their rendered boxes cover a marker. */
-function separateErRelationshipLabels(
-  svg: SVGElement,
-  root: ParentNode,
-  ownerDocument: Document,
-): void {
-  const labels = Array.from(svg.querySelectorAll<SVGGElement>(".edgeLabel"));
-  if (!labels.length) return;
-  const measuringHost = ownerDocument.createElement("div");
-  const diagram = ownerDocument.createElement("div");
-  measuringHost.className = "markdown-body mm-document-content";
-  diagram.className = "mm-mermaid";
-  const rootElement = root as Element;
-  const width =
-    typeof (rootElement as HTMLElement).getBoundingClientRect === "function"
-      ? (rootElement as HTMLElement).getBoundingClientRect().width
-      : 0;
-  const viewportWidth = Math.max(
-    320,
-    width || ownerDocument.documentElement?.clientWidth || 1024,
-  );
-  measuringHost.style.cssText =
-    `position:fixed;left:-100000px;top:0;width:${viewportWidth}px;` +
-    "visibility:hidden;pointer-events:none;";
-  measuringHost.setAttribute("aria-hidden", "true");
-  measuringHost.append(diagram);
-  diagram.append(svg);
-  ownerDocument.body?.append(measuringHost);
-  try {
-    const svgRoot = svg as SVGSVGElement;
-    const rootScreenMatrix = svgRoot.getScreenCTM();
-    if (!rootScreenMatrix) return;
-    const relations = Array.from(
-      svg.querySelectorAll<SVGPathElement>("path.relationshipLine"),
-    );
-    const markerRects = relations.flatMap((relation) =>
-      (["start", "end"] as const)
-        .map((side) => markerScreenRect(svg, relation, side))
-        .filter((rect): rect is SvgScreenRect => Boolean(rect))
-        .map((rect) => screenRectInSvgCoordinates(svgRoot, rect))
-        .filter((rect): rect is SvgScreenRect => Boolean(rect)),
-    );
-    const viewBox = svgRoot.viewBox.baseVal;
-    const svgBounds = {
-      x: viewBox.x,
-      y: viewBox.y,
-      width: viewBox.width,
-      height: viewBox.height,
-    };
-    const fontSize =
-      Number.parseFloat(
-        ownerDocument.defaultView?.getComputedStyle(svg).fontSize ?? "",
-      ) || 14;
-    const scale = Math.hypot(rootScreenMatrix.a, rootScreenMatrix.b) || 1;
-    const gap = Math.max(2, fontSize * 0.12) / scale;
-    for (const label of labels) {
-      const rect = label.getBoundingClientRect();
-      const screenBox = {
-        x: rect.x,
-        y: rect.y,
-        width: rect.width,
-        height: rect.height,
-      };
-      const labelBox = screenRectInSvgCoordinates(svgRoot, screenBox);
-      if (!labelBox) continue;
-      if (!labelBox.width || !labelBox.height) continue;
-      const overlappingMarkers = markerRects.filter((marker) =>
-        rectsOverlap(labelBox, marker),
-      );
-      if (!overlappingMarkers.length) continue;
-      const moves = overlappingMarkers.flatMap((marker) => [
-        { x: marker.x - labelBox.x - labelBox.width - gap, y: 0 },
-        { x: marker.x + marker.width - labelBox.x + gap, y: 0 },
-        { x: 0, y: marker.y - labelBox.y - labelBox.height - gap },
-        { x: 0, y: marker.y + marker.height - labelBox.y + gap },
-      ]);
-      moves.sort(
-        (left, right) =>
-          Math.hypot(left.x, left.y) - Math.hypot(right.x, right.y),
-      );
-      const move = moves.find((candidate) => {
-        const shifted = {
-          ...labelBox,
-          x: labelBox.x + candidate.x,
-          y: labelBox.y + candidate.y,
-        };
-        const insideSvg =
-          shifted.x >= svgBounds.x &&
-          shifted.y >= svgBounds.y &&
-          shifted.x + shifted.width <= svgBounds.x + svgBounds.width &&
-          shifted.y + shifted.height <= svgBounds.y + svgBounds.height;
-        return (
-          insideSvg &&
-          !markerRects.some((marker) => rectsOverlap(shifted, marker))
-        );
-      });
-      if (move) {
-        const screenDelta = svgDeltaToScreen(svgRoot, move.x, move.y);
-        if (screenDelta)
-          translateSvgByScreenDelta(label, screenDelta.x, screenDelta.y);
-      }
-    }
-  } finally {
-    measuringHost.remove();
   }
 }
 
@@ -1099,7 +938,11 @@ function normalizeErSvg(svg: SVGElement, palette: MermaidPalette): void {
     const [background, ...borders] = Array.from(
       outer.querySelectorAll<SVGPathElement>(":scope > path"),
     );
-    if (background) setImportantStyle(background, "fill", palette.surface);
+    if (background) {
+      setImportantStyle(background, "fill", colors.surfaceOpaque);
+      setImportantStyle(background, "fill-opacity", "1");
+      setImportantStyle(background, "opacity", "1");
+    }
     for (const border of borders) {
       setImportantStyle(border, "fill", "none");
       setImportantStyle(border, "stroke", palette.line);
@@ -1125,22 +968,20 @@ function normalizeErSvg(svg: SVGElement, palette: MermaidPalette): void {
     setImportantStyle(line, "stroke-width", "1px");
   }
   for (const marker of Array.from(
-    svg.querySelectorAll<SVGElement>(".marker.er path, .marker.er circle"),
+    svg.querySelectorAll<SVGPathElement>(".marker.er path"),
   )) {
-    setImportantStyle(marker, "fill", palette.surface);
+    setImportantStyle(marker, "fill", "none");
     setImportantStyle(marker, "stroke", palette.line);
     setImportantStyle(marker, "stroke-width", "1px");
   }
-  for (const marker of Array.from(
-    svg.querySelectorAll<SVGMarkerElement>("marker.er"),
+  for (const circle of Array.from(
+    svg.querySelectorAll<SVGCircleElement>(".marker.er circle"),
   )) {
-    const direction = /(Start|End)$/.exec(marker.id)?.[1];
-    const width = Number.parseFloat(marker.getAttribute("markerWidth") ?? "");
-    if (!direction || !Number.isFinite(width) || width <= 0) continue;
-    // Mermaid 11's oneOrMore and zeroOrMore markers use centered reference
-    // points. Pin each glyph to the entity-facing edge so the complete symbol
-    // remains on the relationship side of its entity endpoint.
-    marker.setAttribute("refX", direction === "Start" ? "0" : String(width));
+    setImportantStyle(circle, "fill", colors.surfaceOpaque);
+    setImportantStyle(circle, "fill-opacity", "1");
+    setImportantStyle(circle, "opacity", "1");
+    setImportantStyle(circle, "stroke", palette.line);
+    setImportantStyle(circle, "stroke-width", "1px");
   }
   for (const label of Array.from(
     svg.querySelectorAll<SVGGElement>(".edgeLabel"),
@@ -1148,7 +989,9 @@ function normalizeErSvg(svg: SVGElement, palette: MermaidPalette): void {
     for (const background of Array.from(
       label.querySelectorAll<SVGRectElement>("rect, .background"),
     )) {
-      setImportantStyle(background, "fill", palette.surface);
+      setImportantStyle(background, "fill", colors.surfaceOpaque);
+      setImportantStyle(background, "fill-opacity", "1");
+      setImportantStyle(background, "opacity", "1");
       setImportantStyle(background, "stroke", palette.line);
     }
     for (const text of Array.from(
@@ -1360,13 +1203,15 @@ function normalizeMindmapSvg(svg: SVGElement, palette: MermaidPalette): void {
   )) {
     const center = node.classList.contains("section-root");
     const index = sectionIndex(node, "section");
-    const background = center ? palette.surface : branchColor(index);
+    const background = center ? colors.surfaceOpaque : branchColor(index);
     const foreground = center
-      ? palette.foreground
+      ? mermaidTextColorForBackground(background, palette.foreground)
       : (colors.chartText[
           index === undefined ? 0 : index % colors.chartText.length
         ] ?? palette.foreground);
     const border = mermaidTextColorForBackground(background, palette.line, 3);
+    if (center)
+      svg.style.setProperty("--mm-mindmap-root-foreground", foreground);
 
     // Only generated node backgrounds receive node paint. In particular, keep
     // the separately-classed .edge paths out of this selection.
@@ -1374,6 +1219,8 @@ function normalizeMindmapSvg(svg: SVGElement, palette: MermaidPalette): void {
       node.querySelectorAll<SVGElement>(".node-bkg, .label-container"),
     )) {
       setImportantStyle(shape, "fill", background);
+      setImportantStyle(shape, "fill-opacity", "1");
+      setImportantStyle(shape, "opacity", "1");
       setImportantStyle(shape, "stroke", border);
       setImportantStyle(shape, "stroke-width", "1.5px");
     }
@@ -1616,6 +1463,10 @@ function normalizeMermaidSvg(
 ): void {
   const diagramColors = mermaidDiagramColors(palette);
   svg.style.setProperty("background", "transparent", "important");
+  svg.style.setProperty(
+    "--mm-mermaid-surface-opaque",
+    diagramColors.surfaceOpaque,
+  );
   svg.style.setProperty("--mm-mermaid-row-odd", diagramColors.rowOdd);
   svg.style.setProperty("--mm-mermaid-row-even", diagramColors.rowEven);
   diagramColors.chart.forEach((color, index) => {
@@ -1656,7 +1507,6 @@ function normalizeMermaidSvg(
   const role = svg.getAttribute("aria-roledescription");
   if (role === "er") {
     normalizeErSvg(svg, palette);
-    separateErRelationshipLabels(svg, root, ownerDocument);
   } else if (role === "classDiagram")
     normalizeClassDiagramSvg(svg, palette, root, ownerDocument);
   else if (role === "pie") normalizePieSvg(svg, palette);

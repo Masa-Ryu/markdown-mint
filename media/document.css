@@ -931,6 +931,7 @@ body {
     --vscode-textCodeBlock-background,
     var(--vscode-editorWidget-background, #252526)
   );
+  --mm-mermaid-surface-opaque: var(--mm-mermaid-surface, #252526);
   --mm-mermaid-line: var(
     --vscode-descriptionForeground,
     var(--vscode-textSeparator-foreground, #9da5b4)
@@ -993,7 +994,12 @@ body {
   svg[aria-roledescription="er"]
   .outer-path
   > path:first-child {
-  fill: var(--mm-mermaid-surface) !important;
+  fill: var(
+    --mm-mermaid-surface-opaque,
+    var(--mm-mermaid-surface, #252526)
+  ) !important;
+  fill-opacity: 1 !important;
+  opacity: 1 !important;
 }
 :is(.markdown-body, .mm-document-content)
   .mm-mermaid
@@ -1041,21 +1047,36 @@ body {
   .mm-mermaid
   svg[aria-roledescription="er"]
   .marker.er
-  path,
+  path {
+  fill: none !important;
+  stroke: var(--mm-mermaid-line) !important;
+  stroke-width: 1px !important;
+}
 :is(.markdown-body, .mm-document-content)
   .mm-mermaid
   svg[aria-roledescription="er"]
   .marker.er
   circle {
-  fill: var(--mm-mermaid-surface) !important;
+  fill: var(
+    --mm-mermaid-surface-opaque,
+    var(--mm-mermaid-surface, #252526)
+  ) !important;
+  fill-opacity: 1 !important;
+  opacity: 1 !important;
   stroke: var(--mm-mermaid-line) !important;
+  stroke-width: 1px !important;
 }
 :is(.markdown-body, .mm-document-content)
   .mm-mermaid
   svg[aria-roledescription="er"]
   .edgeLabel
   rect {
-  fill: var(--mm-mermaid-surface) !important;
+  fill: var(
+    --mm-mermaid-surface-opaque,
+    var(--mm-mermaid-surface, #252526)
+  ) !important;
+  fill-opacity: 1 !important;
+  opacity: 1 !important;
   stroke: var(--mm-mermaid-line) !important;
 }
 :is(.markdown-body, .mm-document-content)
@@ -1498,8 +1519,15 @@ body {
   .mm-mermaid
   svg[aria-roledescription="mindmap"]
   .mindmap-node:not(.section-root)
-  .node-bkg {
+  .node-bkg,
+:is(.markdown-body, .mm-document-content)
+  .mm-mermaid
+  svg[aria-roledescription="mindmap"]
+  .mindmap-node:not(.section-root)
+  .label-container {
   fill: var(--mm-mindmap-node-background, var(--mm-mermaid-surface)) !important;
+  fill-opacity: 1 !important;
+  opacity: 1 !important;
   stroke: var(--mm-mermaid-line) !important;
   stroke-width: 1.5px !important;
 }
@@ -1528,8 +1556,18 @@ body {
   .mm-mermaid
   svg[aria-roledescription="mindmap"]
   .mindmap-node.section-root.section--1
+  .node-bkg,
+:is(.markdown-body, .mm-document-content)
+  .mm-mermaid
+  svg[aria-roledescription="mindmap"]
+  .mindmap-node.section-root.section--1
   .label-container {
-  fill: var(--mm-mermaid-surface, #252526) !important;
+  fill: var(
+    --mm-mermaid-surface-opaque,
+    var(--mm-mermaid-surface, #252526)
+  ) !important;
+  fill-opacity: 1 !important;
+  opacity: 1 !important;
   stroke: var(--mm-mermaid-line) !important;
   stroke-width: 1.5px !important;
 }
@@ -1543,8 +1581,14 @@ body {
   svg[aria-roledescription="mindmap"]
   .mindmap-node.section-root.section--1
   tspan {
-  fill: var(--mm-mermaid-foreground) !important;
-  color: var(--mm-mermaid-foreground) !important;
+  fill: var(
+    --mm-mindmap-root-foreground,
+    var(--mm-mermaid-foreground)
+  ) !important;
+  color: var(
+    --mm-mindmap-root-foreground,
+    var(--mm-mermaid-foreground)
+  ) !important;
 }
 :is(.markdown-body, .mm-document-content)
   .mm-mermaid

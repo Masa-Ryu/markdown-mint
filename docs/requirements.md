@@ -236,15 +236,12 @@ show the final arrowheads and multiplicities. The
 `class-basic-candidate-{light,dark,high-contrast,high-contrast-light}.png`
 captures also verify the `places` relationship label under all four themes.
 
-The subsequent ER zoom review compared each `edgeLabel` bounding box with the
-complete screen-space geometry of its two crowfoot/cardinality markers in the
-same Mermaid 11.17.2 SVG. `places` and `contains` do not intersect their marker
-bounds; the closest measured clearance is about 4.1 CSS px, and the normal-size
-Light/Dark/High Contrast screenshots keep both labels and cardinality symbols
-distinct. The browser assertion now enforces at least 1 CSS px of clearance to
-account for marker stroke. Because there is no geometric overlap in the
-rendered artifact, the ER line, markers, and label positions were left intact
-rather than changing cardinality scale or diagram layout.
+The 2026-10-03 ER zoom report's full-marker bounding-box clearance was later
+found to be the wrong acceptance condition: it treated geometry hidden by the
+entity as visible, and the code had changed Mermaid's endpoint references.
+The 2026-10-04 correction below supersedes that measurement and removes the
+duplicated screen-box assertion. It checks the renderer's original marker
+attributes, actual path/circle paint, and finished diagrams instead.
 
 Interactive built-in template selection, editor entry, and unchanged
 Insert/Update use zero explicit Mint-side syntax parses. User edits still run
@@ -329,63 +326,80 @@ acceleration or a hardware-independent budget:
 | Ordinary document runtime requests |          0 |         0 |
 | First-use runtime requests         |          1 |         1 |
 
-The 2026-10-04 visual follow-up keeps version 0.8.0. A native VS Code
-safeprobe showed the Mindmap Project circle did not reliably paint above its
-orange connector. The role-gated Mindmap normalizer now places `g.nodes`
-immediately after `g.edgePaths` when they share a parent and the renderer
-returns the opposite order; the generated path geometry and node positions are
-unchanged. A unit regression constructs that reversed layer order, while the
-browser presentation assertion requires edge paths behind the node layer and
-an opaque center surface. The current Gantt implementation required no further
-source change; its existing fixture still checks task bars, statuses, dates,
-sections, milestone shape, and the today marker.
+The 2026-10-04 Mindmap/ER rendering correction keeps version 0.8.0.
 
-The earlier ER clearance measurement above predates the cardinality endpoint
-anchoring correction. After the correction, the same `USER ||--o{ ORDER :
-places` source exposed an 18×14 CSS px overlap between the relationship label
-and the zero-or-more end marker. The renderer now measures all marker shapes in
-SVG coordinates and moves only an actually colliding `.edgeLabel` by the
-shortest available in-viewBox translation. The regression covers the eight
-marker kinds and Light, Dark, High Contrast, and High Contrast Light; no fixed
-label offset or relationship-layout change is applied.
+Mindmap branches were visible through the center node because the renderer
+already returned `g.nodes` above `g.edgePaths`, but `normalizeMindmapSvg()`
+painted the node with a translucent VS Code surface. The normalizer now
+composites that surface over the resolved opaque editor background and applies
+`fill-opacity: 1` and `opacity: 1` only to `.node-bkg` / `.label-container`
+backgrounds. Root text contrast is selected against that final opaque color.
+The existing layer ordering remains in place; branch path coordinates,
+endpoints, transforms, and node geometry are unchanged. Light `rgba(0, 0, 0,
+0.06)` resolves to `#f0f0f0`; Dark `rgba(127, 127, 127, 0.12)` resolves to
+`#2a2a2a`. Transparent surfaces are resolved against the active Light or Dark
+editor background. Under the browser CSP, the pre-fix pixel comparison found
+299 differing pixels among 25,065 sampled node-interior pixels; after the fix,
+the difference is zero for translucent Light/Dark and transparent Light/Dark.
+The comparison hides `g.edgePaths` only in a rasterized test clone and excludes
+node outlines and text. It separately verifies that the real branch strokes
+remain visible outside nodes.
 
-Pie sectors now share one separator paint selected against every slice fill,
-while the outer ring is painted last with the theme line color. The browser
-assertion requires at least 3:1 outer-ring contrast against the actual page
-backdrop and verifies the ring remains distinct from the internal separators
-in all four themes. The Pie source, sector fills, and label placement are
-unchanged.
+The earlier ER endpoint correction was wrong: `normalizeErSvg()` replaced
+Mermaid's per-symbol `refX` with zero or `markerWidth`, exposing the hidden
+parts of one-or-more / zero-or-more crowfoot paths and making them look like
+eyes or leaves. The normalizer now leaves the generated marker attributes and
+shape paths untouched. The browser test compares the normalized output with the
+raw `render()` output from the same bundled Mermaid 11.17.2 runtime; it checks
+`refX`, `refY`, marker dimensions/units/orientation/viewBox, and path geometry.
+The pinned runtime's reference points are:
 
-The current bundled-runtime browser suite passed all 13 templates and 16
-variants across four live themes, plus candidate, code-edit, insertion,
-existing-diagram re-edit, dedicated Preview, and native-preview checks. The
-four Mindmap, Gantt, ER, and Pie screenshots for each theme in
-`docs/screenshots/issue-141/` were opened and visually inspected; the orange
-Mindmap connector ends at the Project circle edge, ER labels clear their
-cardinality markers, and Pie separators and outer ring remain distinct.
-Before-fix Light/Dark Mindmap and Gantt captures remain alongside the corrected
-images. The in-session native UI check also confirmed Escape closes the
-candidate picker without changing the open safeprobe. A native after-change
-screenshot was not captured. A separate isolated VS Code Development Host
-could not start: `code --extensionDevelopmentPath ...` printed
-`task_name_for_pid ... failure (5)` and exited 0 without opening a new window;
-`open -n -a '/Applications/Visual Studio Code.app' ...` returned
-`kLSNoExecutableErr (-10827)`; and direct `Contents/MacOS/Code` launch exited
-134 with `SIGABRT`. No retry was made, and the open VS Code window and
-`scrach.md` were preserved. The isolated `npm run test:extension` host also
-exited with `SIGABRT` before producing results.
+| Marker       | Start `refX` | End `refX` |
+| ------------ | -----------: | ---------: |
+| `onlyOne`    |            0 |         18 |
+| `zeroOrOne`  |            0 |         30 |
+| `oneOrMore`  |           18 |         27 |
+| `zeroOrMore` |           18 |         39 |
 
-Final checks on 2026-10-04 passed `npm run compile`, `npm test` (1,341 tests /
+ER line paths now use `fill: none` with Mermaid's 1px stroke; zero-cardinality
+circles use a 1px outline and an opaque surface fill; `.outer-path` entity
+backgrounds and relationship-label backgrounds also use that opaque surface.
+The ER label-translation workaround and its marker bounding-box acceptance
+check were removed, so label transforms remain the renderer's original values.
+`markerScreenRect()` and the separate label handling for Class diagrams remain
+unchanged. Role-scoped static CSS covers both `.markdown-body` and
+`.mm-document-content` while preserving Flowchart and Class marker paint.
+
+The release-gate browser test covers all four cardinalities on both endpoints
+in ER diagrams with TB, BT, LR, and RL directions. It checks the complete
+rendered relation, opaque entity backgrounds, path/circle paint, original
+marker attributes and path geometry, and original label transforms without
+copying the product's screen-box calculation. Captures in
+`docs/screenshots/issue-141/` include `mindmap-alpha-{light,dark}-{before,after}.png`,
+`mindmap-alpha-dark-zoom-{before,after}.png`, `er-markers-before-{light,dark}.png`,
+`er-markers-after-{light,dark}.png`, `er-cardinality-{tb,bt,lr,rl}-after.png`,
+and `er-cardinality-tb-zoom-after.png`.
+
+Revalidation on 2026-10-04 passed `npm run compile`, `npm test` (1,344 tests /
 64 files), `npm run lint` (zero errors; 94 existing warnings), and
-`npm run format:check`; the full Mermaid browser suite passed, as did
-`npm run test:browser:blocks` for all five required Markdown fixtures in Rich,
-dedicated Preview, and native Preview. HTML export reported zero CSP
-violations; PDF export produced 334,167 bytes and 13 A4 pages. `npm run
-package` produced and verified the 0.8.0 VSIX (76 files; 4,642,227 bytes).
-The one requested `npm run test:extension` attempt ended with `SIGABRT` and was
-not retried. The live PR base and current `origin/main` both resolve to
-`f6ad692c4d1b10e56afaaeeba7a99c5e3bb137b7`, which is an ancestor of this PR
-branch. No version bump, release, tag, or workflow was run.
+`npm run format:check`. The complete `npm run test:browser:mermaid` passed all
+13 templates / 16 variants under the unchanged CSP and four themes, including
+candidate, code editor, insertion, re-edit, dedicated Preview, native Preview,
+cache behavior, theme changes, and the Mindmap pixel comparison. The browser
+suite measured a warm candidate cache miss at 22.7 / 23.4 ms p50/p95 (zero
+explicit prevalidation parses, one render), a cache hit at 8.4 / 9.3 ms (zero
+parse/render), and a three-candidate latest-only burst at 31.0 / 34.7 ms (zero
+prevalidation, two renders). `npm run test:browser:blocks` passed the five
+required Markdown fixtures in Rich, Preview, and native Preview. HTML export
+reported zero CSP violations; PDF export produced 334,167 bytes and 13 A4
+pages. The single requested isolated `npm run test:extension` run passed. The
+0.8.0 package passed verification with 76 files and 4,640,639 bytes.
+
+The live remote `main` and PR base both resolve to
+`f6ad692c4d1b10e56afaaeeba7a99c5e3bb137b7`, which is already an ancestor of
+the PR branch; no merge was needed. `package.json` and `package-lock.json`
+remain at 0.8.0. OS-level IME candidate UI and screen-reader behavior were not
+manually inspected. No version bump, release, tag, or workflow was run.
 
 ## Quality requirements
 

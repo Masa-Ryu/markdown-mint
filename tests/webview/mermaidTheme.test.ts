@@ -92,6 +92,40 @@ describe("Mermaid chart and surface palette", () => {
     );
   });
 
+  it("composites translucent diagram surfaces over a resolved theme backdrop", () => {
+    const darkSurface = mermaidDiagramColors({
+      ...themes[1]!,
+      background: "#1e1e1e",
+      surface: "rgba(127, 127, 127, 0.12)",
+    }).surfaceOpaque;
+    const lightSurface = mermaidDiagramColors({
+      ...themes[0]!,
+      background: "#ffffff",
+      surface: "rgba(0, 0, 0, 0.06)",
+    }).surfaceOpaque;
+    const darkTransparent = mermaidDiagramColors({
+      ...themes[1]!,
+      background: "transparent",
+      surface: "transparent",
+    }).surfaceOpaque;
+    const lightTransparent = mermaidDiagramColors({
+      ...themes[0]!,
+      background: "rgba(255, 255, 255, 0.5)",
+      surface: "transparent",
+    }).surfaceOpaque;
+    const darkAlphaBackdrop = mermaidDiagramColors({
+      ...themes[1]!,
+      background: "rgba(0, 0, 0, 0.5)",
+      surface: "transparent",
+    }).surfaceOpaque;
+
+    expect(darkSurface).toBe("#2a2a2a");
+    expect(lightSurface).toBe("#f0f0f0");
+    expect(darkTransparent).toBe("#1e1e1e");
+    expect(lightTransparent).toBe("#ffffff");
+    expect(darkAlphaBackdrop).toBe("#0f0f0f");
+  });
+
   it("replaces duplicate custom chart colors to keep categories distinguishable", () => {
     const palette: MermaidPalette = {
       ...themes[0]!,

@@ -82,6 +82,27 @@ describe("native Mermaid role-scoped rendering styles", () => {
       /(?:^|,)\s*\.mm-mermaid\s+svg\s+\.section(?:[,{\s])/m,
     );
   });
+
+  it("keeps Mindmap surfaces opaque and ER cardinality paint role-scoped", () => {
+    const compactCss = documentCss.replace(/\s+/g, " ");
+    expect(compactCss).toContain("--mm-mermaid-surface-opaque:");
+    expect(compactCss).toMatch(
+      /svg\[aria-roledescription="mindmap"\][\s\S]*?\.mindmap-node:not\(\.section-root\)[\s\S]*?fill-opacity:\s*1\s*!important[\s\S]*?opacity:\s*1\s*!important/,
+    );
+    expect(compactCss).toMatch(
+      /svg\[aria-roledescription="mindmap"\][\s\S]*?\.mindmap-node\.section-root\.section--1[\s\S]*?fill-opacity:\s*1\s*!important[\s\S]*?opacity:\s*1\s*!important/,
+    );
+    expect(compactCss).toMatch(
+      /svg\[aria-roledescription="er"\][\s\S]*?\.marker\.er\s+path\s*\{\s*fill:\s*none\s*!important/,
+    );
+    const erCircleRule = compactCss.slice(
+      compactCss.indexOf(".marker.er circle"),
+      compactCss.indexOf(".marker.er circle") + 400,
+    );
+    expect(erCircleRule).toContain("fill:");
+    expect(erCircleRule).toContain("--mm-mermaid-surface-opaque");
+    expect(compactCss).toContain('svg[aria-roledescription="classDiagram"]');
+  });
 });
 
 describe("table delete styles", () => {

@@ -593,34 +593,64 @@ describe("local Mermaid rendering lifecycle", () => {
     enhancer.dispose();
   });
 
-  it("anchors ER cardinality markers at the outside edge of their entity", async () => {
+  it("preserves ER marker geometry and separates line and circle paint", async () => {
+    document.documentElement.className = "vscode-dark";
+    document.documentElement.style.setProperty(
+      "--vscode-editor-background",
+      "#1e1e1e",
+    );
+    document.documentElement.style.setProperty(
+      "--vscode-editor-foreground",
+      "#d4d4d4",
+    );
+    document.documentElement.style.setProperty(
+      "--vscode-textCodeBlock-background",
+      "rgba(127, 127, 127, 0.12)",
+    );
     const markerKinds = [
-      ["onlyOne", 18],
-      ["zeroOrOne", 30],
-      ["oneOrMore", 45],
-      ["zeroOrMore", 57],
+      { kind: "onlyOne", width: 18, height: 18, start: 0, end: 18, refY: 9 },
+      { kind: "zeroOrOne", width: 30, height: 18, start: 0, end: 30, refY: 9 },
+      {
+        kind: "oneOrMore",
+        width: 45,
+        height: 36,
+        start: 18,
+        end: 27,
+        refY: 18,
+      },
+      {
+        kind: "zeroOrMore",
+        width: 57,
+        height: 36,
+        start: 18,
+        end: 39,
+        refY: 18,
+      },
     ] as const;
     const markers = markerKinds
-      .flatMap(([kind, width]) =>
+      .flatMap(({ kind, width, height, start, end, refY }) =>
         (["Start", "End"] as const).map((side) => {
-          const initialRefX =
-            side === "Start"
-              ? kind === "oneOrMore" || kind === "zeroOrMore"
-                ? width / 2
-                : 0
-              : kind === "oneOrMore"
-                ? 27
-                : width;
+          const refX = side === "Start" ? start : end;
+          const circle = kind === "zeroOrOne" || kind === "zeroOrMore";
           return (
             `<marker id="er-${kind}${side}" class="marker er ${kind}" ` +
-            `refX="${initialRefX}" markerWidth="${width}" ` +
-            'markerHeight="36" orient="auto"><circle /><path /></marker>'
+            `refX="${refX}" refY="${refY}" markerWidth="${width}" ` +
+            `markerHeight="${height}" markerUnits="strokeWidth" ` +
+            'orient="auto" viewBox="0 0 57 36">' +
+            (circle ? '<circle cx="9" cy="18" r="6" />' : "") +
+            '<path d="M0,18 Q18,0 36,18 Q18,36 0,18" /></marker>'
           );
         }),
       )
       .join("");
     const runtime: MermaidRuntime = {
-      render: () => `<svg aria-roledescription="er">${markers}</svg>`,
+      render: () =>
+        '<svg aria-roledescription="er">' +
+        '<g class="outer-path"><path class="entity-background" />' +
+        '<path class="entity-border" /></g>' +
+        '<path class="relationshipLine" marker-start="url(#er-oneOrMoreStart)" />' +
+        markers +
+        "</svg>",
     };
     (globalThis as Record<string, unknown>).markdownMintMermaid = runtime;
     const element = diagram("erDiagram\nA ||--o{ B");
@@ -632,14 +662,103 @@ describe("local Mermaid rendering lifecycle", () => {
       svg.querySelectorAll<SVGMarkerElement>("marker.er"),
     );
     expect(markerElements).toHaveLength(8);
-    for (const marker of markerElements) {
-      const width = Number(marker.getAttribute("markerWidth"));
-      expect(marker.getAttribute("refX")).toBe(
-        marker.id.endsWith("Start") ? "0" : String(width),
-      );
-      expect(marker.getAttribute("orient")).toBe("auto");
-      expect(marker.querySelector("path")?.style.strokeWidth).toBe("1px");
+    const before = markerKinds.flatMap(
+      ({ kind, width, height, start, end, refY }) =>
+        (["Start", "End"] as const).map((side) => ({
+          id: `er-${kind}${side}`,
+          refX: String(side === "Start" ? start : end),
+          refY: String(refY),
+          width: String(width),
+          height: String(height),
+          markerUnits: "strokeWidth",
+          orient: "auto",
+          viewBox: "0 0 57 36",
+        })),
+    );
+    expect(
+      markerElements.map((marker) => ({
+        id: marker.id,
+        refX: marker.getAttribute("refX"),
+        refY: marker.getAttribute("refY"),
+        width: marker.getAttribute("markerWidth"),
+        height: marker.getAttribute("markerHeight"),
+        markerUnits: marker.getAttribute("markerUnits"),
+        orient: marker.getAttribute("orient"),
+        viewBox: marker.getAttribute("viewBox"),
+      })),
+    ).toEqual(before);
+    for (const path of Array.from(
+      svg.querySelectorAll<SVGPathElement>("marker.er path"),
+    )) {
+      expect(path.style.fill).toBe("none");
+      expect(path.style.strokeWidth).toBe("1px");
+      expect(path.style.stroke).not.toBe("");
     }
+    for (const circle of Array.from(
+      svg.querySelectorAll<SVGCircleElement>("marker.er circle"),
+    )) {
+      expect(circle.style.fill).toBe("#2a2a2a");
+      expect(circle.style.fillOpacity).toBe("1");
+      expect(circle.style.opacity).toBe("1");
+      expect(circle.style.strokeWidth).toBe("1px");
+    }
+    const entityBackground = svg.querySelector<SVGPathElement>(
+      ".outer-path .entity-background",
+    )!;
+    expect(entityBackground.style.fill).toBe("#2a2a2a");
+    expect(entityBackground.style.fillOpacity).toBe("1");
+    expect(entityBackground.style.opacity).toBe("1");
+    enhancer.dispose();
+  });
+
+  it("composites translucent Mindmap node backgrounds and fully masks branches", async () => {
+    document.documentElement.className = "vscode-dark";
+    document.documentElement.style.setProperty(
+      "--vscode-editor-background",
+      "#1e1e1e",
+    );
+    document.documentElement.style.setProperty(
+      "--vscode-editor-foreground",
+      "#d4d4d4",
+    );
+    document.documentElement.style.setProperty(
+      "--vscode-textCodeBlock-background",
+      "rgba(127, 127, 127, 0.12)",
+    );
+    const runtime: MermaidRuntime = {
+      render: () =>
+        '<svg aria-roledescription="mindmap">' +
+        '<g class="nodes"><g class="mindmap-node section-root section--1">' +
+        '<circle class="node-bkg" fill-opacity="0.12" opacity="0.5" />' +
+        "<text>Ideas</text></g>" +
+        '<g class="mindmap-node section-0"><path class="label-container" ' +
+        'fill-opacity="0.12" opacity="0.5" /><text>Goals</text></g></g>' +
+        '<g class="edgePaths"><path class="edge section-edge-0 edge-depth-1" /></g>' +
+        "</svg>",
+    };
+    (globalThis as Record<string, unknown>).markdownMintMermaid = runtime;
+    const element = diagram("mindmap\nroot((Ideas))\n  Goals");
+    const enhancer = enhanceRenderedContent(document.body);
+    await flush();
+
+    const svg = element.querySelector<SVGElement>("svg")!;
+    const center = svg.querySelector<SVGCircleElement>(
+      ".section-root .node-bkg",
+    )!;
+    const branch = svg.querySelector<SVGPathElement>(
+      ".section-0 .label-container",
+    )!;
+    expect(center.style.fill).toBe("#2a2a2a");
+    expect(center.style.fillOpacity).toBe("1");
+    expect(center.style.opacity).toBe("1");
+    expect(branch.style.fillOpacity).toBe("1");
+    expect(branch.style.opacity).toBe("1");
+    expect(
+      svg.querySelector(".section-root text")?.getAttribute("style"),
+    ).toContain("#d4d4d4");
+    const connector = svg.querySelector<SVGPathElement>("path.edge")!;
+    expect(connector.style.stroke).not.toBe("");
+    expect(connector.style.fill).toBe("none");
     enhancer.dispose();
   });
 

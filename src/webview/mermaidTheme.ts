@@ -13,6 +13,7 @@ export interface MermaidPalette {
 export interface MermaidDiagramColors {
   readonly chart: readonly string[];
   readonly chartText: readonly string[];
+  readonly surfaceOpaque: string;
   readonly rowOdd: string;
   readonly rowEven: string;
   readonly gantt: MermaidGanttColors;
@@ -239,8 +240,14 @@ function opaqueColor(
   value: string,
   backdrop: string,
   fallback: string,
+  fallbackBackdrop = "#ffffff",
 ): RgbColor {
-  const base = parseCssColor(backdrop) ?? parseCssColor("white")!;
+  const fallbackBase =
+    parseCssColor(fallbackBackdrop) ?? parseCssColor("white")!;
+  const parsedBackdrop = parseCssColor(backdrop);
+  const base = parsedBackdrop
+    ? composite(parsedBackdrop, fallbackBase)
+    : fallbackBase;
   const parsed = parseCssColor(value) ?? parseCssColor(fallback)!;
   return composite(parsed, base);
 }
@@ -317,6 +324,23 @@ function mixColors(
 export function mermaidDiagramColors(
   palette: MermaidPalette,
 ): MermaidDiagramColors {
+  const fallbackBackdrop = palette.darkMode ? "#1e1e1e" : "#ffffff";
+  const backgroundOpaque = rgbToHex(
+    opaqueColor(
+      palette.background,
+      fallbackBackdrop,
+      fallbackBackdrop,
+      fallbackBackdrop,
+    ),
+  );
+  const surfaceOpaque = rgbToHex(
+    opaqueColor(
+      palette.surface,
+      backgroundOpaque,
+      palette.darkMode ? "#252526" : "#f6f8fa",
+      backgroundOpaque,
+    ),
+  );
   const defaults = palette.highContrast
     ? palette.darkMode
       ? HIGH_CONTRAST_DARK_CHART_COLORS
@@ -329,8 +353,9 @@ export function mermaidDiagramColors(
     let color = rgbToHex(
       opaqueColor(
         palette.chartColors[index] ?? fallback,
-        palette.background,
+        backgroundOpaque,
         fallback,
+        backgroundOpaque,
       ),
     );
     if (seen.has(color.toLowerCase())) {
@@ -345,13 +370,7 @@ export function mermaidDiagramColors(
   const chartText = chart.map((background) =>
     mermaidTextColorForBackground(background, palette.foreground),
   );
-  const rowOdd = rgbToHex(
-    opaqueColor(
-      palette.surface,
-      palette.background,
-      palette.darkMode ? "#252526" : "#f6f8fa",
-    ),
-  );
+  const rowOdd = surfaceOpaque;
   const rowEven = mixColors(
     rowOdd,
     palette.highContrast
@@ -360,7 +379,7 @@ export function mermaidDiagramColors(
         ? "#ffffff"
         : palette.line,
     palette.highContrast ? 0.06 : 0.08,
-    palette.background,
+    backgroundOpaque,
   );
   const task = chart[0]!;
   const activeTask = chart[1]!;
@@ -387,5 +406,5 @@ export function mermaidDiagramColors(
     grid: palette.line,
     today: palette.accent,
   };
-  return { chart, chartText, rowOdd, rowEven, gantt };
+  return { chart, chartText, surfaceOpaque, rowOdd, rowEven, gantt };
 }
