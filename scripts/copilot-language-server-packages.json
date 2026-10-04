@@ -1,0 +1,34 @@
+{
+  "version": "1.551.2",
+  "license": {
+    "source": "https://github.com/github/copilot-language-server-release/blob/1.551.2/LICENSE",
+    "file": "scripts/licenses/copilot-language-server-1.551.2-LICENSE.txt",
+    "sha256": "9e48ecfa18e2b15169746a3c97beda4d1d6c6796097038498ca434ca7e0ccd44"
+  },
+  "packages": {
+    "darwin-arm64": {
+      "integrity": "sha512-U8osIjY0wJOuvQnl+drdyY7rE2821Y9quSLukuXWDzZ9ZBW+Eb0MVcvCAP6Bq1/WzgJ6Koqe+z2c3O19kU31CA==",
+      "binary": "copilot-language-server"
+    },
+    "darwin-x64": {
+      "integrity": "sha512-uC365grfjhoDoByUXGwX6N4JsN9saREwZNGW0/ycYjsNnolEcilsX/1nTrKJiSIo1twfUxR5ZG/3RZfQMD8NfA==",
+      "binary": "copilot-language-server"
+    },
+    "linux-arm64": {
+      "integrity": "sha512-VDiKsPxD5ijMEeC/JiFHoT+qK2b+TEhKm74uWb3KDdXXu+V2k/dX6siRbx77JX2eR0ixVBoI8ah7up7c9j4aHA==",
+      "binary": "copilot-language-server"
+    },
+    "linux-x64": {
+      "integrity": "sha512-gnH+ZRb4W18zrYTIvkqqJecZTMp6kXRcRgr+AIiyD4VK0dRQ2MjjL40tqi0tJ78/tOvxU23QCRTZzbgzfqRrPg==",
+      "binary": "copilot-language-server"
+    },
+    "win32-arm64": {
+      "integrity": "sha512-fj4wjJRoLuHdnNuaxU1+19MM1P00X1Kxxui8Hri3Vjw2ZFHx/leKXlZVj+aLg/h+9GicLN5aGJIMQAjpnu0UhA==",
+      "binary": "copilot-language-server.exe"
+    },
+    "win32-x64": {
+      "integrity": "sha512-/+73eWkfbn3OKVSs2JOJutZb5Yx3eAAlIezPO3Mv9ya5IY4JUXKQIOvp2RwJcfAQwHBIskctjts7sE5D2oZabA==",
+      "binary": "copilot-language-server.exe"
+    }
+  }
+}

@@ -1,428 +1,839 @@
 <!doctype html>
 <html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src 'self' https: data:; style-src 'self'; style-src-elem 'self'; style-src-attr 'unsafe-inline'; font-src 'self' data:; script-src 'self' 'nonce-mm-test-nonce'; connect-src 'none';">
-  <!-- The local browser server maps this path to VS Code 1.130's installed
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; img-src 'self' https: data:; style-src 'self'; style-src-elem 'self'; style-src-attr 'unsafe-inline'; font-src 'self' data:; script-src 'self' 'nonce-mm-test-nonce'; connect-src 'none';"
+    />
+    <!-- The local browser server maps this path to VS Code 1.130's installed
        markdown.css. Loading it first catches native-preview cascade drift. -->
-  <link rel="stylesheet" href="/__vscode__/markdown.css">
-  <link rel="stylesheet" href="/media/document.css">
-  <link rel="stylesheet" href="/dist/katex/katex.css">
-  <link rel="stylesheet" href="/media/webview.css">
-</head>
-<body data-markdown-mint-mode="editor">
-  <main id="app" aria-label="Markdown Mint" data-mermaid-runtime-uri="/dist/mermaid.js" data-mermaid-runtime-nonce="mm-test-nonce"></main>
-  <!-- markdown-mint-ai-protocol -->
-  <script nonce="mm-test-nonce">
-    window.__markdownMintCspViolations = [];
-    document.addEventListener('securitypolicyviolation', event => {
-      window.__markdownMintCspViolations.push({
-        directive: event.effectiveDirective,
-        blockedURI: event.blockedURI
-      });
-      document.documentElement.dataset.mmCspViolationCount = String(window.__markdownMintCspViolations.length);
-      document.documentElement.dataset.mmCspLastDirective = event.effectiveDirective;
-      document.documentElement.setAttribute('data-mm-csp-last-blocked', String(event.blockedURI || 'unknown'));
-      document.documentElement.setAttribute('data-mm-csp-last-source', String(event.sourceFile || 'unknown'));
-      document.documentElement.setAttribute('data-mm-csp-last-sample', String(event.sample || 'unknown'));
-    });
-    (() => {
-      const protocolVersion = 1;
-      const aiEnabled = new URLSearchParams(location.search).has('ai');
-      let aiState = { protocolVersion, type: 'ai-suggestion-state', sessionId: 'ai-browser', settingsGeneration: 1, autoTrigger: false, modelName: 'Fake Copilot', availability: 'ready' };
-      let aiInvocation = 0;
-      const markdownFixture = [
-        '# Browser harness',
-        '',
-        'Paragraph with **marks** and a [link](#).',
-        '',
-        '- [ ] Task',
-        '',
-        '```ts',
-        'const value = "日本語";',
-        '```',
-        '',
-        '| Name | 値 | 空欄 |',
-        '| --- | --- | --- |',
-        '| A | 日本語 |  |'
-      ].join('\n');
-      const mathFixture = [
-        '## Math browser fixture',
-        '',
-        'Inline: $E = mc^2$',
-        '',
-        '$\\frac{-b \\pm \\sqrt{b^2 - 4ac}}{2a}$',
-        '',
-        '$$',
-        '\\sum_{n=1}^{100}',
-        '\\frac{1}{n^2}',
-        '=',
-        '\\frac{\\pi^2}{6}',
-        '$$',
-        '',
-        '$$',
-        'A =',
-        '\\begin{bmatrix}',
-        '1 & 2 & 3 \\\\',
-        '4 & 5 & 6 \\\\',
-        '7 & 8 & 9',
-        '\\end{bmatrix}',
-        '$$'
-      ].join('\n');
-      const mermaidFixture = [
-        '# Mermaid browser fixture',
-        '',
-        '```mermaid',
-        'flowchart LR',
-        '    A[Markdown Source] --> B[Rich Editor]',
-        '    B --> C[Preview]',
-        '    C --> D{Looks identical?}',
-        '    D -- Yes --> E[Save]',
-        '    D -- No --> B',
-        '    E --> F[GitHub / GitLab]',
-        '```',
-        '',
-        '```mermaid',
-        'sequenceDiagram',
-        '    participant U as User',
-        '    participant E as Editor',
-        '    participant M as Markdown',
-        '    participant P as Preview',
-        '    U->>E: Edit',
-        '    E->>M: Update',
-        '    M->>P: Render',
-        '    P-->>U: Preview',
-        '```'
-      ].join('\n');
-      const mermaidCoverageFixture = [
-        '# Mermaid coverage fixture',
-        '',
-        '```mermaid',
-        'flowchart TD',
-        '    subgraph Flow [処理フロー]',
-        '        A[Short] --> B([日本語 ノード])',
-        '        B --> C{Long label: choose a path}',
-        '        C -->|Yes| D["**Markdown**<br/>複数行"]',
-        '        C -->|No| E[Database]',
-        '    end',
-        '```',
-        '',
-        '```mermaid',
-        'classDiagram',
-        '    class Editor {',
-        '        +String source',
-        '        +render()',
-        '    }',
-        '```',
-        '',
-        '```mermaid',
-        'stateDiagram-v2',
-        '    [*] --> Editing',
-        '    Editing --> Preview',
-        '```'
-      ].join('\n');
-      const fixture = new URLSearchParams(location.search).get('fixture');
-      const initialMode = new URLSearchParams(location.search).get('mode');
-      if (initialMode === 'preview') document.body.dataset.markdownMintMode = 'preview';
-      let markdown = fixture === 'math'
-        ? mathFixture
-        : fixture === 'mermaid'
-          ? mermaidFixture
-          : fixture === 'mermaid-coverage'
-            ? mermaidCoverageFixture
-            : markdownFixture;
-      let version = 1;
-      const requestedProfile = new URLSearchParams(location.search).get('profile');
-      let profile = requestedProfile === 'gitlab' || requestedProfile === 'commonmark'
-        ? requestedProfile
-        : 'github';
-      const history = [];
-      const future = [];
-      const messages = [];
-      let state = {};
-      const clone = value => JSON.parse(JSON.stringify(value));
-      const isRecord = value => typeof value === 'object' && value !== null && !Array.isArray(value);
-      const safeMarkdown = value => typeof value === 'string' && value.length <= 2000000;
-      const safeLinkHref = value => typeof value === 'string' && value.length > 0 && value.length <= 8192;
-      const safeOperation = value => typeof value === 'string' && value.length > 0 && value.length <= 160 && /^[a-zA-Z0-9._:-]+$/.test(value);
-      const safeFileSearchQuery = value => typeof value === 'string' && value.length <= 256 && !/[\u0000-\u001f\u007f]/.test(value);
-      const optionalString = value => value === undefined || (typeof value === 'string' && value.length <= 160);
-      const versionValue = value => Number.isSafeInteger(value) && value >= 1;
-      const optionalVersion = value => value === undefined || versionValue(value);
-      const requestedWorkspaceFileCount = Number.parseInt(
-        new URLSearchParams(location.search).get('workspaceFiles') ?? '',
-        10
-      );
-      const requestedWorkspaceSearchDelay = Number.parseInt(
-        new URLSearchParams(location.search).get('workspaceSearchDelay') ?? '',
-        10
-      );
-      const workspaceSearchDelay = Number.isSafeInteger(requestedWorkspaceSearchDelay) && requestedWorkspaceSearchDelay > 0
-        ? Math.min(requestedWorkspaceSearchDelay, 5000)
-        : 0;
-      const benchmarkWorkspaceFiles = Number.isSafeInteger(requestedWorkspaceFileCount) && requestedWorkspaceFileCount > 0
-        ? Array.from({ length: requestedWorkspaceFileCount }, (_, index) => {
-            const group = String(Math.floor(index / 100)).padStart(3, '0');
-            const number = String(index).padStart(5, '0');
-            const extension = index % 2 === 0 ? '.png' : '.md';
-            return {
-              fileName: `benchmark-${number}${extension}`,
-              directory: `docs/benchmark/${group}/`,
-              relativePath: `../docs/benchmark/${group}/benchmark-${number}${extension}`
-            };
-          })
-        : [];
-      const browserWorkspaceFiles = benchmarkWorkspaceFiles.length > 0
-        ? benchmarkWorkspaceFiles
-        : [
-        { fileName: 'hoge.pdf', directory: 'specs/', relativePath: '../specs/hoge.pdf' },
-        { fileName: 'hoge-design.md', directory: 'docs/', relativePath: '../docs/hoge-design.md' },
-        { fileName: 'how-to-use.md', directory: 'docs/', relativePath: '../docs/how-to-use.md' },
-        { fileName: 'logo.png', directory: 'assets/', relativePath: '../assets/logo.png' },
-        { fileName: 'logo-dark.svg', directory: 'assets/', relativePath: '../assets/logo-dark.svg' },
-        { fileName: 'manual.pdf', directory: 'docs/', relativePath: './manual.pdf' },
-        { fileName: 'guide.md', directory: '.git/', relativePath: '../.git/guide.md' },
-        { fileName: 'guide.md', directory: 'node_modules/pkg/', relativePath: '../node_modules/pkg/guide.md' },
-        ...Array.from({ length: 10 }, (_, index) => ({
-          fileName: `candidate-${String(index + 1).padStart(2, '0')}.md`,
-          directory: 'docs/candidates/',
-          relativePath: `../docs/candidates/candidate-${String(index + 1).padStart(2, '0')}.md`
-        }))
-      ];
-      const searchWorkspaceFiles = (query, filter) => {
-        const lower = query.trim().toLowerCase();
-        return browserWorkspaceFiles
-          .filter(candidate => !/(?:^|\/)\.(?:git)(?:\/|$)|(?:^|\/)node_modules(?:\/|$)/i.test(candidate.directory))
-          .filter(candidate => filter !== 'image' || /\.(?:png|jpe?g|gif|webp|svg|avif|bmp)$/i.test(candidate.fileName))
-          .filter(candidate => `${candidate.fileName} ${candidate.directory}`.toLowerCase().includes(lower))
-          .slice(0, 10);
-      };
-      // Keep this transport check in lockstep with parseWebviewMessage in
-      // src/shared/protocol.ts. The fixture mocks VS Code only; it never
-      // bypasses the extension wire contract.
-      const validWebviewMessage = value => {
-        if (!isRecord(value) || value.protocolVersion !== protocolVersion || typeof value.type !== 'string') return false;
-        if (value.type.startsWith('ai-suggestion-')) return aiEnabled && Boolean(window.__markdownMintAiProtocol.parseWebviewMessage(value));
-        switch (value.type) {
-          case 'ready': return value.requestId === undefined || (typeof value.requestId === 'string' && value.requestId.length <= 160);
-          case 'edit': return versionValue(value.baseVersion) && safeOperation(value.operationId) && safeMarkdown(value.markdown);
-          case 'undo':
-          case 'redo': return safeOperation(value.operationId) && optionalVersion(value.baseVersion);
-          case 'source': return optionalString(value.operationId);
-          case 'set-profile': return (value.profile === 'github' || value.profile === 'gitlab' || value.profile === 'commonmark') && versionValue(value.baseVersion) && safeOperation(value.operationId);
-          case 'format': return versionValue(value.baseVersion) && safeOperation(value.operationId);
-          case 'preview': return optionalVersion(value.baseVersion) && optionalString(value.operationId);
-          case 'recoverDraft': return versionValue(value.baseVersion) && safeOperation(value.operationId) && safeMarkdown(value.markdown);
-          case 'open-link': return safeLinkHref(value.href);
-          case 'workspace-file-search': return safeOperation(value.requestId) && safeFileSearchQuery(value.query) && (value.filter === 'all' || value.filter === 'image');
-          case 'workspace-file-search-warmup': return true;
-          case 'notify': return (value.level === 'info' || value.level === 'warning' || value.level === 'error') && typeof value.message === 'string' && value.message.length <= 1024 && optionalString(value.operationId);
-          default: return false;
-        }
-      };
-      const deliver = data => window.dispatchEvent(new MessageEvent('message', { data: { protocolVersion, ...data } }));
-      const typography = { fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif', fontSize: 14, lineHeight: 1.6 };
-      const reject = (operationId, reason, message, draftMarkdown) => deliver({ type: 'edit-rejected', operationId, reason, message, currentMarkdown: markdown, currentVersion: version, ...(draftMarkdown === undefined ? {} : { draftMarkdown }) });
-      const accept = (operationId, reason = 'ack') => deliver({ type: 'document', markdown, version, profile, ...(operationId === undefined ? {} : { operationId }), ...(aiEnabled ? { documentId: 'file:///browser.md' } : {}), reason, mode: 'editor', typography });
-      const mermaidMetrics = () => {
-        const visible = svg => {
-          const box = svg.getBoundingClientRect();
-          return box.width > 0 && box.height > 0;
-        };
-        const flowcharts = Array.from(document.querySelectorAll('.mm-mermaid svg[aria-roledescription="flowchart-v2"]')).filter(visible);
-        const flowchartNodes = flowcharts.flatMap(svg => Array.from(svg.querySelectorAll('.node'))).map(node => {
-          const shape = node.querySelector('.label-container');
-          const text = node.querySelector('.label text');
-          if (!shape || !text) return { id: node.id, text: text?.textContent ?? '', textAnchor: 'missing', centerDelta: Infinity };
-          const shapeBox = shape.getBoundingClientRect();
-          const textBox = text.getBoundingClientRect();
-          return {
-            id: node.id,
-            text: text.textContent ?? '',
-            textAnchor: getComputedStyle(text).textAnchor,
-            shapeTag: shape?.querySelector('rect, circle, ellipse, polygon, path')?.tagName.toLowerCase() ?? shape?.tagName.toLowerCase() ?? 'missing',
-            rounded: shape?.classList.contains('outer-path') || Number(shape?.getAttribute('rx') ?? shape?.querySelector('rect')?.getAttribute('rx') ?? 0) > 0,
-            centerDelta: Math.abs(
-              (textBox.left + textBox.width / 2) -
-              (shapeBox.left + shapeBox.width / 2)
-            ),
-            shapeBox: shapeBox.toJSON(),
-            textBox: textBox.toJSON()
-          };
+    <link rel="stylesheet" href="/__vscode__/markdown.css" />
+    <link rel="stylesheet" href="/media/document.css" />
+    <link rel="stylesheet" href="/dist/katex/katex.css" />
+    <link rel="stylesheet" href="/media/webview.css" />
+  </head>
+  <body data-markdown-mint-mode="editor">
+    <main
+      id="app"
+      aria-label="Markdown Mint"
+      data-mermaid-runtime-uri="/dist/mermaid.js"
+      data-mermaid-runtime-nonce="mm-test-nonce"
+    ></main>
+    <!-- markdown-mint-ai-protocol -->
+    <script nonce="mm-test-nonce">
+      window.__markdownMintCspViolations = [];
+      document.addEventListener("securitypolicyviolation", (event) => {
+        window.__markdownMintCspViolations.push({
+          directive: event.effectiveDirective,
+          blockedURI: event.blockedURI,
         });
-        const edgeLabels = flowcharts.flatMap(svg => Array.from(svg.querySelectorAll('.edgeLabel text'))).map(text => ({
-          text: text.textContent ?? '',
-          attribute: text.getAttribute('text-anchor'),
-          computed: getComputedStyle(text).textAnchor
-        }));
-        const sequenceMessages = Array.from(document.querySelectorAll('.mm-mermaid svg[aria-roledescription="sequence"]')).filter(visible).flatMap(svg => Array.from(svg.querySelectorAll('.messageText'))).map(text => ({
-          text: text.textContent ?? '',
-          attribute: text.getAttribute('text-anchor'),
-          computed: getComputedStyle(text).textAnchor
-        }));
-        const diagramKinds = Array.from(document.querySelectorAll('.mm-mermaid svg[aria-roledescription]')).filter(visible).map(svg => svg.getAttribute('aria-roledescription'));
-        const clusterCount = flowcharts.reduce((count, svg) => count + svg.querySelectorAll('.cluster').length, 0);
-        const cspViolations = window.__markdownMintCspViolations ?? [];
-        return {
-          flowchartCount: flowcharts.length,
-          flowchartNodeCount: flowchartNodes.length,
-          flowchartNodes,
-          edgeLabels,
-          sequenceMessages,
-          diagramKinds,
-          clusterCount,
-          sourcePreserved: markdown === mermaidFixture,
-          coverageSourcePreserved: markdown === mermaidCoverageFixture,
-          cspViolations,
-          unexpectedCspViolations: cspViolations.filter(violation =>
-            violation.directive !== 'style-src-elem' || violation.blockedURI !== 'inline'
-          )
+        document.documentElement.dataset.mmCspViolationCount = String(
+          window.__markdownMintCspViolations.length,
+        );
+        document.documentElement.dataset.mmCspLastDirective =
+          event.effectiveDirective;
+        document.documentElement.setAttribute(
+          "data-mm-csp-last-blocked",
+          String(event.blockedURI || "unknown"),
+        );
+        document.documentElement.setAttribute(
+          "data-mm-csp-last-source",
+          String(event.sourceFile || "unknown"),
+        );
+        document.documentElement.setAttribute(
+          "data-mm-csp-last-sample",
+          String(event.sample || "unknown"),
+        );
+      });
+      (() => {
+        const protocolVersion = 1;
+        const aiEnabled = new URLSearchParams(location.search).has("ai");
+        let aiState = {
+          protocolVersion,
+          type: "ai-suggestion-state",
+          sessionId: "ai-browser",
+          settingsGeneration: 1,
+          autoTrigger: false,
+          statusText: "Fake Copilot ready",
+          availability: "ready",
         };
-      };
-      const mermaidCheck = () => {
-        const metrics = mermaidMetrics();
-        const failures = [];
-        const coverage = fixture === 'mermaid-coverage';
-        if (metrics.flowchartCount !== 1) failures.push(`expected one flowchart, got ${metrics.flowchartCount}`);
-        if (coverage && metrics.flowchartNodeCount < 5) failures.push(`expected at least five coverage nodes, got ${metrics.flowchartNodeCount}`);
-        if (!coverage && metrics.flowchartNodeCount !== 6) failures.push(`expected six flowchart nodes, got ${metrics.flowchartNodeCount}`);
-        for (const node of metrics.flowchartNodes) {
-          if (node.textAnchor !== 'middle') failures.push(`${node.id} text-anchor is ${node.textAnchor}`);
-          if (node.centerDelta > 2.5) failures.push(`${node.id} center delta is ${node.centerDelta.toFixed(2)}px`);
-        }
-        const branchLabels = metrics.edgeLabels.filter(label => label.text === 'Yes' || label.text === 'No');
-        if (branchLabels.length !== 2) failures.push(`expected Yes and No edge labels, got ${branchLabels.length}`);
-        if (branchLabels.some(label => label.attribute !== 'middle' || label.computed !== 'middle')) failures.push('Yes / No edge-label alignment changed');
-        if (coverage) {
-          if (!metrics.diagramKinds.includes('classDiagram')) failures.push('class diagram was not rendered');
-          if (!metrics.diagramKinds.includes('stateDiagram')) failures.push('state diagram was not rendered');
-          if (metrics.clusterCount < 1) failures.push('subgraph was not rendered');
-          const labels = metrics.flowchartNodes.map(node => node.text).join(' ');
-          if (!labels.includes('日本語') || !labels.includes('Markdown')) failures.push('coverage labels were not rendered');
-          if (!metrics.flowchartNodes.some(node => node.rounded)) failures.push('rounded node was not rendered');
-          if (!metrics.flowchartNodes.some(node => node.shapeTag === 'polygon')) failures.push('diamond node was not rendered');
-        } else {
-          if (metrics.sequenceMessages.length !== 4) failures.push(`expected four sequence messages, got ${metrics.sequenceMessages.length}`);
-          if (metrics.sequenceMessages.some(label => label.computed !== 'middle')) failures.push('sequence message alignment changed');
-          if (!metrics.sourcePreserved) failures.push('Mermaid Markdown source changed');
-        }
-        if (coverage && !metrics.coverageSourcePreserved) failures.push('coverage Mermaid Markdown source changed');
-        if (metrics.unexpectedCspViolations.length > 0) failures.push('unexpected CSP violation detected');
-        return { pass: failures.length === 0, failures, metrics };
-      };
-      const host = {
-        postMessage(message) {
-          messages.push(clone(message));
-          if (!validWebviewMessage(message)) {
-            deliver({ type: 'error', message: 'Malformed or unsupported webview message.' });
-            return;
+        let aiInvocation = 0;
+        const markdownFixture = [
+          "# Browser harness",
+          "",
+          "Paragraph with **marks** and a [link](#).",
+          "",
+          "- [ ] Task",
+          "",
+          "```ts",
+          'const value = "日本語";',
+          "```",
+          "",
+          "| Name | 値 | 空欄 |",
+          "| --- | --- | --- |",
+          "| A | 日本語 |  |",
+        ].join("\n");
+        const mathFixture = [
+          "## Math browser fixture",
+          "",
+          "Inline: $E = mc^2$",
+          "",
+          "$\\frac{-b \\pm \\sqrt{b^2 - 4ac}}{2a}$",
+          "",
+          "$$",
+          "\\sum_{n=1}^{100}",
+          "\\frac{1}{n^2}",
+          "=",
+          "\\frac{\\pi^2}{6}",
+          "$$",
+          "",
+          "$$",
+          "A =",
+          "\\begin{bmatrix}",
+          "1 & 2 & 3 \\\\",
+          "4 & 5 & 6 \\\\",
+          "7 & 8 & 9",
+          "\\end{bmatrix}",
+          "$$",
+        ].join("\n");
+        const mermaidFixture = [
+          "# Mermaid browser fixture",
+          "",
+          "```mermaid",
+          "flowchart LR",
+          "    A[Markdown Source] --> B[Rich Editor]",
+          "    B --> C[Preview]",
+          "    C --> D{Looks identical?}",
+          "    D -- Yes --> E[Save]",
+          "    D -- No --> B",
+          "    E --> F[GitHub / GitLab]",
+          "```",
+          "",
+          "```mermaid",
+          "sequenceDiagram",
+          "    participant U as User",
+          "    participant E as Editor",
+          "    participant M as Markdown",
+          "    participant P as Preview",
+          "    U->>E: Edit",
+          "    E->>M: Update",
+          "    M->>P: Render",
+          "    P-->>U: Preview",
+          "```",
+        ].join("\n");
+        const mermaidCoverageFixture = [
+          "# Mermaid coverage fixture",
+          "",
+          "```mermaid",
+          "flowchart TD",
+          "    subgraph Flow [処理フロー]",
+          "        A[Short] --> B([日本語 ノード])",
+          "        B --> C{Long label: choose a path}",
+          '        C -->|Yes| D["**Markdown**<br/>複数行"]',
+          "        C -->|No| E[Database]",
+          "    end",
+          "```",
+          "",
+          "```mermaid",
+          "classDiagram",
+          "    class Editor {",
+          "        +String source",
+          "        +render()",
+          "    }",
+          "```",
+          "",
+          "```mermaid",
+          "stateDiagram-v2",
+          "    [*] --> Editing",
+          "    Editing --> Preview",
+          "```",
+        ].join("\n");
+        const fixture = new URLSearchParams(location.search).get("fixture");
+        const initialMode = new URLSearchParams(location.search).get("mode");
+        if (initialMode === "preview")
+          document.body.dataset.markdownMintMode = "preview";
+        let markdown =
+          fixture === "math"
+            ? mathFixture
+            : fixture === "mermaid"
+              ? mermaidFixture
+              : fixture === "mermaid-coverage"
+                ? mermaidCoverageFixture
+                : markdownFixture;
+        let version = 1;
+        const requestedProfile = new URLSearchParams(location.search).get(
+          "profile",
+        );
+        let profile =
+          requestedProfile === "gitlab" || requestedProfile === "commonmark"
+            ? requestedProfile
+            : "github";
+        const history = [];
+        const future = [];
+        const messages = [];
+        let state = {};
+        const clone = (value) => JSON.parse(JSON.stringify(value));
+        const isRecord = (value) =>
+          typeof value === "object" && value !== null && !Array.isArray(value);
+        const safeMarkdown = (value) =>
+          typeof value === "string" && value.length <= 2000000;
+        const safeLinkHref = (value) =>
+          typeof value === "string" && value.length > 0 && value.length <= 8192;
+        const safeOperation = (value) =>
+          typeof value === "string" &&
+          value.length > 0 &&
+          value.length <= 160 &&
+          /^[a-zA-Z0-9._:-]+$/.test(value);
+        const safeFileSearchQuery = (value) =>
+          typeof value === "string" &&
+          value.length <= 256 &&
+          !/[\u0000-\u001f\u007f]/.test(value);
+        const optionalString = (value) =>
+          value === undefined ||
+          (typeof value === "string" && value.length <= 160);
+        const versionValue = (value) =>
+          Number.isSafeInteger(value) && value >= 1;
+        const optionalVersion = (value) =>
+          value === undefined || versionValue(value);
+        const requestedWorkspaceFileCount = Number.parseInt(
+          new URLSearchParams(location.search).get("workspaceFiles") ?? "",
+          10,
+        );
+        const requestedWorkspaceSearchDelay = Number.parseInt(
+          new URLSearchParams(location.search).get("workspaceSearchDelay") ??
+            "",
+          10,
+        );
+        const workspaceSearchDelay =
+          Number.isSafeInteger(requestedWorkspaceSearchDelay) &&
+          requestedWorkspaceSearchDelay > 0
+            ? Math.min(requestedWorkspaceSearchDelay, 5000)
+            : 0;
+        const benchmarkWorkspaceFiles =
+          Number.isSafeInteger(requestedWorkspaceFileCount) &&
+          requestedWorkspaceFileCount > 0
+            ? Array.from(
+                { length: requestedWorkspaceFileCount },
+                (_, index) => {
+                  const group = String(Math.floor(index / 100)).padStart(
+                    3,
+                    "0",
+                  );
+                  const number = String(index).padStart(5, "0");
+                  const extension = index % 2 === 0 ? ".png" : ".md";
+                  return {
+                    fileName: `benchmark-${number}${extension}`,
+                    directory: `docs/benchmark/${group}/`,
+                    relativePath: `../docs/benchmark/${group}/benchmark-${number}${extension}`,
+                  };
+                },
+              )
+            : [];
+        const browserWorkspaceFiles =
+          benchmarkWorkspaceFiles.length > 0
+            ? benchmarkWorkspaceFiles
+            : [
+                {
+                  fileName: "hoge.pdf",
+                  directory: "specs/",
+                  relativePath: "../specs/hoge.pdf",
+                },
+                {
+                  fileName: "hoge-design.md",
+                  directory: "docs/",
+                  relativePath: "../docs/hoge-design.md",
+                },
+                {
+                  fileName: "how-to-use.md",
+                  directory: "docs/",
+                  relativePath: "../docs/how-to-use.md",
+                },
+                {
+                  fileName: "logo.png",
+                  directory: "assets/",
+                  relativePath: "../assets/logo.png",
+                },
+                {
+                  fileName: "logo-dark.svg",
+                  directory: "assets/",
+                  relativePath: "../assets/logo-dark.svg",
+                },
+                {
+                  fileName: "manual.pdf",
+                  directory: "docs/",
+                  relativePath: "./manual.pdf",
+                },
+                {
+                  fileName: "guide.md",
+                  directory: ".git/",
+                  relativePath: "../.git/guide.md",
+                },
+                {
+                  fileName: "guide.md",
+                  directory: "node_modules/pkg/",
+                  relativePath: "../node_modules/pkg/guide.md",
+                },
+                ...Array.from({ length: 10 }, (_, index) => ({
+                  fileName: `candidate-${String(index + 1).padStart(2, "0")}.md`,
+                  directory: "docs/candidates/",
+                  relativePath: `../docs/candidates/candidate-${String(index + 1).padStart(2, "0")}.md`,
+                })),
+              ];
+        const searchWorkspaceFiles = (query, filter) => {
+          const lower = query.trim().toLowerCase();
+          return browserWorkspaceFiles
+            .filter(
+              (candidate) =>
+                !/(?:^|\/)\.(?:git)(?:\/|$)|(?:^|\/)node_modules(?:\/|$)/i.test(
+                  candidate.directory,
+                ),
+            )
+            .filter(
+              (candidate) =>
+                filter !== "image" ||
+                /\.(?:png|jpe?g|gif|webp|svg|avif|bmp)$/i.test(
+                  candidate.fileName,
+                ),
+            )
+            .filter((candidate) =>
+              `${candidate.fileName} ${candidate.directory}`
+                .toLowerCase()
+                .includes(lower),
+            )
+            .slice(0, 10);
+        };
+        // Keep this transport check in lockstep with parseWebviewMessage in
+        // src/shared/protocol.ts. The fixture mocks VS Code only; it never
+        // bypasses the extension wire contract.
+        const validWebviewMessage = (value) => {
+          if (
+            !isRecord(value) ||
+            value.protocolVersion !== protocolVersion ||
+            typeof value.type !== "string"
+          )
+            return false;
+          if (value.type.startsWith("ai-suggestion-"))
+            return (
+              aiEnabled &&
+              Boolean(
+                window.__markdownMintAiProtocol.parseWebviewMessage(value),
+              )
+            );
+          switch (value.type) {
+            case "ready":
+              return (
+                value.requestId === undefined ||
+                (typeof value.requestId === "string" &&
+                  value.requestId.length <= 160)
+              );
+            case "edit":
+              return (
+                versionValue(value.baseVersion) &&
+                safeOperation(value.operationId) &&
+                safeMarkdown(value.markdown)
+              );
+            case "undo":
+            case "redo":
+              return (
+                safeOperation(value.operationId) &&
+                optionalVersion(value.baseVersion)
+              );
+            case "source":
+              return optionalString(value.operationId);
+            case "set-profile":
+              return (
+                (value.profile === "github" ||
+                  value.profile === "gitlab" ||
+                  value.profile === "commonmark") &&
+                versionValue(value.baseVersion) &&
+                safeOperation(value.operationId)
+              );
+            case "format":
+              return (
+                versionValue(value.baseVersion) &&
+                safeOperation(value.operationId)
+              );
+            case "preview":
+              return (
+                optionalVersion(value.baseVersion) &&
+                optionalString(value.operationId)
+              );
+            case "recoverDraft":
+              return (
+                versionValue(value.baseVersion) &&
+                safeOperation(value.operationId) &&
+                safeMarkdown(value.markdown)
+              );
+            case "open-link":
+              return safeLinkHref(value.href);
+            case "workspace-file-search":
+              return (
+                safeOperation(value.requestId) &&
+                safeFileSearchQuery(value.query) &&
+                (value.filter === "all" || value.filter === "image")
+              );
+            case "workspace-file-search-warmup":
+              return true;
+            case "notify":
+              return (
+                (value.level === "info" ||
+                  value.level === "warning" ||
+                  value.level === "error") &&
+                typeof value.message === "string" &&
+                value.message.length <= 1024 &&
+                optionalString(value.operationId)
+              );
+            default:
+              return false;
           }
-          if (message.type === 'edit') {
-            if (message.baseVersion !== version) {
-              reject(message.operationId, 'stale', 'The Markdown document changed before this edit arrived.', message.markdown);
+        };
+        const deliver = (data) =>
+          window.dispatchEvent(
+            new MessageEvent("message", { data: { protocolVersion, ...data } }),
+          );
+        const typography = {
+          fontFamily:
+            '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+          fontSize: 14,
+          lineHeight: 1.6,
+        };
+        const reject = (operationId, reason, message, draftMarkdown) =>
+          deliver({
+            type: "edit-rejected",
+            operationId,
+            reason,
+            message,
+            currentMarkdown: markdown,
+            currentVersion: version,
+            ...(draftMarkdown === undefined ? {} : { draftMarkdown }),
+          });
+        const accept = (operationId, reason = "ack") =>
+          deliver({
+            type: "document",
+            markdown,
+            version,
+            profile,
+            ...(operationId === undefined ? {} : { operationId }),
+            ...(aiEnabled ? { documentId: "file:///browser.md" } : {}),
+            reason,
+            mode: "editor",
+            typography,
+          });
+        const mermaidMetrics = () => {
+          const visible = (svg) => {
+            const box = svg.getBoundingClientRect();
+            return box.width > 0 && box.height > 0;
+          };
+          const flowcharts = Array.from(
+            document.querySelectorAll(
+              '.mm-mermaid svg[aria-roledescription="flowchart-v2"]',
+            ),
+          ).filter(visible);
+          const flowchartNodes = flowcharts
+            .flatMap((svg) => Array.from(svg.querySelectorAll(".node")))
+            .map((node) => {
+              const shape = node.querySelector(".label-container");
+              const text = node.querySelector(".label text");
+              if (!shape || !text)
+                return {
+                  id: node.id,
+                  text: text?.textContent ?? "",
+                  textAnchor: "missing",
+                  centerDelta: Infinity,
+                };
+              const shapeBox = shape.getBoundingClientRect();
+              const textBox = text.getBoundingClientRect();
+              return {
+                id: node.id,
+                text: text.textContent ?? "",
+                textAnchor: getComputedStyle(text).textAnchor,
+                shapeTag:
+                  shape
+                    ?.querySelector("rect, circle, ellipse, polygon, path")
+                    ?.tagName.toLowerCase() ??
+                  shape?.tagName.toLowerCase() ??
+                  "missing",
+                rounded:
+                  shape?.classList.contains("outer-path") ||
+                  Number(
+                    shape?.getAttribute("rx") ??
+                      shape?.querySelector("rect")?.getAttribute("rx") ??
+                      0,
+                  ) > 0,
+                centerDelta: Math.abs(
+                  textBox.left +
+                    textBox.width / 2 -
+                    (shapeBox.left + shapeBox.width / 2),
+                ),
+                shapeBox: shapeBox.toJSON(),
+                textBox: textBox.toJSON(),
+              };
+            });
+          const edgeLabels = flowcharts
+            .flatMap((svg) =>
+              Array.from(svg.querySelectorAll(".edgeLabel text")),
+            )
+            .map((text) => ({
+              text: text.textContent ?? "",
+              attribute: text.getAttribute("text-anchor"),
+              computed: getComputedStyle(text).textAnchor,
+            }));
+          const sequenceMessages = Array.from(
+            document.querySelectorAll(
+              '.mm-mermaid svg[aria-roledescription="sequence"]',
+            ),
+          )
+            .filter(visible)
+            .flatMap((svg) => Array.from(svg.querySelectorAll(".messageText")))
+            .map((text) => ({
+              text: text.textContent ?? "",
+              attribute: text.getAttribute("text-anchor"),
+              computed: getComputedStyle(text).textAnchor,
+            }));
+          const diagramKinds = Array.from(
+            document.querySelectorAll(".mm-mermaid svg[aria-roledescription]"),
+          )
+            .filter(visible)
+            .map((svg) => svg.getAttribute("aria-roledescription"));
+          const clusterCount = flowcharts.reduce(
+            (count, svg) => count + svg.querySelectorAll(".cluster").length,
+            0,
+          );
+          const cspViolations = window.__markdownMintCspViolations ?? [];
+          return {
+            flowchartCount: flowcharts.length,
+            flowchartNodeCount: flowchartNodes.length,
+            flowchartNodes,
+            edgeLabels,
+            sequenceMessages,
+            diagramKinds,
+            clusterCount,
+            sourcePreserved: markdown === mermaidFixture,
+            coverageSourcePreserved: markdown === mermaidCoverageFixture,
+            cspViolations,
+            unexpectedCspViolations: cspViolations.filter(
+              (violation) =>
+                violation.directive !== "style-src-elem" ||
+                violation.blockedURI !== "inline",
+            ),
+          };
+        };
+        const mermaidCheck = () => {
+          const metrics = mermaidMetrics();
+          const failures = [];
+          const coverage = fixture === "mermaid-coverage";
+          if (metrics.flowchartCount !== 1)
+            failures.push(
+              `expected one flowchart, got ${metrics.flowchartCount}`,
+            );
+          if (coverage && metrics.flowchartNodeCount < 5)
+            failures.push(
+              `expected at least five coverage nodes, got ${metrics.flowchartNodeCount}`,
+            );
+          if (!coverage && metrics.flowchartNodeCount !== 6)
+            failures.push(
+              `expected six flowchart nodes, got ${metrics.flowchartNodeCount}`,
+            );
+          for (const node of metrics.flowchartNodes) {
+            if (node.textAnchor !== "middle")
+              failures.push(`${node.id} text-anchor is ${node.textAnchor}`);
+            if (node.centerDelta > 2.5)
+              failures.push(
+                `${node.id} center delta is ${node.centerDelta.toFixed(2)}px`,
+              );
+          }
+          const branchLabels = metrics.edgeLabels.filter(
+            (label) => label.text === "Yes" || label.text === "No",
+          );
+          if (branchLabels.length !== 2)
+            failures.push(
+              `expected Yes and No edge labels, got ${branchLabels.length}`,
+            );
+          if (
+            branchLabels.some(
+              (label) =>
+                label.attribute !== "middle" || label.computed !== "middle",
+            )
+          )
+            failures.push("Yes / No edge-label alignment changed");
+          if (coverage) {
+            if (!metrics.diagramKinds.includes("classDiagram"))
+              failures.push("class diagram was not rendered");
+            if (!metrics.diagramKinds.includes("stateDiagram"))
+              failures.push("state diagram was not rendered");
+            if (metrics.clusterCount < 1)
+              failures.push("subgraph was not rendered");
+            const labels = metrics.flowchartNodes
+              .map((node) => node.text)
+              .join(" ");
+            if (!labels.includes("日本語") || !labels.includes("Markdown"))
+              failures.push("coverage labels were not rendered");
+            if (!metrics.flowchartNodes.some((node) => node.rounded))
+              failures.push("rounded node was not rendered");
+            if (
+              !metrics.flowchartNodes.some(
+                (node) => node.shapeTag === "polygon",
+              )
+            )
+              failures.push("diamond node was not rendered");
+          } else {
+            if (metrics.sequenceMessages.length !== 4)
+              failures.push(
+                `expected four sequence messages, got ${metrics.sequenceMessages.length}`,
+              );
+            if (
+              metrics.sequenceMessages.some(
+                (label) => label.computed !== "middle",
+              )
+            )
+              failures.push("sequence message alignment changed");
+            if (!metrics.sourcePreserved)
+              failures.push("Mermaid Markdown source changed");
+          }
+          if (coverage && !metrics.coverageSourcePreserved)
+            failures.push("coverage Mermaid Markdown source changed");
+          if (metrics.unexpectedCspViolations.length > 0)
+            failures.push("unexpected CSP violation detected");
+          return { pass: failures.length === 0, failures, metrics };
+        };
+        const host = {
+          postMessage(message) {
+            messages.push(clone(message));
+            if (!validWebviewMessage(message)) {
+              deliver({
+                type: "error",
+                message: "Malformed or unsupported webview message.",
+              });
               return;
             }
-            history.push(markdown);
-            future.length = 0;
-            markdown = message.markdown;
-            version += 1;
-            accept(message.operationId);
-          } else if (message.type === 'set-profile') {
-            if (message.baseVersion !== version) {
-              deliver({ type: 'error', operationId: message.operationId, message: 'The Markdown document changed before the profile selection arrived.' });
-              accept(undefined, 'external');
-              return;
-            }
-            profile = message.profile;
-            state = { ...state, profile };
-            accept(message.operationId, 'ack');
-          } else if (message.type === 'recoverDraft') {
-            if (message.baseVersion !== version) {
-              reject(message.operationId, 'stale', 'The Markdown document changed before the draft could be opened.', message.markdown);
-              return;
-            }
-            state = { ...state, recoveryDraft: message.markdown };
-            deliver({ type: 'recovery-opened', operationId: message.operationId, currentMarkdown: markdown, currentVersion: version, profile, draftUri: 'untitled:markdown-mint-recovery.md' });
-            // Recovery opens a separate untitled document. The authoritative
-            // document remains unchanged and is sent back with no operation id.
-            accept(undefined, 'recovery');
-          } else if (message.type === 'ready') {
-            accept(undefined, 'initial');
-            if (aiEnabled) deliver(aiState);
-          } else if (message.type === 'undo' || message.type === 'redo') {
-            if (message.baseVersion !== undefined && message.baseVersion !== version) {
-              reject(message.operationId, 'stale', 'The Markdown document changed before undo/redo started.');
-              return;
-            }
-            const source = message.type === 'undo' ? history : future;
-            const target = message.type === 'undo' ? future : history;
-            const previous = source.pop();
-            if (previous !== undefined) {
-              target.push(markdown);
-              markdown = previous;
+            if (message.type === "edit") {
+              if (message.baseVersion !== version) {
+                reject(
+                  message.operationId,
+                  "stale",
+                  "The Markdown document changed before this edit arrived.",
+                  message.markdown,
+                );
+                return;
+              }
+              history.push(markdown);
+              future.length = 0;
+              markdown = message.markdown;
               version += 1;
+              accept(message.operationId);
+            } else if (message.type === "set-profile") {
+              if (message.baseVersion !== version) {
+                deliver({
+                  type: "error",
+                  operationId: message.operationId,
+                  message:
+                    "The Markdown document changed before the profile selection arrived.",
+                });
+                accept(undefined, "external");
+                return;
+              }
+              profile = message.profile;
+              state = { ...state, profile };
+              accept(message.operationId, "ack");
+            } else if (message.type === "recoverDraft") {
+              if (message.baseVersion !== version) {
+                reject(
+                  message.operationId,
+                  "stale",
+                  "The Markdown document changed before the draft could be opened.",
+                  message.markdown,
+                );
+                return;
+              }
+              state = { ...state, recoveryDraft: message.markdown };
+              deliver({
+                type: "recovery-opened",
+                operationId: message.operationId,
+                currentMarkdown: markdown,
+                currentVersion: version,
+                profile,
+                draftUri: "untitled:markdown-mint-recovery.md",
+              });
+              // Recovery opens a separate untitled document. The authoritative
+              // document remains unchanged and is sent back with no operation id.
+              accept(undefined, "recovery");
+            } else if (message.type === "ready") {
+              accept(undefined, "initial");
+              if (aiEnabled) deliver(aiState);
+            } else if (message.type === "undo" || message.type === "redo") {
+              if (
+                message.baseVersion !== undefined &&
+                message.baseVersion !== version
+              ) {
+                reject(
+                  message.operationId,
+                  "stale",
+                  "The Markdown document changed before undo/redo started.",
+                );
+                return;
+              }
+              const source = message.type === "undo" ? history : future;
+              const target = message.type === "undo" ? future : history;
+              const previous = source.pop();
+              if (previous !== undefined) {
+                target.push(markdown);
+                markdown = previous;
+                version += 1;
+              }
+              accept(message.operationId, message.type);
+            } else if (message.type === "format") {
+              if (message.baseVersion !== version) {
+                deliver({
+                  type: "format-rejected",
+                  operationId: message.operationId,
+                  reason: "stale",
+                  message:
+                    "The Markdown document changed before formatting started.",
+                  currentMarkdown: markdown,
+                  currentVersion: version,
+                });
+                return;
+              }
+              accept(message.operationId, "format");
+            } else if (message.type === "open-link") {
+              // The browser harness verifies the Webview transport only. The
+              // extension host owns URI classification and the actual opener.
+            } else if (message.type === "workspace-file-search") {
+              const sendResult = () =>
+                deliver({
+                  type: "workspace-file-search-result",
+                  requestId: message.requestId,
+                  candidates: searchWorkspaceFiles(
+                    message.query,
+                    message.filter,
+                  ),
+                });
+              if (workspaceSearchDelay > 0)
+                setTimeout(sendResult, workspaceSearchDelay);
+              else sendResult();
             }
-            accept(message.operationId, message.type);
-          } else if (message.type === 'format') {
-            if (message.baseVersion !== version) {
-              deliver({ type: 'format-rejected', operationId: message.operationId, reason: 'stale', message: 'The Markdown document changed before formatting started.', currentMarkdown: markdown, currentVersion: version });
-              return;
-            }
-            accept(message.operationId, 'format');
-          } else if (message.type === 'open-link') {
-            // The browser harness verifies the Webview transport only. The
-            // extension host owns URI classification and the actual opener.
-          } else if (message.type === 'workspace-file-search') {
-            const sendResult = () => deliver({ type: 'workspace-file-search-result', requestId: message.requestId, candidates: searchWorkspaceFiles(message.query, message.filter) });
-            if (workspaceSearchDelay > 0) setTimeout(sendResult, workspaceSearchDelay);
-            else sendResult();
-          }
-        },
-        getState: () => clone(state),
-        setState: next => { state = clone(next); }
-      };
-      window.acquireVsCodeApi = () => host;
-      window.__markdownMintHarness = {
-        get messages() { return messages; },
-        get document() { return { markdown, version, profile }; },
-        deliverExternal(nextMarkdown, nextProfile = profile) {
-          markdown = nextMarkdown;
-          if (nextProfile === 'github' || nextProfile === 'gitlab' || nextProfile === 'commonmark') profile = nextProfile;
-          version += 1;
-          accept(undefined, 'external');
-        },
-        get state() { return clone(state); },
-        setAiState(patch) { aiState = { ...aiState, ...patch }; deliver(aiState); },
-        triggerAi() { deliver({ protocolVersion, type: 'ai-suggestion-trigger', sessionId: aiState.sessionId, settingsGeneration: aiState.settingsGeneration, invocationId: `command-${++aiInvocation}` }); },
-        respondAi(request, text = ' 続きを書きます🌿', reason = 'ready') {
-          const { context, trigger, invocationId, ...identity } = request;
-          const result = { ...identity, type: 'ai-suggestion-result', text, reason };
-          if (!window.__markdownMintAiProtocol.isHostMessage(result)) throw Error('Invalid fake AI reply');
-          deliver(result);
-        },
-        metrics() {
-          const rich = document.querySelector('.mm-rich-panel .ProseMirror');
-          const preview = document.querySelector('.mm-preview-panel .mm-document-content');
-          const measure = content => content ? {
-            content: content.getBoundingClientRect().toJSON(),
-            heading: content.querySelector('h1')?.getBoundingClientRect().toJSON(),
-            paragraph: content.querySelector('p')?.getBoundingClientRect().toJSON(),
-            task: content.querySelector('li.task-list-item, .mm-task-item.mm-task-task')?.getBoundingClientRect().toJSON(),
-            table: content.querySelector('table')?.getBoundingClientRect().toJSON(),
-            cells: Array.from(content.querySelectorAll('th,td')).map(cell => cell.getBoundingClientRect().toJSON()),
-            code: content.querySelector('pre')?.getBoundingClientRect().toJSON(),
-            font: getComputedStyle(content).fontFamily,
-            size: getComputedStyle(content).fontSize,
-            line: getComputedStyle(content).lineHeight
-          } : undefined;
-          return { viewport: [innerWidth, innerHeight, document.documentElement.clientWidth], rich: measure(rich), preview: measure(preview), body: { width: document.body.clientWidth, scrollWidth: document.body.scrollWidth, scrollHeight: document.body.scrollHeight } };
-        },
-        mermaidMetrics,
-        mermaidCheck
-      };
-    })();
-  </script>
-  <script nonce="mm-test-nonce" src="/dist/webview.js"></script>
-</body>
+          },
+          getState: () => clone(state),
+          setState: (next) => {
+            state = clone(next);
+          },
+        };
+        window.acquireVsCodeApi = () => host;
+        window.__markdownMintHarness = {
+          get messages() {
+            return messages;
+          },
+          get document() {
+            return { markdown, version, profile };
+          },
+          deliverExternal(nextMarkdown, nextProfile = profile) {
+            markdown = nextMarkdown;
+            if (
+              nextProfile === "github" ||
+              nextProfile === "gitlab" ||
+              nextProfile === "commonmark"
+            )
+              profile = nextProfile;
+            version += 1;
+            accept(undefined, "external");
+          },
+          get state() {
+            return clone(state);
+          },
+          setAiState(patch) {
+            aiState = { ...aiState, ...patch };
+            deliver(aiState);
+          },
+          triggerAi() {
+            deliver({
+              protocolVersion,
+              type: "ai-suggestion-trigger",
+              sessionId: aiState.sessionId,
+              settingsGeneration: aiState.settingsGeneration,
+            });
+          },
+          respondAi(request, text = " 続きを書きます🌿", reason = "ready") {
+            const result = {
+              protocolVersion,
+              type: "ai-suggestion-result",
+              requestId: request.requestId,
+              sessionId: request.sessionId,
+              documentId: request.documentId,
+              baseVersion: request.baseVersion,
+              editorRevision: request.editorRevision,
+              settingsGeneration: request.settingsGeneration,
+              position: request.position,
+              targetKind: request.targetKind,
+              candidateId: "browser-candidate-" + ++aiInvocation,
+              partialAcceptanceOffset: 0,
+              text,
+              reason,
+            };
+            if (!window.__markdownMintAiProtocol.isHostMessage(result))
+              throw Error("Invalid fake AI reply");
+            deliver(result);
+          },
+          metrics() {
+            const rich = document.querySelector(".mm-rich-panel .ProseMirror");
+            const preview = document.querySelector(
+              ".mm-preview-panel .mm-document-content",
+            );
+            const measure = (content) =>
+              content
+                ? {
+                    content: content.getBoundingClientRect().toJSON(),
+                    heading: content
+                      .querySelector("h1")
+                      ?.getBoundingClientRect()
+                      .toJSON(),
+                    paragraph: content
+                      .querySelector("p")
+                      ?.getBoundingClientRect()
+                      .toJSON(),
+                    task: content
+                      .querySelector(
+                        "li.task-list-item, .mm-task-item.mm-task-task",
+                      )
+                      ?.getBoundingClientRect()
+                      .toJSON(),
+                    table: content
+                      .querySelector("table")
+                      ?.getBoundingClientRect()
+                      .toJSON(),
+                    cells: Array.from(content.querySelectorAll("th,td")).map(
+                      (cell) => cell.getBoundingClientRect().toJSON(),
+                    ),
+                    code: content
+                      .querySelector("pre")
+                      ?.getBoundingClientRect()
+                      .toJSON(),
+                    font: getComputedStyle(content).fontFamily,
+                    size: getComputedStyle(content).fontSize,
+                    line: getComputedStyle(content).lineHeight,
+                  }
+                : undefined;
+            return {
+              viewport: [
+                innerWidth,
+                innerHeight,
+                document.documentElement.clientWidth,
+              ],
+              rich: measure(rich),
+              preview: measure(preview),
+              body: {
+                width: document.body.clientWidth,
+                scrollWidth: document.body.scrollWidth,
+                scrollHeight: document.body.scrollHeight,
+              },
+            };
+          },
+          mermaidMetrics,
+          mermaidCheck,
+        };
+      })();
+    </script>
+    <script nonce="mm-test-nonce" src="/dist/webview.js"></script>
+  </body>
 </html>

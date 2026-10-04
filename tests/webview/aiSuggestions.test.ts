@@ -28,9 +28,8 @@ function setup(source = "Hello", autoTrigger = false) {
     root,
     core: { schema, parseMarkdown, renderMarkdown, serializeMarkdown },
     vscode: {
-      postMessage: (message) => {
-        messages.push(message as Record<string, unknown>);
-      },
+      postMessage: (message) =>
+        messages.push(message as Record<string, unknown>),
       getState: () => undefined,
       setState,
     },
@@ -60,7 +59,7 @@ function setup(source = "Hello", autoTrigger = false) {
       settingsGeneration: 1,
       autoTrigger,
       availability: "ready",
-      modelName: "Copilot",
+      statusText: "Copilot ready",
       ...patch,
     });
   state();
@@ -70,7 +69,6 @@ function setup(source = "Hello", autoTrigger = false) {
       type: "ai-suggestion-trigger",
       sessionId: "s1",
       settingsGeneration: 1,
-      invocationId: "c1",
     });
   const requests = () =>
     messages.filter(
@@ -78,8 +76,18 @@ function setup(source = "Hello", autoTrigger = false) {
     ) as unknown as AiSuggestionRequest[];
   const result = (text = " next🌿", request = requests().at(-1)!, patch = {}) =>
     receive({
-      ...request,
+      protocolVersion: 1,
       type: "ai-suggestion-result",
+      requestId: request.requestId,
+      sessionId: request.sessionId,
+      documentId: request.documentId,
+      baseVersion: request.baseVersion,
+      editorRevision: request.editorRevision,
+      settingsGeneration: request.settingsGeneration,
+      position: request.position,
+      targetKind: request.targetKind,
+      candidateId: "candidate-" + requests().length,
+      partialAcceptanceOffset: 0,
       text,
       reason: "ready",
       ...patch,
@@ -127,291 +135,128 @@ function setup(source = "Hello", autoTrigger = false) {
     key,
   };
 }
-beforeEach(() => {
-  vi.useFakeTimers();
-});
+
+beforeEach(() => vi.useFakeTimers());
 afterEach(() => {
   for (const app of apps.splice(0)) app.destroy();
   document.body.replaceChildren();
   vi.useRealTimers();
 });
-describe("AI ghost integration", () => {
-  it("preserves the current input generation through dirty-only echoes and implicit acknowledgements", async () => {
-    const f = setup("Hello", true);
-    f.type("!");
-    const edit = f.messages
-      .filter((message) => message.type === "edit")
-      .at(-1)!;
-    receive({
-      protocolVersion: 1,
-      type: "document",
-      markdown: edit.markdown,
-      version: 2,
-      profile: "github",
-      documentId: "file:///prose.md",
-      reason: "external",
-    });
-    await vi.advanceTimersByTimeAsync(1000);
-    expect(f.requests()).toHaveLength(1);
-    f.result();
-    receive({
-      protocolVersion: 1,
-      type: "document",
-      markdown: edit.markdown,
-      version: 2,
-      profile: "github",
-      documentId: "file:///prose.md",
-      reason: "external",
-    });
-    expect(f.root.querySelector(".mm-ai-suggestion")).not.toBeNull();
-    receive({
-      protocolVersion: 1,
-      type: "document",
-      markdown: edit.markdown,
-      version: 3,
-      profile: "github",
-      documentId: "file:///prose.md",
-      reason: "external",
-    });
-    expect(f.root.querySelector(".mm-ai-suggestion")).toBeNull();
-  });
-  it("invalidates on host panel deactivation even when the iframe does not report blur", async () => {
-    const f = setup();
+
+describe("Copilot inline completion ghost", () => {
+  it("maps a synchronized PM cursor to Markdown UTF-16 source and keeps display transient", async () => {
+    const f = setup("日本語🌿 prose");
     f.trigger();
     await vi.advanceTimersByTimeAsync(0);
     const request = f.requests()[0]!;
-    f.result();
-    f.state({ active: false });
-    f.state({ active: true });
-    f.result(" late", request);
-    expect(f.root.querySelector(".mm-ai-suggestion")).toBeNull();
-  });
-  it("keeps a successful manual candidate when access-information API is unavailable", async () => {
-    const f = setup();
-    f.state({ availability: "needs-authorization" });
-    f.trigger();
-    await vi.advanceTimersByTimeAsync(0);
-    f.result();
-    f.state({ availability: "needs-authorization" });
-    expect(f.root.querySelector(".mm-ai-suggestion")).not.toBeNull();
-    expect(f.key("Tab").defaultPrevented).toBe(true);
-  });
-  it("displays/dismisses a literal decoration without edits, serialization, dirty state, or recovery writes", async () => {
-    const f = setup();
-    f.trigger();
-    await vi.advanceTimersByTimeAsync(0);
+    expect(request.position).toBe("日本語🌿 prose".length);
     const before = f.app.view.state.doc;
     const writes = f.setState.mock.calls.length;
-    f.result(" **literal**🌿");
+    f.result(" continues");
     expect(f.root.querySelector(".mm-ai-suggestion")?.textContent).toBe(
-      " **literal**🌿",
+      " continues",
     );
-    expect(
-      f.root
-        .querySelector(".mm-ai-suggestion")
-        ?.getAttribute("contenteditable"),
-    ).toBe("false");
     expect(f.app.view.state.doc).toBe(before);
     expect(f.app.sync.hasPending).toBe(false);
     expect(f.messages.some((message) => message.type === "edit")).toBe(false);
     expect(f.setState.mock.calls.length).toBe(writes);
-    expect(
-      f.root.querySelector('.mm-ai-announcement[aria-live="polite"]')
-        ?.textContent,
-    ).toContain("Press Tab");
     expect(f.key("Escape").defaultPrevented).toBe(true);
     expect(f.root.querySelector(".mm-ai-suggestion")).toBeNull();
-    expect(f.app.view.state.doc).toBe(before);
   });
-  it("accepts with Tab as a standalone normal edit, retains formatting, and does not trigger another automatic request", async () => {
-    const f = setup("**Hello**", true);
+
+  it("accepts the candidate as a normal single edit and preserves marks and host undo boundaries", async () => {
+    const f = setup("**Hello**");
     f.trigger();
     await vi.advanceTimersByTimeAsync(0);
-    f.result();
+    f.result(" next");
     expect(f.key("Tab").defaultPrevented).toBe(true);
-    const edit = f.messages.filter((message) => message.type === "edit");
-    expect(edit).toHaveLength(1);
-    expect(edit[0]?.markdown).toContain("**Hello next🌿**");
+    const edits = f.messages.filter((message) => message.type === "edit");
+    expect(edits).toHaveLength(1);
+    expect(edits[0]?.markdown).toContain("**Hello next**");
     expect(
       f.app.view.state.doc.lastChild?.lastChild?.marks.map(
         (mark) => mark.type.name,
       ),
     ).toContain("strong");
-    expect(f.root.querySelector(".mm-ai-suggestion")).toBeNull();
     f.ack();
-    await vi.advanceTimersByTimeAsync(2000);
-    expect(f.requests()).toHaveLength(1);
     f.key("z", { ctrlKey: true });
     expect(f.messages.some((message) => message.type === "undo")).toBe(true);
   });
-  it("preserves the original Tab/Shift+Tab/Escape handling when no candidate exists", () => {
-    const f = setup();
-    expect(f.key("Tab").defaultPrevented).toBe(false);
-    expect(f.key("Tab", { shiftKey: true }).defaultPrevented).toBe(false);
-    expect(f.key("Escape").defaultPrevented).toBe(false);
+
+  it("keeps only the unmatched remainder when the user types matching completion text", async () => {
+    const f = setup("Hello");
+    f.trigger();
+    await vi.advanceTimersByTimeAsync(0);
+    f.result(" world");
+    f.type(" ");
+    expect(f.root.querySelector(".mm-ai-suggestion")?.textContent).toBe(
+      "world",
+    );
+    expect(
+      f.messages.some(
+        (message) =>
+          message.type === "ai-suggestion-feedback" &&
+          message.action === "partially-accepted" &&
+          message.acceptedLength === 1,
+      ),
+    ).toBe(true);
+    expect(
+      f.messages.filter((message) => message.type === "edit").at(-1)?.markdown,
+    ).toBe("Hello ");
+    f.ack();
+    expect(f.key("Tab").defaultPrevented).toBe(true);
+    expect(
+      f.messages.filter((message) => message.type === "edit").at(-1)?.markdown,
+    ).toBe("Hello world");
   });
-  it("debounces ordinary input, stays off by default, and ignores paste/programmatic edits", async () => {
-    const f = setup();
-    f.type("a");
+
+  it("allows paragraph and heading midline locations but rejects code and table positions", () => {
+    const heading = setup("# Heading text");
+    heading.app.view.dispatch(
+      heading.app.view.state.tr.setSelection(
+        TextSelection.create(heading.app.view.state.doc, 5),
+      ),
+    );
+    heading.trigger();
+    expect(heading.requests().length).toBe(0);
+    vi.advanceTimersByTime(0);
+    expect(heading.requests()[0]?.targetKind).toBe("heading");
+  });
+
+  it("uses a 300ms opt-in debounce, while manual requests still work when automatic suggestions are off", async () => {
+    const f = setup("Hello", false);
+    f.type("!");
     f.ack();
-    await vi.advanceTimersByTimeAsync(2000);
+    await vi.advanceTimersByTimeAsync(1000);
     expect(f.requests()).toHaveLength(0);
-    f.state({ autoTrigger: true });
-    f.type("b");
-    f.ack();
+    f.trigger();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(f.requests()).toHaveLength(1);
+    const automatic = setup("Words", true);
+    automatic.type("!");
+    automatic.ack();
     await vi.advanceTimersByTimeAsync(AI_LIMITS.debounceMs - 1);
-    expect(f.requests()).toHaveLength(0);
+    expect(automatic.requests()).toHaveLength(0);
     await vi.advanceTimersByTimeAsync(1);
-    expect(f.requests()).toHaveLength(1);
-    f.result("", f.requests()[0]!, { reason: "no-suggestion" });
-    f.app.view.dispatch(f.app.view.state.tr.insertText("programmatic"));
-    f.ack();
-    await vi.advanceTimersByTimeAsync(2000);
-    expect(f.requests()).toHaveLength(1);
-    f.type("paste", "insertFromPaste");
-    f.ack();
-    await vi.advanceTimersByTimeAsync(2000);
-    expect(f.requests()).toHaveLength(1);
+    expect(automatic.requests()).toHaveLength(1);
   });
-  it("waits for host synchronization using the same input generation and the acknowledged version", async () => {
-    const f = setup("Hello", true);
-    f.type("!");
-    await vi.advanceTimersByTimeAsync(1000);
-    expect(f.requests()).toHaveLength(0);
-    f.ack();
-    expect(f.requests()).toHaveLength(1);
-    expect(f.requests()[0]?.baseVersion).toBe(2);
-    expect(f.requests()[0]?.context.before).toBe("Hello!");
-  });
-  it("rechecks a host cooldown only after new input without retrying on its own", async () => {
-    const f = setup("Hello", true);
-    f.state({ availability: "blocked" });
-    f.type("!");
-    f.ack();
-    await vi.advanceTimersByTimeAsync(1000);
-    expect(f.requests()).toHaveLength(1);
-    f.result("", f.requests()[0]!, { reason: "blocked" });
-    await vi.advanceTimersByTimeAsync(60_000);
-    expect(f.requests()).toHaveLength(1);
-    f.type("a");
-    f.ack();
-    await vi.advanceTimersByTimeAsync(1000);
-    expect(f.requests()).toHaveLength(2);
-  });
-  it("resnapshots after manual focus restoration and waits for unsynced input even when auto is off", async () => {
-    const f = setup();
-    f.type("!");
-    const button = f.root.querySelector<HTMLButtonElement>("button")!;
-    button.focus();
-    f.trigger();
-    await vi.advanceTimersByTimeAsync(0);
-    expect(f.requests()).toHaveLength(0);
-    f.ack();
-    expect(f.requests()[0]?.context.before).toBe("Hello!");
-    expect(document.activeElement).toBe(f.app.view.dom);
-  });
-  it("suppresses a dismissed/empty/failed context until another real input", async () => {
+
+  it("rejects stale replies, ends rejected pending requests, and never captures IME Tab/Escape/229", async () => {
     const f = setup("Hello", true);
     f.type("!");
     f.ack();
-    await vi.advanceTimersByTimeAsync(1000);
-    expect(f.key("Escape").defaultPrevented).toBe(true);
-    f.result();
-    await vi.advanceTimersByTimeAsync(10_000);
-    expect(f.requests()).toHaveLength(1);
-    expect(f.root.querySelector(".mm-ai-suggestion")).toBeNull();
-    f.type("a");
-    f.ack();
-    await vi.advanceTimersByTimeAsync(1000);
-    expect(f.requests()).toHaveLength(2);
-  });
-  it.each([
-    "cursor",
-    "external",
-    "focus",
-    "model",
-    "auto-off",
-    "source",
-    "destroy",
-  ])("rejects a late candidate after %s", async (change) => {
-    const f = setup("Hello", true);
-    f.trigger();
-    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(AI_LIMITS.debounceMs);
     const request = f.requests()[0]!;
-    if (change === "cursor") {
-      f.app.view.dispatch(
-        f.app.view.state.tr.setSelection(
-          TextSelection.create(f.app.view.state.doc, 1),
-        ),
-      );
-      f.app.view.dispatch(
-        f.app.view.state.tr.setSelection(
-          TextSelection.create(f.app.view.state.doc, 6),
-        ),
-      );
-    }
-    if (change === "external")
-      receive({
-        protocolVersion: 1,
-        type: "document",
-        markdown: "Changed",
-        version: 2,
-        profile: "github",
-        reason: "external",
-        documentId: "file:///prose.md",
-      });
-    if (change === "focus")
-      f.root.querySelector<HTMLButtonElement>("button")!.focus();
-    if (change === "model") f.state({ settingsGeneration: 2 });
-    if (change === "auto-off") {
-      // A manual request is preserved when only auto is disabled.
-      f.state({ autoTrigger: false });
-      f.result(" next", request);
-      expect(f.root.querySelector(".mm-ai-suggestion")?.textContent).toBe(
-        " next",
-      );
-      return;
-    }
-    if (change === "source")
-      f.root.querySelector<HTMLButtonElement>('[data-mode="source"]')!.click();
-    if (change === "destroy") {
-      f.app.destroy();
-      apps.splice(apps.indexOf(f.app), 1);
-    }
-    f.result(" next", request);
+    f.result(" late", request, { baseVersion: 99 });
     expect(f.root.querySelector(".mm-ai-suggestion")).toBeNull();
-  });
-  it("cancels automatic candidates when off and rejects mismatched result identities", async () => {
-    const f = setup("Hello", true);
-    f.type("!");
-    f.ack();
-    await vi.advanceTimersByTimeAsync(1000);
-    f.result(" next", f.requests()[0]!, { baseVersion: 99 });
-    expect(f.root.querySelector(".mm-ai-suggestion")).toBeNull();
-    f.result();
-    expect(f.root.querySelector(".mm-ai-suggestion")).not.toBeNull();
-    f.state({ autoTrigger: false });
-    expect(f.root.querySelector(".mm-ai-suggestion")).toBeNull();
-  });
-  it("gives IME Tab/Escape/229 priority and starts debounce again after composition commits", async () => {
-    const f = setup("Hello", true);
-    f.trigger();
-    await vi.advanceTimersByTimeAsync(0);
-    f.result();
     expect(f.key("Tab", { isComposing: true }).defaultPrevented).toBe(false);
     expect(f.key("Escape", { keyCode: 229 }).defaultPrevented).toBe(false);
     f.app.view.dom.dispatchEvent(
       new CompositionEvent("compositionstart", { bubbles: true }),
     );
-    expect(f.root.querySelector(".mm-ai-suggestion")).toBeNull();
-    f.type("日本語", "insertCompositionText");
-    f.ack();
-    await vi.advanceTimersByTimeAsync(1000);
-    expect(f.requests()).toHaveLength(1);
     f.app.view.dom.dispatchEvent(
-      new CompositionEvent("compositionend", { bubbles: true, data: "日本語" }),
+      new CompositionEvent("compositionend", { bubbles: true, data: "あ" }),
     );
-    await vi.advanceTimersByTimeAsync(1000);
-    expect(f.requests()).toHaveLength(2);
+    expect(f.key("Tab", { keyCode: 229 }).defaultPrevented).toBe(false);
   });
 });

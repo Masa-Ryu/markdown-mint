@@ -158,6 +158,7 @@ import {
   replaceCodeLanguageIdentifier,
 } from "../core/visualRendering";
 import { isBlankSpacingNode } from "../core";
+import { buildMarkdownPositionMap } from "../core/markdownPositionMap";
 import { mergeMarkdownSnapshots } from "../shared/threeWayMerge";
 import {
   createEmptyTableNode,
@@ -2954,6 +2955,23 @@ export class MarkdownEditorApp {
         !this.hasPendingHostSync() && !this.pendingExternal && !this.syncPaused,
       version: () => this.version,
       documentId: () => this.documentId,
+      markdown: () => this.currentMarkdown(),
+      profile: () => this.profile,
+      sourceOffset: (state, position) => {
+        if (!this.initialized || this.parseError || this.previewOnly)
+          return undefined;
+        const source = this.currentMarkdown();
+        const map = buildMarkdownPositionMap(
+          source,
+          state.doc,
+          this.profile,
+          this.core,
+          this.previousSnapshot,
+        );
+        return map.pmPositionToSourceOffset(position);
+      },
+      parseMarkdown: (source, profile) =>
+        this.core.parseMarkdown(source, profile),
       post: (message) => this.vscode?.postMessage(message),
       dispatch: (transaction) => this.dispatchTransaction(transaction),
     });

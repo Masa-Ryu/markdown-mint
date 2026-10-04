@@ -57,7 +57,7 @@
     "onCommand:markdownMint.exportPdf",
     "onCommand:markdownMint.openInEditor",
     "onCommand:markdownMint.aiSuggestions.trigger",
-    "onCommand:markdownMint.aiSuggestions.selectModel"
+    "onCommand:markdownMint.aiSuggestions.signIn"
   ],
   "main": "./dist/extension.js",
   "contributes": {
@@ -98,9 +98,8 @@
         "enablement": "markdownMint.aiSuggestions.active"
       },
       {
-        "command": "markdownMint.aiSuggestions.selectModel",
-        "title": "Markdown Mint: Select Suggestion Model",
-        "enablement": "markdownMint.aiSuggestions.active"
+        "command": "markdownMint.aiSuggestions.signIn",
+        "title": "Markdown Mint: Sign in to GitHub Copilot"
       }
     ],
     "customEditors": [
@@ -164,14 +163,7 @@
         "markdownMint.aiSuggestions.autoTrigger": {
           "type": "boolean",
           "default": false,
-          "description": "Request a short Copilot prose continuation after typing pauses. Requires model selection and Copilot authorization from a manual command. Requests may consume Copilot usage.",
-          "scope": "application"
-        },
-        "markdownMint.aiSuggestions.model": {
-          "type": "string",
-          "default": "",
-          "maxLength": 512,
-          "description": "Copilot model ID selected with Markdown Mint: Select Suggestion Model. Empty means no model selected.",
+          "description": "Request GitHub Copilot inline prose completions after typing pauses. The official Copilot Language Server synchronizes the current unsaved Markdown document. Requires a trusted workspace and GitHub Copilot authorization; requests may consume Copilot usage.",
           "scope": "application"
         }
       }
@@ -211,7 +203,8 @@
     "test:extension:pdf": "npm run compile && npm run build && node scripts/test-pdf-export-extension.mjs",
     "test:extension:pdf:vsix": "node scripts/test-pdf-export-extension.mjs --vsix",
     "verify:package": "npm run build && node scripts/verify-package.mjs",
-    "package": "npm run build && vsce package --no-dependencies && node scripts/verify-package.mjs && node scripts/verify-vsix.mjs",
+    "package": "npm run build && node scripts/package-vsix.mjs --target local && node scripts/verify-vsix.mjs --target local && node scripts/verify-package.mjs",
+    "package:platforms": "npm run build && node scripts/package-vsix.mjs --target all && node scripts/verify-vsix.mjs --target all",
     "test:browser:blocks": "npm run build:webview && node tests/browser/block-editing.test.mjs",
     "test:browser:mermaid": "npm run build:webview && node tests/browser/mermaid-templates.test.mjs",
     "test:browser:html-export": "npm run build && node tests/browser/html-export.test.mjs",

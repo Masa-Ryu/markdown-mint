@@ -4,7 +4,6 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const repository = fileURLToPath(new URL("..", import.meta.url));
-const samples = 1000;
 const fixtures = await Promise.all(
   [
     ["common-test.md", "commonmark"],
@@ -22,15 +21,15 @@ fixtures.push(
   {
     name: "short English",
     profile: "github",
-    source: "Writing a short sentence",
+    source: "A useful sentence has a middle and an ending.",
   },
   {
     name: "short Japanese",
     profile: "github",
-    source: "短い日本語の文章を書いている",
+    source: "日本語の文章では位置を正確に保ちます。",
   },
   {
-    name: "5000 prose blocks",
+    name: "5,000 prose blocks",
     profile: "github",
     source: Array.from(
       { length: 5000 },
@@ -38,35 +37,87 @@ fixtures.push(
     ).join("\n\n"),
   },
   {
-    name: "2000 table rows",
+    name: "2,000 table rows",
     profile: "github",
     source: "| A | B |\n|---|---|\n" + "| Cell | Value |\n".repeat(2000),
   },
 );
+
 const bundled = await build({
   stdin: {
     contents: `
-import { EditorState, TextSelection } from "prosemirror-state";
-import { parseMarkdown } from ${JSON.stringify(resolve(repository, "src/core/index.ts"))};
-import { getSuggestionTarget, buildSuggestionContext } from ${JSON.stringify(resolve(repository, "src/webview/aiSuggestionContext.ts"))};
+import { TextSelection } from "prosemirror-state";
+import { parseMarkdown, serializeMarkdown } from ${JSON.stringify(resolve(repository, "src/core/index.ts"))};
+import { buildMarkdownPositionMap } from ${JSON.stringify(resolve(repository, "src/core/markdownPositionMap.ts"))};
+import { matchCompletionInput, normalizeCompletionDetails, planCompletionInsertion } from ${JSON.stringify(resolve(repository, "src/core/inlineCompletion.ts"))};
+import { getSuggestionTarget } from ${JSON.stringify(resolve(repository, "src/webview/aiSuggestionContext.ts"))};
+const toPosition = (text, offset) => {
+  const before = text.slice(0, offset).replace(/\\r\\n/g, "\\n");
+  const line = before.split("\\n");
+  return { line: line.length - 1, character: line.at(-1).length };
+};
+const toOffset = (text, position) => {
+  const lines = text.split(/\\r\\n|\\r|\\n/);
+  if (position.line >= lines.length || position.character > lines[position.line].length) return undefined;
+  let offset = 0;
+  for (let i = 0; i < position.line; i += 1) {
+    const match = text.slice(offset).match(/\\r\\n|\\r|\\n/);
+    if (!match) return undefined;
+    offset += match.index + match[0].length;
+  }
+  return offset + position.character;
+};
+const safeBoundary = (text, offset) => {
+  if (offset > 0 && /[\\uDC00-\\uDFFF]/.test(text[offset] ?? "")) return offset - 1;
+  if (text[offset - 1] === "\\r" && text[offset] === "\\n") return offset + 1;
+  return offset;
+};
 export const results = ${JSON.stringify(fixtures)}.map(({ name, source, profile }) => {
-  // Parse/selection preparation is outside the measured debounce-time extraction.
-  const doc = parseMarkdown(source + "\\n\\nBenchmark continuation", profile).doc;
-  const state = EditorState.create({ doc, selection: TextSelection.create(doc, doc.content.size - 1) });
-  const extract = () => buildSuggestionContext(state, getSuggestionTarget(state));
-  for (let i = 0; i < 100; i += 1) extract();
+  const markdown = source + "\\n\\nBenchmark continuation prose";
+  const snapshot = parseMarkdown(markdown, profile);
+  let cursor = -1;
+  snapshot.doc.descendants((node, position) => {
+    if (node.type.name === "paragraph" && node.textContent.trim()) {
+      const text = node.textContent;
+      const offset = Math.min(Math.max(1, Math.floor(text.length / 2)), text.length);
+      cursor = position + 1 + offset;
+    }
+  });
+  if (cursor < 0) cursor = Math.max(1, snapshot.doc.content.size - 1);
+  const state = { doc: snapshot.doc, selection: TextSelection.create(snapshot.doc, cursor), storedMarks: null };
+  const target = getSuggestionTarget(state);
+  const samples = source.length > 100_000 ? 2 : source.length > 20_000 ? 5 : 25;
   const times = [];
-  let units = 0;
-  for (let i = 0; i < ${samples}; i += 1) {
+  let accepted = false;
+  let mappedOffset;
+  const measure = () => {
+    if (!target) return false;
+    const map = buildMarkdownPositionMap(markdown, snapshot.doc, profile, { parseMarkdown, serializeMarkdown }, snapshot);
+    mappedOffset = map.pmPositionToSourceOffset(target.position);
+    if (mappedOffset === undefined) return false;
+    const from = safeBoundary(markdown, Math.max(0, mappedOffset - 2));
+    const to = safeBoundary(markdown, Math.min(markdown.length, mappedOffset + 2));
+    const prefix = markdown.slice(from, mappedOffset);
+    const suffix = markdown.slice(mappedOffset, to);
+    const completion = normalizeCompletionDetails(markdown, mappedOffset, {
+      insertText: prefix + " continued" + suffix,
+      range: { start: toPosition(markdown, from), end: toPosition(markdown, to) },
+      insertTextFormat: 1,
+    }, toOffset, toPosition);
+    if (!completion) return false;
+    const match = matchCompletionInput(completion.text, completion.text.slice(0, Math.min(2, completion.text.length)));
+    if (!match) return false;
+    const plan = planCompletionInsertion(markdown, snapshot.doc, mappedOffset, target.position, completion.text, profile, { parseMarkdown });
+    accepted = Boolean(plan);
+    return true;
+  };
+  for (let i = 0; i < samples; i += 1) {
     const start = performance.now();
-    const context = extract();
+    measure();
     times.push(performance.now() - start);
-    if (!context) throw Error("Missing benchmark context");
-    units = context.before.length + context.after.length + context.heading.length;
-    if (units > 6000) throw Error("Context budget exceeded");
   }
   times.sort((a, b) => a - b);
-  return { name, sourceUnits: source.length, contextUnits: units,
+  return { name, sourceUnits: source.length, documentUnits: markdown.length, samples, candidatePlanned: accepted, mappedOffset,
     p50Ms: times[Math.floor(times.length * 0.5)], p95Ms: times[Math.floor(times.length * 0.95)] };
 });`,
     loader: "js",
@@ -82,7 +133,7 @@ export const results = ${JSON.stringify(fixtures)}.map(({ name, source, profile 
   loader: { ".svg": "text" },
 });
 const source = bundled.outputFiles[0]?.text;
-if (!source) throw Error("Failed to bundle context benchmark");
+if (!source) throw Error("Failed to bundle the inline-completion benchmark");
 const { results } = await import(
   `data:text/javascript;base64,${Buffer.from(source).toString("base64")}`
 );
@@ -90,16 +141,15 @@ const report = {
   node: process.version,
   platform: process.platform,
   arch: process.arch,
-  samples,
   realCopilotRequests: 0,
   measured:
-    "debounce-time context extraction only; parsing and model latency excluded",
+    "local Markdown position mapping, insertion normalization, structural planning, and matching-input reconciliation; model latency and network usage excluded",
   results,
 };
 const output = resolve(repository, "output/benchmarks/ai-suggestions");
 await mkdir(output, { recursive: true });
 await writeFile(
-  resolve(output, "context.json"),
+  resolve(output, "inline-completion.json"),
   JSON.stringify(report, null, 2) + "\n",
 );
 console.log(JSON.stringify(report, null, 2));

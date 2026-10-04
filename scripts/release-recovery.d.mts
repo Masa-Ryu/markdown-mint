@@ -40,17 +40,20 @@ export interface ReleaseRecoveryState {
   targetCommitSha: string;
   tagTargetCommitSha: string | null;
   release: ReleaseRecoveryRelease | null;
-  assetName: string;
-  expectedSha256: string;
-  actualAssetSha256: string | null;
+  artifacts: Array<{
+    target: "darwin-arm64" | "darwin-x64" | "linux-arm64" | "linux-x64" | "win32-arm64" | "win32-x64";
+    assetName: string;
+    expectedSha256: string;
+    actualAssetSha256: string | null;
+  }>;
   releaseNotes: string;
 }
 
 export type ReleaseRecoveryPlan =
   | { action: "create_release"; verifyTag: boolean }
-  | { action: "upload_asset"; releaseId: number }
-  | { action: "delete_starter_asset"; releaseId: number; assetId: number }
-  | { action: "verify_asset"; releaseId: number }
+  | { action: "upload_asset"; releaseId: number; assetName: string }
+  | { action: "delete_starter_asset"; releaseId: number; assetId: number; assetName: string }
+  | { action: "verify_asset"; releaseId: number; assetName: string }
   | { action: "publish_release"; releaseId: number }
   | { action: "already_published"; releaseId: number };
 

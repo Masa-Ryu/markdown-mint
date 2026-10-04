@@ -52,6 +52,33 @@ async function endCaret() {
     view.focus();
   });
 }
+async function placeCaretAtText(text, offset) {
+  await page.evaluate(
+    ([needle, textOffset]) => {
+      const view = window.markdownMint.view;
+      let position;
+      view.state.doc.descendants((node, start) => {
+        if (!node.isText || !node.text) return;
+        const index = node.text.indexOf(needle);
+        if (
+          index >= 0 &&
+          node.text.indexOf(needle, index + needle.length) < 0 &&
+          position === undefined
+        )
+          position = start + index + textOffset;
+      });
+      if (position === undefined)
+        throw Error(`Could not find visible text: ${needle}`);
+      view.dispatch(
+        view.state.tr.setSelection(
+          view.state.selection.constructor.create(view.state.doc, position),
+        ),
+      );
+      view.focus();
+    },
+    [text, offset],
+  );
+}
 async function trigger(text = " 続きを書きます🌿") {
   const count = (await requests()).length;
   await page.evaluate(() => window.__markdownMintHarness.triggerAi());
@@ -196,7 +223,6 @@ try {
   }
   for (const sourceText of [
     "`code`",
-    "[link](https://example.com)",
     "| A |\n|---|\n| B |",
     "```ts\nvalue\n```",
     "",
@@ -208,6 +234,52 @@ try {
     assert.equal((await requests()).length, 0, sourceText);
   }
   console.log("Passed eligible and excluded editing targets");
+
+  await load("[link](https://example.com)");
+  await placeCaretAtText("link", 2);
+  await trigger(" text");
+  await page.keyboard.press("Tab");
+  await page.waitForFunction(() => !window.markdownMint.sync.hasPending);
+  assert.equal(
+    await source(),
+    "[li textnk](https://example.com)",
+    "link-label completion preserves the existing destination",
+  );
+
+  await load("Hello world");
+  await placeCaretAtText("Hello world", 6);
+  await trigger("wonderful ");
+  assert.equal(
+    await page.locator(".mm-ai-suggestion").textContent(),
+    "wonderful ",
+  );
+  await page.keyboard.press("Tab");
+  await page.waitForFunction(() => !window.markdownMint.sync.hasPending);
+  assert.equal(
+    await source(),
+    "Hello wonderful world",
+    "midline completion preserves the existing suffix",
+  );
+
+  const linkedParagraph = "Read [the docs](https://example.test) today.";
+  await load(linkedParagraph);
+  await placeCaretAtText("Read ", 5);
+  await trigger("more about ");
+  await page.keyboard.press("Tab");
+  await page.waitForFunction(() => !window.markdownMint.sync.hasPending);
+  const linkedSource = await source();
+  assert.equal(
+    await page.evaluate(() => window.markdownMint.view.state.doc.textContent),
+    "Read more about the docs today.",
+    "prose adjacent to a link stays eligible and keeps the surrounding text",
+  );
+  assert.ok(
+    linkedSource.includes("[the docs](https://example.test)"),
+    "prose adjacent to a link retains its destination",
+  );
+  console.log(
+    "Passed midline suffix preservation and prose next to a Markdown link",
+  );
 
   const palettes = [
     ["light", "#ffffff", "#333333", "#6a737d"],

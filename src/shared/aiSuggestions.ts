@@ -1,49 +1,42 @@
-/** Bounded, dependency-free AI wire contract shared by both runtimes. */
+/** Bounded protocol for host-owned Copilot Language Server requests. */
 export const AI_LIMITS = {
-  before: 4_000,
-  after: 1_000,
-  heading: 512,
-  context: 6_000,
-  blocks: 64,
-  paragraphOutput: 240,
-  headingOutput: 80,
-  inputTokens: 4_096,
-  debounceMs: 1_000,
-  autoIntervalMs: 2_000,
-  manualIntervalMs: 1_000,
-  windowMs: 60_000,
-  requestsPerWindow: 12,
-  deadlineMs: 15_000,
-  cooldownMs: 30_000,
+  debounceMs: 300,
+  deadlineMs: 35_000,
+  maxDocumentLength: 4_000_000,
+  maxCompletionLength: 32_768,
+  maxRequestIdLength: 160,
 } as const;
 
 export const AI_AVAILABILITY = [
+  "disabled",
+  "preparing",
+  "needs-sign-in",
   "ready",
-  "unsupported",
-  "no-model",
-  "needs-authorization",
   "untrusted",
+  "excluded",
+  "unavailable",
   "blocked",
 ] as const;
 export type AiAvailability = (typeof AI_AVAILABILITY)[number];
 export const AI_REASONS = [
-  ...AI_AVAILABILITY,
+  "ready",
+  "disabled",
+  "unsupported",
+  "needs-sign-in",
+  "untrusted",
+  "blocked",
   "no-suggestion",
-  "rate-limited",
+  "unsafe-suggestion",
+  "invalid-context",
   "failed",
   "timeout",
   "stale",
   "cancelled",
-  "invalid-context",
 ] as const;
 export type AiSuggestionReason = (typeof AI_REASONS)[number];
 export type AiTrigger = "auto" | "manual";
 export type AiTargetKind = "paragraph" | "heading";
-export interface AiSuggestionContext {
-  readonly before: string;
-  readonly after: string;
-  readonly heading: string;
-}
+
 export interface AiSuggestionIdentity {
   readonly requestId: string;
   readonly sessionId: string;
@@ -51,6 +44,7 @@ export interface AiSuggestionIdentity {
   readonly baseVersion: number;
   readonly editorRevision: number;
   readonly settingsGeneration: number;
+  /** UTF-16 offset in the synchronized native Markdown document. */
   readonly position: number;
   readonly targetKind: AiTargetKind;
 }
@@ -58,8 +52,6 @@ export interface AiSuggestionRequest extends AiSuggestionIdentity {
   readonly protocolVersion: 1;
   readonly type: "ai-suggestion-request";
   readonly trigger: AiTrigger;
-  readonly invocationId?: string;
-  readonly context: AiSuggestionContext;
 }
 export interface AiSuggestionCancel {
   readonly protocolVersion: 1;
@@ -67,54 +59,59 @@ export interface AiSuggestionCancel {
   readonly requestId: string;
   readonly sessionId: string;
 }
+export interface AiSuggestionFeedback {
+  readonly protocolVersion: 1;
+  readonly type: "ai-suggestion-feedback";
+  readonly sessionId: string;
+  readonly candidateId: string;
+  readonly action: "shown" | "accepted" | "partially-accepted" | "rejected";
+  readonly rejectionReason?: "unsafe-suggestion" | "cancelled";
+  /** SDK-defined UTF-16 count from the original completion item's start. */
+  readonly acceptedLength?: number;
+}
 export interface AiSuggestionState {
   readonly protocolVersion: 1;
   readonly type: "ai-suggestion-state";
   readonly sessionId: string;
   readonly settingsGeneration: number;
   readonly autoTrigger: boolean;
-  readonly modelName: string;
   readonly availability: AiAvailability;
   readonly active?: boolean;
+  readonly statusText?: string;
 }
 export interface AiSuggestionTrigger {
   readonly protocolVersion: 1;
   readonly type: "ai-suggestion-trigger";
   readonly sessionId: string;
   readonly settingsGeneration: number;
-  readonly invocationId: string;
 }
 export interface AiSuggestionResult extends AiSuggestionIdentity {
   readonly protocolVersion: 1;
   readonly type: "ai-suggestion-result";
+  readonly candidateId?: string;
+  readonly partialAcceptanceOffset?: number;
   readonly text: string;
   readonly reason: AiSuggestionReason;
 }
-export type AiWebviewMessage = AiSuggestionRequest | AiSuggestionCancel;
+export type AiWebviewMessage =
+  AiSuggestionRequest | AiSuggestionCancel | AiSuggestionFeedback;
 export type AiHostMessage =
   AiSuggestionState | AiSuggestionTrigger | AiSuggestionResult;
 
 function record(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
-export function hasAiControlCharacters(text: string): boolean {
-  for (let index = 0; index < text.length; index += 1) {
-    const code = text.charCodeAt(index);
-    if (
-      code < 32 ||
-      (code >= 127 && code <= 159) ||
-      code === 0x2028 ||
-      code === 0x2029
-    )
-      return true;
-  }
-  return false;
+function onlyKeys(
+  value: Record<string, unknown>,
+  allowed: readonly string[],
+): boolean {
+  return Object.keys(value).every((key) => allowed.includes(key));
 }
 function id(value: unknown): value is string {
   return (
     typeof value === "string" &&
     value.length > 0 &&
-    value.length <= 160 &&
+    value.length <= AI_LIMITS.maxRequestIdLength &&
     /^[a-zA-Z0-9._:-]+$/.test(value)
   );
 }
@@ -128,95 +125,157 @@ function identity(value: Record<string, unknown>): boolean {
     typeof value.documentId === "string" &&
     value.documentId.length > 0 &&
     value.documentId.length <= 2_048 &&
-    !hasAiControlCharacters(value.documentId) &&
+    !hasAsciiControl(value.documentId) &&
     counter(value.baseVersion) &&
     value.baseVersion > 0 &&
     counter(value.editorRevision) &&
     counter(value.settingsGeneration) &&
     counter(value.position) &&
-    value.position > 0 &&
-    value.position <= 4_000_000 &&
+    value.position <= AI_LIMITS.maxDocumentLength &&
     (value.targetKind === "paragraph" || value.targetKind === "heading")
   );
 }
-export function isAiSuggestionContext(
-  value: unknown,
-): value is AiSuggestionContext {
+function validCompletionText(text: unknown): text is string {
   return (
-    record(value) &&
-    Object.keys(value).length === 3 &&
-    typeof value.before === "string" &&
-    value.before.length <= AI_LIMITS.before &&
-    typeof value.after === "string" &&
-    value.after.length <= AI_LIMITS.after &&
-    typeof value.heading === "string" &&
-    value.heading.length <= AI_LIMITS.heading &&
-    value.before.length + value.after.length + value.heading.length <=
-      AI_LIMITS.context &&
-    value.before.trim().length > 0
+    typeof text === "string" &&
+    text.length <= AI_LIMITS.maxCompletionLength &&
+    !hasCompletionControl(text)
   );
 }
+
+function hasAsciiControl(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code < 0x20 || code === 0x7f) return true;
+  }
+  return false;
+}
+
+function hasCompletionControl(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (
+      (code < 0x20 && code !== 0x09 && code !== 0x0a && code !== 0x0d) ||
+      code === 0x7f
+    )
+      return true;
+  }
+  return false;
+}
+
 export function isAiWebviewMessage(value: unknown): value is AiWebviewMessage {
   if (!record(value) || value.protocolVersion !== 1) return false;
   if (value.type === "ai-suggestion-cancel")
-    return id(value.requestId) && id(value.sessionId);
+    return (
+      onlyKeys(value, ["protocolVersion", "type", "requestId", "sessionId"]) &&
+      id(value.requestId) &&
+      id(value.sessionId)
+    );
+  if (value.type === "ai-suggestion-feedback")
+    return (
+      onlyKeys(value, [
+        "protocolVersion",
+        "type",
+        "sessionId",
+        "candidateId",
+        "action",
+        "acceptedLength",
+        "rejectionReason",
+      ]) &&
+      id(value.sessionId) &&
+      id(value.candidateId) &&
+      (value.action === "shown" ||
+        value.action === "accepted" ||
+        (value.action === "rejected" &&
+          (value.rejectionReason === "unsafe-suggestion" ||
+            value.rejectionReason === "cancelled")) ||
+        (value.action === "partially-accepted" &&
+          counter(value.acceptedLength) &&
+          value.acceptedLength > 0)) &&
+      (value.rejectionReason === undefined || value.action === "rejected") &&
+      (value.acceptedLength === undefined ||
+        (counter(value.acceptedLength) && value.acceptedLength > 0))
+    );
   return (
     value.type === "ai-suggestion-request" &&
+    onlyKeys(value, [
+      "protocolVersion",
+      "type",
+      "requestId",
+      "sessionId",
+      "documentId",
+      "baseVersion",
+      "editorRevision",
+      "settingsGeneration",
+      "position",
+      "targetKind",
+      "trigger",
+    ]) &&
     identity(value) &&
-    isAiSuggestionContext(value.context) &&
-    (value.trigger === "auto"
-      ? value.invocationId === undefined
-      : value.trigger === "manual" && id(value.invocationId))
+    (value.trigger === "auto" || value.trigger === "manual")
   );
 }
 export function isAiHostMessage(value: unknown): value is AiHostMessage {
   if (!record(value) || value.protocolVersion !== 1) return false;
   if (value.type === "ai-suggestion-state")
     return (
+      onlyKeys(value, [
+        "protocolVersion",
+        "type",
+        "sessionId",
+        "settingsGeneration",
+        "autoTrigger",
+        "availability",
+        "active",
+        "statusText",
+      ]) &&
       id(value.sessionId) &&
       counter(value.settingsGeneration) &&
       typeof value.autoTrigger === "boolean" &&
       (value.active === undefined || typeof value.active === "boolean") &&
-      typeof value.modelName === "string" &&
-      value.modelName.length <= 512 &&
+      (value.statusText === undefined ||
+        (typeof value.statusText === "string" &&
+          value.statusText.length <= 512)) &&
       AI_AVAILABILITY.includes(value.availability as AiAvailability)
     );
   if (value.type === "ai-suggestion-trigger")
     return (
+      onlyKeys(value, [
+        "protocolVersion",
+        "type",
+        "sessionId",
+        "settingsGeneration",
+      ]) &&
       id(value.sessionId) &&
-      counter(value.settingsGeneration) &&
-      id(value.invocationId)
+      counter(value.settingsGeneration)
     );
   return (
     value.type === "ai-suggestion-result" &&
+    onlyKeys(value, [
+      "protocolVersion",
+      "type",
+      "requestId",
+      "sessionId",
+      "documentId",
+      "baseVersion",
+      "editorRevision",
+      "settingsGeneration",
+      "position",
+      "targetKind",
+      "candidateId",
+      "partialAcceptanceOffset",
+      "text",
+      "reason",
+    ]) &&
     identity(value) &&
-    typeof value.text === "string" &&
-    value.text.length <=
-      2 *
-        (value.targetKind === "heading"
-          ? AI_LIMITS.headingOutput
-          : AI_LIMITS.paragraphOutput) &&
-    Array.from(value.text).length <=
-      (value.targetKind === "heading"
-        ? AI_LIMITS.headingOutput
-        : AI_LIMITS.paragraphOutput) &&
-    !hasAiControlCharacters(value.text) &&
+    validCompletionText(value.text) &&
+    (value.candidateId === undefined || id(value.candidateId)) &&
+    (value.partialAcceptanceOffset === undefined ||
+      (counter(value.partialAcceptanceOffset) &&
+        value.partialAcceptanceOffset <= AI_LIMITS.maxCompletionLength)) &&
     AI_REASONS.includes(value.reason as AiSuggestionReason) &&
     (value.reason === "ready"
-      ? value.text.trim().length > 0
-      : value.text === "")
+      ? value.text.length > 0 && id(value.candidateId)
+      : value.text === "" && value.candidateId === undefined)
   );
-}
-
-/** Slice by UTF-16 budgets without splitting surrogate pairs. */
-export function aiContextTail(text: string, limit: number): string {
-  let start = Math.max(0, text.length - limit);
-  if (start > 0 && /[\uDC00-\uDFFF]/.test(text[start] ?? "")) start += 1;
-  return text.slice(start);
-}
-export function aiContextHead(text: string, limit: number): string {
-  let end = Math.min(text.length, limit);
-  if (end < text.length && /[\uD800-\uDBFF]/.test(text[end - 1] ?? ""))
-    end -= 1;
-  return text.slice(0, end);
 }

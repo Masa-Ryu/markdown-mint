@@ -1,9 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import {
-  AI_LIMITS,
-  aiContextHead,
-  aiContextTail,
+  isAiHostMessage,
+  isAiWebviewMessage,
   type AiSuggestionRequest,
 } from "../../src/shared/aiSuggestions";
 import { isHostMessage, parseWebviewMessage } from "../../src/shared/protocol";
@@ -20,10 +19,10 @@ const request: AiSuggestionRequest = {
   position: 6,
   targetKind: "paragraph",
   trigger: "auto",
-  context: { before: "Hello", after: "", heading: "" },
 };
-describe("AI protocol boundaries", () => {
-  it("ships opt-in, application-scoped settings and commands without a new minimum engine or keybinding", () => {
+
+describe("Copilot Language Server protocol", () => {
+  it("keeps auto suggestions off by default and exposes only manual trigger and sign-in commands", () => {
     const manifest = JSON.parse(readFileSync("package.json", "utf8"));
     const properties = manifest.contributes.configuration.properties;
     expect(properties["markdownMint.aiSuggestions.autoTrigger"]).toMatchObject({
@@ -31,11 +30,7 @@ describe("AI protocol boundaries", () => {
       scope: "application",
       type: "boolean",
     });
-    expect(properties["markdownMint.aiSuggestions.model"]).toMatchObject({
-      default: "",
-      scope: "application",
-      type: "string",
-    });
+    expect(properties["markdownMint.aiSuggestions.model"]).toBeUndefined();
     expect(manifest.engines.vscode).toBe("^1.90.0");
     expect(manifest.extensionDependencies).toBeUndefined();
     expect(manifest.contributes.keybindings).toBeUndefined();
@@ -48,23 +43,27 @@ describe("AI protocol boundaries", () => {
         .map((command: { command: string }) => command.command)
         .sort(),
     ).toEqual([
-      "markdownMint.aiSuggestions.selectModel",
+      "markdownMint.aiSuggestions.signIn",
       "markdownMint.aiSuggestions.trigger",
     ]);
   });
-  it("accepts automatic/manual requests and bounded host replies without changing existing document messages", () => {
+  it("accepts source-position requests and bounded completion results", () => {
     expect(parseWebviewMessage(request)).toEqual(request);
-    expect(
-      parseWebviewMessage({
-        ...request,
-        trigger: "manual",
-        invocationId: "command-1",
-      }),
-    ).toBeDefined();
+    expect(isAiWebviewMessage(request)).toBe(true);
     expect(
       isHostMessage({
-        ...request,
+        protocolVersion: 1,
         type: "ai-suggestion-result",
+        requestId: request.requestId,
+        sessionId: request.sessionId,
+        documentId: request.documentId,
+        baseVersion: request.baseVersion,
+        editorRevision: request.editorRevision,
+        settingsGeneration: request.settingsGeneration,
+        position: request.position,
+        targetKind: request.targetKind,
+        candidateId: "c-1",
+        partialAcceptanceOffset: 5,
         text: " world🌿",
         reason: "ready",
       }),
@@ -90,69 +89,36 @@ describe("AI protocol boundaries", () => {
     { documentId: "a\0b" },
     { baseVersion: 0 },
     { baseVersion: 1.5 },
-    { baseVersion: Number.MAX_SAFE_INTEGER + 1 },
     { editorRevision: -1 },
     { settingsGeneration: NaN },
-    { position: 0 },
     { position: 4_000_001 },
     { targetKind: "code_block" },
     { trigger: "background" },
-    { trigger: "manual" },
-    { invocationId: "forged" },
-    { context: { before: "", after: "context", heading: "" } },
-    {
-      context: {
-        before: "ok",
-        after: "",
-        heading: "",
-        unbounded: "x".repeat(6001),
-      },
-    },
-    {
-      context: {
-        before: "x".repeat(AI_LIMITS.before + 1),
-        after: "",
-        heading: "",
-      },
-    },
-    {
-      context: {
-        before: "ok",
-        after: "x".repeat(AI_LIMITS.after + 1),
-        heading: "",
-      },
-    },
-    {
-      context: {
-        before: "ok",
-        after: "",
-        heading: "x".repeat(AI_LIMITS.heading + 1),
-      },
-    },
+    { context: { before: "forged host context" } },
   ])("rejects malformed request %j", (patch) => {
     expect(parseWebviewMessage({ ...request, ...patch })).toBeUndefined();
   });
   it.each([
-    { text: "x".repeat(241) },
-    { text: "🌿".repeat(241) },
-    { text: "two\nlines" },
+    { text: "x".repeat(32_769) },
     { text: "a\0b" },
     { text: "", reason: "ready" },
     { text: "text", reason: "failed" },
     { reason: "unknown" },
-    { targetKind: "heading", text: "x".repeat(81) },
+    { candidateId: undefined },
+    { partialAcceptanceOffset: 32_769 },
   ])("rejects malformed result %j", (patch) => {
     expect(
       isHostMessage({
         ...request,
         type: "ai-suggestion-result",
+        candidateId: "c-1",
         text: " next",
         reason: "ready",
         ...patch,
       }),
     ).toBe(false);
   });
-  it("validates cancel, state, and one-time trigger payloads", () => {
+  it("validates cancellation, status, trigger, and SDK feedback messages", () => {
     expect(
       parseWebviewMessage({
         protocolVersion: 1,
@@ -168,32 +134,44 @@ describe("AI protocol boundaries", () => {
         sessionId: "s1",
       }),
     ).toBeUndefined();
-    const state = {
-      protocolVersion: 1,
-      type: "ai-suggestion-state",
-      sessionId: "s1",
-      settingsGeneration: 0,
-      autoTrigger: false,
-      modelName: "Copilot",
-      availability: "ready",
-    };
-    expect(isHostMessage(state)).toBe(true);
-    expect(isHostMessage({ ...state, autoTrigger: "true" })).toBe(false);
-    expect(isHostMessage({ ...state, availability: "invented" })).toBe(false);
     expect(
-      isHostMessage({
+      parseWebviewMessage({
+        protocolVersion: 1,
+        type: "ai-suggestion-feedback",
+        sessionId: "s1",
+        candidateId: "c-1",
+        action: "partially-accepted",
+        acceptedLength: 4,
+      }),
+    ).toBeDefined();
+    expect(
+      parseWebviewMessage({
+        protocolVersion: 1,
+        type: "ai-suggestion-feedback",
+        sessionId: "s1",
+        candidateId: "c-1",
+        action: "partially-accepted",
+        acceptedLength: -1,
+      }),
+    ).toBeUndefined();
+    expect(
+      isAiHostMessage({
+        protocolVersion: 1,
+        type: "ai-suggestion-state",
+        sessionId: "s1",
+        settingsGeneration: 1,
+        autoTrigger: false,
+        availability: "needs-sign-in",
+        statusText: "Sign in",
+      }),
+    ).toBe(true);
+    expect(
+      isAiHostMessage({
         protocolVersion: 1,
         type: "ai-suggestion-trigger",
         sessionId: "s1",
         settingsGeneration: 1,
-        invocationId: "c1",
       }),
     ).toBe(true);
-  });
-  it("never splits a surrogate pair at either context budget", () => {
-    expect(aiContextHead("A🌿B", 2)).toBe("A");
-    expect(aiContextTail("A🌿B", 2)).toBe("B");
-    expect(aiContextHead("A🌿B", 3)).toBe("A🌿");
-    expect(aiContextTail("A🌿B", 3)).toBe("🌿B");
   });
 });

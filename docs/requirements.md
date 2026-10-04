@@ -412,135 +412,139 @@ manually inspected. No version bump, release, tag, or workflow was run.
 
 ## Issue #142 Copilot prose suggestions (0.9.0)
 
-The Rich Editor can request one short continuation at the end of a paragraph,
-heading, or list-item paragraph. `markdownMint.aiSuggestions.trigger` and
-`.selectModel` target the active, ready editor panel, restore focus after the
-Command Palette/model picker, and use a fresh synchronized cursor snapshot.
-No default shortcut or toolbar toggle is added. User-only, application-scoped
-`markdownMint.aiSuggestions.autoTrigger` defaults to false; `.model` defaults
-to an empty ID. Workspace overrides cannot enable sending or choose a model.
+The Rich Editor uses GitHub's official `@github/copilot-language-server` at
+pinned version `1.551.2`. It sends `textDocument/inlineCompletion` requests over
+a host-owned stdio JSON-RPC connection; the chat-model API, model picker, and
+Mint-authored generation prompt are removed. The user-scoped
+`markdownMint.aiSuggestions.autoTrigger` stays false by default. Users can
+start the official device flow through the registered sign-in command, use a
+manual suggestion with auto off, and resume automatically after restart when
+the Language Server can restore valid authorization. No VS Code Copilot
+settings or credentials are read or changed by Mint.
 
-Only an actual host command can initiate model selection/consent and mint a
-single-use, expiring manual invocation. Startup, configuration changes, input
-timers, and provider events never enumerate models or prompt. A saved model ID
-requires a manual resume after restart. This deliberately avoids promising a
-silent restoration path that the
-[public Language Model API guide](https://code.visualstudio.com/api/extension-guides/ai/language-model)
-does not guarantee. Automatic sends require the real access-information API to
-return true immediately before sending. Permission revocation and model-list
-changes invalidate in-flight and visible suggestions without selecting a
-replacement. Missing APIs/models disable only AI; `engines.vscode` remains
-`^1.90.0`. Restricted Mode keeps ordinary editing enabled and blocks AI;
-workspace-defined PDF executable paths are also restricted there.
+The bundled client starts one server lazily, initializes it before sending
+`initialized`, sets optional SDK telemetry off before synchronizing a
+document, and observes the official status notification. Only the active Rich
+Editor document with its real file URI and TextDocument version is opened,
+incrementally changed, focused, and closed. The current unsaved Markdown is
+synchronized in full; code, tables, and other non-target content in that same
+file are included. The server receives the workspace folder, so this
+implementation does not claim that service-side repository context, content
+exclusion behavior, or provider-side data handling is fully known. Mint does
+not scan or sync other documents, terminal output, clipboard data, or Git
+diffs. It does not retain prompts or completion text in logs or persistent
+storage. Untrusted workspaces and unsupported Extension Hosts cannot send AI
+requests; ordinary editing remains available.
 
-Context extraction reads the current PM document only after the debounce or
-manual request. It reads at most 64 nearby block/container nodes, skips table,
-raw, code, and custom editor subtrees, and bounds inline reads. Limits are
-4,000/1,000/512 UTF-16 units for preceding prose, following prose, and a nearby
-heading, with a 6,000-unit total ceiling. The host counts both fixed
-instructions and quoted JSON context with the chosen model's tokenizer,
-reducing context to at most 4,096 input tokens and the model's limit. Output
-is plain text: at most 240 Unicode code points, or 80 for headings. English
-leading spaces and surrogate pairs survive; controls, multiline output,
-HTML, code fences, and obvious explanatory responses are rejected.
+A manual request targets prose or headings at cursor positions within a line,
+paragraph/list ends, and contextually empty paragraphs. A link in a paragraph
+does not suppress adjacent prose; link destinations and inline-code contents
+are excluded. Tables, code/Mermaid/math blocks, raw HTML editor regions,
+selected ranges, Source, Preview, and modal fields remain unsupported.
 
-Ordinary typing and IME commits start a 1,000ms debounce. Paste, programmatic
-edits, suggestion acceptance, selection, history, initialization, and ACKs do
-not start another generation. ACKs may complete an already-waiting input
-generation. Host-wide intervals are 2,000ms automatic / 1,000ms manual, with
-at most 12 sends per rolling minute, including cancelled sends. Requests have
-a 15-second deadline; transient failure suppresses automatic sends for 30
-seconds and provider blocking suppresses sends for 60 seconds. Timers do not
-retry a failed or dismissed context. Manual failures receive normalized short
-messages; automatic failures stay quiet. Model waits never enter the document
-edit/save queue. Cancellation/deadline settle locally even if a provider
-ignores its token, and token sources, timers, and iterators are released.
-A new ordinary input can recheck an expired blocking window; the host still
-checks actual access and the cooldown before any send.
+The official completion's LSP range is converted to an insertion only when it
+contains the cursor, its existing prefix and suffix are both present in the
+returned `insertText`, and the resulting addition is non-empty. The client
+rejects snippet format, invalid or oversized responses, and insertions that
+change existing PM/source structure or marks. It uses marker-anchored parsing
+and source mapping rather than text search to locate Unicode, CRLF, emphasis,
+links, lists, and repeated text. Multiline results are accepted only when the
+parsed structural slice is safe. A candidate stays transient until Tab; matching
+user input consumes only the matching prefix. Display alone does not change
+Markdown, native TextDocument, dirty/recovery data, clipboard, preview/export,
+or Undo history. Acceptance remains a single normal synced edit with the
+existing native Undo/Redo boundary. Same-version saves do not invalidate a
+waiting response; actual version changes, deactivation, disposal, settings
+changes, cancellation, and timeout do.
 
-Candidates live in a `Decoration.widget` and controller/plugin memory, with
-`textContent`, `contenteditable=false`, nonselectable/pointer-free styles,
-theme variables, and a single polite accessibility announcement. Showing or
-dismissing one produces no document change, dirty state, serialization, edit
-request, recovery write, or history entry. The host explicitly reports panel
-deactivation, so a retained iframe cannot revive a candidate after switching
-panels even if blur is missed. Request/session/document/version/revision/
-settings/position/target/focus checks run again before display and acceptance.
-IME composition, 229 events, and the immediate composition-end window keep
-Tab/Escape priority. Tab inserts a single normal transaction with prose marks
-and no inherited link/code attributes. The existing SyncController starts
-that edit only from an acknowledged base; subsequent input queues separately.
+The stdio transport only answers known LSP configuration and message requests,
+permits the server's constrained GitHub `window/showDocument` URLs, refuses
+workspace edits and arbitrary server-to-client command execution, and validates
+the device-flow and accepted-completion commands before invoking the server's
+`workspace/executeCommand`. Status and account/billing messages are presented
+through VS Code UI; server stderr and log notifications are drained/discarded.
+Shutdown sends LSP `shutdown` and `exit`, waits briefly for process exit, then
+forces termination if necessary. The native package is started directly with
+`spawn` and no shell or PATH Node/npm lookup.
 
-Verification on 2026-10-03:
+SDK build manifest pins `1.551.2` and registry SHA-512 integrity for six
+platform packages: darwin-arm64, darwin-x64, linux-arm64, linux-x64,
+win32-arm64, and win32-x64. Packaging checks each archive's integrity,
+package name/version/license metadata, and native binary. The published
+platform archives contain no license text, so the MIT text is vendored from
+the matching upstream `1.551.2` source tag and its SHA-256 is pinned in the
+manifest; each target VSIX includes that text and its generated third-party
+notice. Target VSIX verification checks its platform declaration, target-only
+binary, executable mode where applicable, exact license hash, and
+compressed/uncompressed sizes. Only the trusted desktop
+macOS arm64 Extension Host is currently enabled at runtime; Remote, Web, and
+other operating systems remain AI-disabled until separately verified. Manual
+checks of a Japanese/space-containing install path, PATH without Node/npm,
+process lifecycle on real VS Code shutdown, sign-in reuse after restart, and
+real Copilot completions are still required.
 
-- `npm run compile`, `npm test` (60 files / 1,370 tests), `npm run lint`
-  (0 errors; 94 existing warnings), and `npm run format:check` passed.
-- Unit tests cover authorization and unsupported API behavior, application
-  configuration, protocol bounds, forged/reused/expired invocations, token
-  fitting, Unicode, bounded context, cancellation, timeout, late/erroring
-  streams, request caps, stale snapshots, IME keys, manual operation while
-  auto is off, host panel deactivation, and independent edit/save progress.
-- `npm run test:browser:ai` uses the production wire validators and a fake
-  provider. Real Chromium keyboard input verifies display-only integrity,
-  Tab/Escape, copied/cut text excluding an unaccepted candidate, ordinary
-  typing debounce, target exclusions, wrapping in Light/Dark/High Contrast,
-  and preview exclusion. Screenshots and a report are written to
-  `output/playwright/ai-suggestions/`.
-- The installed VS Code **1.138.0** native acceptance uses the production
-  host, controller, SyncController, WorkspaceEdit, and resource Undo/Redo
-  with a fake model/panel transport. It verifies unchanged native text/version
-  while a candidate is shown, one accepted edit, Undo removing only the
-  candidate, Redo restoring it, and a separate subsequent-input history entry.
-- The existing browser block suite passed all five required fixtures on Rich
-  Editor, Dedicated Preview, and the native-preview cascade (15 combinations).
-  Source snapshots, including HTML/PDF export inputs, contain no ghost data.
-- `npm run benchmark:ai-suggestions` measured debounce-time context extraction
-  on macOS arm64 / Node 24.5.0, with 1,000 samples after warmup per scenario.
-  The five required fixtures had p50 0.002–0.004ms and p95 0.002–0.009ms;
-  5,000 prose blocks had p50 0.002ms / p95 0.004ms, and a 2,000-row table had
-  p50/p95 below 0.001ms because its subtree is skipped. Short English/Japanese
-  scenarios are included. `output/benchmarks/ai-suggestions/context.json`
-  records sample counts, input/context sizes and percentiles. These are local
-  extraction measurements; parsing, editing/rendering, debounce, model latency,
-  tokens and Copilot usage are excluded. No production diagnostics are added.
-- HTML export's Chromium smoke check and PDF export's 13-page A4/raster
-  regression passed. `npm run package` created and verified the 0.8.0 VSIX.
+The GitHub Release workflow now packages and validates six platform VSIX
+artifacts, records each SHA-256 in the validation job output, retains those
+exact artifacts for recovery, re-downloads and hashes every remote asset, and
+publishes the draft only after all six match. The existing byte-exact release
+notes recovery and planner-error propagation remain in place. This PR does
+not run the release workflow or publish to Marketplace/GitHub Releases.
 
-Real Copilot requests are **not** part of any automatic suite. The isolated
-native host has no signed-in Copilot model. Actual model selection/consent,
-Japanese/English generation quality, restart/revocation provider UI, Copilot
-versions, request/token counts and p50/p95 response latency remain explicit
-manual acceptance work. No real-provider speed or usage measurements are
-claimed. Live VS Code 1.90, OS Japanese IME candidate windows, native Command
-Palette/Quick Pick focus, screen-reader pronunciation, and zoom/scroll visual
-inspection also remain manual checks. API-absent behavior is covered with
-fakes; screenshot/browser composition evidence does not establish those
-native observations. Candidates/prompts are never logged or persisted in
-production. Provider usage, content exclusion, repository context, and custom
-instructions are described as boundaries in both English/Japanese READMEs.
+Verification after the Language Server conversion:
 
-Verification after rebasing on 2026-10-04 onto latest `origin/main`
-`397597002f17eea47b52115f5325f4da369c3c9c`:
+- `npm run compile`, `npm test` (71 files / 1,405 tests), `npm run lint` (0
+  errors, 96 warnings), and `npm run format:check` passed.
+- `npm run test:extension` passed in VS Code 1.140.0 through the production
+  provider with a fake Language Server. The candidate left native text and
+  version unchanged before Tab; acceptance synchronized as one native edit,
+  and Undo/Redo removed and restored only that edit. A following ordinary edit
+  retained its own history boundary. This does not establish real Copilot
+  acceptance or VS Code 1.90 compatibility.
+- `npm run test:browser:ai` passed ghost integrity, Tab/Escape, browser Undo/
+  Redo, copy/cut exclusion, 300 ms debounce, manual use with auto off, supported
+  and excluded targets, midline suffix preservation, link-destination
+  preservation, theme colors, wrapping, and Preview exclusion.
+- `npm run test:browser:blocks` passed all interaction checks and the five
+  required Markdown fixtures in Rich Editor, Dedicated Preview, and the native
+  preview CSS/script cascade (15 fixture/display combinations).
+- `npm run test:browser:html-export` passed with Mermaid rendered, two images,
+  mixed task states, and zero CSP violations. `npm run test:browser:pdf-export`
+  passed with a 334,167-byte PDF, 13 A4 pages, and 13 raster pages.
+- `npm run benchmark:ai-suggestions` passed with zero real Copilot requests.
+  It measures local Markdown position mapping, candidate normalization,
+  structural planning, and input reconciliation, not model latency or network
+  usage. On macOS arm64 / Node 24.5.0, the five Markdown fixtures measured
+  p50 5.71–36.49 ms and p95 9.36–38.61 ms; 5,000 prose blocks measured p50
+  57.84 ms / p95 70.83 ms, and 2,000 table rows measured p50 43.94 ms / p95
+  46.49 ms.
+- `npm run package` and `npm run package:platforms` passed. The six 0.9.0 VSIX
+  archives each contain only their matching native binary and license. Their
+  verified archive sizes were:
 
-- `npm run compile`, `npm test` (1,468 tests across 69 files),
-  `npm run lint` (0 errors; 94 warnings), and `npm run format:check` passed.
-- `npm run test:browser:ai` passed all five Chromium groups. The block suite
-  passed the five required fixtures in Rich Editor, Dedicated Preview, and
-  native preview (15 display combinations). HTML export had zero CSP
-  violations; PDF export passed with 334,167 bytes, 13 A4 pages, and 13 raster
-  pages.
-- `npm run test:extension` passed in VS Code 1.140.0 with one fake-model send.
-  The run verified the save/AI race and acceptance Undo/Redo boundary; no real
-  Copilot request was made.
-- `npm run benchmark:ai-suggestions` passed with 1,000 samples per scenario.
-  The five Markdown fixtures measured p50 0.00175–0.00354ms / p95
-  0.00196–0.00721ms; 5,000 prose blocks measured p50 0.002041ms / p95
-  0.003709ms, and 2,000 table rows measured p50 0.000209ms / p95 0.000291ms.
-  These are context-extraction measurements only.
-- `npm run package` verified the 0.9.0 VSIX (76 files; 4,651,874 bytes).
-  Real Copilot behavior, VS Code 1.90, OS Japanese IME, Command Palette/Quick
-  Pick focus, and screen-reader behavior remain manual acceptance work; the PR
-  remains Draft.
+  | Target       | Compressed bytes | Uncompressed bytes |
+  | ------------ | ---------------: | -----------------: |
+  | darwin-arm64 |       88,715,670 |        136,563,522 |
+  | darwin-x64   |       94,971,482 |        144,276,380 |
+  | linux-arm64  |       98,648,716 |        149,803,454 |
+  | linux-x64    |      101,690,713 |        157,890,716 |
+  | win32-arm64  |       90,166,219 |        132,899,353 |
+  | win32-x64    |       92,742,810 |        137,753,051 |
+
+  The darwin-arm64 native binary is 122,589,013 bytes. The SDK package
+  SHA-512 and upstream 1.551.2 MIT license SHA-256 are pinned and verified; the
+  exact license text is included in every VSIX notice. All six package archives
+  were locally built and verified, but only the macOS arm64 runtime is enabled;
+  the other five server binaries have not been exercised on their target OS.
+
+- Fake Language Server, Chromium, and benchmark runs do not count as real
+  Copilot acceptance and made no real Copilot requests.
+- Manual acceptance remains incomplete for actual Copilot sign-in and
+  repeated English/Japanese completions in prose, headings, lists, midline and
+  empty-paragraph positions; matching-input behavior; native VS Code 1.90; OS
+  Japanese IME, Command Palette/Quick Pick focus, screen reader, restart
+  authorization restoration, and Node-free installation-path/process-shutdown
+  checks. No provider latency, usage, content-exclusion, or service data-flow
+  acceptance result is claimed. Keep PR #147 Draft until these checks run.
 
 ## Issue #131 standalone HTML export (0.6.0)
 

@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import MarkdownIt from "markdown-it";
 import { isHostMessage } from "../../src/shared/protocol";
 import type { AiSuggestionsEnvironment } from "../../src/extension/aiSuggestions";
-import type * as Vscode from "vscode";
+import type { CopilotLanguageServer } from "../../src/extension/copilotLanguageServer";
 
 const vscode = vi.hoisted(() => {
   type Listener = (...args: never[]) => void;
@@ -624,6 +624,8 @@ const vscode = vi.hoisted(() => {
     },
   };
   const env = {
+    uiKind: 1,
+    remoteName: undefined,
     async openExternal(uri: Uri): Promise<boolean> {
       openExternalCalls.push(uri);
       if (openExternalError) throw openExternalError;
@@ -761,6 +763,7 @@ const vscode = vi.hoisted(() => {
     TextDocument,
     EndOfLine: { LF: 1, CRLF: 2 },
     ConfigurationTarget: { Global: 1, Workspace: 2, WorkspaceFolder: 3 },
+    UIKind: { Desktop: 1, Webworker: 2 },
     WebviewPanel,
     ViewColumn: { Beside: 2 },
     ProgressLocation: { Notification: 1 },
@@ -888,8 +891,6 @@ const pdfMocks = vi.hoisted(() => {
 
 vi.mock("vscode", () => ({
   ...vscode,
-  lm: undefined,
-  LanguageModelChatMessage: undefined,
   CancellationTokenSource: undefined,
 }));
 vi.mock("../../src/extension/export/browserDiscovery", () => ({
@@ -909,34 +910,31 @@ const {
 it("does not put model communication into the document edit/save queue", async () => {
   vscode.__state.reset();
   const { panel, document } = vscode.__state;
-  let modelId = "";
   let sends = 0;
   let cancelled = false;
-  const response = deferred<never>();
-  const model = {
-    id: "fake",
-    name: "Fake Copilot",
-    vendor: "copilot",
-    maxInputTokens: 4096,
-    countTokens: async () => 20,
-    sendRequest: () => {
+  const response = deferred<{ items: Array<{ insertText: string }> }>();
+  const server = {
+    currentStatus: { kind: "Normal", busy: false, message: "Copilot ready" },
+    isRunning: true,
+    start: async () => undefined,
+    synchronizeDocument: async () => undefined,
+    focusDocument: async () => undefined,
+    requestInlineCompletion: () => {
       sends += 1;
       return response.promise;
     },
-  };
+    reportShown: () => undefined,
+    reportPartiallyAccepted: () => undefined,
+    reportAccepted: async () => undefined,
+    closeDocument: async () => undefined,
+    dispose: () => undefined,
+  } as unknown as CopilotLanguageServer;
   const environment: AiSuggestionsEnvironment = {
+    server,
     supported: () => true,
     trusted: () => true,
-    settings: () => ({ autoTrigger: false, model: modelId }),
-    saveModel: async (id) => {
-      modelId = id;
-    },
-    models: async () => [model],
-    access: () => true,
-    choose: async () => model,
-    explain: async () => true,
+    settings: () => ({ autoTrigger: false }),
     notify: () => undefined,
-    user: (text) => ({ role: 1, content: [{ value: text }] }) as never,
     tokenSource: () =>
       ({
         token: {
@@ -989,13 +987,11 @@ it("does not put model communication into the document edit/save queue", async (
     baseVersion: document.version,
     editorRevision: 1,
     settingsGeneration: state.settingsGeneration,
-    position: 11,
+    position: document.getText().length,
     targetKind: "heading",
     trigger: "manual",
-    invocationId: trigger.invocationId,
-    context: { before: "Original", after: "", heading: "" },
   });
-  await waitForCondition(() => sends === 1, "held fake model request");
+  await waitForCondition(() => sends === 1, "held fake Copilot LSP request");
   panel.webview.receive({
     protocolVersion: 1,
     type: "edit",
@@ -1056,7 +1052,7 @@ it("returns an AI candidate when a non-mutating save is still queued", async () 
     expect(document.version).toBe(versionBefore);
     expect(document.getText()).toBe(markdownBefore);
 
-    response.resolve(chatResponse(" continuation"));
+    response.resolve({ items: [{ insertText: " continuation" }] });
     await waitForCondition(
       () =>
         panel.webview.messages.some(
@@ -1146,7 +1142,7 @@ it("cancels a pending AI response when format-on-save changes the document", asy
       ),
     ).toBe(true);
 
-    response.resolve(chatResponse(" stale continuation"));
+    response.resolve({ items: [{ insertText: " stale continuation" }] });
     await flush();
     expect(document.getText()).toBe(formattedDocument);
     expect(document.version).toBe(formattedVersion);
@@ -1203,38 +1199,38 @@ async function startDelayedAiSuggestion(markdown = "# Original"): Promise<{
     save(): Promise<boolean>;
     replaceText(value: string): void;
   };
-  response: ReturnType<typeof deferred<Vscode.LanguageModelChatResponse>>;
+  response: ReturnType<
+    typeof deferred<{ items: Array<{ insertText: string }> }>
+  >;
+  requestCount(): number;
 }> {
   vscode.__state.reset();
   const { panel, document } = vscode.__state;
   if (markdown !== document.getText()) document.reset(markdown);
-  let modelId = "";
-  let sends = 0;
-  const response = deferred<Vscode.LanguageModelChatResponse>();
-  const model = {
-    id: "fake",
-    name: "Fake Copilot",
-    vendor: "copilot",
-    maxInputTokens: 4096,
-    countTokens: async () => 20,
-    sendRequest: () => {
-      sends += 1;
+  const response = deferred<{ items: Array<{ insertText: string }> }>();
+  let requestCount = 0;
+  const server = {
+    currentStatus: { kind: "Normal", busy: false, message: "Copilot ready" },
+    isRunning: true,
+    start: async () => undefined,
+    synchronizeDocument: async () => undefined,
+    focusDocument: async () => undefined,
+    requestInlineCompletion: () => {
+      requestCount += 1;
       return response.promise;
     },
-  };
+    reportShown: () => undefined,
+    reportPartiallyAccepted: () => undefined,
+    reportAccepted: async () => undefined,
+    closeDocument: async () => undefined,
+    dispose: () => undefined,
+  } as unknown as CopilotLanguageServer;
   const environment: AiSuggestionsEnvironment = {
+    server,
     supported: () => true,
     trusted: () => true,
-    settings: () => ({ autoTrigger: false, model: modelId }),
-    saveModel: async (id) => {
-      modelId = id;
-    },
-    models: async () => [model],
-    access: () => true,
-    choose: async () => model,
-    explain: async () => true,
+    settings: () => ({ autoTrigger: false }),
     notify: () => undefined,
-    user: (text) => ({ role: 1, content: [{ value: text }] }) as never,
     tokenSource: () =>
       ({
         token: { isCancellationRequested: false },
@@ -1284,23 +1280,18 @@ async function startDelayedAiSuggestion(markdown = "# Original"): Promise<{
     position: document.getText().length,
     targetKind: "heading",
     trigger: "manual",
-    invocationId: trigger.invocationId,
-    context: {
-      before: document.getText().replace(/^#\s*/, ""),
-      after: "",
-      heading: "",
-    },
   });
-  await waitForCondition(() => sends === 1, "delayed fake model request");
-  return { provider, panel, document, response };
-}
-
-function chatResponse(text: string): Vscode.LanguageModelChatResponse {
+  await waitForCondition(
+    () => requestCount === 1,
+    "delayed fake Copilot request",
+  );
   return {
-    text: (async function* () {
-      yield text;
-    })(),
-  } as unknown as Vscode.LanguageModelChatResponse;
+    provider,
+    panel,
+    document,
+    response,
+    requestCount: () => requestCount,
+  };
 }
 
 function applyTextEdits(

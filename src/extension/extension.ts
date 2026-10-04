@@ -55,11 +55,12 @@ import { classifyLinkNavigation } from "./linkNavigation";
 import { WorkspaceFileSearchHost } from "./workspaceFileSearch";
 import {
   AiSuggestionsHost,
+  AI_SIGN_IN_COMMAND,
   AI_TRIGGER_COMMAND,
-  AI_MODEL_COMMAND,
   createAiSuggestionsEnvironment,
   type AiSuggestionsEnvironment,
 } from "./aiSuggestions";
+import type { AiAvailability } from "../shared/aiSuggestions";
 
 export const VIEW_TYPE = MARKDOWN_MINT_VIEW_TYPE;
 export const PREVIEW_VIEW_TYPE = "markdownMint.preview";
@@ -202,8 +203,8 @@ export function activate(context: vscode.ExtensionContext): MarkdownMintApi {
     vscode.commands.registerCommand(AI_TRIGGER_COMMAND, () =>
       provider.triggerAiSuggestion(),
     ),
-    vscode.commands.registerCommand(AI_MODEL_COMMAND, () =>
-      provider.selectAiSuggestionModel(),
+    vscode.commands.registerCommand(AI_SIGN_IN_COMMAND, () =>
+      provider.signInToCopilot(),
     ),
     vscode.commands.registerCommand(
       "markdownMint.openPreview",
@@ -326,6 +327,7 @@ export class MarkdownMintEditorProvider
   private readonly previewPanels = new Map<string, vscode.WebviewPanel>();
   private readonly subscriptions: vscode.Disposable[] = [];
   private readonly output: vscode.OutputChannel;
+  private readonly aiStatus: vscode.StatusBarItem | undefined;
   private readonly workspaceFileSearch = new WorkspaceFileSearchHost();
   private readonly aiSuggestions: AiSuggestionsHost;
   private pdfExportQueue: Promise<void> = Promise.resolve();
@@ -335,11 +337,44 @@ export class MarkdownMintEditorProvider
     private readonly context: vscode.ExtensionContext,
     aiEnvironment?: AiSuggestionsEnvironment,
   ) {
+    this.aiStatus =
+      typeof vscode.window.createStatusBarItem === "function"
+        ? vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, -1)
+        : undefined;
+    if (this.aiStatus) {
+      this.aiStatus.name = "Markdown Mint Copilot Suggestions";
+      this.aiStatus.command = AI_TRIGGER_COMMAND;
+      this.aiStatus.show();
+    }
     this.aiSuggestions = new AiSuggestionsHost(
       aiEnvironment ?? createAiSuggestionsEnvironment(context),
+      (availability: AiAvailability, message: string, autoTrigger: boolean) => {
+        if (!this.aiStatus) return;
+        this.aiStatus.text =
+          availability === "needs-sign-in"
+            ? "$(account) Mint sign in"
+            : availability === "preparing"
+              ? "$(sync~spin) Mint Copilot"
+              : availability === "ready" && !autoTrigger
+                ? "$(copilot) Mint suggestions off"
+                : availability === "ready"
+                  ? "$(copilot) Mint suggestions"
+                  : availability === "disabled"
+                    ? "$(copilot) Mint suggestions off"
+                    : "$(warning) Mint Copilot";
+        this.aiStatus.tooltip = message;
+        this.aiStatus.command =
+          availability === "needs-sign-in"
+            ? AI_SIGN_IN_COMMAND
+            : AI_TRIGGER_COMMAND;
+      },
     );
     this.output = vscode.window.createOutputChannel("Markdown Mint");
-    this.subscriptions.push(this.workspaceFileSearch, this.aiSuggestions);
+    this.subscriptions.push(
+      this.workspaceFileSearch,
+      this.aiSuggestions,
+      ...(this.aiStatus ? [this.aiStatus] : []),
+    );
     if (typeof vscode.workspace.onDidGrantWorkspaceTrust === "function")
       this.subscriptions.push(
         vscode.workspace.onDidGrantWorkspaceTrust(() =>
@@ -394,13 +429,10 @@ export class MarkdownMintEditorProvider
   }
   public async triggerAiSuggestion(): Promise<void> {
     const session = this.activeAiSession();
-    if (session)
-      await this.aiSuggestions.triggerFromUserAction(session.aiSessionId);
+    await this.aiSuggestions.triggerFromUserAction(session?.aiSessionId ?? "");
   }
-  public async selectAiSuggestionModel(): Promise<void> {
-    const session = this.activeAiSession();
-    if (session)
-      await this.aiSuggestions.selectModelFromUserAction(session.aiSessionId);
+  public async signInToCopilot(): Promise<void> {
+    await this.aiSuggestions.signInFromUserAction();
   }
 
   public async resolveCustomTextEditor(
@@ -618,7 +650,9 @@ export class MarkdownMintEditorProvider
       this.aiSuggestions.registerSession({
         id: session.aiSessionId,
         documentId: () => state.key,
+        uri: () => document.uri.toString(),
         version: () => state.document.version,
+        markdown: () => state.document.getText(),
         isReady: () =>
           this.sessions.get(panel) === session &&
           session.ready &&
@@ -666,6 +700,7 @@ export class MarkdownMintEditorProvider
         panelWithViewState.onDidChangeViewState(() => {
           if (!session.panel.active)
             this.aiSuggestions.cancelSession(session.aiSessionId);
+          else void this.aiSuggestions.sessionActivated(session.aiSessionId);
           this.aiSuggestions.publishState(session.aiSessionId);
           this.updateAiCommandContext();
           if (session.mode === "editor" && session.panel.active)
@@ -970,6 +1005,7 @@ export class MarkdownMintEditorProvider
           session.ready = true;
           this.sendDocumentIfVisible(session, "initial");
           this.aiSuggestions.publishState(session.aiSessionId);
+          void this.aiSuggestions.sessionActivated(session.aiSessionId);
           this.updateAiCommandContext();
           if (session.mode === "preview") this.requestPreviewRender(session);
           return;
@@ -985,6 +1021,10 @@ export class MarkdownMintEditorProvider
               session.aiSessionId,
               message.requestId,
             );
+          return;
+        case "ai-suggestion-feedback":
+          if (message.sessionId === session.aiSessionId)
+            this.aiSuggestions.feedback(message);
           return;
         case "edit":
           await this.enqueue(session.state, () =>

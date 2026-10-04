@@ -2,16 +2,18 @@
 
 ## 0.9.0
 
-- Add optional Copilot prose continuations in the Rich Editor, with a faint
-  display-only candidate, Tab acceptance, Escape dismissal, and native
-  document Undo/Redo. Support paragraph, heading, and list-item ends.
-- Add manual suggestion/model-selection commands and user-only
-  `markdownMint.aiSuggestions.autoTrigger` (initially false) and `.model`
-  settings. Require user-initiated model selection/consent and a manual resume
-  after restart or model changes; leave ordinary editing available without AI.
-- Bound current-document context, input tokens, output size, request frequency,
-  and deadlines; cancel stale requests independently of editing and saving.
-  Keep unaccepted candidates out of Markdown, clipboard, recovery, and exports.
+- Replace chat-model generation with GitHub's official
+  `@github/copilot-language-server` 1.551.2 and platform-specific native
+  binaries. Use LSP inline completions without a model picker or Mint chat
+  prompt; keep the current runtime gate limited to trusted desktop macOS arm64.
+- Add user-initiated GitHub device sign-in and automatic prose suggestions
+  controlled by user-scoped `markdownMint.aiSuggestions.autoTrigger` (initially
+  false). Resume automatically after restart when the Language Server restores
+  valid authorization; keep manual suggestions available while auto is off.
+- Show insertion-only transient candidates in paragraphs, headings, and list
+  items, including midline positions. Preserve original text and formatting,
+  support Tab/Escape and native Undo/Redo, and keep candidates out of the
+  document, clipboard, recovery data, previews, and exports until accepted.
 
 ## 0.8.0
 

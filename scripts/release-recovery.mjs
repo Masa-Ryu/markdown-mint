@@ -2,6 +2,14 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const sha256Pattern = /^[0-9a-f]{64}$/i;
+const releaseTargets = [
+  "darwin-arm64",
+  "darwin-x64",
+  "linux-arm64",
+  "linux-x64",
+  "win32-arm64",
+  "win32-x64",
+];
 const releaseLookupQuery = `query ReleaseForRecovery($owner: String!, $name: String!, $tag: String!) {
   repository(owner: $owner, name: $name) {
     release(tagName: $tag) {
@@ -140,9 +148,6 @@ export function planReleaseRecovery(state) {
     targetCommitSha,
     tagTargetCommitSha,
     release,
-    assetName,
-    expectedSha256,
-    actualAssetSha256,
     releaseNotes,
   } = state;
 
@@ -158,21 +163,10 @@ export function planReleaseRecovery(state) {
   if (tagTargetCommitSha !== null && typeof tagTargetCommitSha !== "string") {
     throw new Error("The existing Git tag target is invalid");
   }
-  if (
-    typeof assetName !== "string" ||
-    assetName !== `markdown-mint-${version}.vsix`
-  ) {
-    throw new Error(`Unexpected release asset name: ${String(assetName)}`);
-  }
   if (typeof releaseNotes !== "string") {
     throw new Error("Release notes must be a string");
   }
-  if (
-    typeof expectedSha256 !== "string" ||
-    !sha256Pattern.test(expectedSha256)
-  ) {
-    throw new Error("The expected VSIX SHA-256 is invalid");
-  }
+  const artifacts = normalizeArtifacts(state, version);
   if (tagTargetCommitSha !== null && tagTargetCommitSha !== targetCommitSha) {
     throw new Error(
       `Git tag ${tag} points to ${tagTargetCommitSha}, not ${targetCommitSha}`,
@@ -180,7 +174,7 @@ export function planReleaseRecovery(state) {
   }
 
   if (release === null) {
-    if (actualAssetSha256 !== null) {
+    if (artifacts.some((artifact) => artifact.actualAssetSha256 !== null)) {
       throw new Error("An asset checksum was supplied without a release");
     }
     return {
@@ -223,67 +217,150 @@ export function planReleaseRecovery(state) {
     throw new Error(`Existing GitHub Release ${tag} has invalid assets`);
   }
 
-  const expectedAssets = release.assets.filter(
-    (asset) => asset?.name === assetName,
+  const expectedNames = new Set(
+    artifacts.map((artifact) => artifact.assetName),
   );
-  if (expectedAssets.length > 1) {
-    throw new Error(`GitHub Release ${tag} has duplicate ${assetName} assets`);
-  }
-  if (expectedAssets.length === 0) {
-    if (actualAssetSha256 !== null) {
-      throw new Error("An asset checksum was supplied for a missing asset");
-    }
-    if (!release.draft) {
+  for (const asset of release.assets) {
+    if (
+      typeof asset?.name === "string" &&
+      asset.name.startsWith(`markdown-mint-${version}-`) &&
+      !expectedNames.has(asset.name)
+    ) {
       throw new Error(
-        `Published GitHub Release ${tag} is missing ${assetName}`,
+        `GitHub Release ${tag} has an unexpected VSIX asset: ${asset.name}`,
       );
     }
-    return { action: "upload_asset", releaseId: release.id };
   }
 
-  const expectedAsset = expectedAssets[0];
-  if (expectedAsset.state === "starter") {
-    if (
-      release.draft &&
-      expectedAsset.size === 0 &&
-      Number.isSafeInteger(expectedAsset.id) &&
-      expectedAsset.id > 0 &&
-      actualAssetSha256 === null
-    ) {
+  for (const artifact of artifacts) {
+    const matching = release.assets.filter(
+      (asset) => asset?.name === artifact.assetName,
+    );
+    if (matching.length > 1) {
+      throw new Error(
+        `GitHub Release ${tag} has duplicate ${artifact.assetName} assets`,
+      );
+    }
+    if (matching.length === 0) {
+      if (artifact.actualAssetSha256 !== null) {
+        throw new Error(
+          `An asset checksum was supplied for missing ${artifact.assetName}`,
+        );
+      }
+      if (!release.draft) {
+        throw new Error(
+          `Published GitHub Release ${tag} is missing ${artifact.assetName}`,
+        );
+      }
       return {
-        action: "delete_starter_asset",
+        action: "upload_asset",
         releaseId: release.id,
-        assetId: expectedAsset.id,
+        assetName: artifact.assetName,
       };
     }
-    throw new Error(
-      `GitHub Release ${tag} has a starter asset that is not an empty draft upload; inspect this release manually before retrying`,
-    );
-  }
-  if (expectedAsset.state !== "uploaded") {
-    throw new Error(
-      `GitHub Release ${tag} has an unsupported asset state: ${String(expectedAsset.state)}`,
-    );
-  }
 
-  if (actualAssetSha256 === null) {
-    return { action: "verify_asset", releaseId: release.id };
-  }
-  if (
-    typeof actualAssetSha256 !== "string" ||
-    !sha256Pattern.test(actualAssetSha256)
-  ) {
-    throw new Error(`The ${assetName} SHA-256 is invalid`);
-  }
-  if (actualAssetSha256.toLowerCase() !== expectedSha256.toLowerCase()) {
-    throw new Error(
-      `The ${assetName} SHA-256 does not match the validated VSIX`,
-    );
+    const expectedAsset = matching[0];
+    if (expectedAsset.state === "starter") {
+      if (
+        release.draft &&
+        expectedAsset.size === 0 &&
+        Number.isSafeInteger(expectedAsset.id) &&
+        expectedAsset.id > 0 &&
+        artifact.actualAssetSha256 === null
+      ) {
+        return {
+          action: "delete_starter_asset",
+          releaseId: release.id,
+          assetId: expectedAsset.id,
+          assetName: artifact.assetName,
+        };
+      }
+      throw new Error(
+        `GitHub Release ${tag} has a starter asset that is not an empty draft upload; inspect this release manually before retrying`,
+      );
+    }
+    if (expectedAsset.state !== "uploaded") {
+      throw new Error(
+        `GitHub Release ${tag} has an unsupported asset state: ${String(expectedAsset.state)}`,
+      );
+    }
+
+    if (artifact.actualAssetSha256 === null) {
+      return {
+        action: "verify_asset",
+        releaseId: release.id,
+        assetName: artifact.assetName,
+      };
+    }
+    if (!sha256Pattern.test(artifact.actualAssetSha256)) {
+      throw new Error(`The ${artifact.assetName} SHA-256 is invalid`);
+    }
+    if (
+      artifact.actualAssetSha256.toLowerCase() !==
+      artifact.expectedSha256.toLowerCase()
+    ) {
+      throw new Error(
+        `The ${artifact.assetName} SHA-256 does not match the validated VSIX`,
+      );
+    }
   }
 
   return release.draft
     ? { action: "publish_release", releaseId: release.id }
     : { action: "already_published", releaseId: release.id };
+}
+
+function normalizeArtifacts(state, version) {
+  const artifacts = state.artifacts;
+  if (!Array.isArray(artifacts) || artifacts.length !== releaseTargets.length)
+    throw new Error(
+      "The release artifact manifest must include every supported platform",
+    );
+  const seenTargets = new Set();
+  const normalized = artifacts.map((artifact) => {
+    if (!artifact || typeof artifact !== "object" || Array.isArray(artifact))
+      throw new Error("The release artifact manifest is invalid");
+    const {
+      target,
+      assetName,
+      expectedSha256,
+      actualAssetSha256 = null,
+    } = artifact;
+    if (
+      typeof target !== "string" ||
+      !releaseTargets.includes(target) ||
+      seenTargets.has(target)
+    )
+      throw new Error(
+        `Unexpected or duplicate release target: ${String(target)}`,
+      );
+    seenTargets.add(target);
+    const expectedName = `markdown-mint-${version}-${target}.vsix`;
+    if (assetName !== expectedName)
+      throw new Error(`Unexpected release asset name: ${String(assetName)}`);
+    if (
+      typeof expectedSha256 !== "string" ||
+      !sha256Pattern.test(expectedSha256)
+    )
+      throw new Error("The expected VSIX SHA-256 is invalid");
+    if (
+      actualAssetSha256 !== null &&
+      (typeof actualAssetSha256 !== "string" ||
+        !sha256Pattern.test(actualAssetSha256))
+    )
+      throw new Error(`The ${assetName} SHA-256 is invalid`);
+    return {
+      target,
+      assetName,
+      expectedSha256,
+      actualAssetSha256,
+    };
+  });
+  if (releaseTargets.some((target) => !seenTargets.has(target)))
+    throw new Error(
+      "The release artifact manifest must include every supported platform",
+    );
+  return normalized;
 }
 
 async function main() {

@@ -62,43 +62,55 @@ Markdown Mint includes additional tools for working with real-world Markdown doc
 
 ## Copilot prose suggestions
 
-With a Markdown Mint Rich Editor active, run **Markdown Mint: Suggest
-Continuation** from the Command Palette. On first use, Mint explains the
-bounded text it sends and lets you select an available Copilot chat model and
-authorize access. Use **Markdown Mint: Select Suggestion Model** to change it.
-You can assign a shortcut to either command; Mint adds no default shortcut.
+Markdown Mint uses GitHub's official `@github/copilot-language-server` 1.551.2
+over `textDocument/inlineCompletion`; it does not select a chat model or send a
+Mint-authored chat prompt. The fixed-version native server binary is bundled in
+the platform VSIX, so Mint launches it directly instead of invoking `node`,
+`npm`, or `npx` from `PATH`. The pinned server binary is MIT licensed; each
+VSIX includes the matching upstream license text and third-party notice.
 
-A short continuation appears in faint text at the end of a paragraph, heading,
-or list item. Press **Tab** to insert it or **Esc** to dismiss it. It remains a
-display-only suggestion until accepted, so it is excluded from your file,
-clipboard, previews, exports, and recovery draft. Ordinary Undo/Redo applies
-after acceptance. Tables, code, links, inline code, Details/Alerts, Source,
-Preview, and selected text are excluded.
+With a Markdown Mint Rich Editor active, run **Markdown Mint: Sign in to GitHub
+Copilot** when setup is needed. The server supplies its device sign-in code and
+opens the official GitHub flow after the user confirms. Then type normally to
+see suggestions when `markdownMint.aiSuggestions.autoTrigger` is enabled, or
+run **Markdown Mint: Suggest Continuation** for a manual request. There is no
+model picker or default shortcut. The setting is user-scoped, initially
+**false**, and has no toolbar toggle. Manual suggestions remain available when
+automatic suggestions are off. If server status reports an authentication or
+availability problem, the status item and manual command report it. When the
+server can reuse its saved authorization after VS Code restarts, automatic
+suggestions resume without a second setup command.
 
-Automatic suggestions are initially **off**. Enable
-`markdownMint.aiSuggestions.autoTrigger` in VS Code's **User Settings** to
-request a continuation about one second after typing pauses. Turning it off
-keeps the manual command available. The selected ID is stored in
-`markdownMint.aiSuggestions.model` (initially empty). Both settings have
-application scope; workspace settings cannot enable sending or select a model.
-There is no automatic-suggestion toggle in the Mint toolbar.
+Suggestions can appear in the middle or at the end of ordinary prose,
+headings, and list items, including a contextually empty paragraph. Links in a
+paragraph do not exclude neighboring prose; link destinations, inline-code
+contents, tables, code blocks, Mermaid, math, raw HTML editor regions, selected
+text, Source, Preview, and modal fields are not completion targets. The
+candidate is transient until **Tab** accepts it; **Esc** dismisses it. Mint
+converts the server's replacement range to an insertion only when the original
+prefix and suffix are both preserved. A displayed candidate does not change
+Markdown, dirty/recovery state, clipboard, preview/export, or Undo history.
 
-Mint uses VS Code's public Language Model API in the extension host, with no
-Mint API key, server, or required Copilot dependency. Regular editing works
-when that API or a Copilot model is unavailable. Automatic requests require
-confirmed model access and a trusted workspace. After a restart, access
-revocation, or model-list change, run the manual command to resume; Mint never
-silently chooses a replacement model.
+Mint sends the complete current unsaved Markdown document to the local
+Language Server using its real file URI and version. Code, tables, and other
+non-target regions in that same document are included in this synchronization.
+The extension synchronizes only the active Rich Editor document and does not
+scan or synchronize other documents, terminals, clipboard contents, or Git
+changes itself. The Language Server receives the workspace folder and may use
+its own repository context; Mint has not independently verified every source
+the service may consult, the exact service-side content-exclusion behavior, or
+all provider-side data processing. Organization policies and service-side
+exclusions are not bypassed. Mint configures optional SDK telemetry off; this
+does not mean that service operations involve no data processing. Suggestions
+can consume **Copilot usage**. Mint does not log or persist document text or
+completion contents.
 
-Only bounded prose around the current document's cursor is sent: up to 4,000
-UTF-16 units before, 1,000 after, and 512 for a nearby heading, reduced further
-to fit the model's token budget. Mint does not collect other files, paths,
-images, Git changes, or clipboard content for AI, and does not log or persist
-prompts or suggestions. Requests can consume **Copilot usage** and differ
-from standard Copilot inline completion. Cancellation does not guarantee zero
-provider usage. Content exclusion, repository context, and custom instructions
-from standard Copilot features are not guaranteed for these separate chat
-requests; follow your organization's policy for sending document text.
+The native server packages are prepared for macOS, Linux, and Windows on x64
+and arm64. The current runtime gate enables AI only in a trusted, desktop,
+macOS arm64 Extension Host; Remote, Web, and other unverified Extension Host
+environments keep ordinary Markdown editing available without AI. Real Copilot acceptance and the no-Node/PATH, Japanese
+installation-path, restart, and process-shutdown checks are still required
+before claiming those behaviors verified.
 
 ## Markdown stays Markdown
 

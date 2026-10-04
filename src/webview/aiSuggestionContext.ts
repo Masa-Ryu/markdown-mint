@@ -1,20 +1,22 @@
-import type { Node as PMNode } from "prosemirror-model";
+import type { Node as PMNode, ResolvedPos } from "prosemirror-model";
 import { TextSelection, type EditorState } from "prosemirror-state";
-import {
-  AI_LIMITS,
-  aiContextHead,
-  aiContextTail,
-  type AiSuggestionContext,
-  type AiTargetKind,
-} from "../shared/aiSuggestions";
+import type { AiTargetKind } from "../shared/aiSuggestions";
 
-const containers = new Set(["doc", "bullet_list", "ordered_list", "list_item"]);
+const allowedContainers = new Set([
+  "doc",
+  "bullet_list",
+  "ordered_list",
+  "list_item",
+]);
+
 export interface AiSuggestionTarget {
   readonly position: number;
   readonly kind: AiTargetKind;
   readonly node: PMNode;
   readonly doc: PMNode;
 }
+
+/** Only ordinary prose and headings are eligible; links remain editable labels. */
 export function getSuggestionTarget(
   state: EditorState,
 ): AiSuggestionTarget | undefined {
@@ -23,121 +25,62 @@ export function getSuggestionTarget(
     return undefined;
   const { $from } = selection;
   const kind = $from.parent.type.name;
+  if (kind !== "paragraph" && kind !== "heading") return undefined;
   if (
-    (kind !== "paragraph" && kind !== "heading") ||
-    $from.parentOffset !== $from.parent.content.size
+    !$from.parent.textContent.trim() &&
+    (kind !== "paragraph" || !hasAdjacentProse($from))
   )
     return undefined;
-  for (let depth = 0; depth < $from.depth; depth += 1) {
-    if (!containers.has($from.node(depth).type.name)) return undefined;
-  }
-  const marks = state.storedMarks ?? $from.marks();
+  for (let depth = 0; depth < $from.depth; depth += 1)
+    if (!allowedContainers.has($from.node(depth).type.name)) return undefined;
+  const activeMarks = state.storedMarks ?? $from.marks();
+  if (activeMarks.some((mark) => mark.type.name === "code")) return undefined;
   if (
-    marks.some(
-      (mark) => mark.type.name === "link" || mark.type.name === "code",
-    ) ||
-    $from.nodeBefore?.marks.some(
-      (mark) => mark.type.name === "link" || mark.type.name === "code",
-    )
+    $from.nodeBefore?.marks.some((mark) => mark.type.name === "code") ||
+    $from.nodeAfter?.marks.some((mark) => mark.type.name === "code")
   )
     return undefined;
   return { position: selection.from, kind, node: $from.parent, doc: state.doc };
 }
 
-/** Read only bounded inline text; never render/serialize or descend into raw nodes. */
-function text(node: PMNode, limit: number, reverse: boolean): string {
-  let result = "";
-  for (
-    let step = 0;
-    step < Math.min(node.childCount, AI_LIMITS.blocks) && result.length < limit;
-    step += 1
-  ) {
-    const child = node.child(reverse ? node.childCount - 1 - step : step);
-    const value = child.isText
-      ? (child.text ?? "")
-      : child.type.name === "hard_break"
-        ? " "
-        : "";
-    result = reverse
-      ? aiContextTail(value, limit - result.length) + result
-      : result + aiContextHead(value, limit - result.length);
+function hasAdjacentProse(position: ResolvedPos): boolean {
+  for (let depth = position.depth; depth > 0; depth -= 1) {
+    const container = position.node(depth - 1);
+    const index = position.index(depth - 1);
+    if (
+      (index > 0 && containsProse(container.child(index - 1))) ||
+      (index + 1 < container.childCount &&
+        containsProse(container.child(index + 1)))
+    )
+      return true;
   }
-  return result;
+  return false;
 }
 
-export function buildSuggestionContext(
-  state: EditorState,
-  target: AiSuggestionTarget,
-): AiSuggestionContext | undefined {
-  if (!isSuggestionSnapshotCurrent(state, target)) return undefined;
-  let before = text(target.node, AI_LIMITS.before, true);
-  let after = "";
-  let heading =
-    target.kind === "heading" ? text(target.node, AI_LIMITS.heading, true) : "";
-  let visited = 0;
-  const visit = (node: PMNode, reverse: boolean): void => {
-    if (visited >= AI_LIMITS.blocks) return;
-    visited += 1;
-    const kind = node.type.name;
-    if (kind === "paragraph" || kind === "heading") {
-      if (reverse) {
-        if (!heading && kind === "heading")
-          heading = text(node, AI_LIMITS.heading, true);
-        if (before.length < AI_LIMITS.before) {
-          const remaining = AI_LIMITS.before - before.length;
-          const value = text(
-            node,
-            Math.max(0, remaining - (before ? 1 : 0)),
-            true,
-          );
-          before = value + (value && before ? "\n" : "") + before;
-        }
-      } else if (after.length < AI_LIMITS.after) {
-        const remaining = AI_LIMITS.after - after.length;
-        const value = text(
-          node,
-          Math.max(0, remaining - (after ? 1 : 0)),
-          false,
-        );
-        after += (value && after ? "\n" : "") + value;
-      }
-    } else if (containers.has(kind)) {
-      for (
-        let step = 0;
-        step < node.childCount && visited < AI_LIMITS.blocks;
-        step += 1
+function containsProse(node: PMNode): boolean {
+  if (node.type.name === "paragraph" || node.type.name === "heading") {
+    let found = false;
+    node.descendants((child) => {
+      if (
+        child.isText &&
+        child.text?.trim() &&
+        !child.marks.some((mark) => mark.type.name === "code")
       ) {
-        visit(node.child(reverse ? node.childCount - 1 - step : step), reverse);
+        found = true;
+        return false;
       }
-    }
-  };
-  const $position = state.selection.$from;
-  // Share the visit budget between directions, reserving a portion for following prose.
-  for (const reverse of [true, false]) {
-    const ceiling = reverse ? AI_LIMITS.blocks - 16 : AI_LIMITS.blocks;
-    for (
-      let depth = $position.depth - 1;
-      depth >= 0 && visited < ceiling;
-      depth -= 1
-    ) {
-      const parent = $position.node(depth);
-      const start = $position.index(depth) + (reverse ? -1 : 1);
-      for (
-        let index = start;
-        index >= 0 && index < parent.childCount && visited < ceiling;
-        index += reverse ? -1 : 1
-      ) {
-        visit(parent.child(index), reverse);
-        if (
-          reverse
-            ? before.length >= AI_LIMITS.before && Boolean(heading)
-            : after.length >= AI_LIMITS.after
-        )
-          break;
-      }
-    }
+    });
+    return found;
   }
-  return before.trim() ? { before, after, heading } : undefined;
+  if (
+    node.type.name !== "bullet_list" &&
+    node.type.name !== "ordered_list" &&
+    node.type.name !== "list_item"
+  )
+    return false;
+  for (let index = 0; index < node.childCount; index += 1)
+    if (containsProse(node.child(index))) return true;
+  return false;
 }
 
 export function isSuggestionSnapshotCurrent(
@@ -153,3 +96,9 @@ export function isSuggestionSnapshotCurrent(
     current.kind === target.kind
   );
 }
+
+/** Host callbacks implement this only for a synchronized document snapshot. */
+export type MarkdownOffsetForPosition = (
+  state: EditorState,
+  position: number,
+) => number | undefined;
