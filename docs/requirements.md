@@ -519,6 +519,29 @@ native observations. Candidates/prompts are never logged or persisted in
 production. Provider usage, content exclusion, repository context, and custom
 instructions are described as boundaries in both English/Japanese READMEs.
 
+Verification after rebasing on 2026-10-04 onto latest `origin/main`
+`397597002f17eea47b52115f5325f4da369c3c9c`:
+
+- `npm run compile`, `npm test` (1,468 tests across 69 files),
+  `npm run lint` (0 errors; 94 warnings), and `npm run format:check` passed.
+- `npm run test:browser:ai` passed all five Chromium groups. The block suite
+  passed the five required fixtures in Rich Editor, Dedicated Preview, and
+  native preview (15 display combinations). HTML export had zero CSP
+  violations; PDF export passed with 334,167 bytes, 13 A4 pages, and 13 raster
+  pages.
+- `npm run test:extension` passed in VS Code 1.140.0 with one fake-model send.
+  The run verified the save/AI race and acceptance Undo/Redo boundary; no real
+  Copilot request was made.
+- `npm run benchmark:ai-suggestions` passed with 1,000 samples per scenario.
+  The five Markdown fixtures measured p50 0.00175–0.00354ms / p95
+  0.00196–0.00721ms; 5,000 prose blocks measured p50 0.002041ms / p95
+  0.003709ms, and 2,000 table rows measured p50 0.000209ms / p95 0.000291ms.
+  These are context-extraction measurements only.
+- `npm run package` verified the 0.9.0 VSIX (76 files; 4,651,874 bytes).
+  Real Copilot behavior, VS Code 1.90, OS Japanese IME, Command Palette/Quick
+  Pick focus, and screen-reader behavior remain manual acceptance work; the PR
+  remains Draft.
+
 ## Issue #131 standalone HTML export (0.6.0)
 
 The toolbar's **Export** button and the `Markdown Mint: Export as HTML`
