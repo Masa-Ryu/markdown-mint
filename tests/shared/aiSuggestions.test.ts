@@ -183,4 +183,36 @@ describe("VS Code Language Model suggestion protocol", () => {
     expect(isAiWebviewMessage({ ...validation, current: "yes" })).toBe(false);
     expect(isAiWebviewMessage({ ...validation, unexpected: true })).toBe(false);
   });
+
+  it("validates the stale-model candidate adoption handshake", () => {
+    const check = {
+      protocolVersion: 1,
+      type: "ai-suggestion-adoption-check",
+      attemptId: "adopt-1",
+      requestId: request.requestId,
+      sessionId: request.sessionId,
+      documentId: request.documentId,
+      baseVersion: request.baseVersion,
+      editorRevision: request.editorRevision,
+      settingsGeneration: request.settingsGeneration,
+      position: request.position,
+      targetKind: request.targetKind,
+    } as const;
+    expect(isAiWebviewMessage(check)).toBe(true);
+    expect(parseWebviewMessage(check)).toEqual(check);
+    expect(isAiWebviewMessage({ ...check, unexpected: true })).toBe(false);
+
+    const validation = {
+      protocolVersion: 1,
+      type: "ai-suggestion-adoption-validation",
+      attemptId: "adopt-1",
+      requestId: request.requestId,
+      sessionId: request.sessionId,
+      available: true,
+    } as const;
+    expect(isAiHostMessage(validation)).toBe(true);
+    expect(isHostMessage(validation)).toBe(true);
+    expect(isAiHostMessage({ ...validation, available: "yes" })).toBe(false);
+    expect(isAiHostMessage({ ...validation, unexpected: true })).toBe(false);
+  });
 });

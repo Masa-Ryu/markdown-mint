@@ -15,6 +15,8 @@ import {
   AI_LIMITS,
   isAiHostMessage,
   type AiHostMessage,
+  type AiSuggestionAdoptionCheck,
+  type AiSuggestionAdoptionValidation,
   type AiSuggestionRequest,
   type AiSuggestionResult,
   type AiSuggestionState,
@@ -48,6 +50,11 @@ interface Waiting {
   readonly trigger: AiTrigger;
   readonly afterUserInput?: boolean;
   readonly invocationId?: string;
+}
+interface PendingAdoption {
+  readonly check: AiSuggestionAdoptionCheck;
+  readonly candidate: LiveCandidate;
+  readonly timer: ReturnType<typeof setTimeout>;
 }
 
 export const aiSuggestionsPluginKey = new PluginKey<CandidateDecoration | null>(
@@ -118,9 +125,11 @@ export class AiSuggestionsController {
   private state: AiSuggestionState | undefined;
   private revision = 0;
   private sequence = 0;
+  private adoptionSequence = 0;
   private pending: Snapshot | undefined;
   private pendingSelectionWait = false;
   private candidate: LiveCandidate | undefined;
+  private adoptionValidation: PendingAdoption | undefined;
   private waiting: Waiting | undefined;
   private timer: ReturnType<typeof setTimeout> | undefined;
   private pendingTimer: ReturnType<typeof setTimeout> | undefined;
@@ -253,6 +262,7 @@ export class AiSuggestionsController {
   ): void {
     if (this.disposed || (!docChanged && !selectionChanged && !marksChanged))
       return;
+    this.cancelAdoptionValidation();
     if (docChanged && this.composing) {
       this.compositionDirty = true;
       this.inputIntent = false;
@@ -440,14 +450,17 @@ export class AiSuggestionsController {
     this.sendCancel(pending);
   }
   private clearCandidate(sendRejection: boolean): void {
+    const candidate = this.candidate;
     this.candidate = undefined;
     void sendRejection;
+    this.sendCancel(candidate?.snapshot);
     this.clearDecoration();
   }
   public invalidate(): void {
     if (this.disposed) return;
     this.revision += 1;
     this.autoWaitingRevision = undefined;
+    this.cancelAdoptionValidation();
     this.cancelPending();
     this.clearCandidate(true);
   }
@@ -533,6 +546,10 @@ export class AiSuggestionsController {
       } else if (!restoringAfterInput) {
         this.pendingSelectionWait = false;
       }
+      return;
+    }
+    if (message.type === "ai-suggestion-adoption-validation") {
+      this.finishAdoptionValidation(message);
       return;
     }
     if (message.type === "ai-suggestion-snapshot-check") {
@@ -811,17 +828,108 @@ export class AiSuggestionsController {
   }
   public acceptSuggestion(): boolean {
     const candidate = this.candidate;
+    if (!candidate || !this.canAcceptCandidate(candidate)) {
+      this.invalidate();
+      return false;
+    }
+    if (this.state?.modelSelectionStale)
+      return this.beginAdoptionValidation(candidate);
+    return this.commitCandidate(candidate);
+  }
+
+  private canAcceptCandidate(candidate: LiveCandidate): boolean {
     const view = this.options.view();
-    const target = candidate?.snapshot.target;
+    const target = candidate.snapshot.target;
+    return Boolean(
+      target &&
+      this.options.canSuggest() &&
+      this.state &&
+      availabilityAllowsPendingWork(this.state, candidate.snapshot.request) &&
+      view.state.selection.from === target.position &&
+      view.state.selection.empty &&
+      candidate.snapshot.request.documentId === this.options.documentId(),
+    );
+  }
+
+  private beginAdoptionValidation(candidate: LiveCandidate): boolean {
+    if (this.adoptionValidation) return true;
+    const request = candidate.snapshot.request;
+    const check: AiSuggestionAdoptionCheck = {
+      protocolVersion: 1,
+      type: "ai-suggestion-adoption-check",
+      attemptId: `adopt-${Date.now()}-${++this.adoptionSequence}`,
+      requestId: request.requestId,
+      sessionId: request.sessionId,
+      documentId: this.options.documentId() ?? request.documentId,
+      baseVersion: this.options.version(),
+      editorRevision: this.revision,
+      settingsGeneration: request.settingsGeneration,
+      position: request.position,
+      targetKind: request.targetKind,
+    };
+    const pending: PendingAdoption = {
+      check,
+      candidate,
+      timer: setTimeout(() => {
+        if (this.adoptionValidation !== pending) return;
+        this.adoptionValidation = undefined;
+        this.clearCandidate(true);
+        this.setLive(
+          "The changed Copilot model could not be verified. Type again to request a new suggestion.",
+        );
+      }, AI_LIMITS.modelValidationDeadlineMs),
+    };
+    this.adoptionValidation = pending;
+    this.setLive("Checking the selected Copilot model before accepting.");
+    try {
+      this.options.post(check);
+    } catch {
+      clearTimeout(pending.timer);
+      this.adoptionValidation = undefined;
+      this.clearCandidate(true);
+      this.setLive("The selected Copilot model could not be verified.");
+    }
+    return true;
+  }
+
+  private finishAdoptionValidation(
+    validation: AiSuggestionAdoptionValidation,
+  ): void {
+    const pending = this.adoptionValidation;
     if (
-      !candidate ||
-      !target ||
-      !this.options.canSuggest() ||
-      !this.state ||
-      !availabilityAllowsPendingWork(this.state, candidate.snapshot.request) ||
-      view.state.selection.from !== target.position ||
-      !view.state.selection.empty
+      !pending ||
+      validation.attemptId !== pending.check.attemptId ||
+      validation.requestId !== pending.check.requestId ||
+      validation.sessionId !== pending.check.sessionId
+    )
+      return;
+    clearTimeout(pending.timer);
+    this.adoptionValidation = undefined;
+    if (
+      this.candidate !== pending.candidate ||
+      !validation.available ||
+      !this.canAcceptCandidate(pending.candidate)
     ) {
+      if (this.candidate === pending.candidate) this.clearCandidate(true);
+      this.setLive(
+        "The model or suggestion changed. Type again to request a new suggestion.",
+      );
+      return;
+    }
+    if (this.state) this.state = { ...this.state, modelSelectionStale: false };
+    this.commitCandidate(pending.candidate);
+  }
+
+  private cancelAdoptionValidation(): void {
+    const pending = this.adoptionValidation;
+    this.adoptionValidation = undefined;
+    if (pending) clearTimeout(pending.timer);
+  }
+
+  private commitCandidate(candidate: LiveCandidate): boolean {
+    const view = this.options.view();
+    const target = candidate.snapshot.target;
+    if (!this.canAcceptCandidate(candidate)) {
       this.invalidate();
       return false;
     }
@@ -838,6 +946,7 @@ export class AiSuggestionsController {
       return false;
     }
     this.candidate = undefined;
+    this.sendCancel(candidate.snapshot);
     this.revision += 1;
     const accepted = this.options.dispatch(transaction);
     if (accepted) {

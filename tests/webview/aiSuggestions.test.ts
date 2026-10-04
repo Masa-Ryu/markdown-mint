@@ -454,6 +454,155 @@ describe("Copilot inline completion ghost", () => {
     expect(f.app.view.state.doc).toBe(nativeDoc);
   });
 
+  it("waits for host membership confirmation before Tab adopts a stale-list candidate", async () => {
+    const f = setup("Hello", false);
+    f.trigger();
+    await vi.advanceTimersByTimeAsync(0);
+    const request = f.requests()[0]!;
+    const nativeDoc = f.app.view.state.doc;
+    f.result(" next", request);
+    f.state({ modelSelectionStale: true });
+
+    expect(f.root.querySelector(".mm-ai-suggestion")?.textContent).toBe(
+      " next",
+    );
+    expect(f.key("Tab").defaultPrevented).toBe(true);
+    const check = f.messages.find(
+      (message) => message.type === "ai-suggestion-adoption-check",
+    );
+    expect(check).toMatchObject({
+      type: "ai-suggestion-adoption-check",
+      attemptId: expect.any(String),
+      requestId: request.requestId,
+      sessionId: request.sessionId,
+      documentId: request.documentId,
+      baseVersion: request.baseVersion,
+    });
+    expect(f.app.view.state.doc).toBe(nativeDoc);
+    expect(f.messages.some((message) => message.type === "edit")).toBe(false);
+
+    receive({
+      protocolVersion: 1,
+      type: "ai-suggestion-adoption-validation",
+      attemptId: String(check?.attemptId),
+      requestId: request.requestId,
+      sessionId: request.sessionId,
+      available: true,
+    });
+    expect(
+      f.messages.filter((message) => message.type === "edit"),
+    ).toHaveLength(1);
+    expect(f.messages.at(-1)).toMatchObject({
+      type: "edit",
+      markdown: "Hello next",
+    });
+  });
+
+  it("rejects a removed model and ignores late validation replies after timeout", async () => {
+    const f = setup("Hello", false);
+    f.trigger();
+    await vi.advanceTimersByTimeAsync(0);
+    const request = f.requests()[0]!;
+    const nativeDoc = f.app.view.state.doc;
+    f.result(" stale", request);
+    f.state({ modelSelectionStale: true });
+
+    expect(f.key("Tab").defaultPrevented).toBe(true);
+    expect(f.app.view.state.doc).toBe(nativeDoc);
+    const check = f.messages.find(
+      (message) => message.type === "ai-suggestion-adoption-check",
+    );
+    expect(check).toMatchObject({ requestId: request.requestId });
+    receive({
+      protocolVersion: 1,
+      type: "ai-suggestion-adoption-validation",
+      attemptId: String(check?.attemptId),
+      requestId: request.requestId,
+      sessionId: request.sessionId,
+      available: false,
+    });
+    expect(f.root.querySelector(".mm-ai-suggestion")).toBeNull();
+    expect(f.messages.some((message) => message.type === "edit")).toBe(false);
+
+    f.trigger();
+    await vi.advanceTimersByTimeAsync(0);
+    const secondRequest = f.requests()[1]!;
+    f.result(" later", secondRequest);
+    f.state({ modelSelectionStale: true });
+    expect(f.key("Tab").defaultPrevented).toBe(true);
+    const timeoutCheck = f.messages
+      .filter((message) => message.type === "ai-suggestion-adoption-check")
+      .at(-1);
+    await vi.advanceTimersByTimeAsync(AI_LIMITS.modelValidationDeadlineMs);
+    expect(f.root.querySelector(".mm-ai-suggestion")).toBeNull();
+    receive({
+      protocolVersion: 1,
+      type: "ai-suggestion-adoption-validation",
+      attemptId: String(timeoutCheck?.attemptId),
+      requestId: secondRequest.requestId,
+      sessionId: secondRequest.sessionId,
+      available: true,
+    });
+    expect(f.app.view.state.doc).toBe(nativeDoc);
+    expect(f.messages.some((message) => message.type === "edit")).toBe(false);
+  });
+
+  it("ignores a late reply from an earlier Tab validation attempt", async () => {
+    const f = setup("Hello", false);
+    f.trigger();
+    await vi.advanceTimersByTimeAsync(0);
+    const request = f.requests()[0]!;
+    f.result(" world", request);
+    f.state({ modelSelectionStale: true });
+    expect(f.key("Tab").defaultPrevented).toBe(true);
+    const firstCheck = f.messages
+      .filter((message) => message.type === "ai-suggestion-adoption-check")
+      .at(-1);
+
+    f.type(" ");
+    f.ack();
+    expect(f.key("Tab").defaultPrevented).toBe(true);
+    const secondCheck = f.messages
+      .filter((message) => message.type === "ai-suggestion-adoption-check")
+      .at(-1);
+    expect(secondCheck).toMatchObject({
+      requestId: request.requestId,
+      baseVersion: f.app.version,
+    });
+    expect(secondCheck?.attemptId).not.toBe(firstCheck?.attemptId);
+    const editCount = f.messages.filter(
+      (message) => message.type === "edit",
+    ).length;
+
+    receive({
+      protocolVersion: 1,
+      type: "ai-suggestion-adoption-validation",
+      attemptId: String(firstCheck?.attemptId),
+      requestId: request.requestId,
+      sessionId: request.sessionId,
+      available: true,
+    });
+    expect(
+      f.messages.filter((message) => message.type === "edit"),
+    ).toHaveLength(editCount);
+    expect(f.root.querySelector(".mm-ai-suggestion")?.textContent).toBe(
+      "world",
+    );
+
+    receive({
+      protocolVersion: 1,
+      type: "ai-suggestion-adoption-validation",
+      attemptId: String(secondCheck?.attemptId),
+      requestId: request.requestId,
+      sessionId: request.sessionId,
+      available: true,
+    });
+    expect(f.messages.at(-1)).toMatchObject({
+      type: "edit",
+      markdown: "Hello world",
+    });
+  });
+
   it("starts one debounced request after composing Japanese text without a candidate", async () => {
     const f = setup("Hello", true);
     f.app.view.dom.dispatchEvent(

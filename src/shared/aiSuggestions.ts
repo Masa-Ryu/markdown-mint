@@ -3,6 +3,7 @@ export const AI_LIMITS = {
   debounceMs: 300,
   deadlineMs: 35_000,
   snapshotCheckDeadlineMs: 3_000,
+  modelValidationDeadlineMs: 3_000,
   maxDocumentLength: 4_000_000,
   maxCompletionLength: 32_768,
   maxRequestIdLength: 160,
@@ -74,6 +75,19 @@ export interface AiSuggestionSnapshotValidation {
   readonly sessionId: string;
   readonly current: boolean;
 }
+export interface AiSuggestionAdoptionCheck extends AiSuggestionIdentity {
+  readonly protocolVersion: 1;
+  readonly type: "ai-suggestion-adoption-check";
+  readonly attemptId: string;
+}
+export interface AiSuggestionAdoptionValidation {
+  readonly protocolVersion: 1;
+  readonly type: "ai-suggestion-adoption-validation";
+  readonly attemptId: string;
+  readonly requestId: string;
+  readonly sessionId: string;
+  readonly available: boolean;
+}
 export interface AiSuggestionState {
   readonly protocolVersion: 1;
   readonly type: "ai-suggestion-state";
@@ -83,6 +97,8 @@ export interface AiSuggestionState {
   readonly availability: AiAvailability;
   /** Non-secret setup marker; this never represents model access permission. */
   readonly autoRestoreOnInput?: boolean;
+  /** True when a model-list event requires user-initiated membership recheck. */
+  readonly modelSelectionStale?: boolean;
   readonly active?: boolean;
   readonly statusText?: string;
   readonly modelName?: string;
@@ -107,11 +123,15 @@ export interface AiSuggestionResult extends AiSuggestionIdentity {
   readonly reason: AiSuggestionReason;
 }
 export type AiWebviewMessage =
-  AiSuggestionRequest | AiSuggestionCancel | AiSuggestionSnapshotValidation;
+  | AiSuggestionRequest
+  | AiSuggestionCancel
+  | AiSuggestionSnapshotValidation
+  | AiSuggestionAdoptionCheck;
 export type AiHostMessage =
   | AiSuggestionState
   | AiSuggestionTrigger
   | AiSuggestionSnapshotCheck
+  | AiSuggestionAdoptionValidation
   | AiSuggestionResult;
 
 function record(value: unknown): value is Record<string, unknown> {
@@ -193,6 +213,24 @@ export function isAiWebviewMessage(value: unknown): value is AiWebviewMessage {
       id(value.sessionId) &&
       typeof value.current === "boolean"
     );
+  if (value.type === "ai-suggestion-adoption-check")
+    return (
+      onlyKeys(value, [
+        "protocolVersion",
+        "type",
+        "attemptId",
+        "requestId",
+        "sessionId",
+        "documentId",
+        "baseVersion",
+        "editorRevision",
+        "settingsGeneration",
+        "position",
+        "targetKind",
+      ]) &&
+      id(value.attemptId) &&
+      identity(value)
+    );
   return (
     value.type === "ai-suggestion-request" &&
     onlyKeys(value, [
@@ -232,6 +270,7 @@ export function isAiHostMessage(value: unknown): value is AiHostMessage {
         "autoTrigger",
         "availability",
         "autoRestoreOnInput",
+        "modelSelectionStale",
         "active",
         "statusText",
         "modelName",
@@ -241,6 +280,8 @@ export function isAiHostMessage(value: unknown): value is AiHostMessage {
       typeof value.autoTrigger === "boolean" &&
       (value.autoRestoreOnInput === undefined ||
         typeof value.autoRestoreOnInput === "boolean") &&
+      (value.modelSelectionStale === undefined ||
+        typeof value.modelSelectionStale === "boolean") &&
       (value.active === undefined || typeof value.active === "boolean") &&
       (value.statusText === undefined ||
         (typeof value.statusText === "string" &&
@@ -268,6 +309,21 @@ export function isAiHostMessage(value: unknown): value is AiHostMessage {
       onlyKeys(value, ["protocolVersion", "type", "requestId", "sessionId"]) &&
       id(value.requestId) &&
       id(value.sessionId)
+    );
+  if (value.type === "ai-suggestion-adoption-validation")
+    return (
+      onlyKeys(value, [
+        "protocolVersion",
+        "type",
+        "attemptId",
+        "requestId",
+        "sessionId",
+        "available",
+      ]) &&
+      id(value.attemptId) &&
+      id(value.requestId) &&
+      id(value.sessionId) &&
+      typeof value.available === "boolean"
     );
   return (
     value.type === "ai-suggestion-result" &&

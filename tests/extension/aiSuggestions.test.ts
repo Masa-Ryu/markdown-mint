@@ -69,7 +69,10 @@ function fixture(autoTrigger = false) {
   let requestIsQueueBusy = false;
   let allow = true;
   let setupCompleted = false;
+  let savedModelIdentity: { id: string; version: string } | undefined;
   let snapshotCurrent = true;
+  let beforeSnapshotValidation: (() => void) | undefined;
+  let availableModels: readonly vscode.LanguageModelChat[] = [];
   const accessListeners = new Set<() => void>();
   const modelListeners = new Set<() => void>();
   const messages: AiHostMessage[] = [];
@@ -86,8 +89,9 @@ function fixture(autoTrigger = false) {
     countTokens: vi.fn(async () => 40),
     sendRequest: send,
   } as unknown as vscode.LanguageModelChat;
+  availableModels = [model];
   const api: LanguageModelApi = {
-    selectChatModels: vi.fn(async () => [model]),
+    selectChatModels: vi.fn(async () => availableModels),
     onDidChangeChatModels: (listener) => {
       modelListeners.add(listener);
       return { dispose: () => modelListeners.delete(listener) };
@@ -100,13 +104,18 @@ function fixture(autoTrigger = false) {
       return { dispose: () => accessListeners.delete(listener) };
     },
   };
-  const languageModel = new LanguageModelSuggestions({ api, access });
+  const languageModel = new LanguageModelSuggestions({
+    api,
+    access,
+    savedModelIdentity: () => savedModelIdentity,
+  });
   const statusReports: Array<AiStatusSnapshot | undefined> = [];
   const environment: AiSuggestionsEnvironment = {
     languageModel,
     setupCompleted: () => setupCompleted,
     markSetupCompleted: async () => {
       setupCompleted = true;
+      savedModelIdentity = { id: model.id, version: model.version };
     },
     supported: () => true,
     trusted: () => true,
@@ -129,7 +138,8 @@ function fixture(autoTrigger = false) {
     focus: vi.fn(),
     post: (message) => {
       messages.push(message);
-      if (message.type === "ai-suggestion-snapshot-check")
+      if (message.type === "ai-suggestion-snapshot-check") {
+        beforeSnapshotValidation?.();
         host.confirmSnapshotValidation("s1", {
           protocolVersion: 1,
           type: "ai-suggestion-snapshot-validation",
@@ -137,6 +147,7 @@ function fixture(autoTrigger = false) {
           sessionId: message.sessionId,
           current: snapshotCurrent,
         });
+      }
     },
   };
   host.registerSession(panel);
@@ -179,9 +190,15 @@ function fixture(autoTrigger = false) {
     setupCompleted: () => setupCompleted,
     setSetupCompleted: (value: boolean) => {
       setupCompleted = value;
+      savedModelIdentity = value
+        ? { id: model.id, version: model.version }
+        : undefined;
     },
     setSnapshotCurrent: (value: boolean) => {
       snapshotCurrent = value;
+    },
+    setBeforeSnapshotValidation: (callback: (() => void) | undefined) => {
+      beforeSnapshotValidation = callback;
     },
     send,
     startManual,
@@ -249,7 +266,8 @@ function fixture(autoTrigger = false) {
     accessChanged: () => {
       for (const listener of accessListeners) listener();
     },
-    modelsChanged: () => {
+    modelsChanged: (models?: readonly vscode.LanguageModelChat[]) => {
+      if (models) availableModels = models;
       for (const listener of modelListeners) listener();
     },
     dispose: () => host.dispose(),
@@ -411,9 +429,14 @@ describe("AI suggestion lifecycle with the public Language Model API", () => {
     f.dispose();
   });
 
-  it("reacquires a saved model only after a debounced real-input request after restart", async () => {
+  it("reacquires a saved model only after a real-input request after restart", async () => {
     const f = fixture(true);
     f.setSetupCompleted(true);
+    f.host.publishState("s1");
+    expect(f.messages.at(-1)).toMatchObject({
+      type: "ai-suggestion-state",
+      autoRestoreOnInput: true,
+    });
     expect(f.api.selectChatModels).not.toHaveBeenCalled();
     f.send.mockResolvedValueOnce(
       response('{"insertText":" for safer publishing."}') as never,
@@ -423,6 +446,8 @@ describe("AI suggestion lifecycle with the public Language Model API", () => {
 
     expect(f.api.selectChatModels).toHaveBeenCalledExactlyOnceWith({
       vendor: "copilot",
+      id: f.model.id,
+      version: f.model.version,
     });
     expect(f.send).toHaveBeenCalledTimes(1);
     expect(f.messages.at(-1)).toMatchObject({
@@ -460,7 +485,7 @@ describe("AI suggestion lifecycle with the public Language Model API", () => {
     { setup: false, afterUserInput: true, label: "without completed setup" },
     { setup: true, afterUserInput: false, label: "without real-input origin" },
   ])(
-    "does not restore consent after restart $label",
+    "does not auto-reacquire a model after restart $label",
     async ({ setup, afterUserInput }) => {
       const f = fixture(true);
       f.setSetupCompleted(setup);
@@ -508,15 +533,13 @@ describe("AI suggestion lifecycle with the public Language Model API", () => {
   it("blocks automatic restoration if access is lost before the snapshot is sent", async () => {
     const f = fixture(true);
     f.setSetupCompleted(true);
-    vi.spyOn(f.access, "canSendRequest")
-      .mockReturnValueOnce(true)
-      .mockReturnValueOnce(false);
+    f.setBeforeSnapshotValidation(() => f.setAccess(false));
 
     await f.host.requestSuggestion(
       "s1",
       f.autoRequest("restart-access-race", true),
     );
-    f.setAccess(false);
+    f.setBeforeSnapshotValidation(undefined);
     await f.host.requestSuggestion(
       "s1",
       f.autoRequest("restart-access-still-denied", true),
@@ -549,6 +572,7 @@ describe("AI suggestion lifecycle with the public Language Model API", () => {
     expect(f.send).not.toHaveBeenCalled();
 
     f.accessChanged();
+    f.modelsChanged([f.model]);
     await f.host.requestSuggestion("s1", f.autoRequest("denied-again", true));
 
     expect(f.api.selectChatModels).toHaveBeenCalledTimes(1);
@@ -620,6 +644,238 @@ describe("AI suggestion lifecycle with the public Language Model API", () => {
       type: "ai-suggestion-result",
       reason: "ready",
     });
+    f.dispose();
+  });
+
+  it("preserves no-model recovery across an unassociated access event", async () => {
+    const f = fixture(true);
+    f.setSetupCompleted(true);
+    vi.mocked(f.api.selectChatModels).mockResolvedValueOnce([]);
+
+    await f.host.requestSuggestion("s1", f.autoRequest("missing-model", true));
+    expect(
+      f.messages
+        .filter((message) => message.type === "ai-suggestion-result")
+        .at(-1),
+    ).toMatchObject({
+      type: "ai-suggestion-result",
+      reason: "no-model",
+    });
+    expect(
+      f.messages
+        .filter((message) => message.type === "ai-suggestion-state")
+        .at(-1),
+    ).toMatchObject({ autoRestoreOnInput: false });
+
+    f.accessChanged();
+    f.modelsChanged([f.model]);
+    expect(f.api.selectChatModels).toHaveBeenCalledTimes(1);
+    f.setText("The registered model can help", 2);
+    f.send.mockResolvedValueOnce(
+      response('{"insertText":" with the next step."}') as never,
+    );
+    await f.host.requestSuggestion("s1", f.autoRequest("model-restored", true));
+
+    expect(f.api.selectChatModels).toHaveBeenCalledTimes(2);
+    expect(f.send).toHaveBeenCalledTimes(1);
+    expect(f.messages.at(-1)).toMatchObject({
+      type: "ai-suggestion-result",
+      reason: "ready",
+    });
+    f.dispose();
+  });
+
+  it("recovers permission after a model-list event without reusing its stale selection", async () => {
+    const f = fixture(true);
+    f.setSetupCompleted(true);
+    f.send.mockResolvedValueOnce(
+      response('{"insertText":" is drafted."}') as never,
+    );
+    await f.host.requestSuggestion(
+      "s1",
+      f.autoRequest("first-after-setup", true),
+    );
+    expect(f.api.selectChatModels).toHaveBeenCalledTimes(1);
+
+    f.setAccess(false);
+    f.modelsChanged([f.model]);
+    f.setAccess(true);
+    expect(f.api.selectChatModels).toHaveBeenCalledTimes(1);
+    f.setText("The revised publication plan", 2);
+    f.host.documentChanged("file:///document.md");
+    f.send.mockResolvedValueOnce(
+      response('{"insertText":" is ready."}') as never,
+    );
+    await f.host.requestSuggestion(
+      "s1",
+      f.autoRequest("permission-restored", true),
+    );
+
+    expect(f.api.selectChatModels).toHaveBeenCalledTimes(2);
+    expect(f.send).toHaveBeenCalledTimes(2);
+    const sendCalls = f.send.mock.calls as unknown as Array<[unknown]>;
+    const requestMessages = sendCalls[1]?.[0] as
+      Array<{ content?: string }> | undefined;
+    expect(requestMessages?.[0]?.content).toContain(
+      'PREFIX: "The revised publication plan"',
+    );
+    expect(f.messages.at(-1)).toMatchObject({
+      type: "ai-suggestion-result",
+      reason: "ready",
+    });
+    f.dispose();
+  });
+
+  it("cancels an active candidate when the selected model leaves the model list", async () => {
+    const f = fixture();
+    const request = await f.startManual();
+    const generation = deferred<Awaited<ReturnType<typeof response>>>();
+    f.send.mockReturnValue(generation.promise);
+    const pending = f.host.requestSuggestion("s1", request);
+    await vi.waitFor(() => expect(f.send).toHaveBeenCalledTimes(1));
+
+    f.modelsChanged([]);
+    await pending;
+    generation.resolve(response('{"insertText":" stale candidate"}'));
+
+    expect(f.api.selectChatModels).toHaveBeenCalledTimes(1);
+    expect(
+      f.messages.some(
+        (message) =>
+          message.type === "ai-suggestion-result" && message.reason === "ready",
+      ),
+    ).toBe(false);
+    expect(f.messages.at(-1)).toMatchObject({
+      type: "ai-suggestion-result",
+      reason: "needs-authorization",
+    });
+    f.dispose();
+  });
+
+  it("confirms a cached candidate against the exact model after an unrelated list change", async () => {
+    const f = fixture();
+    const request = await f.startManual();
+    f.send.mockResolvedValueOnce(
+      response('{"insertText":" for the release."}') as never,
+    );
+    await f.host.requestSuggestion("s1", request);
+    f.modelsChanged([
+      f.model,
+      {
+        ...f.model,
+        id: "copilot-other",
+        version: "v2",
+      } as vscode.LanguageModelChat,
+    ]);
+
+    await f.host.validateCandidateAdoption("s1", {
+      ...request,
+      type: "ai-suggestion-adoption-check",
+      attemptId: "adopt-unrelated-list",
+    });
+
+    expect(f.messages.at(-1)).toMatchObject({
+      type: "ai-suggestion-adoption-validation",
+      attemptId: "adopt-unrelated-list",
+      requestId: request.requestId,
+      available: true,
+    });
+    expect(f.api.selectChatModels).toHaveBeenLastCalledWith({
+      vendor: "copilot",
+      id: f.model.id,
+      version: f.model.version,
+    });
+    f.dispose();
+  });
+
+  it("keeps a candidate available for a fresh Tab check after its first check goes stale", async () => {
+    const f = fixture();
+    const request = await f.startManual();
+    f.send.mockResolvedValueOnce(
+      response('{"insertText":" for the release."}') as never,
+    );
+    await f.host.requestSuggestion("s1", request);
+    f.modelsChanged([f.model]);
+    const delayedMembership = deferred<readonly vscode.LanguageModelChat[]>();
+    vi.mocked(f.api.selectChatModels).mockReturnValueOnce(
+      delayedMembership.promise,
+    );
+    const check = (attemptId: string, baseVersion: number) => ({
+      protocolVersion: 1 as const,
+      type: "ai-suggestion-adoption-check" as const,
+      attemptId,
+      requestId: request.requestId,
+      sessionId: request.sessionId,
+      documentId: request.documentId,
+      baseVersion,
+      editorRevision: request.editorRevision,
+      settingsGeneration: request.settingsGeneration,
+      position: request.position,
+      targetKind: request.targetKind,
+    });
+
+    const firstCheck = f.host.validateCandidateAdoption(
+      "s1",
+      check("adopt-stale", request.baseVersion),
+    );
+    await vi.waitFor(() =>
+      expect(f.api.selectChatModels).toHaveBeenCalledTimes(2),
+    );
+    f.setText("The release helper!", 2);
+    f.host.documentChanged("file:///document.md");
+    delayedMembership.resolve([f.model]);
+    await firstCheck;
+    expect(
+      f.messages
+        .filter(
+          (message) => message.type === "ai-suggestion-adoption-validation",
+        )
+        .at(-1),
+    ).toMatchObject({ attemptId: "adopt-stale", available: false });
+
+    await f.host.validateCandidateAdoption("s1", check("adopt-retry", 2));
+    expect(
+      f.messages
+        .filter(
+          (message) => message.type === "ai-suggestion-adoption-validation",
+        )
+        .at(-1),
+    ).toMatchObject({ attemptId: "adopt-retry", available: true });
+    f.dispose();
+  });
+
+  it("rejects Tab adoption when the selected model was removed", async () => {
+    const f = fixture();
+    const request = await f.startManual();
+    f.send.mockResolvedValueOnce(response('{"insertText":" stale."}') as never);
+    await f.host.requestSuggestion("s1", request);
+    f.modelsChanged([]);
+
+    await f.host.validateCandidateAdoption("s1", {
+      ...request,
+      type: "ai-suggestion-adoption-check",
+      attemptId: "adopt-removed-model",
+    });
+
+    expect(
+      f.messages
+        .filter(
+          (message) => message.type === "ai-suggestion-adoption-validation",
+        )
+        .at(-1),
+    ).toMatchObject({
+      type: "ai-suggestion-adoption-validation",
+      attemptId: "adopt-removed-model",
+      requestId: request.requestId,
+      available: false,
+    });
+    expect(
+      f.messages.some(
+        (message) =>
+          message.type === "ai-suggestion-state" &&
+          message.availability === "no-model",
+      ),
+    ).toBe(true);
     f.dispose();
   });
 

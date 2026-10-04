@@ -1016,6 +1016,12 @@ export class MarkdownMintEditorProvider
             message,
           );
           return;
+        case "ai-suggestion-adoption-check":
+          await this.aiSuggestions.validateCandidateAdoption(
+            session.aiSessionId,
+            message,
+          );
+          return;
         case "ai-suggestion-cancel":
           if (message.sessionId === session.aiSessionId)
             this.aiSuggestions.cancelSession(

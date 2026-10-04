@@ -25,6 +25,14 @@ export interface LanguageModelSelection {
   readonly reason: string;
 }
 
+export interface SavedLanguageModelIdentity {
+  readonly id: string;
+  readonly version: string;
+}
+
+export type SelectionMembershipValidation =
+  "available" | "missing" | "access-denied" | "stale";
+
 export interface LanguageModelResult {
   readonly text?: string;
   readonly failure?: LanguageModelFailure;
@@ -45,6 +53,7 @@ export interface LanguageModelAccess {
 export interface LanguageModelSuggestionsOptions {
   readonly api?: LanguageModelApi;
   readonly access?: LanguageModelAccess;
+  readonly savedModelIdentity?: () => SavedLanguageModelIdentity | undefined;
   readonly modelMessage?: (content: string) => vscode.LanguageModelChatMessage;
 }
 
@@ -53,6 +62,8 @@ export class LanguageModelSuggestions implements vscode.Disposable {
   private selection: LanguageModelSelection | undefined;
   private accessCandidate: LanguageModelSelection | undefined;
   private lastAccessAllowed: boolean | undefined;
+  private selectionNeedsUserInitiatedRefresh = false;
+  private modelListGeneration = 0;
   private selecting: Promise<LanguageModelFailure | undefined> | undefined;
   private disposed = false;
   private readonly subscriptions: vscode.Disposable[] = [];
@@ -65,14 +76,11 @@ export class LanguageModelSuggestions implements vscode.Disposable {
     if (modelChange)
       this.subscriptions.push(
         modelChange(() => {
-          if (
-            this.selection &&
-            options.access?.canSendRequest(this.selection.model) === true
-          )
-            return;
-          this.selection = undefined;
-          this.accessCandidate = undefined;
-          this.lastAccessAllowed = undefined;
+          // The event carries no model identity. Keep the previous selection
+          // only as a reference; requests and adoption require a user-initiated
+          // exact membership query after this point.
+          this.modelListGeneration += 1;
+          this.selectionNeedsUserInitiatedRefresh = true;
           this.emitChange("models");
         }),
       );
@@ -128,19 +136,34 @@ export class LanguageModelSuggestions implements vscode.Disposable {
     if (this.disposed) return "cancelled";
     const { api, access } = this.options;
     if (!api || !access) return "failed";
+    const priorSelection = this.selection;
+    if (
+      this.selectionNeedsUserInitiatedRefresh &&
+      priorSelection &&
+      access.canSendRequest(priorSelection.model) === true
+    ) {
+      const membership =
+        await this.validateSelectionForAdoption(priorSelection);
+      if (membership === "available") return undefined;
+      if (membership === "stale") return "cancelled";
+    }
     try {
+      const generation = this.modelListGeneration;
       const models = await api.selectChatModels({ vendor: "copilot" });
-      if (this.disposed) return "cancelled";
+      if (this.disposed || generation !== this.modelListGeneration)
+        return "cancelled";
       const selected = chooseCompletionModel(models);
       if (!selected) {
         this.selection = undefined;
         this.accessCandidate = undefined;
         this.lastAccessAllowed = undefined;
+        this.selectionNeedsUserInitiatedRefresh = false;
         return "no-model";
       }
       this.accessCandidate = selected;
       const permission = access.canSendRequest(selected.model);
       this.lastAccessAllowed = permission === true;
+      this.selectionNeedsUserInitiatedRefresh = false;
       if (permission !== true) {
         this.selection = undefined;
         return "needs-authorization";
@@ -153,13 +176,162 @@ export class LanguageModelSuggestions implements vscode.Disposable {
     }
   }
 
+  /** Whether a real user input can safely check or restore a model selection. */
+  public canRevalidateForUserInput(): boolean {
+    if (this.disposed || !this.options.api || !this.options.access)
+      return false;
+    const knownSelection = this.selection ?? this.accessCandidate;
+    if (knownSelection)
+      return this.options.access.canSendRequest(knownSelection.model) === true;
+    // A cold Extension Host has no model object to check yet. Reacquisition is
+    // limited to the exact non-secret model identity saved after explicit
+    // setup; auto work never enumerates a vendor's entire model list.
+    return Boolean(
+      this.options.savedModelIdentity?.() && this.lastAccessAllowed !== false,
+    );
+  }
+
+  /** Checks cached permission or reacquires a previously authorized model. */
+  public async revalidateForUserInput(): Promise<
+    LanguageModelFailure | undefined
+  > {
+    if (this.disposed) return "cancelled";
+    const access = this.options.access;
+    if (!this.options.api || !access) return "failed";
+    const selection = this.selection;
+    if (selection && access.canSendRequest(selection.model) !== true)
+      return "needs-authorization";
+    if (!selection) {
+      const candidate = this.accessCandidate;
+      if (candidate && access.canSendRequest(candidate.model) !== true)
+        return "needs-authorization";
+      if (!this.canRevalidateForUserInput()) return "needs-authorization";
+      const savedIdentity = this.options.savedModelIdentity?.();
+      if (!savedIdentity) return "needs-authorization";
+      return this.restoreSavedModel(savedIdentity);
+    }
+    if (!this.selectionNeedsUserInitiatedRefresh) return undefined;
+    const result = await this.validateSelectionForAdoption(selection);
+    return result === "available"
+      ? undefined
+      : result === "missing"
+        ? "no-model"
+        : result === "access-denied"
+          ? "needs-authorization"
+          : "cancelled";
+  }
+
+  private async restoreSavedModel(
+    identity: SavedLanguageModelIdentity,
+  ): Promise<LanguageModelFailure | undefined> {
+    const { api, access } = this.options;
+    if (!api || !access) return "failed";
+    const generation = this.modelListGeneration;
+    try {
+      const models = await api.selectChatModels({
+        vendor: "copilot",
+        id: identity.id,
+        version: identity.version,
+      });
+      if (this.disposed || generation !== this.modelListGeneration)
+        return "cancelled";
+      const model = models.find(
+        (candidate) =>
+          candidate.vendor === "copilot" &&
+          candidate.id === identity.id &&
+          candidate.version === identity.version,
+      );
+      if (!model) return "no-model";
+      const selection = selectionForModel(
+        model,
+        "restored the previously selected Copilot model by exact identity",
+      );
+      this.accessCandidate = selection;
+      const permission = access.canSendRequest(model);
+      this.lastAccessAllowed = permission === true;
+      this.selectionNeedsUserInitiatedRefresh = false;
+      if (permission !== true) {
+        this.selection = undefined;
+        return "needs-authorization";
+      }
+      this.selection = selection;
+      return undefined;
+    } catch (error) {
+      return classifyLanguageModelError(error);
+    }
+  }
+
   /** Rechecks an in-memory model. It never selects models or opens consent UI. */
   public restoreAccess(): LanguageModelFailure | undefined {
     if (this.disposed) return "cancelled";
     if (!this.options.api || !this.options.access) return "failed";
     if (!this.selection) return "needs-authorization";
+    if (this.selectionNeedsUserInitiatedRefresh) return "needs-authorization";
     const access = this.options.access.canSendRequest(this.selection.model);
     return access === true ? undefined : "needs-authorization";
+  }
+
+  public get modelSelectionStale(): boolean {
+    return this.selectionNeedsUserInitiatedRefresh;
+  }
+
+  /** Keeps a ready status visible without treating access as list membership. */
+  public hasAuthorizedCachedSelection(): boolean {
+    return (
+      this.selection !== undefined &&
+      this.options.access?.canSendRequest(this.selection.model) === true
+    );
+  }
+
+  /** Called only from the user's Tab action when membership became unknown. */
+  public async validateSelectionForAdoption(
+    expected: LanguageModelSelection,
+  ): Promise<SelectionMembershipValidation> {
+    const { api, access } = this.options;
+    if (this.disposed || !api || !access || this.selection !== expected)
+      return "stale";
+    if (access.canSendRequest(expected.model) !== true) return "access-denied";
+    if (!this.selectionNeedsUserInitiatedRefresh) return "available";
+
+    const generation = this.modelListGeneration;
+    try {
+      const models = await api.selectChatModels({
+        vendor: "copilot",
+        id: expected.model.id,
+        version: expected.model.version,
+      });
+      if (
+        this.disposed ||
+        generation !== this.modelListGeneration ||
+        this.selection !== expected
+      )
+        return "stale";
+      const model = models.find(
+        (candidate) =>
+          candidate.vendor === "copilot" &&
+          candidate.id === expected.model.id &&
+          candidate.version === expected.model.version,
+      );
+      if (!model) {
+        this.selection = undefined;
+        return "missing";
+      }
+      if (access.canSendRequest(model) !== true) {
+        this.selection = undefined;
+        return "access-denied";
+      }
+      const refreshed: LanguageModelSelection = {
+        ...expected,
+        model,
+      };
+      this.selection = refreshed;
+      this.accessCandidate = refreshed;
+      this.lastAccessAllowed = true;
+      this.selectionNeedsUserInitiatedRefresh = false;
+      return "available";
+    } catch {
+      return "stale";
+    }
   }
 
   public get currentSelection(): LanguageModelSelection | undefined {
@@ -176,6 +348,8 @@ export class LanguageModelSuggestions implements vscode.Disposable {
     const model = selection?.model;
     const access = this.options.access;
     if (!model || !access) return { failure: "needs-authorization" };
+    if (this.selectionNeedsUserInitiatedRefresh)
+      return { failure: "needs-authorization" };
     if (access.canSendRequest(model) !== true)
       return { failure: "needs-authorization" };
     const context = buildCompletionContext(markdown, position, targetKind);
@@ -184,7 +358,11 @@ export class LanguageModelSuggestions implements vscode.Disposable {
       const prompt = await fitCompletionPrompt(model, context, token);
       if (token.isCancellationRequested) return { failure: "cancelled" };
       if (!prompt) return { failure: "invalid-context" };
-      if (this.selection !== selection || access.canSendRequest(model) !== true)
+      if (
+        this.selectionNeedsUserInitiatedRefresh ||
+        this.selection !== selection ||
+        access.canSendRequest(model) !== true
+      )
         return { failure: "needs-authorization" };
       // Only a User message is available. The prompt grants no tools or other
       // capabilities and contains only the active host-owned document snapshot.
@@ -198,7 +376,11 @@ export class LanguageModelSuggestions implements vscode.Disposable {
         text += chunk;
         if (text.length > 32_768) return { failure: "unsafe-suggestion" };
       }
-      if (token.isCancellationRequested || this.selection !== selection)
+      if (
+        token.isCancellationRequested ||
+        this.selectionNeedsUserInitiatedRefresh ||
+        this.selection !== selection
+      )
         return { failure: "cancelled" };
       const parsed = parseCompletionResponse(text);
       if (!parsed) return { failure: "unsafe-suggestion" };
@@ -256,6 +438,18 @@ export function chooseCompletionModel(
     reason: mini.length
       ? "selected an available Copilot mini family for inline response latency"
       : "selected the lexically stable available Copilot model because no mini family was listed",
+  };
+}
+
+function selectionForModel(
+  model: vscode.LanguageModelChat,
+  reason: string,
+): LanguageModelSelection {
+  return {
+    model,
+    identity: `${model.id}@${model.version}`,
+    displayName: `${model.name} (${model.id}, ${model.version})`,
+    reason,
   };
 }
 

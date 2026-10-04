@@ -46,12 +46,13 @@ function fakeModel(overrides: Record<string, unknown> = {}) {
   } as unknown as vscode.LanguageModelChat;
 }
 
-function setup(model = fakeModel()) {
+function setup(model = fakeModel(), savedIdentity = true) {
   let permitted = true;
+  let availableModels: readonly vscode.LanguageModelChat[] = [model];
   const accessListeners = new Set<() => void>();
   const modelListeners = new Set<() => void>();
   const api: LanguageModelApi = {
-    selectChatModels: vi.fn(async () => [model]),
+    selectChatModels: vi.fn(async () => availableModels),
     onDidChangeChatModels: (listener) => {
       modelListeners.add(listener);
       return { dispose: () => modelListeners.delete(listener) };
@@ -64,16 +65,24 @@ function setup(model = fakeModel()) {
       return { dispose: () => accessListeners.delete(listener) };
     },
   };
-  const adapter = new LanguageModelSuggestions({ api, access });
+  const adapter = new LanguageModelSuggestions({
+    api,
+    access,
+    savedModelIdentity: savedIdentity
+      ? () => ({ id: model.id, version: model.version })
+      : () => undefined,
+  });
   return {
     adapter,
     api,
+    access,
     model,
     permit(value: boolean) {
       permitted = value;
       for (const listener of accessListeners) listener();
     },
-    modelsChanged() {
+    modelsChanged(models?: readonly vscode.LanguageModelChat[]) {
+      if (models) availableModels = models;
       for (const listener of modelListeners) listener();
     },
   };
@@ -130,6 +139,34 @@ describe("public VS Code Language Model adapter", () => {
     f.adapter.dispose();
   });
 
+  it("reacquires a previously authorized model after cold restart only on user input", async () => {
+    const f = setup();
+    expect(f.adapter.currentSelection).toBeUndefined();
+    expect(f.adapter.canRevalidateForUserInput()).toBe(true);
+    expect(f.api.selectChatModels).not.toHaveBeenCalled();
+
+    await expect(f.adapter.revalidateForUserInput()).resolves.toBeUndefined();
+
+    expect(f.api.selectChatModels).toHaveBeenCalledExactlyOnceWith({
+      vendor: "copilot",
+      id: f.model.id,
+      version: f.model.version,
+    });
+    expect(f.adapter.currentSelection?.model).toBe(f.model);
+    expect(f.adapter.restoreAccess()).toBeUndefined();
+    f.adapter.dispose();
+  });
+
+  it("does not enumerate all models for automatic restoration without a saved identity", async () => {
+    const f = setup(fakeModel(), false);
+    expect(f.adapter.canRevalidateForUserInput()).toBe(false);
+    await expect(f.adapter.revalidateForUserInput()).resolves.toBe(
+      "needs-authorization",
+    );
+    expect(f.api.selectChatModels).not.toHaveBeenCalled();
+    f.adapter.dispose();
+  });
+
   it("stops using the selected model when permission is revoked and does not recover its old result", async () => {
     const f = setup();
     await f.adapter.selectForUserAction();
@@ -172,13 +209,98 @@ describe("public VS Code Language Model adapter", () => {
     f.adapter.dispose();
   });
 
-  it("does not invalidate on an unrelated model-list event while selected-model access remains true", async () => {
+  it("keeps a candidate model after an unrelated list change and rechecks it by exact identity", async () => {
     const f = setup();
     await f.adapter.selectForUserAction();
     const changed = vi.fn();
     f.adapter.onDidChange(changed);
-    f.modelsChanged();
-    expect(changed).not.toHaveBeenCalled();
+    const unrelated = fakeModel({
+      id: "copilot-unrelated",
+      version: "v2",
+    });
+    f.modelsChanged([f.model, unrelated]);
+    expect(f.access.canSendRequest(f.model)).toBe(true);
+    const selection = f.adapter.currentSelection;
+    expect(selection?.model).toBe(f.model);
+    expect(f.adapter.modelSelectionStale).toBe(true);
+    expect(f.adapter.restoreAccess()).toBe("needs-authorization");
+    expect(f.api.selectChatModels).toHaveBeenCalledTimes(1);
+    expect(changed.mock.calls).toEqual([["models"]]);
+    await expect(
+      f.adapter.validateSelectionForAdoption(selection!),
+    ).resolves.toBe("available");
+    expect(f.api.selectChatModels).toHaveBeenLastCalledWith({
+      vendor: "copilot",
+      id: f.model.id,
+      version: f.model.version,
+    });
+    expect(f.adapter.modelSelectionStale).toBe(false);
+    f.adapter.dispose();
+  });
+
+  it("does not strand a real-input retry when the model list changes during exact revalidation", async () => {
+    const f = setup();
+    await f.adapter.selectForUserAction();
+    f.modelsChanged([f.model]);
+    const pending = deferred<readonly vscode.LanguageModelChat[]>();
+    vi.mocked(f.api.selectChatModels).mockReturnValueOnce(pending.promise);
+
+    const firstRevalidation = f.adapter.revalidateForUserInput();
+    await vi.waitFor(() =>
+      expect(f.api.selectChatModels).toHaveBeenCalledTimes(2),
+    );
+    f.modelsChanged([f.model]);
+    pending.resolve([f.model]);
+    await expect(firstRevalidation).resolves.toBe("cancelled");
+
+    expect(f.adapter.canRevalidateForUserInput()).toBe(true);
+    await expect(f.adapter.revalidateForUserInput()).resolves.toBeUndefined();
+    expect(f.api.selectChatModels).toHaveBeenCalledTimes(3);
+    expect(f.adapter.modelSelectionStale).toBe(false);
+    f.adapter.dispose();
+  });
+
+  it("rejects an adoption check when the selected id and version disappear", async () => {
+    const f = setup();
+    await f.adapter.selectForUserAction();
+    const selection = f.adapter.currentSelection;
+    expect(selection).toBeDefined();
+    f.modelsChanged([]);
+
+    await expect(
+      f.adapter.validateSelectionForAdoption(selection!),
+    ).resolves.toBe("missing");
+    expect(f.adapter.currentSelection).toBeUndefined();
+    expect(f.model.sendRequest).not.toHaveBeenCalled();
+    f.adapter.dispose();
+  });
+
+  it("keeps tracking permission across model-list invalidation without restoring the stale model", async () => {
+    const f = setup();
+    await f.adapter.selectForUserAction();
+    const changed = vi.fn();
+    f.adapter.onDidChange(changed);
+
+    f.permit(false);
+    f.modelsChanged([f.model]);
+    f.permit(true);
+
+    expect(changed.mock.calls).toEqual([
+      ["access", false],
+      ["models"],
+      ["access", true],
+    ]);
+    expect(f.adapter.currentSelection?.model).toBe(f.model);
+    expect(f.api.selectChatModels).toHaveBeenCalledTimes(1);
+
+    await expect(f.adapter.selectForUserAction()).resolves.toBeUndefined();
+    expect(f.api.selectChatModels).toHaveBeenCalledTimes(2);
+    expect(f.api.selectChatModels).toHaveBeenLastCalledWith({
+      vendor: "copilot",
+      id: f.model.id,
+      version: f.model.version,
+    });
+    expect(f.adapter.currentSelection?.model).toBe(f.model);
     f.adapter.dispose();
   });
 

@@ -11185,6 +11185,7 @@ export class MarkdownEditorApp {
       message.type === "ai-suggestion-state" ||
       message.type === "ai-suggestion-trigger" ||
       message.type === "ai-suggestion-snapshot-check" ||
+      message.type === "ai-suggestion-adoption-validation" ||
       message.type === "ai-suggestion-result"
     ) {
       this.aiSuggestions.handleMessage(message);

@@ -79,15 +79,18 @@ consent flow. After that setup succeeds, type normally to see suggestions when
 `markdownMint.aiSuggestions.autoTrigger` is enabled, or continue using the
 manual command. The setting is user-scoped, initially **false**, and has no
 toolbar toggle. Manual suggestions remain available while automatic
-suggestions are off. After an Extension Host restart, Mint waits for a real
-text edit and its normal 300 ms debounce before it uses the public model
-selection API to reacquire a model. The saved setup marker is not permission:
-Mint checks `canSendRequest(model)` before every request, and a denied or
-unknown result stops automatic requests. No model is selected at activation or
-because a setting changed. If a public access-change event later confirms the
-cached model is permitted, the next real input starts a fresh request from the
-current text; an old request or candidate is never revived. This restart path
-is covered with fake-model tests but remains unverified in a real
+suggestions are off. Setup stores the selected model's non-secret ID and
+version, never the model object or access permission. After an Extension Host
+restart, Mint waits for a real text edit and its normal 300 ms debounce before
+reacquiring only that exact model through the public API. It does not enumerate
+the full Copilot model list during automatic restoration. Mint checks
+`canSendRequest(model)` before every request; denied or unknown access stops
+generation. If the saved model is no longer available, run Suggest Continuation
+to choose from currently available models. No model is selected at activation
+or because a setting changed. If a public access-change event confirms the
+cached model is permitted again, the next real input starts a fresh request
+from current text; an old request or candidate is never revived. This restart
+path is covered with fake-model tests but remains unverified in a real
 VS Code/Copilot session. Requests may consume **Copilot usage**.
 
 Suggestions can appear between existing words or at the end of ordinary prose,
@@ -107,7 +110,11 @@ The candidate is transient until **Tab** accepts it; **Esc** dismisses it.
 The insertion is shown only if Markdown source mapping confirms that existing
 text and structure remain unchanged. Display alone does not change Markdown,
 dirty/recovery state, clipboard, preview/export, or Undo history. Acceptance
-uses the normal editor transaction and native Undo/Redo boundary.
+uses the normal editor transaction and native Undo/Redo boundary. If the
+Copilot model list changes while a candidate is displayed, Tab first asks the
+host to verify the selected model's exact ID and version. An unrelated model
+list change can keep the candidate usable; a removed model or changed editor
+snapshot clears it.
 
 ## Markdown stays Markdown
 
