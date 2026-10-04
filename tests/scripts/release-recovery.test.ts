@@ -15,31 +15,25 @@ const targetCommitSha = "a".repeat(40);
 const expectedSha256 = "b".repeat(64);
 const differentSha256 = "c".repeat(64);
 const releaseNotes = "- Release note.";
-const targets = [
-  "darwin-arm64",
-  "darwin-x64",
-  "linux-arm64",
-  "linux-x64",
-  "win32-arm64",
-  "win32-x64",
-] as const;
-
 function artifacts(actual: string | null = null) {
-  return targets.map((target) => ({
-    target,
-    assetName: `markdown-mint-${version}-${target}.vsix`,
-    expectedSha256,
-    actualAssetSha256: actual,
-  }));
+  return [
+    {
+      assetName: `markdown-mint-${version}.vsix`,
+      expectedSha256,
+      actualAssetSha256: actual,
+    },
+  ];
 }
 
 function uploadedAssets() {
-  return targets.map((target, index) => ({
-    id: 84 + index,
-    name: `markdown-mint-${version}-${target}.vsix`,
-    state: "uploaded",
-    size: 1024,
-  }));
+  return [
+    {
+      id: 84,
+      name: `markdown-mint-${version}.vsix`,
+      state: "uploaded",
+      size: 1024,
+    },
+  ];
 }
 
 function state(
@@ -95,16 +89,16 @@ describe("GitHub Release recovery planning", () => {
     ).toEqual({ action: "create_release", verifyTag: true });
   });
 
-  it("rejects a tag at a different commit and incomplete platform manifests", () => {
+  it("rejects a tag at a different commit and incomplete universal manifests", () => {
     expect(() =>
       planReleaseRecovery(state({ tagTargetCommitSha: "d".repeat(40) })),
     ).toThrow("not");
     expect(() =>
       planReleaseRecovery(state({ artifacts: artifacts().slice(1) })),
-    ).toThrow("every supported platform");
+    ).toThrow("one universal VSIX");
   });
 
-  it("uploads platform VSIX assets one at a time to a draft", () => {
+  it("uploads the universal VSIX to a draft", () => {
     expect(
       planReleaseRecovery(
         state({
@@ -115,7 +109,7 @@ describe("GitHub Release recovery planning", () => {
     ).toEqual({
       action: "upload_asset",
       releaseId: 42,
-      assetName: `markdown-mint-${version}-darwin-arm64.vsix`,
+      assetName: `markdown-mint-${version}.vsix`,
     });
   });
 
@@ -133,23 +127,20 @@ describe("GitHub Release recovery planning", () => {
     expect(plan.action).toBe("upload_asset");
   });
 
-  it("requests each asset checksum and publishes only after all six match", () => {
+  it("requests the asset checksum and publishes only after it matches", () => {
     const assets = uploadedAssets();
     const draft = existingRelease({ draft: true, assets });
     expect(
       planReleaseRecovery(
         state({
           release: draft,
-          artifacts: artifacts().map((artifact, index) => ({
-            ...artifact,
-            actualAssetSha256: index === 0 ? expectedSha256 : null,
-          })),
+          artifacts: artifacts(),
         }),
       ),
     ).toEqual({
       action: "verify_asset",
       releaseId: 42,
-      assetName: `markdown-mint-${version}-darwin-x64.vsix`,
+      assetName: `markdown-mint-${version}.vsix`,
     });
 
     expect(
@@ -159,16 +150,13 @@ describe("GitHub Release recovery planning", () => {
     ).toEqual({ action: "publish_release", releaseId: 42 });
   });
 
-  it("rejects a mismatched VSIX checksum and unexpected platform artifact", () => {
+  it("rejects a mismatched VSIX checksum and unexpected target-specific artifact", () => {
     const assets = uploadedAssets();
     expect(() =>
       planReleaseRecovery(
         state({
           release: existingRelease({ draft: true, assets }),
-          artifacts: artifacts().map((artifact, index) => ({
-            ...artifact,
-            actualAssetSha256: index === 0 ? differentSha256 : expectedSha256,
-          })),
+          artifacts: artifacts(differentSha256),
         }),
       ),
     ).toThrow("does not match");
@@ -181,7 +169,7 @@ describe("GitHub Release recovery planning", () => {
               ...assets,
               {
                 id: 99,
-                name: `markdown-mint-${version}-unknown.vsix`,
+                name: `markdown-mint-${version}-legacy.vsix`,
                 state: "uploaded",
                 size: 1,
               },
@@ -192,19 +180,16 @@ describe("GitHub Release recovery planning", () => {
     ).toThrow("unexpected VSIX asset");
   });
 
-  it("rejects a published release missing any platform package", () => {
+  it("rejects a published release missing its universal package", () => {
     expect(() =>
       planReleaseRecovery(
         state({
           tagTargetCommitSha: targetCommitSha,
           release: existingRelease({
             draft: false,
-            assets: uploadedAssets().slice(0, 5),
+            assets: [],
           }),
-          artifacts: artifacts().map((artifact, index) => ({
-            ...artifact,
-            actualAssetSha256: index < 5 ? expectedSha256 : null,
-          })),
+          artifacts: artifacts(),
         }),
       ),
     ).toThrow("missing");
@@ -299,7 +284,7 @@ describe("GitHub Release API lookup", () => {
     expect(calls).toEqual([restByTag]);
   });
 
-  it("plans first publication and resumes an interrupted draft before verifying every package", async () => {
+  it("plans first publication and resumes an interrupted draft before verifying the package", async () => {
     let release: ReleaseRecoveryRelease | null = null;
     const fetchImpl: FetchMock = async (url, init) => {
       if (url === restByTag)

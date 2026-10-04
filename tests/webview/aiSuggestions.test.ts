@@ -11,12 +11,6 @@ import {
   type AiSuggestionRequest,
 } from "../../src/shared/aiSuggestions";
 import {
-  AiSuggestionsHost,
-  type AiPanelSession,
-  type AiSuggestionsEnvironment,
-} from "../../src/extension/aiSuggestions";
-import type { CopilotLanguageServer } from "../../src/extension/copilotLanguageServer";
-import {
   createEditorApp,
   type MarkdownEditorApp,
 } from "../../src/webview/editor";
@@ -25,6 +19,9 @@ const apps: MarkdownEditorApp[] = [];
 
 vi.mock("vscode", () => ({
   window: { showInformationMessage: vi.fn(async () => undefined) },
+  LanguageModelChatMessage: {
+    User: (content: string) => ({ role: 1, content }),
+  },
   env: { clipboard: { writeText: vi.fn() }, openExternal: vi.fn() },
   Uri: { parse: (value: string) => ({ toString: () => value }) },
   workspace: { isTrusted: true },
@@ -32,13 +29,6 @@ vi.mock("vscode", () => ({
 
 function receive(data: unknown): void {
   window.dispatchEvent(new MessageEvent("message", { data }));
-}
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((done) => {
-    resolve = done;
-  });
-  return { promise, resolve };
 }
 function setup(source = "Hello", autoTrigger = false) {
   const root = document.createElement("div");
@@ -90,6 +80,7 @@ function setup(source = "Hello", autoTrigger = false) {
       type: "ai-suggestion-trigger",
       sessionId: "s1",
       settingsGeneration: 1,
+      invocationId: "manual-invocation",
     });
   const requests = () =>
     messages.filter(
@@ -107,8 +98,6 @@ function setup(source = "Hello", autoTrigger = false) {
       settingsGeneration: request.settingsGeneration,
       position: request.position,
       targetKind: request.targetKind,
-      candidateId: "candidate-" + requests().length,
-      partialAcceptanceOffset: 0,
       text,
       reason: "ready",
       ...patch,
@@ -214,14 +203,6 @@ describe("Copilot inline completion ghost", () => {
       "world",
     );
     expect(
-      f.messages.some(
-        (message) =>
-          message.type === "ai-suggestion-feedback" &&
-          message.action === "partially-accepted" &&
-          message.acceptedLength === 1,
-      ),
-    ).toBe(true);
-    expect(
       f.messages.filter((message) => message.type === "edit").at(-1)?.markdown,
     ).toBe("Hello ");
     f.ack();
@@ -281,7 +262,7 @@ describe("Copilot inline completion ghost", () => {
     expect(f.key("Tab", { keyCode: 229 }).defaultPrevented).toBe(false);
   });
 
-  it.each(["needs-sign-in", "excluded"] as const)(
+  it.each(["needs-authorization", "no-model"] as const)(
     "drops a pending-only request after status becomes %s, even if ready returns",
     async (availability) => {
       const f = setup("Hello", false);
@@ -290,141 +271,30 @@ describe("Copilot inline completion ghost", () => {
       const request = f.requests()[0]!;
 
       f.state({ availability, statusText: availability });
-      f.result(" stale", request, { candidateId: "old-after-expiry" });
+      f.result(" stale", request);
       expect(f.root.querySelector(".mm-ai-suggestion")).toBeNull();
 
       f.state({ availability: "ready", statusText: "Ready again" });
-      f.result(" stale", request, { candidateId: "old-after-recovery" });
+      f.result(" stale", request);
       expect(f.root.querySelector(".mm-ai-suggestion")).toBeNull();
       expect(f.key("Tab").defaultPrevented).toBe(false);
-      expect(f.messages).not.toContainEqual(
-        expect.objectContaining({
-          type: "ai-suggestion-feedback",
-          candidateId: "old-after-recovery",
-          action: "shown",
-        }),
-      );
+      expect(f.root.querySelector(".mm-ai-suggestion")).toBeNull();
     },
   );
 
-  it("connects host invalidation to the webview pending and late-result paths", async () => {
-    const f = setup("Hello", false);
-    const response = deferred<{ items: Array<{ insertText: string }> }>();
-    const documentUri = "file:///prose.md";
-    const status = {
-      kind: "Normal" as const,
-      busy: false,
-      message: "Copilot ready",
-    };
-    let statusListener:
-      | Parameters<NonNullable<AiSuggestionsEnvironment["statusChanged"]>>[0]
-      | undefined;
-    const server = {
-      get currentStatus() {
-        return status;
-      },
-      isRunning: true,
-      start: vi.fn(async () => undefined),
-      synchronizeDocument: vi.fn(async () => undefined),
-      synchronizeAndFocusDocument: vi.fn(
-        async (
-          _uri: string,
-          _version: number,
-          _markdown: string,
-          isCurrent: () => boolean,
-        ) => isCurrent(),
-      ),
-      focusDocument: vi.fn(async () => undefined),
-      requestInlineCompletion: vi.fn(() => response.promise),
-      reportShown: vi.fn(),
-      reportPartiallyAccepted: vi.fn(),
-      reportAccepted: vi.fn(async () => undefined),
-      closeDocument: vi.fn(async () => undefined),
-      signInFromUserAction: vi.fn(async () => false),
-      dispose: vi.fn(),
-    } as unknown as CopilotLanguageServer;
-    const environment: AiSuggestionsEnvironment = {
-      server,
-      supported: () => true,
-      trusted: () => true,
-      settings: () => ({ autoTrigger: false }),
-      notify: vi.fn(),
-      tokenSource: () => {
-        let cancelled = false;
-        return {
-          token: {
-            get isCancellationRequested() {
-              return cancelled;
-            },
-            onCancellationRequested: () => ({ dispose: vi.fn() }),
-          },
-          cancel: () => {
-            cancelled = true;
-          },
-          dispose: vi.fn(),
-        } as never;
-      },
-      statusChanged: (listener) => {
-        statusListener = listener;
-        listener("ready", "Copilot ready", documentUri);
-        return { dispose: vi.fn() };
-      },
-    };
-    const host = new AiSuggestionsHost(environment);
-    const panel: AiPanelSession = {
-      id: "s1",
-      documentId: () => documentUri,
-      uri: () => documentUri,
-      version: () => f.app.version,
-      markdown: () => "Hello",
-      isReady: () => true,
-      isActive: () => true,
-      canStartRequest: () => true,
-      focus: vi.fn(),
-      post: receive,
-    };
-    try {
-      host.trustChanged();
-      host.registerSession(panel);
-      await host.triggerFromUserAction("s1");
-      await vi.advanceTimersByTimeAsync(0);
-      const request = f.requests()[0]!;
-      expect(request).toBeDefined();
-      const pending = host.requestSuggestion("s1", request);
-      await vi.waitFor(() =>
-        expect(server.requestInlineCompletion).toHaveBeenCalledTimes(1),
-      );
-
-      statusListener?.("needs-sign-in", "Sign in required", documentUri);
-      await pending;
-      response.resolve({ items: [{ insertText: " stale" }] });
-      await Promise.resolve();
-      await Promise.resolve();
-
-      expect(f.root.querySelector(".mm-ai-suggestion")).toBeNull();
-      expect(f.app.view.state.doc.textContent).toBe("Hello");
-      expect(
-        f.messages.some(
-          (message) =>
-            message.type === "ai-suggestion-feedback" &&
-            message.action === "shown",
-        ),
-      ).toBe(false);
-    } finally {
-      host.dispose();
-    }
-  });
-
-  it("cannot accept a displayed candidate after authentication expires", async () => {
+  it("cannot accept a displayed candidate after model authorization expires", async () => {
     const f = setup("Hello", false);
     f.trigger();
     await vi.advanceTimersByTimeAsync(0);
     const request = f.requests()[0]!;
     const nativeDoc = f.app.view.state.doc;
-    f.result(" stale", request, { candidateId: "candidate-before-expiry" });
+    f.result(" stale", request);
     expect(f.root.querySelector(".mm-ai-suggestion")).not.toBeNull();
 
-    f.state({ availability: "needs-sign-in", statusText: "Sign in required" });
+    f.state({
+      availability: "needs-authorization",
+      statusText: "Authorization required",
+    });
     expect(f.root.querySelector(".mm-ai-suggestion")).toBeNull();
     expect(f.key("Tab").defaultPrevented).toBe(false);
     expect(f.app.view.state.doc).toBe(nativeDoc);
@@ -595,7 +465,7 @@ describe("Copilot inline completion ghost", () => {
     expect(f.root.querySelector(".mm-ai-suggestion")).toBeNull();
   });
 
-  it("tries later SDK alternatives when the first Markdown insertion is unsafe", async () => {
+  it("validates the single language-model insertion against the Markdown source", async () => {
     const source = "hello world**";
     const f = setup(source, false);
     f.app.view.dispatch(
@@ -606,33 +476,15 @@ describe("Copilot inline completion ghost", () => {
     f.trigger();
     await vi.advanceTimersByTimeAsync(0);
     const request = f.requests()[0]!;
-    f.result("**", request, {
-      candidateId: "unsafe-item",
-      candidates: [
-        { candidateId: "unsafe-item", text: "**", partialAcceptanceOffset: 0 },
-        { candidateId: "safe-item", text: "nice ", partialAcceptanceOffset: 0 },
-      ],
-    });
+    f.result("nice ", request);
 
     expect(f.root.querySelector(".mm-ai-suggestion")?.textContent).toBe(
       "nice ",
     );
-    expect(
-      f.messages.filter((message) => message.type === "ai-suggestion-feedback"),
-    ).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          candidateId: "unsafe-item",
-          action: "rejected",
-          rejectionReason: "unsafe-suggestion",
-        }),
-        expect.objectContaining({ candidateId: "safe-item", action: "shown" }),
-      ]),
-    );
     expect(f.requests()).toHaveLength(1);
   });
 
-  it("rejects all unsafe alternatives without displaying a candidate", async () => {
+  it("rejects an unsafe insertion without displaying a candidate", async () => {
     const f = setup("hello world**", false);
     f.app.view.dispatch(
       f.app.view.state.tr.setSelection(
@@ -642,29 +494,16 @@ describe("Copilot inline completion ghost", () => {
     f.trigger();
     await vi.advanceTimersByTimeAsync(0);
     const request = f.requests()[0]!;
-    f.result("**", request, {
-      candidateId: "unsafe-item-1",
-      candidates: [
-        { candidateId: "unsafe-item-1", text: "**" },
-        { candidateId: "unsafe-item-2", text: "***" },
-      ],
-    });
+    f.result("**", request);
 
     expect(f.root.querySelector(".mm-ai-suggestion")).toBeNull();
     expect(
       f.root.querySelector<HTMLElement>(".mm-ai-status")?.textContent,
     ).toMatch(/safely inserted without changing existing Markdown/i);
-    expect(
-      f.messages.filter(
-        (message) =>
-          message.type === "ai-suggestion-feedback" &&
-          message.action === "rejected",
-      ),
-    ).toHaveLength(2);
     expect(f.requests()).toHaveLength(1);
   });
 
-  it("does not display any alternative after the document version changes", async () => {
+  it("does not display a result after the document version changes", async () => {
     const f = setup("hello world**", false);
     f.app.view.dispatch(
       f.app.view.state.tr.setSelection(
@@ -675,21 +514,9 @@ describe("Copilot inline completion ghost", () => {
     await vi.advanceTimersByTimeAsync(0);
     const request = f.requests()[0]!;
     f.app.version += 1;
-    f.result("nice ", request, {
-      candidateId: "stale-item-1",
-      candidates: [
-        { candidateId: "stale-item-1", text: "nice " },
-        { candidateId: "stale-item-2", text: "safe " },
-      ],
-    });
+    f.result("nice ", request);
 
     expect(f.root.querySelector(".mm-ai-suggestion")).toBeNull();
-    expect(f.messages).not.toContainEqual(
-      expect.objectContaining({
-        type: "ai-suggestion-feedback",
-        action: "shown",
-      }),
-    );
   });
 
   it("shows manual no-suggestion feedback outside the visually hidden live region", async () => {
@@ -697,7 +524,7 @@ describe("Copilot inline completion ghost", () => {
     f.trigger();
     await vi.advanceTimersByTimeAsync(0);
     const request = f.requests()[0]!;
-    f.result("", request, { reason: "no-suggestion", candidateId: undefined });
+    f.result("", request, { reason: "no-suggestion" });
 
     const status = f.root.querySelector<HTMLElement>(".mm-ai-status");
     expect(status).not.toBeNull();

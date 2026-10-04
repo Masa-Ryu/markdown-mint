@@ -56,8 +56,7 @@
     "onCommand:markdownMint.exportHtml",
     "onCommand:markdownMint.exportPdf",
     "onCommand:markdownMint.openInEditor",
-    "onCommand:markdownMint.aiSuggestions.trigger",
-    "onCommand:markdownMint.aiSuggestions.signIn"
+    "onCommand:markdownMint.aiSuggestions.trigger"
   ],
   "main": "./dist/extension.js",
   "contributes": {
@@ -96,10 +95,6 @@
         "command": "markdownMint.aiSuggestions.trigger",
         "title": "Markdown Mint: Suggest Continuation",
         "enablement": "markdownMint.aiSuggestions.active"
-      },
-      {
-        "command": "markdownMint.aiSuggestions.signIn",
-        "title": "Markdown Mint: Sign in to GitHub Copilot"
       }
     ],
     "customEditors": [
@@ -163,7 +158,7 @@
         "markdownMint.aiSuggestions.autoTrigger": {
           "type": "boolean",
           "default": false,
-          "description": "Request GitHub Copilot inline prose completions after typing pauses. The official Copilot Language Server synchronizes the current unsaved Markdown document. Requires a trusted workspace and GitHub Copilot authorization; requests may consume Copilot usage.",
+          "description": "Request prose continuations from an available GitHub Copilot language model after typing pauses. Sends only selected context from the active unsaved Markdown document through the VS Code Language Model API. Requires a trusted workspace and user consent; requests may consume Copilot usage.",
           "scope": "application"
         }
       }
@@ -203,8 +198,7 @@
     "test:extension:pdf": "npm run compile && npm run build && node scripts/test-pdf-export-extension.mjs",
     "test:extension:pdf:vsix": "node scripts/test-pdf-export-extension.mjs --vsix",
     "verify:package": "npm run build && node scripts/verify-package.mjs",
-    "package": "npm run build && node scripts/package-vsix.mjs --target local && node scripts/verify-vsix.mjs --target local && node scripts/verify-package.mjs",
-    "package:platforms": "npm run build && node scripts/package-vsix.mjs --target all && node scripts/verify-vsix.mjs --target all",
+    "package": "npm run clean && npm run build && node scripts/package-vsix.mjs && node scripts/verify-vsix.mjs && node scripts/verify-package.mjs",
     "test:browser:blocks": "npm run build:webview && node tests/browser/block-editing.test.mjs",
     "test:browser:mermaid": "npm run build:webview && node tests/browser/mermaid-templates.test.mjs",
     "test:browser:html-export": "npm run build && node tests/browser/html-export.test.mjs",

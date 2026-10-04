@@ -16,8 +16,6 @@ import {
   isAiHostMessage,
   type AiAvailability,
   type AiHostMessage,
-  type AiSuggestionFeedback,
-  type AiSuggestionCandidate,
   type AiSuggestionRequest,
   type AiSuggestionResult,
   type AiSuggestionState,
@@ -43,14 +41,13 @@ interface Snapshot {
 }
 interface LiveCandidate {
   readonly snapshot: Snapshot;
-  readonly id: string;
   readonly remaining: string;
-  readonly acceptedLength: number;
   readonly plan: CompletionInsertionPlan;
 }
 interface Waiting {
   readonly revision: number;
   readonly trigger: AiTrigger;
+  readonly invocationId?: string;
 }
 
 export const aiSuggestionsPluginKey = new PluginKey<CandidateDecoration | null>(
@@ -315,12 +312,6 @@ export class AiSuggestionsController {
       return false;
     const remaining = match.remaining;
     if (!remaining) {
-      this.sendFeedback(
-        candidate.id,
-        candidate.snapshot.request.requestId,
-        "partially-accepted",
-        candidate.acceptedLength + match.acceptedLength,
-      );
       this.clearCandidate(false);
       this.setLive("");
       return true;
@@ -355,18 +346,10 @@ export class AiSuggestionsController {
         markdown: this.options.markdown(),
         profile: this.options.profile(),
       },
-      id: candidate.id,
       remaining,
-      acceptedLength: candidate.acceptedLength + match.acceptedLength,
       plan,
     };
     this.candidate = updated;
-    this.sendFeedback(
-      updated.id,
-      updated.snapshot.request.requestId,
-      "partially-accepted",
-      updated.acceptedLength,
-    );
     this.updateDecoration(updated);
     return true;
   }
@@ -441,16 +424,8 @@ export class AiSuggestionsController {
     this.sendCancel(pending);
   }
   private clearCandidate(sendRejection: boolean): void {
-    const candidate = this.candidate;
     this.candidate = undefined;
-    if (candidate && sendRejection)
-      this.sendFeedback(
-        candidate.id,
-        candidate.snapshot.request.requestId,
-        "rejected",
-        undefined,
-        "cancelled",
-      );
+    void sendRejection;
     this.clearDecoration();
   }
   public invalidate(): void {
@@ -533,7 +508,11 @@ export class AiSuggestionsController {
       this.options.view().focus();
       this.manualTimer = setTimeout(() => {
         this.manualTimer = undefined;
-        this.request({ revision: this.revision, trigger: "manual" });
+        this.request({
+          revision: this.revision,
+          trigger: "manual",
+          invocationId: message.invocationId,
+        });
       }, 0);
       return;
     }
@@ -594,6 +573,7 @@ export class AiSuggestionsController {
       position,
       targetKind: target.kind,
       trigger: waiting.trigger,
+      ...(waiting.invocationId ? { invocationId: waiting.invocationId } : {}),
     };
     const snapshot: Snapshot = {
       request,
@@ -649,66 +629,35 @@ export class AiSuggestionsController {
     ] as const)
       if (message[key] !== snapshot.request[key]) return;
     if (!this.current(snapshot)) return;
-    if (message.reason !== "ready" || !message.candidateId) {
+    if (message.reason !== "ready") {
       if (snapshot.request.trigger === "manual")
         this.setLive(reasonText(message.reason));
       return;
     }
-    const candidates: readonly AiSuggestionCandidate[] = message.candidates ?? [
-      {
-        candidateId: message.candidateId,
-        text: message.text,
-        ...(message.partialAcceptanceOffset !== undefined
-          ? { partialAcceptanceOffset: message.partialAcceptanceOffset }
-          : {}),
-      },
-    ];
-    for (const option of candidates) {
-      const plan = planCompletionInsertion(
-        snapshot.markdown,
-        snapshot.target.doc,
-        snapshot.request.position,
-        snapshot.target.position,
-        option.text,
-        snapshot.profile,
-        this.options,
-      );
-      if (!plan) {
-        this.options.post({
-          protocolVersion: 1,
-          type: "ai-suggestion-feedback",
-          requestId: message.requestId,
-          sessionId: message.sessionId,
-          candidateId: option.candidateId,
-          action: "rejected",
-          rejectionReason: "unsafe-suggestion",
-        });
-        continue;
-      }
-      const candidate: LiveCandidate = {
-        snapshot,
-        id: option.candidateId,
-        remaining: option.text,
-        acceptedLength: option.partialAcceptanceOffset ?? 0,
-        plan,
-      };
-      this.candidate = candidate;
-      this.updateDecoration(candidate);
-      this.options.post({
-        protocolVersion: 1,
-        type: "ai-suggestion-feedback",
-        requestId: message.requestId,
-        sessionId: message.sessionId,
-        candidateId: option.candidateId,
-        action: "shown",
-      });
-      this.setLive(
-        "Suggestion available. Press Tab to accept or Escape to dismiss.",
-      );
+    const plan = planCompletionInsertion(
+      snapshot.markdown,
+      snapshot.target.doc,
+      snapshot.request.position,
+      snapshot.target.position,
+      message.text,
+      snapshot.profile,
+      this.options,
+    );
+    if (!plan) {
+      if (snapshot.request.trigger === "manual")
+        this.setLive(reasonText("unsafe-suggestion"));
       return;
     }
-    if (snapshot.request.trigger === "manual")
-      this.setLive(reasonText("unsafe-suggestion"));
+    const candidate: LiveCandidate = {
+      snapshot,
+      remaining: message.text,
+      plan,
+    };
+    this.candidate = candidate;
+    this.updateDecoration(candidate);
+    this.setLive(
+      "Suggestion available. Press Tab to accept or Escape to dismiss.",
+    );
   }
 
   private updateDecoration(candidate: LiveCandidate): void {
@@ -718,26 +667,6 @@ export class AiSuggestionsController {
         text: candidate.remaining,
       } satisfies CandidateDecoration),
     );
-  }
-  private sendFeedback(
-    id: string,
-    requestId: string,
-    action: AiSuggestionFeedback["action"],
-    acceptedLength?: number,
-    rejectionReason?: AiSuggestionFeedback["rejectionReason"],
-  ): void {
-    const sessionId = this.state?.sessionId;
-    if (!sessionId) return;
-    this.options.post({
-      protocolVersion: 1,
-      type: "ai-suggestion-feedback",
-      requestId,
-      sessionId,
-      candidateId: id,
-      action,
-      ...(acceptedLength !== undefined ? { acceptedLength } : {}),
-      ...(rejectionReason ? { rejectionReason } : {}),
-    });
   }
   private setLive(text: string): void {
     if (this.live) this.live.textContent = text;
@@ -824,21 +753,9 @@ export class AiSuggestionsController {
     this.revision += 1;
     const accepted = this.options.dispatch(transaction);
     if (accepted) {
-      this.sendFeedback(
-        candidate.id,
-        candidate.snapshot.request.requestId,
-        "accepted",
-      );
       this.setLive("");
       return true;
     }
-    this.sendFeedback(
-      candidate.id,
-      candidate.snapshot.request.requestId,
-      "rejected",
-      undefined,
-      "unsafe-suggestion",
-    );
     return false;
   }
   public dispose(): void {
@@ -873,32 +790,32 @@ function availabilityAllowsPendingWork(
 
 function reasonText(reason: string): string {
   switch (reason) {
-    case "needs-sign-in":
-      return "Sign in to GitHub Copilot from the Command Palette, then try again.";
+    case "needs-authorization":
+      return "Use Suggest Continuation to authorize Markdown Mint with the available language model.";
     case "unsupported":
-      return "The Copilot Language Server is not supported on this extension host.";
+      return "The VS Code Language Model API is not available in this extension host.";
     case "untrusted":
       return "Copilot suggestions require a trusted workspace.";
-    case "excluded":
-      return "Copilot excluded this Markdown document from suggestions.";
+    case "no-model":
+      return "No Copilot language model is currently available.";
     case "disabled":
       return "Automatic suggestions are off. Manual suggestions remain available.";
     case "unsafe-suggestion":
-      return "Copilot returned suggestions that could not be safely inserted without changing existing Markdown.";
+      return "The language model returned text that could not be safely inserted without changing existing Markdown.";
     case "no-suggestion":
-      return "Copilot did not return a suggestion at this position.";
+      return "The language model did not return a suggestion at this position.";
     case "invalid-context":
       return "Place the cursor in supported Markdown prose, a heading, or a list item.";
     case "timeout":
       return "The Copilot suggestion request timed out.";
     case "failed":
-      return "Could not connect to GitHub Copilot. Try again when the server is available.";
+      return "The language model request failed. Try again later.";
     case "cancelled":
       return "The Copilot suggestion request was cancelled.";
     case "stale":
       return "The document changed before the suggestion was ready.";
     case "blocked":
-      return "Copilot cannot serve this request because of an account, policy, or service limit.";
+      return "The language model request is blocked by an account, policy, or service limit.";
     default:
       return "The Copilot suggestion request could not be completed.";
   }

@@ -62,55 +62,48 @@ Markdown Mint includes additional tools for working with real-world Markdown doc
 
 ## Copilot prose suggestions
 
-Markdown Mint uses GitHub's official `@github/copilot-language-server` 1.551.2
-over `textDocument/inlineCompletion`; it does not select a chat model or send a
-Mint-authored chat prompt. The fixed-version native server binary is bundled in
-the platform VSIX, so Mint launches it directly instead of invoking `node`,
-`npm`, or `npx` from `PATH`. The pinned server binary is MIT licensed; each
-VSIX includes the matching upstream license text and third-party notice.
+Markdown Mint uses VS Code's public Language Model API to request short prose
+continuations from an available GitHub Copilot model. It selects a model for
+editor use from the models VS Code exposes, preferring an available `mini`
+family and otherwise using a stable model-ID order. The model name and ID are
+shown in the suggestion status hover. The feature runs only in a trusted local
+desktop Extension Host on macOS, Windows, or Linux; unsupported hosts keep
+ordinary Markdown editing available.
+The Language Model API became available in VS Code Stable in 1.91; on 1.90,
+Mint's ordinary editing remains supported while AI suggestions report the API
+as unavailable.
 
-With a Markdown Mint Rich Editor active, run **Markdown Mint: Sign in to GitHub
-Copilot** when setup is needed. The server supplies its device sign-in code and
-opens the official GitHub flow after the user confirms. Then type normally to
-see suggestions when `markdownMint.aiSuggestions.autoTrigger` is enabled, or
-run **Markdown Mint: Suggest Continuation** for a manual request. There is no
-model picker or default shortcut. The setting is user-scoped, initially
-**false**, and has no toolbar toggle. Manual suggestions remain available when
-automatic suggestions are off. If server status reports an authentication or
-availability problem, the status item and manual command report it. When the
-server can reuse its saved authorization after VS Code restarts, automatic
-suggestions resume without a second setup command.
+Run **Markdown Mint: Suggest Continuation** from the Command Palette or the
+Mint status item to make the first model request and complete any VS Code
+consent flow. Then type normally to see suggestions when
+`markdownMint.aiSuggestions.autoTrigger` is enabled, or continue using the
+manual command. The setting is user-scoped, initially **false**, and has no
+toolbar toggle. Manual suggestions remain available while automatic
+suggestions are off. The Language Model API requires model selection from a
+user-initiated action. Because VS Code exposes no non-interactive way to
+reacquire a model and check its saved access after an Extension Host restart,
+this implementation currently needs the same command again after a restart;
+automatic restoration is not claimed as verified. Requests may consume
+**Copilot usage**.
 
-Suggestions can appear in the middle or at the end of ordinary prose,
-headings, and list items, including a contextually empty paragraph. Links in a
-paragraph do not exclude neighboring prose; link destinations, inline-code
-contents, tables, code blocks, Mermaid, math, raw HTML editor regions, selected
-text, Source, Preview, and modal fields are not completion targets. The
-candidate is transient until **Tab** accepts it; **Esc** dismisses it. Mint
-converts the server's replacement range to an insertion only when the original
-prefix and suffix are both preserved. A displayed candidate does not change
-Markdown, dirty/recovery state, clipboard, preview/export, or Undo history.
-
-Mint sends the complete current unsaved Markdown document to the local
-Language Server using its real file URI and version. Code, tables, and other
-non-target regions in that same document are included in this synchronization.
-The extension synchronizes only the active Rich Editor document and does not
-scan or synchronize other documents, terminals, clipboard contents, or Git
-changes itself. The Language Server receives the workspace folder and may use
-its own repository context; Mint has not independently verified every source
-the service may consult, the exact service-side content-exclusion behavior, or
-all provider-side data processing. Organization policies and service-side
-exclusions are not bypassed. Mint configures optional SDK telemetry off; this
-does not mean that service operations involve no data processing. Suggestions
-can consume **Copilot usage**. Mint does not log or persist document text or
+Suggestions can appear between existing words or at the end of ordinary prose,
+headings, and list items, including a contextually empty paragraph. The host
+sends only bounded context from the active unsaved Markdown snapshot: the
+current paragraph around the cursor, its heading, and nearby prose where
+available. It does not send other files, terminal output, clipboard contents,
+or Git changes. Link destinations, inline-code contents, tables, code blocks,
+Mermaid, math, raw HTML editor regions, selected text, Source, Preview, and
+modal fields are not completion targets. Document text is sent to the selected
+model through VS Code's Language Model API; Mint does not claim that Copilot's
+content exclusions apply identically to arbitrary prompts or that cancellation
+means no usage was consumed. Mint does not log or persist document text or
 completion contents.
 
-The native server packages are prepared for macOS, Linux, and Windows on x64
-and arm64. The current runtime gate enables AI only in a trusted, desktop,
-macOS arm64 Extension Host; Remote, Web, and other unverified Extension Host
-environments keep ordinary Markdown editing available without AI. Real Copilot acceptance and the no-Node/PATH, Japanese
-installation-path, restart, and process-shutdown checks are still required
-before claiming those behaviors verified.
+The candidate is transient until **Tab** accepts it; **Esc** dismisses it.
+The insertion is shown only if Markdown source mapping confirms that existing
+text and structure remain unchanged. Display alone does not change Markdown,
+dirty/recovery state, clipboard, preview/export, or Undo history. Acceptance
+uses the normal editor transaction and native Undo/Redo boundary.
 
 ## Markdown stays Markdown
 

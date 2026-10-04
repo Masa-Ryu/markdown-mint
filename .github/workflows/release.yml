@@ -109,35 +109,24 @@ jobs:
       - name: Check formatting
         run: npm run format:check
 
-      - name: Package and verify platform VSIX files
-        run: npm run package:platforms
+      - name: Package and verify the universal VSIX
+        run: npm run package
 
-      - name: Confirm platform release artifacts and checksums
+      - name: Confirm universal release artifact and checksum
         id: artifact
         env:
           VERSION: ${{ steps.metadata.outputs.version }}
         shell: bash
         run: |
           set -euo pipefail
-          targets=(darwin-arm64 darwin-x64 linux-arm64 linux-x64 win32-arm64 win32-x64)
-          artifacts='[]'
-          for target in "${targets[@]}"; do
-            name="markdown-mint-${VERSION}-${target}.vsix"
-            if [[ ! -f "$name" ]]; then
-              echo "::error::Missing verified platform package ${name}."
-              exit 1
-            fi
-            sha256="$(sha256sum "$name" | cut -d ' ' -f 1)"
-            artifacts="$(jq -c --arg target "$target" --arg name "$name" --arg sha256 "$sha256" '. + [{target: $target, assetName: $name, sha256: $sha256}]' <<< "$artifacts")"
-            printf 'Verified %s (SHA-256 %s)\n' "$name" "$sha256"
-          done
-
-          shopt -s nullglob
-          packages=(markdown-mint-"${VERSION}"-*.vsix)
-          if [[ ${#packages[@]} -ne ${#targets[@]} ]]; then
-            printf '::error::Expected six target VSIX files; found: %s\n' "${packages[*]:-none}"
+          name="markdown-mint-${VERSION}.vsix"
+          if [[ ! -f "$name" ]]; then
+            echo "::error::Missing verified universal package ${name}."
             exit 1
           fi
+          sha256="$(sha256sum "$name" | cut -d ' ' -f 1)"
+          artifacts="$(jq -cn --arg name "$name" --arg sha256 "$sha256" '[{assetName: $name, sha256: $sha256}]')"
+          printf 'Verified %s (SHA-256 %s)\n' "$name" "$sha256"
           cp "$RUNNER_TEMP/release-notes.md" release-notes.md
           printf 'artifacts=%s\n' "$artifacts" >> "$GITHUB_OUTPUT"
 
@@ -146,7 +135,7 @@ jobs:
         with:
           name: ${{ steps.metadata.outputs.artifact_name }}
           path: |
-            markdown-mint-${{ steps.metadata.outputs.version }}-*.vsix
+            markdown-mint-${{ steps.metadata.outputs.version }}.vsix
             release-notes.md
           if-no-files-found: error
           retention-days: 90
@@ -184,38 +173,35 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          targets=(darwin-arm64 darwin-x64 linux-arm64 linux-x64 win32-arm64 win32-x64)
           notes="release-payload/release-notes.md"
           if [[ ! -f "$notes" ]]; then
             echo "::error::The validated release notes are missing from the workflow artifact."
             exit 1
           fi
-          if [[ "$(jq 'length' <<< "$EXPECTED_ARTIFACTS")" -ne ${#targets[@]} ]]; then
-            echo "::error::The validation job did not retain all six platform checksums."
+          if [[ "$(jq 'length' <<< "$EXPECTED_ARTIFACTS")" -ne 1 ]]; then
+            echo "::error::The validation job did not retain one universal VSIX checksum."
             exit 1
           fi
 
           verified='[]'
-          for target in "${targets[@]}"; do
-            name="markdown-mint-${VERSION}-${target}.vsix"
-            expected_name="$(jq -er --arg target "$target" '.[] | select(.target == $target) | .assetName' <<< "$EXPECTED_ARTIFACTS")"
-            expected_sha256="$(jq -er --arg target "$target" '.[] | select(.target == $target) | .sha256' <<< "$EXPECTED_ARTIFACTS")"
-            vsix="release-payload/${name}"
-            if [[ "$expected_name" != "$name" || ! -f "$vsix" ]]; then
-              echo "::error::The validated platform VSIX ${name} is missing or unexpected."
-              exit 1
-            fi
-            actual_sha256="$(sha256sum "$vsix" | cut -d ' ' -f 1)"
-            if [[ "$actual_sha256" != "$expected_sha256" ]]; then
-              echo "::error::The downloaded ${name} checksum does not match its validated artifact."
-              exit 1
-            fi
-            verified="$(jq -c --arg name "$name" --arg sha256 "$actual_sha256" '. + [{name: $name, sha256: $sha256}]' <<< "$verified")"
-            printf 'Verified downloaded %s (SHA-256 %s)\n' "$name" "$actual_sha256"
-          done
+          name="markdown-mint-${VERSION}.vsix"
+          expected_name="$(jq -er '.[0].assetName' <<< "$EXPECTED_ARTIFACTS")"
+          expected_sha256="$(jq -er '.[0].sha256' <<< "$EXPECTED_ARTIFACTS")"
+          vsix="release-payload/${name}"
+          if [[ "$expected_name" != "$name" || ! -f "$vsix" ]]; then
+            echo "::error::The validated universal VSIX ${name} is missing or unexpected."
+            exit 1
+          fi
+          actual_sha256="$(sha256sum "$vsix" | cut -d ' ' -f 1)"
+          if [[ "$actual_sha256" != "$expected_sha256" ]]; then
+            echo "::error::The downloaded ${name} checksum does not match its validated artifact."
+            exit 1
+          fi
+          verified="$(jq -c --arg name "$name" --arg sha256 "$actual_sha256" '. + [{name: $name, sha256: $sha256}]' <<< "$verified")"
+          printf 'Verified downloaded %s (SHA-256 %s)\n' "$name" "$actual_sha256"
           printf 'verified=%s\n' "$verified" >> "$GITHUB_OUTPUT"
 
-      - name: Create or recover the GitHub Release with the same platform VSIX files
+      - name: Create or recover the GitHub Release with the same universal VSIX
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.validate.outputs.version }}
@@ -289,7 +275,6 @@ jobs:
             local artifacts_json
             artifacts_json="$(jq -cn --argjson expected "$EXPECTED_ARTIFACTS" --argjson verified "$release_asset_hashes" '
               $expected | map(. as $artifact | {
-                target: $artifact.target,
                 assetName: $artifact.assetName,
                 expectedSha256: $artifact.sha256,
                 actualAssetSha256: ([ $verified[] | select(.name == $artifact.assetName) | .sha256 ][0] // null)
@@ -368,13 +353,13 @@ jobs:
               publish_release)
                 release_id="$(jq -r '.plan.releaseId' "$plan_json")"
                 if ! gh api --method PATCH "repos/${GITHUB_REPOSITORY}/releases/${release_id}" --field draft=false > /dev/null; then
-                  echo "::error::All six expected VSIX files are verified on draft ${tag}, but publishing failed. Rerun failed jobs for run ${GITHUB_RUN_ID}; retained payload ${ARTIFACT_NAME} remains available for recovery."
+                  echo "::error::The expected universal VSIX is verified on draft ${tag}, but publishing failed. Rerun failed jobs for run ${GITHUB_RUN_ID}; retained payload ${ARTIFACT_NAME} remains available for recovery."
                   exit 1
                 fi
                 ;;
               already_published)
                 release_url="$(jq -r '.release.html_url' "$plan_json")"
-                echo "::notice::Published ${title} from ${GITHUB_SHA}: ${release_url} (all six platform VSIX SHA-256 values verified)"
+                echo "::notice::Published ${title} from ${GITHUB_SHA}: ${release_url} (universal VSIX SHA-256 verified)"
                 exit 0
                 ;;
               *)

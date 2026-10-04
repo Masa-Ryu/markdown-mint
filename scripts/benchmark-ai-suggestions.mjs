@@ -49,29 +49,9 @@ const bundled = await build({
 import { TextSelection } from "prosemirror-state";
 import { parseMarkdown, serializeMarkdown } from ${JSON.stringify(resolve(repository, "src/core/index.ts"))};
 import { buildMarkdownPositionMap } from ${JSON.stringify(resolve(repository, "src/core/markdownPositionMap.ts"))};
-import { matchCompletionInput, normalizeCompletionDetails, planCompletionInsertion } from ${JSON.stringify(resolve(repository, "src/core/inlineCompletion.ts"))};
+import { matchCompletionInput, planCompletionInsertion } from ${JSON.stringify(resolve(repository, "src/core/inlineCompletion.ts"))};
+import { buildCompletionContext } from ${JSON.stringify(resolve(repository, "src/extension/aiSuggestionPrompt.ts"))};
 import { getSuggestionTarget } from ${JSON.stringify(resolve(repository, "src/webview/aiSuggestionContext.ts"))};
-const toPosition = (text, offset) => {
-  const before = text.slice(0, offset).replace(/\\r\\n/g, "\\n");
-  const line = before.split("\\n");
-  return { line: line.length - 1, character: line.at(-1).length };
-};
-const toOffset = (text, position) => {
-  const lines = text.split(/\\r\\n|\\r|\\n/);
-  if (position.line >= lines.length || position.character > lines[position.line].length) return undefined;
-  let offset = 0;
-  for (let i = 0; i < position.line; i += 1) {
-    const match = text.slice(offset).match(/\\r\\n|\\r|\\n/);
-    if (!match) return undefined;
-    offset += match.index + match[0].length;
-  }
-  return offset + position.character;
-};
-const safeBoundary = (text, offset) => {
-  if (offset > 0 && /[\\uDC00-\\uDFFF]/.test(text[offset] ?? "")) return offset - 1;
-  if (text[offset - 1] === "\\r" && text[offset] === "\\n") return offset + 1;
-  return offset;
-};
 export const results = ${JSON.stringify(fixtures)}.map(({ name, source, profile }) => {
   const markdown = source + "\\n\\nBenchmark continuation prose";
   const snapshot = parseMarkdown(markdown, profile);
@@ -95,19 +75,12 @@ export const results = ${JSON.stringify(fixtures)}.map(({ name, source, profile 
     const map = buildMarkdownPositionMap(markdown, snapshot.doc, profile, { parseMarkdown, serializeMarkdown }, snapshot);
     mappedOffset = map.pmPositionToSourceOffset(target.position);
     if (mappedOffset === undefined) return false;
-    const from = safeBoundary(markdown, Math.max(0, mappedOffset - 2));
-    const to = safeBoundary(markdown, Math.min(markdown.length, mappedOffset + 2));
-    const prefix = markdown.slice(from, mappedOffset);
-    const suffix = markdown.slice(mappedOffset, to);
-    const completion = normalizeCompletionDetails(markdown, mappedOffset, {
-      insertText: prefix + " continued" + suffix,
-      range: { start: toPosition(markdown, from), end: toPosition(markdown, to) },
-      insertTextFormat: 1,
-    }, toOffset, toPosition);
-    if (!completion) return false;
-    const match = matchCompletionInput(completion.text, completion.text.slice(0, Math.min(2, completion.text.length)));
+    const context = buildCompletionContext(markdown, mappedOffset, target.kind);
+    if (!context) return false;
+    const completion = " continued";
+    const match = matchCompletionInput(completion, completion.slice(0, Math.min(2, completion.length)));
     if (!match) return false;
-    const plan = planCompletionInsertion(markdown, snapshot.doc, mappedOffset, target.position, completion.text, profile, { parseMarkdown });
+    const plan = planCompletionInsertion(markdown, snapshot.doc, mappedOffset, target.position, completion, profile, { parseMarkdown });
     accepted = Boolean(plan);
     return true;
   };
@@ -143,7 +116,7 @@ const report = {
   arch: process.arch,
   realCopilotRequests: 0,
   measured:
-    "local Markdown position mapping, insertion normalization, structural planning, and matching-input reconciliation; model latency and network usage excluded",
+    "local Markdown position mapping, context construction, insertion safety planning, and matching-input reconciliation; model latency and network usage excluded",
   results,
 };
 const output = resolve(repository, "output/benchmarks/ai-suggestions");

@@ -5,234 +5,156 @@ import {
   type AiPanelSession,
   type AiSuggestionsEnvironment,
 } from "../../src/extension/aiSuggestions";
-import { offsetToLspPosition } from "../../src/extension/copilotLanguageServer";
+import {
+  LanguageModelSuggestions,
+  type LanguageModelApi,
+  type LanguageModelAccess,
+} from "../../src/extension/languageModelSuggestions";
 import type {
-  CopilotLanguageServer,
-  CopilotServerStatus,
-} from "../../src/extension/copilotLanguageServer";
-import { normalizeCompletionToInsertion } from "../../src/core/inlineCompletion";
-import type {
-  AiAvailability,
   AiHostMessage,
-  AiSuggestionFeedback,
   AiSuggestionRequest,
 } from "../../src/shared/aiSuggestions";
 
 vi.mock("vscode", () => ({
-  window: { showInformationMessage: vi.fn(async () => undefined) },
-  env: { clipboard: { writeText: vi.fn() }, openExternal: vi.fn() },
-  Uri: {
-    parse: (value: string) => ({
-      scheme: "https",
-      authority: "github.com",
-      toString: () => value,
-    }),
-  },
-  workspace: { isTrusted: true },
-  CancellationTokenSource: class {
-    private cancelled = false;
-    token = {
-      get isCancellationRequested() {
-        return false;
-      },
-      onCancellationRequested: () => ({ dispose: vi.fn() }),
-    };
-    cancel = () => {
-      this.cancelled = true;
-    };
-    dispose = vi.fn();
+  LanguageModelChatMessage: {
+    User: (content: string) => ({ role: 1, content }),
   },
 }));
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>((done) => {
-    resolve = done;
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((yes, no) => {
+    resolve = yes;
+    reject = no;
   });
-  return { promise, resolve };
+  return { promise, resolve, reject };
+}
+
+function response(...chunks: string[]) {
+  return {
+    text: (async function* () {
+      for (const chunk of chunks) yield chunk;
+    })(),
+  };
+}
+
+function cancellationSource(): vscode.CancellationTokenSource {
+  let cancelled = false;
+  return {
+    token: {
+      get isCancellationRequested() {
+        return cancelled;
+      },
+      onCancellationRequested: () => ({ dispose: vi.fn() }),
+    },
+    cancel: () => {
+      cancelled = true;
+    },
+    dispose: vi.fn(),
+  } as unknown as vscode.CancellationTokenSource;
 }
 
 function fixture(autoTrigger = false) {
   let automatic = autoTrigger;
   let version = 1;
-  let text = "Hello";
-  let documentUri = "file:///prose.md";
-  let canStart = true;
+  let text = "The release helper";
+  let uri = "file:///document.md";
   let active = true;
   let ready = true;
-  const tokenStates: Array<{ cancelled: boolean }> = [];
-  const synchronizedDocuments = new Set<string>();
-  let focusedUri: string | undefined;
-  let statusListener:
-    | ((
-        availability: AiAvailability,
-        message: string,
-        documentUri?: string,
-      ) => void)
-    | undefined;
-  let currentStatus: CopilotServerStatus = {
-    kind: "Normal",
-    busy: false,
-    message: "Copilot signed in",
-  };
+  let requestIsQueueBusy = false;
+  let allow = true;
+  const accessListeners = new Set<() => void>();
+  const modelListeners = new Set<() => void>();
   const messages: AiHostMessage[] = [];
-  const response = deferred<{ items: Array<{ insertText: string }> }>();
-  const responses = [response];
-  const server = {
-    get currentStatus() {
-      return currentStatus;
+  const send = vi.fn(
+    () => deferred<Awaited<ReturnType<typeof response>>>().promise,
+  );
+  const model = {
+    id: "copilot-gpt-4o-mini",
+    name: "Copilot Mini",
+    vendor: "copilot",
+    family: "gpt-4o-mini",
+    version: "2026-10",
+    maxInputTokens: 32_000,
+    countTokens: vi.fn(async () => 40),
+    sendRequest: send,
+  } as unknown as vscode.LanguageModelChat;
+  const api: LanguageModelApi = {
+    selectChatModels: vi.fn(async () => [model]),
+    onDidChangeChatModels: (listener) => {
+      modelListeners.add(listener);
+      return { dispose: () => modelListeners.delete(listener) };
     },
-    isRunning: true,
-    start: vi.fn(async () => undefined),
-    synchronizeDocument: vi.fn(async () => undefined),
-    synchronizeAndFocusDocument: vi.fn(
-      async (
-        uri: string,
-        _version: number,
-        _markdown: string,
-        isCurrent: () => boolean = () => true,
-      ) => {
-        if (!isCurrent()) return false;
-        synchronizedDocuments.add(uri);
-        for (const documentUri of synchronizedDocuments)
-          if (documentUri !== uri) synchronizedDocuments.delete(documentUri);
-        focusedUri = uri;
-        return isCurrent();
-      },
-    ),
-    focusDocument: vi.fn(
-      async (
-        uri: string | undefined,
-        isCurrent: () => boolean = () => true,
-      ) => {
-        if (!isCurrent()) return;
-        if (uri === undefined) {
-          synchronizedDocuments.clear();
-          focusedUri = undefined;
-        } else {
-          for (const documentUri of synchronizedDocuments)
-            if (documentUri !== uri) synchronizedDocuments.delete(documentUri);
-          focusedUri = uri;
-        }
-      },
-    ),
-    requestInlineCompletion: vi.fn(
-      () => responses.shift()?.promise ?? Promise.resolve({ items: [] }),
-    ),
-    reportShown: vi.fn(),
-    reportPartiallyAccepted: vi.fn(),
-    reportAccepted: vi.fn(async () => undefined),
-    closeDocument: vi.fn(async () => undefined),
-    signInFromUserAction: vi.fn(async () => false),
-    dispose: vi.fn(),
-  } as unknown as CopilotLanguageServer;
+  };
+  const access: LanguageModelAccess = {
+    canSendRequest: () => allow,
+    onDidChange: (listener) => {
+      accessListeners.add(listener);
+      return { dispose: () => accessListeners.delete(listener) };
+    },
+  };
+  const languageModel = new LanguageModelSuggestions({ api, access });
   const environment: AiSuggestionsEnvironment = {
-    server,
+    languageModel,
     supported: () => true,
     trusted: () => true,
     settings: () => ({ autoTrigger: automatic }),
     notify: vi.fn(),
-    tokenSource: () => {
-      const tokenState = { cancelled: false };
-      tokenStates.push(tokenState);
-      return {
-        token: {
-          get isCancellationRequested() {
-            return tokenState.cancelled;
-          },
-          onCancellationRequested: () => ({ dispose: vi.fn() }),
-        },
-        cancel: () => {
-          tokenState.cancelled = true;
-        },
-        dispose: vi.fn(),
-      } as unknown as vscode.CancellationTokenSource;
-    },
-    statusChanged: (listener) => {
-      statusListener = listener;
-      listener("disabled", "Copilot suggestions are off.");
-      return { dispose: vi.fn() };
-    },
+    tokenSource: cancellationSource,
   };
   const host = new AiSuggestionsHost(environment);
   const panel: AiPanelSession = {
     id: "s1",
-    documentId: () => documentUri,
-    uri: () => documentUri,
+    documentId: () => uri,
+    uri: () => uri,
     version: () => version,
     markdown: () => text,
     isReady: () => ready,
     isActive: () => active,
-    canStartRequest: () => canStart,
+    canStartRequest: () => ready && active && !requestIsQueueBusy,
     focus: vi.fn(),
-    post: (message) => {
-      messages.push(message);
-    },
+    post: (message) => messages.push(message),
   };
   host.registerSession(panel);
-  host.publishState(panel.id);
-  const request = (
-    patch: Partial<AiSuggestionRequest> = {},
-  ): AiSuggestionRequest => {
-    const state = messages
-      .filter((message) => message.type === "ai-suggestion-state")
-      .at(-1)!;
-    return {
+  const startManual = async () => {
+    await host.triggerFromUserAction(panel.id);
+    const trigger = [...messages]
+      .reverse()
+      .find((message) => message.type === "ai-suggestion-trigger");
+    if (!trigger || trigger.type !== "ai-suggestion-trigger")
+      throw new Error("manual invocation missing");
+    const state = [...messages]
+      .reverse()
+      .find((message) => message.type === "ai-suggestion-state");
+    if (!state || state.type !== "ai-suggestion-state")
+      throw new Error("AI state missing");
+    const request: AiSuggestionRequest = {
       protocolVersion: 1,
       type: "ai-suggestion-request",
-      requestId: "r-" + messages.length,
-      sessionId: "s1",
-      documentId: documentUri,
+      requestId: `r-${messages.length}`,
+      sessionId: panel.id,
+      documentId: uri,
       baseVersion: version,
       editorRevision: 1,
       settingsGeneration: state.settingsGeneration,
       position: text.length,
       targetKind: "paragraph",
       trigger: "manual",
-      ...patch,
+      invocationId: trigger.invocationId,
     };
+    return request;
   };
   return {
     host,
     panel,
-    server,
-    environment,
-    response,
+    model,
+    api,
+    access,
     messages,
-    request,
-    ready: () =>
-      messages.filter(
-        (message) =>
-          message.type === "ai-suggestion-result" && message.reason === "ready",
-      ),
-    queueResponse: () => {
-      const next = deferred<{ items: Array<{ insertText: string }> }>();
-      responses.push(next);
-      return next;
-    },
-    setQueueBusy: (value: boolean) => {
-      canStart = !value;
-    },
-    setAutoTrigger: (value: boolean) => {
-      automatic = value;
-    },
-    setServerStatus: (
-      availability: AiAvailability,
-      patch: Partial<CopilotServerStatus> = {},
-      statusDocumentUri = documentUri,
-    ) => {
-      currentStatus = { ...currentStatus, ...patch };
-      statusListener?.(availability, currentStatus.message, statusDocumentUri);
-    },
-    changeVersion: (value: number, next = text) => {
-      version = value;
-      text = next;
-    },
-    setMarkdown: (value: string) => {
-      text = value;
-    },
-    changeDocument: (uri: string, value: string, nextVersion = 1) => {
-      documentUri = uri;
+    send,
+    startManual,
+    setText: (value: string, nextVersion = version) => {
       text = value;
       version = nextVersion;
     },
@@ -242,779 +164,128 @@ function fixture(autoTrigger = false) {
     setReady: (value: boolean) => {
       ready = value;
     },
-    cancelToken: () => Boolean(tokenStates.at(-1)?.cancelled),
-    synchronizedDocuments,
-    focusedUri: () => focusedUri,
-    setFocusedUri: (uri: string | undefined) => {
-      focusedUri = uri;
+    setQueueBusy: (value: boolean) => {
+      requestIsQueueBusy = value;
     },
+    setAccess: (value: boolean) => {
+      allow = value;
+      for (const listener of accessListeners) listener();
+    },
+    setAutomatic: (value: boolean) => {
+      automatic = value;
+      host.refreshSettings();
+    },
+    activate: (id: string) => host.sessionActivated(id),
+    addPanel: (id: string, documentUri: string, isActive: () => boolean) => {
+      const second: AiPanelSession = {
+        id,
+        documentId: () => documentUri,
+        uri: () => documentUri,
+        version: () => 1,
+        markdown: () => "Second panel",
+        isReady: () => true,
+        isActive,
+        canStartRequest: () => isActive(),
+        focus: vi.fn(),
+        post: (message) => messages.push(message),
+      };
+      host.registerSession(second);
+      return second;
+    },
+    accessChanged: () => {
+      for (const listener of accessListeners) listener();
+    },
+    dispose: () => host.dispose(),
   };
 }
 
-describe("Copilot Language Server request lifecycle", () => {
-  it("keeps an in-flight completion current through a same-version queued save", async () => {
+describe("AI suggestion lifecycle with the public Language Model API", () => {
+  it("returns a ready suggestion when a same-version save is queued during model response", async () => {
     const f = fixture();
-    await f.host.triggerFromUserAction("s1");
-    const pending = f.host.requestSuggestion("s1", f.request());
-    await vi.waitFor(() =>
-      expect(f.server.requestInlineCompletion).toHaveBeenCalledTimes(1),
-    );
+    const request = await f.startManual();
+    const generation = deferred<Awaited<ReturnType<typeof response>>>();
+    f.send.mockReturnValue(generation.promise);
+    const pending = f.host.requestSuggestion("s1", request);
+    await vi.waitFor(() => expect(f.send).toHaveBeenCalledTimes(1));
     f.setQueueBusy(true);
-    f.response.resolve({ items: [{ insertText: " world🌿" }] });
+    generation.resolve(response('{"insertText":" for safe publishing."}'));
     await pending;
-    expect(f.ready()).toHaveLength(1);
-    expect(f.ready()[0]).toMatchObject({ text: " world🌿", reason: "ready" });
-    expect(f.server.synchronizeAndFocusDocument).toHaveBeenCalledWith(
-      "file:///prose.md",
-      1,
-      "Hello",
-      expect.any(Function),
-    );
-    expect(f.cancelToken()).toBe(true);
-    f.host.dispose();
-  });
-  it("does not synchronize a panel that deactivates while server startup is pending", async () => {
-    const f = fixture(false);
-    const startup = deferred<void>();
-    vi.mocked(f.server.start).mockImplementation(() => startup.promise);
-    const activatingA = f.host.sessionActivated("s1");
-
-    f.setActive(false);
-    const deactivatingA = f.host.sessionDeactivated("s1");
-    let activeB = true;
-    const panelB: AiPanelSession = {
-      id: "s2",
-      documentId: () => "file:///B.md",
-      uri: () => "file:///B.md",
-      version: () => 4,
-      markdown: () => "B body",
-      isReady: () => true,
-      isActive: () => activeB,
-      canStartRequest: () => activeB,
-      focus: vi.fn(),
-      post: vi.fn(),
-    };
-    f.host.registerSession(panelB);
-    const activatingB = f.host.sessionActivated("s2");
-
-    startup.resolve();
-    await Promise.all([activatingA, deactivatingA, activatingB]);
-
-    expect(f.server.synchronizeAndFocusDocument).toHaveBeenCalledTimes(1);
-    expect(f.server.synchronizeAndFocusDocument).toHaveBeenCalledWith(
-      "file:///B.md",
-      4,
-      "B body",
-      expect.any(Function),
-    );
-    expect(f.synchronizedDocuments).toEqual(new Set(["file:///B.md"]));
-    expect(f.focusedUri()).toBe("file:///B.md");
-    f.host.dispose();
-  });
-  it("does not synchronize a session disposed while server startup is pending", async () => {
-    const f = fixture(false);
-    const startup = deferred<void>();
-    vi.mocked(f.server.start).mockImplementation(() => startup.promise);
-    const activating = f.host.sessionActivated("s1");
-    f.host.unregisterSession("s1");
-
-    startup.resolve();
-    await activating;
-
-    expect(f.server.synchronizeAndFocusDocument).not.toHaveBeenCalled();
-    expect(f.synchronizedDocuments).toEqual(new Set());
-    f.host.dispose();
-  });
-  it("does not send a stale document version after the SDK start await", async () => {
-    const f = fixture(false);
-    const sdkStart = deferred<void>();
-    vi.mocked(f.server.synchronizeAndFocusDocument).mockImplementation(
-      async (uri, _version, _markdown, isCurrent) => {
-        await sdkStart.promise;
-        if (!isCurrent()) return false;
-        f.synchronizedDocuments.add(uri);
-        f.setFocusedUri(uri);
-        return true;
-      },
-    );
-    const activating = f.host.sessionActivated("s1");
-    await vi.waitFor(() =>
-      expect(f.server.synchronizeAndFocusDocument).toHaveBeenCalledTimes(1),
-    );
-
-    f.changeVersion(2, "Edited during SDK start");
-    sdkStart.resolve();
-    await activating;
-
-    expect(f.synchronizedDocuments).toEqual(new Set());
-    expect(f.focusedUri()).toBeUndefined();
-    f.host.dispose();
-  });
-  it("uses activation generations for rapid A to B to A switches", async () => {
-    const f = fixture(false);
-    const startup = deferred<void>();
-    vi.mocked(f.server.start).mockImplementation(() => startup.promise);
-    const activatingA1 = f.host.sessionActivated("s1");
-    f.setActive(false);
-    const deactivatingA = f.host.sessionDeactivated("s1");
-    let activeB = true;
-    const panelB: AiPanelSession = {
-      id: "s2",
-      documentId: () => "file:///B.md",
-      uri: () => "file:///B.md",
-      version: () => 2,
-      markdown: () => "B",
-      isReady: () => true,
-      isActive: () => activeB,
-      canStartRequest: () => activeB,
-      focus: vi.fn(),
-      post: vi.fn(),
-    };
-    f.host.registerSession(panelB);
-    const activatingB = f.host.sessionActivated("s2");
-    activeB = false;
-    const deactivatingB = f.host.sessionDeactivated("s2");
-    f.setActive(true);
-    const activatingA2 = f.host.sessionActivated("s1");
-
-    startup.resolve();
-    await Promise.all([
-      activatingA1,
-      deactivatingA,
-      activatingB,
-      deactivatingB,
-      activatingA2,
-    ]);
-
-    expect(f.server.synchronizeAndFocusDocument).toHaveBeenCalledTimes(1);
-    expect(f.server.synchronizeAndFocusDocument).toHaveBeenCalledWith(
-      "file:///prose.md",
-      1,
-      "Hello",
-      expect.any(Function),
-    );
-    expect(f.synchronizedDocuments).toEqual(new Set(["file:///prose.md"]));
-    expect(f.focusedUri()).toBe("file:///prose.md");
-    f.host.dispose();
-  });
-  it("rejects delayed SDK sync continuations from earlier A to B to A activations", async () => {
-    const f = fixture(false);
-    const operations: Array<{
-      uri: string;
-      gate: ReturnType<typeof deferred<void>>;
-    }> = [];
-    vi.mocked(f.server.synchronizeAndFocusDocument).mockImplementation(
-      async (uri, _version, _markdown, isCurrent) => {
-        const gate = deferred<void>();
-        operations.push({ uri, gate });
-        await gate.promise;
-        if (!isCurrent()) return false;
-        f.synchronizedDocuments.clear();
-        f.synchronizedDocuments.add(uri);
-        f.setFocusedUri(uri);
-        return true;
-      },
-    );
-    const activatingA1 = f.host.sessionActivated("s1");
-    await vi.waitFor(() => expect(operations).toHaveLength(1));
-
-    f.setActive(false);
-    const deactivatingA = f.host.sessionDeactivated("s1");
-    let activeB = true;
-    const panelB: AiPanelSession = {
-      id: "s2",
-      documentId: () => "file:///B.md",
-      uri: () => "file:///B.md",
-      version: () => 2,
-      markdown: () => "B",
-      isReady: () => true,
-      isActive: () => activeB,
-      canStartRequest: () => activeB,
-      focus: vi.fn(),
-      post: vi.fn(),
-    };
-    f.host.registerSession(panelB);
-    const activatingB = f.host.sessionActivated("s2");
-    await vi.waitFor(() => expect(operations).toHaveLength(2));
-
-    activeB = false;
-    const deactivatingB = f.host.sessionDeactivated("s2");
-    f.setActive(true);
-    const activatingA2 = f.host.sessionActivated("s1");
-    await vi.waitFor(() => expect(operations).toHaveLength(3));
-
-    operations[1]!.gate.resolve();
-    operations[0]!.gate.resolve();
-    operations[2]!.gate.resolve();
-    await Promise.all([
-      activatingA1,
-      deactivatingA,
-      activatingB,
-      deactivatingB,
-      activatingA2,
-    ]);
-
-    expect(operations.map(({ uri }) => uri)).toEqual([
-      "file:///prose.md",
-      "file:///B.md",
-      "file:///prose.md",
-    ]);
-    expect(f.synchronizedDocuments).toEqual(new Set(["file:///prose.md"]));
-    expect(f.focusedUri()).toBe("file:///prose.md");
-    f.host.dispose();
-  });
-  it("keeps a same-URI document open while another active panel owns it", async () => {
-    const f = fixture(false);
-    await f.host.sessionActivated("s1");
-    let activeB = true;
-    const panelB: AiPanelSession = {
-      id: "s2",
-      documentId: () => "file:///prose.md",
-      uri: () => "file:///prose.md",
-      version: () => 1,
-      markdown: () => "Hello",
-      isReady: () => true,
-      isActive: () => activeB,
-      canStartRequest: () => activeB,
-      focus: vi.fn(),
-      post: vi.fn(),
-    };
-    f.host.registerSession(panelB);
-    await f.host.sessionActivated("s2");
-    f.setActive(false);
-    await f.host.sessionDeactivated("s1");
-
-    expect(f.synchronizedDocuments).toEqual(new Set(["file:///prose.md"]));
-    expect(f.focusedUri()).toBe("file:///prose.md");
-    expect(f.server.focusDocument).not.toHaveBeenCalledWith(
-      undefined,
-      expect.any(Function),
-    );
-    activeB = false;
-    f.host.dispose();
-  });
-  it.each([
-    ["needs-sign-in", { kind: "Error", busy: false }],
-    ["excluded", { kind: "Inactive", busy: false }],
-  ] as const)(
-    "cancels a pending request after the document becomes %s",
-    async (availability, status) => {
-      const f = fixture();
-      const request = f.request();
-      const pending = f.host.requestSuggestion("s1", request);
-      await vi.waitFor(() =>
-        expect(f.server.requestInlineCompletion).toHaveBeenCalledTimes(1),
-      );
-
-      f.setServerStatus(availability, {
-        ...status,
-        message: availability,
-      });
-      expect(f.cancelToken()).toBe(true);
-      f.response.resolve({ items: [{ insertText: " stale" }] });
-      await pending;
-
-      expect(f.ready()).toHaveLength(0);
-      expect(
-        f.messages.some(
-          (message) =>
-            message.type === "ai-suggestion-result" &&
-            message.requestId === request.requestId &&
-            message.reason !== "ready",
-        ),
-      ).toBe(true);
-      f.host.dispose();
-    },
-  );
-  it("does not revive an old response after availability recovers and allows a fresh request", async () => {
-    const f = fixture();
-    const oldRequest = f.request();
-    const oldPending = f.host.requestSuggestion("s1", oldRequest);
-    await vi.waitFor(() =>
-      expect(f.server.requestInlineCompletion).toHaveBeenCalledTimes(1),
-    );
-
-    f.setServerStatus("needs-sign-in", {
-      kind: "Error",
-      busy: false,
-      message: "Sign in required",
-    });
-    f.setServerStatus("ready", {
-      kind: "Normal",
-      busy: false,
-      message: "Signed in",
-    });
-    f.response.resolve({ items: [{ insertText: " old" }] });
-    await oldPending;
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(f.ready()).toHaveLength(0);
-
-    const nextResponse = f.queueResponse();
-    const newRequest = f.request({ requestId: "fresh-after-sign-in" });
-    const newPending = f.host.requestSuggestion("s1", newRequest);
-    await vi.waitFor(() =>
-      expect(f.server.requestInlineCompletion).toHaveBeenCalledTimes(2),
-    );
-    nextResponse.resolve({ items: [{ insertText: " fresh" }] });
-    await newPending;
-    expect(f.ready()).toHaveLength(1);
-    expect(f.ready()[0]).toMatchObject({
-      requestId: "fresh-after-sign-in",
-      text: " fresh",
-      reason: "ready",
-    });
-    f.host.dispose();
-  });
-  it("does not cancel an allowed document when a different document is excluded", async () => {
-    const f = fixture();
-    const pending = f.host.requestSuggestion("s1", f.request());
-    await vi.waitFor(() =>
-      expect(f.server.requestInlineCompletion).toHaveBeenCalledTimes(1),
-    );
-    f.setServerStatus(
-      "excluded",
-      {
-        kind: "Inactive",
-        busy: false,
-        message: "Another document is excluded",
-      },
-      "file:///other.md",
-    );
-    expect(f.cancelToken()).toBe(false);
-    f.response.resolve({ items: [{ insertText: " allowed" }] });
-    await pending;
-    expect(f.ready()).toHaveLength(1);
-    f.host.dispose();
-  });
-  it("keeps connection authentication loss global after a per-document exclusion", async () => {
-    const f = fixture();
-    f.setServerStatus("needs-sign-in", {
-      kind: "Error",
-      busy: false,
-      message: "Sign in required",
-    });
-    f.setServerStatus(
-      "excluded",
-      {
-        kind: "Inactive",
-        busy: false,
-        message: "Another document is excluded",
-      },
-      "file:///other.md",
-    );
-
-    await f.host.requestSuggestion("s1", f.request());
-
-    expect(f.server.requestInlineCompletion).not.toHaveBeenCalled();
     expect(f.messages.at(-1)).toMatchObject({
       type: "ai-suggestion-result",
-      reason: "needs-sign-in",
+      reason: "ready",
+      text: " for safe publishing.",
     });
-    f.host.dispose();
+    f.dispose();
   });
-  it("cancels and settles the webview request when the actual document version changes", async () => {
+
+  it("rejects delayed text after a TextDocument version change", async () => {
     const f = fixture();
-    await f.host.triggerFromUserAction("s1");
-    const pending = f.host.requestSuggestion("s1", f.request());
-    await vi.waitFor(() =>
-      expect(f.server.requestInlineCompletion).toHaveBeenCalledTimes(1),
-    );
-    f.changeVersion(2, "Changed");
+    const request = await f.startManual();
+    const generation = deferred<Awaited<ReturnType<typeof response>>>();
+    f.send.mockReturnValue(generation.promise);
+    const pending = f.host.requestSuggestion("s1", request);
+    await vi.waitFor(() => expect(f.send).toHaveBeenCalledTimes(1));
+    f.setText("The release helper changed", 2);
+    f.host.documentChanged("file:///document.md");
     f.host.cancelSession("s1");
     await pending;
+    generation.resolve(response('{"insertText":" stale"}'));
     expect(
       f.messages.some(
         (message) =>
-          message.type === "ai-suggestion-result" &&
-          message.reason === "cancelled",
+          message.type === "ai-suggestion-result" && message.reason === "ready",
       ),
-    ).toBe(true);
-    expect(f.ready()).toHaveLength(0);
-    expect(f.cancelToken()).toBe(true);
-    f.host.dispose();
-  });
-  it("does not start a request when a panel is inactive", async () => {
-    const f = fixture(true);
-    f.setActive(false);
-    await f.host.requestSuggestion("s1", f.request({ trigger: "auto" }));
-    expect(f.server.requestInlineCompletion).not.toHaveBeenCalled();
-    expect(f.messages.at(-1)).toMatchObject({
-      type: "ai-suggestion-result",
-      reason: "stale",
-    });
-    f.host.dispose();
-  });
-  it("continues to allow manual completion while automatic suggestions are off", async () => {
-    const f = fixture(false);
-    await f.host.triggerFromUserAction("s1");
-    const pending = f.host.requestSuggestion("s1", f.request());
-    await vi.waitFor(() =>
-      expect(f.server.requestInlineCompletion).toHaveBeenCalledTimes(1),
-    );
-    f.response.resolve({ items: [{ insertText: " next" }] });
-    await pending;
-    expect(f.ready()).toHaveLength(1);
-    f.host.dispose();
-  });
-  it("normalizes LSP ranges to inserted text without replacing source or trimming spaces", () => {
-    const text = "Hello world";
-    const cursor = 6;
-    const position = (source: string, offset: number) =>
-      offsetToLspPosition(source, offset);
-    const toOffset = (
-      source: string,
-      value: { line: number; character: number },
-    ) =>
-      value.line === 0 && value.character <= source.length
-        ? value.character
-        : undefined;
-    expect(
-      normalizeCompletionToInsertion(
-        text,
-        cursor,
-        {
-          insertText: "Hello wonderful world",
-          range: { start: position(text, 0), end: position(text, text.length) },
-        },
-        toOffset,
-        position,
-      ),
-    ).toBe("wonderful ");
-    expect(
-      normalizeCompletionToInsertion(
-        "Hello",
-        5,
-        { insertText: " " },
-        toOffset,
-        position,
-      ),
-    ).toBe(" ");
-    expect(
-      normalizeCompletionToInsertion(
-        text,
-        cursor,
-        {
-          insertText: "Goodbye world",
-          range: { start: position(text, 0), end: position(text, text.length) },
-        },
-        toOffset,
-        position,
-      ),
-    ).toBeUndefined();
-    expect(
-      normalizeCompletionToInsertion(
-        text,
-        cursor,
-        {
-          insertText: "x" + String.fromCharCode(36) + "{1}",
-          insertTextFormat: 2,
-        },
-        toOffset,
-        position,
-      ),
-    ).toBeUndefined();
+    ).toBe(false);
+    f.dispose();
   });
 
-  it("keeps the Normal status received before the sign-in RPC reply", async () => {
-    const f = fixture(true);
-    const rpc = deferred<boolean>();
-    vi.spyOn(f.server, "signInFromUserAction").mockReturnValue(rpc.promise);
-    const signingIn = f.host.signInFromUserAction();
-    f.setServerStatus("ready", {
-      kind: "Normal",
-      busy: false,
-      message: "Signed in",
-    });
-    rpc.resolve(true);
-    await signingIn;
-
-    expect(f.messages.at(-1)).toMatchObject({
-      type: "ai-suggestion-state",
-      availability: "ready",
-      statusText: "Signed in",
-    });
-    f.host.dispose();
-  });
-
-  it("retains the Normal status received after the sign-in RPC reply", async () => {
-    const f = fixture(true);
-    const rpc = deferred<boolean>();
-    vi.spyOn(f.server, "signInFromUserAction").mockReturnValue(rpc.promise);
-    f.setServerStatus("needs-sign-in", {
-      kind: "Error",
-      busy: false,
-      message: "Sign in required",
-    });
-    const signingIn = f.host.signInFromUserAction();
-    rpc.resolve(true);
-    await signingIn;
-    f.setServerStatus("ready", {
-      kind: "Normal",
-      busy: false,
-      message: "Signed in",
-    });
-
-    expect(f.messages.at(-1)).toMatchObject({
-      type: "ai-suggestion-state",
-      availability: "ready",
-      statusText: "Signed in",
-    });
-    f.host.dispose();
-  });
-
-  it("treats a Normal server status as ready while a completion is busy", async () => {
-    const f = fixture(true);
-    f.setServerStatus("ready", {
-      kind: "Normal",
-      busy: true,
-      message: "Copilot is processing a request",
-    });
-    await f.host.triggerFromUserAction("s1");
-
-    expect(f.messages.at(-1)).toMatchObject({
-      type: "ai-suggestion-trigger",
-      sessionId: "s1",
-    });
-    expect(
-      f.messages
-        .filter((message) => message.type === "ai-suggestion-state")
-        .at(-1),
-    ).toMatchObject({ availability: "ready" });
-    f.host.dispose();
-  });
-
-  it("restores automatic requests from an existing sign-in after startup", async () => {
-    const f = fixture(true);
-    await vi.waitFor(() =>
-      expect(
-        f.messages
-          .filter((message) => message.type === "ai-suggestion-state")
-          .at(-1),
-      ).toMatchObject({ availability: "ready" }),
-    );
-    const pending = f.host.requestSuggestion(
-      "s1",
-      f.request({ trigger: "auto" }),
-    );
-    await vi.waitFor(() =>
-      expect(f.server.requestInlineCompletion).toHaveBeenCalledTimes(1),
-    );
-    f.response.resolve({ items: [{ insertText: " next" }] });
-    await pending;
-
-    expect(f.ready()).toHaveLength(1);
-    expect(f.server.start).toHaveBeenCalled();
-    f.host.dispose();
-  });
-
-  it("does not invalidate an in-flight manual request when auto-trigger is turned off", async () => {
-    const f = fixture(true);
-    const pending = f.host.requestSuggestion("s1", f.request());
-    await vi.waitFor(() =>
-      expect(f.server.requestInlineCompletion).toHaveBeenCalledTimes(1),
-    );
-    const generation = f.messages
-      .filter((message) => message.type === "ai-suggestion-state")
-      .at(-1)!.settingsGeneration;
-    f.setAutoTrigger(false);
-    f.host.refreshSettings();
-    f.response.resolve({ items: [{ insertText: " next" }] });
-    await pending;
-
-    expect(f.ready()).toHaveLength(1);
-    expect(
-      f.messages
-        .filter((message) => message.type === "ai-suggestion-state")
-        .at(-1)?.settingsGeneration,
-    ).toBe(generation);
-    f.host.dispose();
-  });
-
-  it("returns multiple normalized SDK alternatives for Webview safety validation", async () => {
+  it("does not send after authorization is revoked and never revives an old response", async () => {
     const f = fixture();
-    f.setMarkdown("hello world**");
-    const request = f.request({ position: 6 });
+    const request = await f.startManual();
+    const generation = deferred<Awaited<ReturnType<typeof response>>>();
+    f.send.mockReturnValue(generation.promise);
     const pending = f.host.requestSuggestion("s1", request);
-    await vi.waitFor(() =>
-      expect(f.server.requestInlineCompletion).toHaveBeenCalledTimes(1),
-    );
-    f.response.resolve({
-      items: [{ insertText: "**" }, { insertText: "nice " }],
-    });
+    await vi.waitFor(() => expect(f.send).toHaveBeenCalledTimes(1));
+    f.setAccess(false);
     await pending;
-
-    expect(f.ready()[0]).toMatchObject({
-      candidates: [{ text: "**" }, { text: "nice " }],
-    });
-    f.host.dispose();
-  });
-
-  it("does not report a stale-version candidate as shown", async () => {
-    const f = fixture();
-    const request = f.request();
-    const pending = f.host.requestSuggestion("s1", request);
-    await vi.waitFor(() =>
-      expect(f.server.requestInlineCompletion).toHaveBeenCalledTimes(1),
-    );
-    f.response.resolve({ items: [{ insertText: " next" }] });
-    await pending;
-    const result = f.ready()[0];
-    if (
-      !result ||
-      result.type !== "ai-suggestion-result" ||
-      !result.candidateId
-    )
-      throw new Error("Expected a ready candidate result.");
-
-    f.changeVersion(2, "Edited while the candidate was pending");
-    f.host.feedback({
-      protocolVersion: 1,
-      type: "ai-suggestion-feedback",
-      requestId: request.requestId,
-      sessionId: request.sessionId,
-      candidateId: result.candidateId,
-      action: "shown",
-    } satisfies AiSuggestionFeedback);
-
-    expect(f.server.reportShown).not.toHaveBeenCalled();
-    f.host.dispose();
-  });
-  it("invalidates candidate feedback records on authentication loss", async () => {
-    const f = fixture();
-    const request = f.request();
-    const pending = f.host.requestSuggestion("s1", request);
-    await vi.waitFor(() =>
-      expect(f.server.requestInlineCompletion).toHaveBeenCalledTimes(1),
-    );
-    f.response.resolve({ items: [{ insertText: " next" }] });
-    await pending;
-    const result = f.ready()[0];
-    if (
-      !result ||
-      result.type !== "ai-suggestion-result" ||
-      !result.candidateId
-    )
-      throw new Error("Expected a ready candidate.");
-
-    f.host.feedback({
-      protocolVersion: 1,
-      type: "ai-suggestion-feedback",
-      requestId: request.requestId,
-      sessionId: request.sessionId,
-      candidateId: result.candidateId,
-      action: "shown",
-    });
-    expect(f.server.reportShown).toHaveBeenCalledTimes(1);
-    f.setServerStatus("needs-sign-in", {
-      kind: "Error",
-      busy: false,
-      message: "Sign in required",
-    });
-    f.host.feedback({
-      protocolVersion: 1,
-      type: "ai-suggestion-feedback",
-      requestId: request.requestId,
-      sessionId: request.sessionId,
-      candidateId: result.candidateId,
-      action: "accepted",
-    });
-
-    expect(f.server.reportAccepted).not.toHaveBeenCalled();
-    f.host.dispose();
-  });
-
-  it("opens and focuses the new document after the previous document was excluded", async () => {
-    const f = fixture(true);
-    f.changeDocument("file:///workspace/A.md", "excluded text");
-    f.setServerStatus("excluded", {
-      kind: "Inactive",
-      busy: false,
-      message: "This file is excluded",
-    });
-    await f.host.sessionActivated("s1");
-    expect(f.server.synchronizeAndFocusDocument).toHaveBeenCalledWith(
-      "file:///workspace/A.md",
-      1,
-      "excluded text",
-      expect.any(Function),
-    );
-    expect(f.focusedUri()).toBe("file:///workspace/A.md");
-
-    f.changeDocument("file:///workspace/B.md", "allowed text", 2);
-    await f.host.sessionActivated("s1");
-    expect(f.server.synchronizeAndFocusDocument).toHaveBeenCalledWith(
-      "file:///workspace/B.md",
-      2,
-      "allowed text",
-      expect.any(Function),
-    );
-    expect(f.focusedUri()).toBe("file:///workspace/B.md");
-
-    f.setServerStatus("ready", {
-      kind: "Normal",
-      busy: false,
-      message: "Ready for this document",
-    });
-    const pending = f.host.requestSuggestion(
-      "s1",
-      f.request({ trigger: "auto" }),
-    );
-    await vi.waitFor(() =>
-      expect(f.server.requestInlineCompletion).toHaveBeenCalledWith(
-        "file:///workspace/B.md",
-        2,
-        expect.anything(),
-        "auto",
-        expect.anything(),
-      ),
-    );
-    f.response.resolve({ items: [{ insertText: " with a continuation" }] });
-    await pending;
-    expect(f.ready()).toHaveLength(1);
+    generation.resolve(response('{"insertText":" stale"}'));
     expect(
-      vi
-        .mocked(f.server.requestInlineCompletion)
-        .mock.calls.map(([uri]) => uri),
-    ).toEqual(["file:///workspace/B.md"]);
-    f.host.dispose();
+      f.messages.some(
+        (message) =>
+          message.type === "ai-suggestion-result" && message.reason === "ready",
+      ),
+    ).toBe(false);
+    f.dispose();
   });
 
-  it("clears LSP focus when leaving the last active panel for a native editor", async () => {
-    const f = fixture(false);
-    await f.host.sessionActivated("s1");
+  it("does not keep a request alive after panel deactivation or disposal", async () => {
+    const f = fixture();
+    const request = await f.startManual();
+    const generation = deferred<Awaited<ReturnType<typeof response>>>();
+    f.send.mockReturnValue(generation.promise);
+    const pending = f.host.requestSuggestion("s1", request);
+    await vi.waitFor(() => expect(f.send).toHaveBeenCalledTimes(1));
     f.setActive(false);
     await f.host.sessionDeactivated("s1");
-
-    expect(f.server.focusDocument).toHaveBeenCalledWith(
-      undefined,
-      expect.any(Function),
-    );
-    f.host.dispose();
+    await pending;
+    generation.resolve(response('{"insertText":" stale"}'));
+    expect(
+      f.messages.some(
+        (message) =>
+          message.type === "ai-suggestion-result" && message.reason === "ready",
+      ),
+    ).toBe(false);
+    f.dispose();
   });
 
-  it("keeps a shared document open until its last active Mint panel deactivates", async () => {
-    const f = fixture(false);
-    await f.host.sessionActivated("s1");
-    const secondPanel: AiPanelSession = {
-      ...f.panel,
-      id: "s2",
-      focus: vi.fn(),
-      post: vi.fn(),
-    };
-    f.host.registerSession(secondPanel);
-    f.host.unregisterSession("s1");
-
-    expect(f.server.focusDocument).not.toHaveBeenCalledWith(
-      undefined,
-      expect.any(Function),
-    );
-    expect(f.server.closeDocument).not.toHaveBeenCalled();
-    await f.host.sessionDeactivated("s2");
-    expect(f.server.focusDocument).toHaveBeenLastCalledWith(
-      undefined,
-      expect.any(Function),
-    );
-    f.host.dispose();
+  it("chooses a mini family by model metadata instead of list order", async () => {
+    const f = fixture();
+    await f.startManual();
+    expect(f.api.selectChatModels).toHaveBeenCalledWith({ vendor: "copilot" });
+    expect(f.messages.at(-1)).toMatchObject({
+      type: "ai-suggestion-state",
+      modelName: "Copilot Mini (copilot-gpt-4o-mini, 2026-10)",
+    });
+    f.dispose();
   });
 });

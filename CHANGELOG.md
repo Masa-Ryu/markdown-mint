@@ -2,18 +2,15 @@
 
 ## 0.9.0
 
-- Replace chat-model generation with GitHub's official
-  `@github/copilot-language-server` 1.551.2 and platform-specific native
-  binaries. Use LSP inline completions without a model picker or Mint chat
-  prompt; keep the current runtime gate limited to trusted desktop macOS arm64.
-- Add user-initiated GitHub device sign-in and automatic prose suggestions
-  controlled by user-scoped `markdownMint.aiSuggestions.autoTrigger` (initially
-  false). Resume automatically after restart when the Language Server restores
-  valid authorization; keep manual suggestions available while auto is off.
-- Show insertion-only transient candidates in paragraphs, headings, and list
-  items, including midline positions. Preserve original text and formatting,
-  support Tab/Escape and native Undo/Redo, and keep candidates out of the
-  document, clipboard, recovery data, previews, and exports until accepted.
+- Use VS Code's public Language Model API for optional Copilot prose
+  continuations. Automatically choose an available editor-suitable model and
+  send bounded context around the active cursor; keep model consent under VS
+  Code's user-initiated flow.
+- Keep suggestions transient until Tab acceptance, preserve existing Markdown
+  and source structure, and keep AI requests independent of document save/edit
+  queue work. Package one universal VSIX without a bundled Copilot SDK.
+- AI suggestions require VS Code 1.91 or newer; ordinary Markdown editing
+  remains available at the existing 1.90 engine minimum.
 
 ## 0.8.0
 

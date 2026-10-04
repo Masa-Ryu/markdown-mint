@@ -752,6 +752,7 @@
               type: "ai-suggestion-trigger",
               sessionId: aiState.sessionId,
               settingsGeneration: aiState.settingsGeneration,
+              invocationId: "browser-manual-" + ++aiInvocation,
             });
           },
           respondAi(request, text = " 続きを書きます🌿", reason = "ready") {
@@ -766,8 +767,6 @@
               settingsGeneration: request.settingsGeneration,
               position: request.position,
               targetKind: request.targetKind,
-              candidateId: "browser-candidate-" + ++aiInvocation,
-              partialAcceptanceOffset: 0,
               text,
               reason,
             };

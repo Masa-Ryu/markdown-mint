@@ -55,7 +55,6 @@ import { classifyLinkNavigation } from "./linkNavigation";
 import { WorkspaceFileSearchHost } from "./workspaceFileSearch";
 import {
   AiSuggestionsHost,
-  AI_SIGN_IN_COMMAND,
   AI_TRIGGER_COMMAND,
   createAiSuggestionsEnvironment,
   type AiSuggestionsEnvironment,
@@ -203,9 +202,6 @@ export function activate(context: vscode.ExtensionContext): MarkdownMintApi {
     vscode.commands.registerCommand(AI_TRIGGER_COMMAND, () =>
       provider.triggerAiSuggestion(),
     ),
-    vscode.commands.registerCommand(AI_SIGN_IN_COMMAND, () =>
-      provider.signInToCopilot(),
-    ),
     vscode.commands.registerCommand(
       "markdownMint.openPreview",
       (uri?: vscode.Uri) => provider.openPreview(uri),
@@ -342,7 +338,7 @@ export class MarkdownMintEditorProvider
         ? vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, -1)
         : undefined;
     if (this.aiStatus) {
-      this.aiStatus.name = "Markdown Mint Copilot Suggestions";
+      this.aiStatus.name = "Markdown Mint Language Model Suggestions";
       this.aiStatus.command = AI_TRIGGER_COMMAND;
       this.aiStatus.show();
     }
@@ -351,22 +347,19 @@ export class MarkdownMintEditorProvider
       (availability: AiAvailability, message: string, autoTrigger: boolean) => {
         if (!this.aiStatus) return;
         this.aiStatus.text =
-          availability === "needs-sign-in"
-            ? "$(account) Mint sign in"
+          availability === "needs-authorization"
+            ? "$(account) Mint suggestions"
             : availability === "preparing"
-              ? "$(sync~spin) Mint Copilot"
+              ? "$(sync~spin) Mint suggestions"
               : availability === "ready" && !autoTrigger
-                ? "$(copilot) Mint suggestions off"
+                ? "$(sparkle) Mint suggestions off"
                 : availability === "ready"
-                  ? "$(copilot) Mint suggestions"
+                  ? "$(sparkle) Mint suggestions"
                   : availability === "disabled"
-                    ? "$(copilot) Mint suggestions off"
-                    : "$(warning) Mint Copilot";
+                    ? "$(sparkle) Mint suggestions off"
+                    : "$(warning) Mint suggestions";
         this.aiStatus.tooltip = message;
-        this.aiStatus.command =
-          availability === "needs-sign-in"
-            ? AI_SIGN_IN_COMMAND
-            : AI_TRIGGER_COMMAND;
+        this.aiStatus.command = AI_TRIGGER_COMMAND;
       },
     );
     this.output = vscode.window.createOutputChannel("Markdown Mint");
@@ -431,10 +424,6 @@ export class MarkdownMintEditorProvider
     const session = this.activeAiSession();
     await this.aiSuggestions.triggerFromUserAction(session?.aiSessionId ?? "");
   }
-  public async signInToCopilot(): Promise<void> {
-    await this.aiSuggestions.signInFromUserAction();
-  }
-
   public async resolveCustomTextEditor(
     document: vscode.TextDocument,
     webviewPanel: vscode.WebviewPanel,
@@ -665,9 +654,7 @@ export class MarkdownMintEditorProvider
           this.sessions.get(panel) === session &&
           session.ready &&
           panel.active &&
-          mode === "editor" &&
-          state.pending.size === 0 &&
-          state.pendingCommand === undefined,
+          mode === "editor",
         focus: () => panel.reveal(panel.viewColumn, false),
         post: (message) => {
           if (session.ready) this.post(session, message);
@@ -770,6 +757,7 @@ export class MarkdownMintEditorProvider
       event.contentChanges.length > 0 ||
       event.document.version !== state.version
     ) {
+      this.aiSuggestions.documentChanged(state.uri.toString());
       for (const session of state.panels)
         this.aiSuggestions.cancelSession(session.aiSessionId);
     }
@@ -1022,10 +1010,6 @@ export class MarkdownMintEditorProvider
               session.aiSessionId,
               message.requestId,
             );
-          return;
-        case "ai-suggestion-feedback":
-          if (message.sessionId === session.aiSessionId)
-            this.aiSuggestions.feedback(message);
           return;
         case "edit":
           await this.enqueue(session.state, () =>

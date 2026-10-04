@@ -31,12 +31,12 @@ describe("GitHub Release workflow", () => {
     expect(releaseJob).toMatch(/^ {4}permissions:\n {6}contents: write$/m);
   });
 
-  it("validates and retains six platform VSIX packages with individual checksums", () => {
-    expect(validateJob).toContain("npm run package:platforms");
+  it("validates and retains one universal VSIX with its checksum", () => {
+    expect(validateJob).toContain("npm run package");
     expect(validateJob).toContain("sha256sum");
     expect(validateJob).toContain("actions/upload-artifact@v4");
     expect(validateJob).toContain(
-      "markdown-mint-${{ steps.metadata.outputs.version }}-*.vsix",
+      "markdown-mint-${{ steps.metadata.outputs.version }}.vsix",
     );
     expect(validateJob).toContain("printf 'artifacts=%s\\n'");
     expect(validateJob).toContain("retention-days: 90");
@@ -45,7 +45,7 @@ describe("GitHub Release workflow", () => {
     expect(releaseJob).toContain(
       "EXPECTED_ARTIFACTS: ${{ needs.validate.outputs.artifacts }}",
     );
-    expect(releaseJob).toContain('for target in "${targets[@]}"; do');
+    expect(releaseJob).toContain('name="markdown-mint-${VERSION}.vsix"');
     expect(releaseJob).toContain(
       'gh release upload "$tag" "release-payload/$asset_name"',
     );
@@ -58,14 +58,14 @@ describe("GitHub Release workflow", () => {
     expect(releaseJob).toContain("release_asset_hashes=");
   });
 
-  it("recovers each release asset and publishes only after all checksums match", () => {
+  it("recovers the release asset and publishes only after its checksum matches", () => {
     expect(releaseJob).toContain(
       "node scripts/release-recovery.mjs plan-current",
     );
     expect(releaseJob).toContain("delete_starter_asset");
     expect(releaseJob).toContain("verify_asset");
     expect(releaseJob).toContain("publish_release");
-    expect(releaseJob).toContain("All six expected VSIX files are verified");
+    expect(releaseJob).toContain("expected universal VSIX is verified");
     expect(releaseJob).toContain('if ! action="$(make_recovery_plan)"; then');
     expect(releaseJob).toContain("jq -er '.plan.action // empty'");
     expect(workflow).not.toMatch(

@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import MarkdownIt from "markdown-it";
-import { isHostMessage } from "../../src/shared/protocol";
+import { isHostMessage, type HostMessage } from "../../src/shared/protocol";
 import type { AiSuggestionsEnvironment } from "../../src/extension/aiSuggestions";
-import type { CopilotLanguageServer } from "../../src/extension/copilotLanguageServer";
+import { LanguageModelSuggestions } from "../../src/extension/languageModelSuggestions";
 
 const vscode = vi.hoisted(() => {
   type Listener = (...args: never[]) => void;
@@ -767,6 +767,9 @@ const vscode = vi.hoisted(() => {
     WebviewPanel,
     ViewColumn: { Beside: 2 },
     ProgressLocation: { Notification: 1 },
+    LanguageModelChatMessage: {
+      User: (content: string) => ({ role: 1, content }),
+    },
     window,
     workspace,
     commands,
@@ -891,6 +894,7 @@ const pdfMocks = vi.hoisted(() => {
 
 vi.mock("vscode", () => ({
   ...vscode,
+  lm: undefined,
   CancellationTokenSource: undefined,
 }));
 vi.mock("../../src/extension/export/browserDiscovery", () => ({
@@ -907,53 +911,71 @@ const {
   webviewContentSecurityPolicy,
 } = await import("../../src/extension/extension");
 
+function modelText(value: string): { text: AsyncIterable<string> } {
+  return {
+    text: (async function* () {
+      yield value;
+    })(),
+  };
+}
+
+function fakeAiEnvironment(
+  sendRequest: () => Promise<{ text: AsyncIterable<string> }>,
+  onCancel?: () => void,
+): AiSuggestionsEnvironment {
+  const model = {
+    id: "copilot-mini",
+    name: "Copilot Mini",
+    vendor: "copilot",
+    family: "gpt-4o-mini",
+    version: "test",
+    maxInputTokens: 32_000,
+    countTokens: async () => 40,
+    sendRequest,
+  };
+  return {
+    languageModel: new LanguageModelSuggestions({
+      api: { selectChatModels: async () => [model as never] },
+      access: { canSendRequest: () => true },
+    }),
+    supported: () => true,
+    trusted: () => true,
+    settings: () => ({ autoTrigger: false }),
+    notify: () => undefined,
+    tokenSource: () => {
+      let cancelled = false;
+      return {
+        token: {
+          get isCancellationRequested() {
+            return cancelled;
+          },
+          onCancellationRequested: () => ({ dispose: () => undefined }),
+        },
+        cancel: () => {
+          cancelled = true;
+          onCancel?.();
+        },
+        dispose: () => undefined,
+      } as never;
+    },
+  };
+}
+
 it("does not put model communication into the document edit/save queue", async () => {
   vscode.__state.reset();
   const { panel, document } = vscode.__state;
   let sends = 0;
   let cancelled = false;
-  const response = deferred<{ items: Array<{ insertText: string }> }>();
-  const server = {
-    currentStatus: { kind: "Normal", busy: false, message: "Copilot ready" },
-    isRunning: true,
-    start: async () => undefined,
-    synchronizeDocument: async () => undefined,
-    synchronizeAndFocusDocument: async (
-      _uri: string,
-      _version: number,
-      _markdown: string,
-      isCurrent: () => boolean,
-    ) => isCurrent(),
-    focusDocument: async () => undefined,
-    requestInlineCompletion: () => {
+  const response = deferred<{ text: AsyncIterable<string> }>();
+  const environment = fakeAiEnvironment(
+    () => {
       sends += 1;
       return response.promise;
     },
-    reportShown: () => undefined,
-    reportPartiallyAccepted: () => undefined,
-    reportAccepted: async () => undefined,
-    closeDocument: async () => undefined,
-    dispose: () => undefined,
-  } as unknown as CopilotLanguageServer;
-  const environment: AiSuggestionsEnvironment = {
-    server,
-    supported: () => true,
-    trusted: () => true,
-    settings: () => ({ autoTrigger: false }),
-    notify: () => undefined,
-    tokenSource: () =>
-      ({
-        token: {
-          get isCancellationRequested() {
-            return cancelled;
-          },
-        },
-        cancel: () => {
-          cancelled = true;
-        },
-        dispose: () => undefined,
-      }) as never,
-  };
+    () => {
+      cancelled = true;
+    },
+  );
   const provider = new MarkdownMintEditorProvider(
     context() as never,
     environment,
@@ -996,8 +1018,9 @@ it("does not put model communication into the document edit/save queue", async (
     position: document.getText().length,
     targetKind: "heading",
     trigger: "manual",
+    invocationId: trigger.invocationId,
   });
-  await waitForCondition(() => sends === 1, "held fake Copilot LSP request");
+  await waitForCondition(() => sends === 1, "held fake Language Model request");
   panel.webview.receive({
     protocolVersion: 1,
     type: "edit",
@@ -1058,7 +1081,7 @@ it("returns an AI candidate when a non-mutating save is still queued", async () 
     expect(document.version).toBe(versionBefore);
     expect(document.getText()).toBe(markdownBefore);
 
-    response.resolve({ items: [{ insertText: " continuation" }] });
+    response.resolve(modelText('{"insertText":" continuation"}'));
     await waitForCondition(
       () =>
         panel.webview.messages.some(
@@ -1148,7 +1171,7 @@ it("cancels a pending AI response when format-on-save changes the document", asy
       ),
     ).toBe(true);
 
-    response.resolve({ items: [{ insertText: " stale continuation" }] });
+    response.resolve(modelText('{"insertText":" stale continuation"}'));
     await flush();
     expect(document.getText()).toBe(formattedDocument);
     expect(document.version).toBe(formattedVersion);
@@ -1205,51 +1228,18 @@ async function startDelayedAiSuggestion(markdown = "# Original"): Promise<{
     save(): Promise<boolean>;
     replaceText(value: string): void;
   };
-  response: ReturnType<
-    typeof deferred<{ items: Array<{ insertText: string }> }>
-  >;
+  response: ReturnType<typeof deferred<{ text: AsyncIterable<string> }>>;
   requestCount(): number;
 }> {
   vscode.__state.reset();
   const { panel, document } = vscode.__state;
   if (markdown !== document.getText()) document.reset(markdown);
-  const response = deferred<{ items: Array<{ insertText: string }> }>();
+  const response = deferred<{ text: AsyncIterable<string> }>();
   let requestCount = 0;
-  const server = {
-    currentStatus: { kind: "Normal", busy: false, message: "Copilot ready" },
-    isRunning: true,
-    start: async () => undefined,
-    synchronizeDocument: async () => undefined,
-    synchronizeAndFocusDocument: async (
-      _uri: string,
-      _version: number,
-      _markdown: string,
-      isCurrent: () => boolean,
-    ) => isCurrent(),
-    focusDocument: async () => undefined,
-    requestInlineCompletion: () => {
-      requestCount += 1;
-      return response.promise;
-    },
-    reportShown: () => undefined,
-    reportPartiallyAccepted: () => undefined,
-    reportAccepted: async () => undefined,
-    closeDocument: async () => undefined,
-    dispose: () => undefined,
-  } as unknown as CopilotLanguageServer;
-  const environment: AiSuggestionsEnvironment = {
-    server,
-    supported: () => true,
-    trusted: () => true,
-    settings: () => ({ autoTrigger: false }),
-    notify: () => undefined,
-    tokenSource: () =>
-      ({
-        token: { isCancellationRequested: false },
-        cancel: () => undefined,
-        dispose: () => undefined,
-      }) as never,
-  };
+  const environment = fakeAiEnvironment(() => {
+    requestCount += 1;
+    return response.promise;
+  });
   const provider = new MarkdownMintEditorProvider(
     context() as never,
     environment,
@@ -1292,6 +1282,7 @@ async function startDelayedAiSuggestion(markdown = "# Original"): Promise<{
     position: document.getText().length,
     targetKind: "heading",
     trigger: "manual",
+    invocationId: trigger.invocationId,
   });
   await waitForCondition(
     () => requestCount === 1,
@@ -3017,10 +3008,12 @@ describe("MarkdownMintEditorProvider", () => {
     await flush();
 
     const result = vscode.__state.panel.webview.messages.find(
-      (message: any) =>
+      (message): message is Extract<HostMessage, { type: "save-result" }> =>
+        isHostMessage(message) &&
         message.type === "save-result" &&
         message.operationId === "save:during-edit",
-    ) as any;
+    );
+    if (!result) throw new Error("Expected the save result message.");
     expect(document.getText()).toBe("# Typed during save");
     expect(result).toMatchObject({
       type: "save-result",

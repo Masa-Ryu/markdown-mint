@@ -21,8 +21,23 @@ const request: AiSuggestionRequest = {
   trigger: "auto",
 };
 
-describe("Copilot Language Server protocol", () => {
-  it("keeps auto suggestions off by default and exposes only manual trigger and sign-in commands", () => {
+const result = {
+  protocolVersion: 1,
+  type: "ai-suggestion-result",
+  requestId: request.requestId,
+  sessionId: request.sessionId,
+  documentId: request.documentId,
+  baseVersion: request.baseVersion,
+  editorRevision: request.editorRevision,
+  settingsGeneration: request.settingsGeneration,
+  position: request.position,
+  targetKind: request.targetKind,
+  text: " world🌿",
+  reason: "ready",
+} as const;
+
+describe("VS Code Language Model suggestion protocol", () => {
+  it("keeps auto suggestions off by default and exposes a manual command only", () => {
     const manifest = JSON.parse(readFileSync("package.json", "utf8"));
     const properties = manifest.contributes.configuration.properties;
     expect(properties["markdownMint.aiSuggestions.autoTrigger"]).toMatchObject({
@@ -40,55 +55,20 @@ describe("Copilot Language Server protocol", () => {
         .filter((command: { command: string }) =>
           command.command.startsWith("markdownMint.aiSuggestions."),
         )
-        .map((command: { command: string }) => command.command)
-        .sort(),
-    ).toEqual([
-      "markdownMint.aiSuggestions.signIn",
-      "markdownMint.aiSuggestions.trigger",
-    ]);
+        .map((command: { command: string }) => command.command),
+    ).toEqual(["markdownMint.aiSuggestions.trigger"]);
   });
-  it("accepts source-position requests and bounded completion results", () => {
+
+  it("accepts bounded auto/manual source-position requests and result messages", () => {
     expect(parseWebviewMessage(request)).toEqual(request);
     expect(isAiWebviewMessage(request)).toBe(true);
-    expect(
-      isHostMessage({
-        protocolVersion: 1,
-        type: "ai-suggestion-result",
-        requestId: request.requestId,
-        sessionId: request.sessionId,
-        documentId: request.documentId,
-        baseVersion: request.baseVersion,
-        editorRevision: request.editorRevision,
-        settingsGeneration: request.settingsGeneration,
-        position: request.position,
-        targetKind: request.targetKind,
-        candidateId: "c-1",
-        partialAcceptanceOffset: 5,
-        text: " world🌿",
-        reason: "ready",
-      }),
-    ).toBe(true);
-    expect(
-      isHostMessage({
-        protocolVersion: 1,
-        type: "ai-suggestion-result",
-        requestId: request.requestId,
-        sessionId: request.sessionId,
-        documentId: request.documentId,
-        baseVersion: request.baseVersion,
-        editorRevision: request.editorRevision,
-        settingsGeneration: request.settingsGeneration,
-        position: request.position,
-        targetKind: request.targetKind,
-        candidateId: "c-1",
-        text: "**",
-        reason: "ready",
-        candidates: [
-          { candidateId: "c-1", text: "**" },
-          { candidateId: "c-2", text: "safe" },
-        ],
-      }),
-    ).toBe(true);
+    const manualRequest = {
+      ...request,
+      trigger: "manual",
+      invocationId: "manual-1",
+    };
+    expect(parseWebviewMessage(manualRequest)).toEqual(manualRequest);
+    expect(isHostMessage(result)).toBe(true);
     expect(
       isHostMessage({
         protocolVersion: 1,
@@ -99,6 +79,7 @@ describe("Copilot Language Server protocol", () => {
       }),
     ).toBe(true);
   });
+
   it.each([
     { protocolVersion: 2 },
     { requestId: "" },
@@ -116,40 +97,24 @@ describe("Copilot Language Server protocol", () => {
     { targetKind: "code_block" },
     { trigger: "background" },
     { context: { before: "forged host context" } },
+    { trigger: "manual", invocationId: undefined },
   ])("rejects malformed request %j", (patch) => {
     expect(parseWebviewMessage({ ...request, ...patch })).toBeUndefined();
   });
+
   it.each([
     { text: "x".repeat(32_769) },
     { text: "a\0b" },
     { text: "", reason: "ready" },
     { text: "text", reason: "failed" },
     { reason: "unknown" },
-    { candidateId: undefined },
-    { partialAcceptanceOffset: 32_769 },
-    { candidates: [] },
-    { candidates: [{ candidateId: "bad/id", text: "x" }] },
-    { candidates: [{ candidateId: "c-1", text: "x", extra: true }] },
-    {
-      candidates: Array.from({ length: 11 }, (_, index) => ({
-        candidateId: `c-${index}`,
-        text: "x",
-      })),
-    },
-    { candidates: [{ candidateId: "c-2", text: "different" }] },
+    { candidateId: "c-1" },
+    { partialAcceptanceOffset: 5 },
   ])("rejects malformed result %j", (patch) => {
-    expect(
-      isHostMessage({
-        ...request,
-        type: "ai-suggestion-result",
-        candidateId: "c-1",
-        text: " next",
-        reason: "ready",
-        ...patch,
-      }),
-    ).toBe(false);
+    expect(isHostMessage({ ...result, ...patch })).toBe(false);
   });
-  it("validates cancellation, status, trigger, and SDK feedback messages", () => {
+
+  it("validates cancellation, availability, and host-issued manual triggers", () => {
     expect(
       parseWebviewMessage({
         protocolVersion: 1,
@@ -163,28 +128,6 @@ describe("Copilot Language Server protocol", () => {
         protocolVersion: 1,
         type: "ai-suggestion-cancel",
         sessionId: "s1",
-      }),
-    ).toBeUndefined();
-    expect(
-      parseWebviewMessage({
-        protocolVersion: 1,
-        type: "ai-suggestion-feedback",
-        requestId: "r1",
-        sessionId: "s1",
-        candidateId: "c-1",
-        action: "partially-accepted",
-        acceptedLength: 4,
-      }),
-    ).toBeDefined();
-    expect(
-      parseWebviewMessage({
-        protocolVersion: 1,
-        type: "ai-suggestion-feedback",
-        requestId: "r1",
-        sessionId: "s1",
-        candidateId: "c-1",
-        action: "partially-accepted",
-        acceptedLength: -1,
       }),
     ).toBeUndefined();
     expect(
@@ -194,8 +137,17 @@ describe("Copilot Language Server protocol", () => {
         sessionId: "s1",
         settingsGeneration: 1,
         autoTrigger: false,
-        availability: "needs-sign-in",
-        statusText: "Sign in",
+        availability: "needs-authorization",
+        statusText: "Authorization required",
+      }),
+    ).toBe(true);
+    expect(
+      isAiHostMessage({
+        protocolVersion: 1,
+        type: "ai-suggestion-trigger",
+        sessionId: "s1",
+        settingsGeneration: 1,
+        invocationId: "manual-1",
       }),
     ).toBe(true);
     expect(
@@ -205,6 +157,6 @@ describe("Copilot Language Server protocol", () => {
         sessionId: "s1",
         settingsGeneration: 1,
       }),
-    ).toBe(true);
+    ).toBe(false);
   });
 });

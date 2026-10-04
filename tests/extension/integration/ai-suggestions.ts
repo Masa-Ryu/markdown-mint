@@ -8,14 +8,15 @@ import {
 import type { EditorView } from "prosemirror-view";
 import { buildMarkdownPositionMap } from "../../../src/core/markdownPositionMap";
 import { parseMarkdown, serializeMarkdown } from "../../../src/core";
-import type { CopilotLanguageServer } from "../../../src/extension/copilotLanguageServer";
+import { LanguageModelSuggestions } from "../../../src/extension/languageModelSuggestions";
 import { MarkdownMintEditorProvider } from "../../../src/extension/extension";
 import type { AiSuggestionsEnvironment } from "../../../src/extension/aiSuggestions";
+import { isAiWebviewMessage } from "../../../src/shared/aiSuggestions";
 import { isHostMessage } from "../../../src/shared/protocol";
 import { AiSuggestionsController } from "../../../src/webview/aiSuggestions";
 import { SyncController } from "../../../src/webview/editor";
 
-/** Native TextDocument/history with the production provider and fake LSP transport. */
+/** Native TextDocument/history with the production provider and a fake public LM API. */
 export async function runAiSuggestionAcceptance(
   extensionUri: vscode.Uri,
   documentUri: vscode.Uri,
@@ -27,34 +28,38 @@ export async function runAiSuggestionAcceptance(
   let modelCalls = 0;
   let editMessages = 0;
   let suggestionReady = false;
-  const server = {
-    currentStatus: {
-      kind: "Normal",
-      busy: false,
-      message: "Copilot signed in (fake server)",
+  let saveCompleted = false;
+  let aiRequestMessages = 0;
+  let aiTriggerMessages = 0;
+  let aiResultReason: string | undefined;
+  let latestAvailability: string | undefined;
+  let resolveResponse!: (value: { text: AsyncIterable<string> }) => void;
+  const responsePending = new Promise<{ text: AsyncIterable<string> }>(
+    (resolve) => {
+      resolveResponse = resolve;
     },
-    isRunning: true,
-    start: async () => undefined,
-    synchronizeDocument: async () => undefined,
-    synchronizeAndFocusDocument: async (
-      _uri: string,
-      _version: number,
-      _markdown: string,
-      isCurrent: () => boolean,
-    ) => isCurrent(),
-    focusDocument: async () => undefined,
-    requestInlineCompletion: async () => {
-      modelCalls += 1;
-      return { items: [{ insertText: " continues🌿" }] };
-    },
-    reportShown: () => undefined,
-    reportPartiallyAccepted: () => undefined,
-    reportAccepted: async () => undefined,
-    closeDocument: async () => undefined,
-    dispose: () => undefined,
-  } as unknown as CopilotLanguageServer;
+  );
   const environment: AiSuggestionsEnvironment = {
-    server,
+    languageModel: new LanguageModelSuggestions({
+      api: {
+        selectChatModels: async () => [
+          {
+            id: "fake-copilot-mini",
+            name: "Fake Copilot Mini",
+            vendor: "copilot",
+            family: "gpt-4o-mini",
+            version: "test",
+            maxInputTokens: 32_000,
+            countTokens: async () => 40,
+            sendRequest: async () => {
+              modelCalls += 1;
+              return responsePending;
+            },
+          } as unknown as vscode.LanguageModelChat,
+        ],
+      },
+      access: { canSendRequest: () => true },
+    }),
     supported: () => true,
     trusted: () => true,
     settings: () => ({ autoTrigger: false }),
@@ -95,7 +100,14 @@ export async function runAiSuggestionAcceptance(
         snapshot,
       ).pmPositionToSourceOffset(position),
     parseMarkdown: (markdown, profile) => parseMarkdown(markdown, profile),
-    post: (message) => input.fire(message),
+    post: (message) => {
+      if (
+        isAiWebviewMessage(message) &&
+        message.type === "ai-suggestion-request"
+      )
+        aiRequestMessages += 1;
+      input.fire(message);
+    },
     dispatch: (transaction: Transaction) => {
       const previous = state;
       state = state.apply(transaction);
@@ -138,6 +150,10 @@ export async function runAiSuggestionAcceptance(
       postMessage: async (message: unknown) => {
         assert.ok(isHostMessage(message));
         if (message.type === "document") {
+          const sameVersionSave =
+            message.reason === "save" &&
+            message.version === version &&
+            message.markdown === source;
           version = message.version;
           sync.acknowledge(
             message.operationId,
@@ -145,16 +161,23 @@ export async function runAiSuggestionAcceptance(
             message.markdown,
           );
           sync.noteAuthoritative(message.version, message.markdown);
-          if (message.reason !== "ack") {
+          if (message.reason !== "ack" && !sameVersionSave) {
             controller.invalidate();
             setSource(message.markdown);
           }
           controller.syncChanged();
+        } else if (message.type === "save-result") {
+          saveCompleted = message.saved;
         } else if (
           message.type === "ai-suggestion-state" ||
           message.type === "ai-suggestion-trigger" ||
           message.type === "ai-suggestion-result"
         ) {
+          if (message.type === "ai-suggestion-trigger") aiTriggerMessages += 1;
+          if (message.type === "ai-suggestion-state")
+            latestAvailability = message.availability;
+          if (message.type === "ai-suggestion-result")
+            aiResultReason = message.reason;
           controller.handleMessage(message);
           if (
             message.type === "ai-suggestion-result" &&
@@ -188,7 +211,53 @@ export async function runAiSuggestionAcceptance(
     const beforeVersion = document.version;
     const beforeEdits = editMessages;
     await provider.triggerAiSuggestion();
-    await waitFor(() => suggestionReady, "fake Copilot LSP response");
+    if (aiTriggerMessages !== 1)
+      throw new Error(
+        `Expected one manual trigger; received ${aiTriggerMessages} with availability ${latestAvailability ?? "none"}`,
+      );
+    try {
+      await waitFor(
+        () => modelCalls === 1 || aiResultReason !== undefined,
+        "fake public Language Model request or a host result",
+      );
+    } catch {
+      throw new Error(
+        `No Language Model result; host triggers=${aiTriggerMessages}, webview requests=${aiRequestMessages}, availability=${latestAvailability ?? "none"}`,
+      );
+    }
+    assert.equal(
+      modelCalls,
+      1,
+      `Expected one model call; host triggers=${aiTriggerMessages}, webview requests=${aiRequestMessages}, host result=${aiResultReason ?? "none"}, availability=${latestAvailability ?? "none"}`,
+    );
+    input.fire({
+      protocolVersion: 1,
+      type: "save",
+      operationId: "ai-same-version-save",
+      baseVersion: beforeVersion,
+    });
+    await waitFor(() => saveCompleted, "same-version save during model wait");
+    assert.equal(document.getText(), before, "save does not apply an AI ghost");
+    assert.equal(
+      document.version,
+      beforeVersion,
+      "save does not advance document version",
+    );
+    resolveResponse({
+      text: (async function* () {
+        yield '{"insertText":" continues🌿"}';
+      })(),
+    });
+    await waitFor(
+      () => suggestionReady || aiResultReason !== undefined,
+      "fake public Language Model response or result",
+    );
+    assert.equal(
+      aiResultReason,
+      "ready",
+      `Expected a ready result after the same-version save; got ${aiResultReason ?? "none"}`,
+    );
+    assert.equal(suggestionReady, true);
     assert.equal(modelCalls, 1);
     assert.equal(
       document.getText(),
@@ -248,7 +317,7 @@ export async function runAiSuggestionAcceptance(
     console.log(
       "AI native acceptance: " +
         vscode.version +
-        "; fake LSP completions=" +
+        "; fake Language Model requests=" +
         modelCalls +
         "; ghost unchanged; isolated Undo/Redo passed.",
     );

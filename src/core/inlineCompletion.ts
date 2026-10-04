@@ -1,20 +1,6 @@
 import { type Slice, type Node as PMNode } from "prosemirror-model";
 import type { Profile } from "./index";
 
-export interface CompletionRange {
-  readonly start: { readonly line: number; readonly character: number };
-  readonly end: { readonly line: number; readonly character: number };
-}
-export interface CompletionLike {
-  readonly insertText: string;
-  readonly range?: CompletionRange;
-  readonly insertTextFormat?: number;
-}
-export interface NormalizedCompletion {
-  readonly text: string;
-  /** The number of SDK insertText UTF-16 code units preceding inserted text. */
-  readonly partialAcceptanceOffset: number;
-}
 export interface CompletionInputMatch {
   readonly acceptedLength: number;
   readonly remaining: string;
@@ -40,72 +26,6 @@ export function matchCompletionInput(
     acceptedLength: typed.length,
     remaining: remaining.slice(typed.length),
   };
-}
-
-/** Convert an LSP replacement into strictly insertion-only text. */
-export function normalizeCompletionToInsertion(
-  markdown: string,
-  cursor: number,
-  item: CompletionLike,
-  positionToOffset: (
-    text: string,
-    position: { line: number; character: number },
-  ) => number | undefined,
-  offsetToPosition: (
-    text: string,
-    offset: number,
-  ) => { line: number; character: number },
-): string | undefined {
-  return normalizeCompletionDetails(
-    markdown,
-    cursor,
-    item,
-    positionToOffset,
-    offsetToPosition,
-  )?.text;
-}
-
-export function normalizeCompletionDetails(
-  markdown: string,
-  cursor: number,
-  item: CompletionLike,
-  positionToOffset: (
-    text: string,
-    position: { line: number; character: number },
-  ) => number | undefined,
-  offsetToPosition: (
-    text: string,
-    offset: number,
-  ) => { line: number; character: number },
-): NormalizedCompletion | undefined {
-  if (item.insertTextFormat !== undefined && item.insertTextFormat !== 1)
-    return undefined;
-  if (item.insertText.length > 32_768) return undefined;
-  const range = item.range ?? {
-    start: offsetToPosition(markdown, cursor),
-    end: offsetToPosition(markdown, cursor),
-  };
-  const start = positionToOffset(markdown, range.start);
-  const end = positionToOffset(markdown, range.end);
-  if (
-    start === undefined ||
-    end === undefined ||
-    start > cursor ||
-    cursor > end
-  )
-    return undefined;
-  const prefix = markdown.slice(start, cursor);
-  const suffix = markdown.slice(cursor, end);
-  if (item.insertText.length < prefix.length + suffix.length) return undefined;
-  if (!item.insertText.startsWith(prefix) || !item.insertText.endsWith(suffix))
-    return undefined;
-  const insertion = item.insertText.slice(
-    prefix.length,
-    item.insertText.length - suffix.length,
-  );
-  return insertion.length > 0 && isBoundedMarkdownText(insertion)
-    ? { text: insertion, partialAcceptanceOffset: prefix.length }
-    : undefined;
 }
 
 /**

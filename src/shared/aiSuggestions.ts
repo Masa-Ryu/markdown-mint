@@ -1,20 +1,19 @@
-/** Bounded protocol for host-owned Copilot Language Server requests. */
+/** Bounded host/webview protocol for public VS Code Language Model requests. */
 export const AI_LIMITS = {
   debounceMs: 300,
   deadlineMs: 35_000,
   maxDocumentLength: 4_000_000,
   maxCompletionLength: 32_768,
-  maxCompletionCandidates: 10,
   maxRequestIdLength: 160,
 } as const;
 
 export const AI_AVAILABILITY = [
   "disabled",
   "preparing",
-  "needs-sign-in",
+  "needs-authorization",
   "ready",
   "untrusted",
-  "excluded",
+  "no-model",
   "unavailable",
   "blocked",
 ] as const;
@@ -23,11 +22,11 @@ export const AI_REASONS = [
   "ready",
   "disabled",
   "unsupported",
-  "needs-sign-in",
+  "needs-authorization",
   "untrusted",
   "blocked",
+  "no-model",
   "no-suggestion",
-  "excluded",
   "unsafe-suggestion",
   "invalid-context",
   "failed",
@@ -46,7 +45,7 @@ export interface AiSuggestionIdentity {
   readonly baseVersion: number;
   readonly editorRevision: number;
   readonly settingsGeneration: number;
-  /** UTF-16 offset in the synchronized native Markdown document. */
+  /** UTF-16 offset in the host-owned Markdown snapshot. */
   readonly position: number;
   readonly targetKind: AiTargetKind;
 }
@@ -54,28 +53,14 @@ export interface AiSuggestionRequest extends AiSuggestionIdentity {
   readonly protocolVersion: 1;
   readonly type: "ai-suggestion-request";
   readonly trigger: AiTrigger;
+  /** Only host-issued manual triggers have an invocation id. */
+  readonly invocationId?: string;
 }
 export interface AiSuggestionCancel {
   readonly protocolVersion: 1;
   readonly type: "ai-suggestion-cancel";
   readonly requestId: string;
   readonly sessionId: string;
-}
-export interface AiSuggestionFeedback {
-  readonly protocolVersion: 1;
-  readonly type: "ai-suggestion-feedback";
-  readonly requestId: string;
-  readonly sessionId: string;
-  readonly candidateId: string;
-  readonly action: "shown" | "accepted" | "partially-accepted" | "rejected";
-  readonly rejectionReason?: "unsafe-suggestion" | "cancelled";
-  /** SDK-defined UTF-16 count from the original completion item's start. */
-  readonly acceptedLength?: number;
-}
-export interface AiSuggestionCandidate {
-  readonly candidateId: string;
-  readonly text: string;
-  readonly partialAcceptanceOffset?: number;
 }
 export interface AiSuggestionState {
   readonly protocolVersion: 1;
@@ -86,24 +71,22 @@ export interface AiSuggestionState {
   readonly availability: AiAvailability;
   readonly active?: boolean;
   readonly statusText?: string;
+  readonly modelName?: string;
 }
 export interface AiSuggestionTrigger {
   readonly protocolVersion: 1;
   readonly type: "ai-suggestion-trigger";
   readonly sessionId: string;
   readonly settingsGeneration: number;
+  readonly invocationId: string;
 }
 export interface AiSuggestionResult extends AiSuggestionIdentity {
   readonly protocolVersion: 1;
   readonly type: "ai-suggestion-result";
-  readonly candidateId?: string;
-  readonly partialAcceptanceOffset?: number;
-  readonly candidates?: readonly AiSuggestionCandidate[];
   readonly text: string;
   readonly reason: AiSuggestionReason;
 }
-export type AiWebviewMessage =
-  AiSuggestionRequest | AiSuggestionCancel | AiSuggestionFeedback;
+export type AiWebviewMessage = AiSuggestionRequest | AiSuggestionCancel;
 export type AiHostMessage =
   AiSuggestionState | AiSuggestionTrigger | AiSuggestionResult;
 
@@ -144,30 +127,23 @@ function identity(value: Record<string, unknown>): boolean {
     (value.targetKind === "paragraph" || value.targetKind === "heading")
   );
 }
-function validCompletionText(text: unknown): text is string {
-  return (
-    typeof text === "string" &&
-    text.length <= AI_LIMITS.maxCompletionLength &&
-    !hasCompletionControl(text)
-  );
-}
-
-function hasAsciiControl(value: string): boolean {
-  for (let index = 0; index < value.length; index += 1) {
-    const code = value.charCodeAt(index);
-    if (code < 0x20 || code === 0x7f) return true;
-  }
-  return false;
-}
-
-function hasCompletionControl(value: string): boolean {
+function validCompletionText(value: unknown): value is string {
+  if (typeof value !== "string" || value.length > AI_LIMITS.maxCompletionLength)
+    return false;
   for (let index = 0; index < value.length; index += 1) {
     const code = value.charCodeAt(index);
     if (
       (code < 0x20 && code !== 0x09 && code !== 0x0a && code !== 0x0d) ||
       code === 0x7f
     )
-      return true;
+      return false;
+  }
+  return true;
+}
+function hasAsciiControl(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code < 0x20 || code === 0x7f) return true;
   }
   return false;
 }
@@ -179,33 +155,6 @@ export function isAiWebviewMessage(value: unknown): value is AiWebviewMessage {
       onlyKeys(value, ["protocolVersion", "type", "requestId", "sessionId"]) &&
       id(value.requestId) &&
       id(value.sessionId)
-    );
-  if (value.type === "ai-suggestion-feedback")
-    return (
-      onlyKeys(value, [
-        "protocolVersion",
-        "type",
-        "requestId",
-        "sessionId",
-        "candidateId",
-        "action",
-        "acceptedLength",
-        "rejectionReason",
-      ]) &&
-      id(value.requestId) &&
-      id(value.sessionId) &&
-      id(value.candidateId) &&
-      (value.action === "shown" ||
-        value.action === "accepted" ||
-        (value.action === "rejected" &&
-          (value.rejectionReason === "unsafe-suggestion" ||
-            value.rejectionReason === "cancelled")) ||
-        (value.action === "partially-accepted" &&
-          counter(value.acceptedLength) &&
-          value.acceptedLength > 0)) &&
-      (value.rejectionReason === undefined || value.action === "rejected") &&
-      (value.acceptedLength === undefined ||
-        (counter(value.acceptedLength) && value.acceptedLength > 0))
     );
   return (
     value.type === "ai-suggestion-request" &&
@@ -221,11 +170,16 @@ export function isAiWebviewMessage(value: unknown): value is AiWebviewMessage {
       "position",
       "targetKind",
       "trigger",
+      "invocationId",
     ]) &&
     identity(value) &&
-    (value.trigger === "auto" || value.trigger === "manual")
+    (value.trigger === "auto" || value.trigger === "manual") &&
+    (value.trigger === "manual"
+      ? id(value.invocationId)
+      : value.invocationId === undefined)
   );
 }
+
 export function isAiHostMessage(value: unknown): value is AiHostMessage {
   if (!record(value) || value.protocolVersion !== 1) return false;
   if (value.type === "ai-suggestion-state")
@@ -239,6 +193,7 @@ export function isAiHostMessage(value: unknown): value is AiHostMessage {
         "availability",
         "active",
         "statusText",
+        "modelName",
       ]) &&
       id(value.sessionId) &&
       counter(value.settingsGeneration) &&
@@ -247,6 +202,9 @@ export function isAiHostMessage(value: unknown): value is AiHostMessage {
       (value.statusText === undefined ||
         (typeof value.statusText === "string" &&
           value.statusText.length <= 512)) &&
+      (value.modelName === undefined ||
+        (typeof value.modelName === "string" &&
+          value.modelName.length <= 256)) &&
       AI_AVAILABILITY.includes(value.availability as AiAvailability)
     );
   if (value.type === "ai-suggestion-trigger")
@@ -256,9 +214,11 @@ export function isAiHostMessage(value: unknown): value is AiHostMessage {
         "type",
         "sessionId",
         "settingsGeneration",
+        "invocationId",
       ]) &&
       id(value.sessionId) &&
-      counter(value.settingsGeneration)
+      counter(value.settingsGeneration) &&
+      id(value.invocationId)
     );
   return (
     value.type === "ai-suggestion-result" &&
@@ -273,48 +233,12 @@ export function isAiHostMessage(value: unknown): value is AiHostMessage {
       "settingsGeneration",
       "position",
       "targetKind",
-      "candidateId",
-      "partialAcceptanceOffset",
-      "candidates",
       "text",
       "reason",
     ]) &&
     identity(value) &&
     validCompletionText(value.text) &&
-    (value.candidateId === undefined || id(value.candidateId)) &&
-    (value.partialAcceptanceOffset === undefined ||
-      (counter(value.partialAcceptanceOffset) &&
-        value.partialAcceptanceOffset <= AI_LIMITS.maxCompletionLength)) &&
-    (value.candidates === undefined || validCandidates(value.candidates)) &&
     AI_REASONS.includes(value.reason as AiSuggestionReason) &&
-    (value.reason === "ready"
-      ? value.text.length > 0 &&
-        id(value.candidateId) &&
-        (value.candidates === undefined ||
-          (value.candidates[0]?.candidateId === value.candidateId &&
-            value.candidates[0]?.text === value.text))
-      : value.text === "" &&
-        value.candidateId === undefined &&
-        value.candidates === undefined)
-  );
-}
-
-function validCandidates(value: unknown): value is AiSuggestionCandidate[] {
-  if (
-    !Array.isArray(value) ||
-    value.length < 1 ||
-    value.length > AI_LIMITS.maxCompletionCandidates
-  )
-    return false;
-  return value.every(
-    (candidate) =>
-      record(candidate) &&
-      onlyKeys(candidate, ["candidateId", "text", "partialAcceptanceOffset"]) &&
-      id(candidate.candidateId) &&
-      validCompletionText(candidate.text) &&
-      candidate.text.length > 0 &&
-      (candidate.partialAcceptanceOffset === undefined ||
-        (counter(candidate.partialAcceptanceOffset) &&
-          candidate.partialAcceptanceOffset <= AI_LIMITS.maxCompletionLength)),
+    (value.reason === "ready" ? value.text.length > 0 : value.text === "")
   );
 }

@@ -28,7 +28,7 @@ function pmPositionFor(
   return position;
 }
 
-describe("Copilot Markdown source positions", () => {
+describe("AI suggestion Markdown source positions", () => {
   it("maps UTF-16 positions through Japanese, emoji, emphasis, links, and nested lists", () => {
     const source =
       "日本語🌿 **bold** and [link](https://example.test)\n\n- parent\n  - child";
@@ -108,7 +108,7 @@ describe("Copilot Markdown source positions", () => {
   });
 });
 
-describe("Copilot insertion plans", () => {
+describe("AI suggestion insertion plans", () => {
   it("keeps only the unmatched remainder after a matching typed prefix", () => {
     expect(matchCompletionInput(" wonderful world", " wonder")).toEqual({
       acceptedLength: 7,

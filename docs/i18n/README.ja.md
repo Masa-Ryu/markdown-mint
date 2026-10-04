@@ -55,41 +55,33 @@ Markdown Mint には、実際の Markdown 文書の編集に役立つツール�
 
 ## Copilot による文章の続きの提案
 
-Markdown Mint は GitHub 公式の `@github/copilot-language-server` 1.551.2 を
-`textDocument/inlineCompletion` で使用します。チャットモデルの選択や Mint 独自のチャット
-プロンプト送信は行いません。固定したSDK版のネイティブ実行ファイルを各対象VSIXへ同梱し、
-実行時に `PATH` 上の `node`、`npm`、`npx` は起動に使いません。サーバーと同梱バイナリは
-MIT ライセンスです。各VSIXには対応するupstreamのライセンス本文と第三者通知を含めます。
+Markdown Mint は VS Code 公開の Language Model API を使い、利用可能な GitHub Copilot
+モデルから文章の続きを要求します。エディターでの応答時間を考慮し、取得結果に `mini` family
+があれば優先し、それ以外はモデルID順の安定した方法で選びます。現在のモデル名とIDは
+ステータス項目のホバーで確認できます。AI機能は信頼済みworkspace上のローカルdesktop
+Extension Host（macOS、Windows、Linux）で動作します。対象外環境でも通常の編集は使えます。
+Language Model APIはVS Code 1.91でStableになりました。1.90ではMintの通常編集は引き続き使えますが、
+AI提案はAPI unavailableとして無効になります。
 
-初回の準備が必要なときは、**Markdown Mint: Sign in to GitHub Copilot** を実行します。
-Language Server がデバイス認証コードを返し、ユーザーが確認した後に GitHub の認証を開始します。
-その後、`markdownMint.aiSuggestions.autoTrigger` が有効なら通常の入力中に候補を表示します。
-手動の場合は **Markdown Mint: Suggest Continuation** を実行してください。モデル選択と既定の
-ショートカットはありません。このユーザースコープ設定の初期値は **false** で、ツールバーに
-ON/OFF ボタンはありません。自動提案をOFFにしても手動提案を使えます。認証や利用可否に問題が
-ある場合はステータス表示と手動コマンドが状態を知らせます。VS Code 再起動後にサーバーが保存済み
-認証を再利用できる場合、自動提案は手動コマンドなしで再開します。
+最初のモデル要求とVS Codeの同意は、Command PaletteまたはMintのステータス項目から
+**Markdown Mint: Suggest Continuation** を実行して開始します。その後、
+`markdownMint.aiSuggestions.autoTrigger` が有効なら通常入力後に候補を表示します。設定の初期値は
+**false** で、ツールバーにON/OFFボタンはありません。自動提案がOFFでも手動提案を使えます。
+公開Language Model APIではモデル取得をユーザー操作から開始する必要があります。Extension Host
+再起動後にモデルと保存済みアクセスを非対話で再取得する公開手段は確認できていないため、現在の
+実装では再起動後に同じコマンドが再度必要です。再起動後の自動復元を確認済みとはしていません。
+要求は **Copilot の利用枠を消費する場合があります**。
 
-通常の本文・見出し・リスト文章の文中と文末、および文脈のある空段落に候補を表示できます。
-段落内にリンクがあっても周囲の文章は対象です。リンク先URL、インラインコード内、表、コードブロック、
-Mermaid、数式、raw HTML 編集領域、範囲選択中、Source、Preview、モーダル入力欄は対象外です。
-候補は一時表示で、**Tab** で採用、**Esc** で破棄します。元のprefixとsuffixの両方を維持できる場合に限り、
-置換範囲を挿入専用候補へ変換します。候補表示だけではMarkdown、dirty/復旧状態、クリップボード、
-プレビュー/出力、Undo履歴は変化しません。
+候補対象は本文・見出し・リストの文中と文末、および文脈のある空段落です。hostはアクティブな
+未保存Markdownからカーソル周辺の段落、見出し、近くの文章だけを上限付きで選びます。他ファイル、
+ターミナル、クリップボード、Git差分は送りません。リンク先URL、インラインコード内、表、コード
+ブロック、Mermaid、数式、raw HTML編集領域、範囲選択中、Source、Preview、モーダル入力欄は対象外です。
+任意のプロンプトにもCopilotのcontent exclusionが同じように適用される、またはキャンセルすれば利用枠を
+消費しない、とは主張しません。Mintは本文や候補をログ・永続化しません。
 
-Mint は現在の補完対象である未保存Markdown全文を、本来のファイルURIとversionでローカルの
-Language Serverへ同期します。同じ文書内のコード、表、補完対象外の内容もこの同期に含まれます。
-拡張が同期する文書はアクティブなRich Editorだけで、他文書、ターミナル、クリップボード、Git差分を
-独自に走査・同期しません。一方、Language Serverにはworkspace folderを渡すため、サーバー独自の
-リポジトリ文脈利用の全範囲、サービス側のcontent exclusion、サービス側のデータ処理をMintが個別に
-検証したとは主張しません。組織ポリシーやサービス側の除外を迂回しません。SDKの任意テレメトリは
-OFFに設定しますが、これはサービス運用上のデータ処理が一切ないという意味ではありません。
-要求は **Copilot の利用枠を消費する場合があります**。Mintは文書本文や候補内容をログ・永続化しません。
-
-ネイティブサーバーはmacOS/Linux/Windowsのx64/arm64向けVSIXに準備します。現在AIを有効にするのは
-信頼済みworkspace上のdesktop macOS arm64 Extension Hostのみです。Remote、Web、その他の未確認環境では
-通常のMarkdown編集を維持し、AI機能を無効にします。実Copilot、Node/npmがPATHにない環境、日本語を含む
-インストール先、再起動後の認証復元、プロセス終了については別途受入確認が必要です。
+候補は一時表示で、**Tab** で採用、**Esc** で破棄します。元の文章と構造が保たれることをsource mappingで
+確認できた挿入だけ表示します。候補表示だけではMarkdown、dirty/復旧状態、クリップボード、プレビュー/出力、
+Undo履歴は変化しません。採用は通常の編集transactionを通り、native Undo/Redo境界を維持します。
 
 ## Markdown は Markdown のまま
 

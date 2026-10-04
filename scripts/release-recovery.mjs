@@ -2,14 +2,6 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const sha256Pattern = /^[0-9a-f]{64}$/i;
-const releaseTargets = [
-  "darwin-arm64",
-  "darwin-x64",
-  "linux-arm64",
-  "linux-x64",
-  "win32-arm64",
-  "win32-x64",
-];
 const releaseLookupQuery = `query ReleaseForRecovery($owner: String!, $name: String!, $tag: String!) {
   repository(owner: $owner, name: $name) {
     release(tagName: $tag) {
@@ -312,30 +304,15 @@ export function planReleaseRecovery(state) {
 
 function normalizeArtifacts(state, version) {
   const artifacts = state.artifacts;
-  if (!Array.isArray(artifacts) || artifacts.length !== releaseTargets.length)
+  if (!Array.isArray(artifacts) || artifacts.length !== 1)
     throw new Error(
-      "The release artifact manifest must include every supported platform",
+      "The release artifact manifest must contain one universal VSIX",
     );
-  const seenTargets = new Set();
   const normalized = artifacts.map((artifact) => {
     if (!artifact || typeof artifact !== "object" || Array.isArray(artifact))
       throw new Error("The release artifact manifest is invalid");
-    const {
-      target,
-      assetName,
-      expectedSha256,
-      actualAssetSha256 = null,
-    } = artifact;
-    if (
-      typeof target !== "string" ||
-      !releaseTargets.includes(target) ||
-      seenTargets.has(target)
-    )
-      throw new Error(
-        `Unexpected or duplicate release target: ${String(target)}`,
-      );
-    seenTargets.add(target);
-    const expectedName = `markdown-mint-${version}-${target}.vsix`;
+    const { assetName, expectedSha256, actualAssetSha256 = null } = artifact;
+    const expectedName = `markdown-mint-${version}.vsix`;
     if (assetName !== expectedName)
       throw new Error(`Unexpected release asset name: ${String(assetName)}`);
     if (
@@ -349,17 +326,8 @@ function normalizeArtifacts(state, version) {
         !sha256Pattern.test(actualAssetSha256))
     )
       throw new Error(`The ${assetName} SHA-256 is invalid`);
-    return {
-      target,
-      assetName,
-      expectedSha256,
-      actualAssetSha256,
-    };
+    return { assetName, expectedSha256, actualAssetSha256 };
   });
-  if (releaseTargets.some((target) => !seenTargets.has(target)))
-    throw new Error(
-      "The release artifact manifest must include every supported platform",
-    );
   return normalized;
 }
 
