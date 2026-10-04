@@ -639,22 +639,30 @@ Preview. HTML export passed with zero CSP violations; PDF export produced
 input-reconciliation costs; it excludes model and network latency. Packaging
 passed for a 76-file universal VSIX and the bundled formatter.
 
-The package measurements use Node 24.5.0 on macOS arm64 and the checkout's
-installed dependencies. The exact locally tracked `origin/main` base was
-`397597002f17eea47b52115f5325f4da369c3c9c` (0.8.0); its package-size figures
-are the recorded verified base measurement:
+Both package measurements were made on macOS arm64 with Node 24.5.0, npm
+11.5.1, and the locked dependency graph from this checkout. The exact fetched
+`origin/main` base was `397597002f17eea47b52115f5325f4da369c3c9c` (0.8.0).
+For the base comparison, that commit was extracted with `git archive` into a
+fresh temporary directory, given the same installed dependencies (its lockfile
+differs only in the root package version), and packaged with its own
+`npm run package` script. The PR artifact was built with the PR's `npm run package` script:
 
 | Build                                | Files | Compressed bytes | Uncompressed bytes |
 | ------------------------------------ | ----: | ---------------: | -----------------: |
-| `origin/main` 0.8.0                  |    76 |        4,640,754 |         13,909,932 |
+| `origin/main` 0.8.0                  |    76 |        4,640,744 |         13,908,612 |
 | This PR 0.9.0 universal VSIX         |    76 |        4,660,801 |         13,976,935 |
 | Prior PR 0.9.0 darwin-arm64 SDK VSIX |    78 |       88,717,931 |        136,567,747 |
 
 The previous SDK-package number is the recorded earlier PR validation result,
 not a fresh rebuild in this run. Relative to that recorded build, the universal
 package is 94.75% smaller compressed; the removed native server alone was
-122,589,013 bytes uncompressed. The current package is 20,047 compressed bytes
-(0.43%) larger than the recorded 0.8.0 main package. The AI benchmark's short
+122,589,013 bytes uncompressed. The current package is 20,057 compressed bytes
+(0.43%) larger and 68,323 uncompressed bytes larger than the freshly rebuilt
+0.8.0 main package. The verified base VSIX SHA-256 is
+`99df0664ae5ce5967c385bc69ccadc9bbc9fa1e5cac53bd0ea20a8f950bc4df7`; the
+verified PR VSIX SHA-256 is
+`d0dcb8a0792798c3557c7ca2cae9125aa0ace1f68d6b1e00ed2ab3f64b0e6cb8`. The AI
+benchmark's short
 English case measured p50/p95 of 0.502/0.765 ms, and the short Japanese case
 0.527/0.592 ms for local mapping, context, safety planning, and input
 reconciliation only. The 5,000-prose-block case measured 30.36/35.65 ms and
