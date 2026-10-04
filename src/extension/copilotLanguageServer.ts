@@ -13,6 +13,7 @@ export interface CopilotServerStatus {
   readonly busy: boolean;
   readonly message: string;
   readonly actionTitle?: string;
+  readonly documentUri?: string;
 }
 export interface CopilotWorkspaceFolder {
   readonly name: string;
@@ -21,7 +22,10 @@ export interface CopilotWorkspaceFolder {
 export interface CopilotLanguageServerOptions {
   readonly binaryPath: string;
   readonly extensionVersion: string;
-  readonly workspaceFolder: () => CopilotWorkspaceFolder | undefined;
+  readonly workspaceFolder: (
+    documentUri?: string,
+  ) => CopilotWorkspaceFolder | undefined;
+  readonly workspaceFolders?: () => readonly CopilotWorkspaceFolder[];
   readonly proxy: () => { proxy: string; strictSSL: boolean };
   readonly onStatus?: (status: CopilotServerStatus) => void;
   readonly onMessage?: (
@@ -82,6 +86,17 @@ const MAX_STATUS_TEXT = 512;
 const MAX_SERVER_MESSAGE = 1_024;
 const SERVER_REQUEST_TIMEOUT_MS = 30_000;
 const EXECUTABLE_NAME = "copilot-language-server";
+const FAILED_PROCESS_TERM_GRACE_MS = 500;
+const DISPOSE_TERM_GRACE_MS = 500;
+
+interface ChildListeners {
+  readonly generation: number;
+  readonly onData: (chunk: Buffer | string) => void;
+  readonly onStderr: () => void;
+  readonly onError: (error: Error) => void;
+  readonly onStreamError: (error: Error) => void;
+  readonly onExit: (code: number | null, signal: NodeJS.Signals | null) => void;
+}
 
 /**
  * Owns one official Copilot Language Server process and its stdio LSP
@@ -90,13 +105,26 @@ const EXECUTABLE_NAME = "copilot-language-server";
  */
 export class CopilotLanguageServer implements vscode.Disposable {
   private child: ChildProcessWithoutNullStreams | undefined;
+  private generation = 0;
+  private readonly ownedChildren = new Set<ChildProcessWithoutNullStreams>();
+  private readonly childListeners = new Map<
+    ChildProcessWithoutNullStreams,
+    ChildListeners
+  >();
+  private readonly cleanupPromises = new Map<
+    ChildProcessWithoutNullStreams,
+    Promise<void>
+  >();
   private buffer = Buffer.alloc(0);
   private nextRequestId = 1;
   private readonly pending = new Map<number, PendingRequest>();
   private readonly documents = new Map<string, ServerDocument>();
   private focusedUri: string | undefined;
   private startPromise: Promise<void> | undefined;
+  private initialized = false;
+  private statusRevision = 0;
   private disposed = false;
+  private disposePromise: Promise<void> | undefined;
   private status: CopilotServerStatus = {
     kind: "Warning",
     busy: false,
@@ -112,20 +140,24 @@ export class CopilotLanguageServer implements vscode.Disposable {
   public get isRunning(): boolean {
     return this.child !== undefined && !this.disposed;
   }
+  public get focusedDocumentUri(): string | undefined {
+    return this.focusedUri;
+  }
 
-  public async start(): Promise<void> {
+  public async start(documentUri?: string): Promise<void> {
     if (this.disposed) throw new Error("Copilot Language Server is disposed.");
-    if (this.child) return;
+    if (this.initialized && this.child) return;
     if (this.startPromise) return this.startPromise;
-    this.startPromise = this.startInternal();
+    const starting = this.startInternal(documentUri);
+    this.startPromise = starting;
     try {
-      await this.startPromise;
+      await starting;
     } finally {
-      this.startPromise = undefined;
+      if (this.startPromise === starting) this.startPromise = undefined;
     }
   }
 
-  private async startInternal(): Promise<void> {
+  private async startInternal(documentUri?: string): Promise<void> {
     const binaryPath = this.options.binaryPath;
     if (
       !binaryPath ||
@@ -141,7 +173,21 @@ export class CopilotLanguageServer implements vscode.Disposable {
       busy: true,
       message: "Starting Copilot Language Server…",
     });
-    const folder = this.options.workspaceFolder();
+    const statusRevision = this.statusRevision;
+    const configuredFolders = this.options.workspaceFolders?.() ?? [];
+    const folder =
+      this.options.workspaceFolder(documentUri) ??
+      configuredFolders
+        .filter((candidate) =>
+          uriBelongsToWorkspace(documentUri, candidate.uri),
+        )
+        .sort((left, right) => right.uri.length - left.uri.length)[0] ??
+      (configuredFolders.length === 1 ? configuredFolders[0] : undefined);
+    const workspaceFolders = configuredFolders.length
+      ? configuredFolders
+      : folder
+        ? [folder]
+        : [];
     const cwd = folder?.uri.startsWith("file:")
       ? vscode.Uri.parse(folder.uri).fsPath
       : dirname(binaryPath);
@@ -153,24 +199,38 @@ export class CopilotLanguageServer implements vscode.Disposable {
       windowsHide: true,
     });
     this.child = child;
-    child.stdout.on("data", (chunk: Buffer | string) => this.receive(chunk));
-    // Drain stderr to avoid blocking the server. Copilot logs are deliberately
-    // discarded rather than retained in an OutputChannel or a file.
-    child.stderr.on("data", () => undefined);
-    child.on("error", (error) => this.fail(error));
-    child.on("exit", (code, signal) => {
-      const error = new Error(
-        `Copilot Language Server exited (${signal ?? code ?? "unknown"}).`,
-      );
-      this.fail(error);
-    });
+    const generation = ++this.generation;
+    this.ownedChildren.add(child);
+    this.buffer = Buffer.alloc(0);
+    const listeners: ChildListeners = {
+      generation,
+      onData: (chunk) => {
+        if (this.isCurrentChild(child, generation))
+          this.receive(chunk, child, generation);
+      },
+      // Drain stderr to avoid blocking the server. Copilot logs are deliberately
+      // discarded rather than retained in an OutputChannel or a file.
+      onStderr: () => undefined,
+      onError: (error) => this.fail(error, child, generation),
+      onStreamError: (error) => this.fail(error, child, generation),
+      onExit: (code, signal) =>
+        this.handleChildExit(child, generation, code, signal),
+    };
+    this.childListeners.set(child, listeners);
+    child.stdout.on("data", listeners.onData);
+    child.stderr.on("data", listeners.onStderr);
+    child.stdin.on("error", listeners.onStreamError);
+    child.stdout.on("error", listeners.onStreamError);
+    child.stderr.on("error", listeners.onStreamError);
+    child.on("error", listeners.onError);
+    child.on("exit", listeners.onExit);
 
     try {
-      const workspaceFolder = folder ?? undefined;
       const initialized = await this.request("initialize", {
         processId: process.pid,
-        rootUri: workspaceFolder?.uri ?? null,
-        workspaceFolders: workspaceFolder ? [workspaceFolder] : null,
+        rootUri:
+          workspaceFolders.length === 1 ? workspaceFolders[0]?.uri : null,
+        workspaceFolders: workspaceFolders.length ? workspaceFolders : null,
         capabilities: {
           general: { positionEncodings: ["utf-16"] },
           window: { showDocument: { support: true }, workDoneProgress: true },
@@ -201,6 +261,16 @@ export class CopilotLanguageServer implements vscode.Disposable {
         throw new Error(
           "Copilot Language Server returned invalid initialization data.",
         );
+      const capabilities = isRecord(initialized.capabilities)
+        ? initialized.capabilities
+        : {};
+      if (
+        capabilities.positionEncoding !== undefined &&
+        capabilities.positionEncoding !== "utf-16"
+      )
+        throw new Error(
+          "Copilot Language Server selected an unsupported position encoding.",
+        );
 
       // LSP requires initialized to be the next client message after initialize.
       this.notify("initialized", {});
@@ -214,18 +284,21 @@ export class CopilotLanguageServer implements vscode.Disposable {
           },
         },
       });
-      this.setStatus({
-        kind: "Warning",
-        busy: true,
-        message: "Checking Copilot sign-in status…",
-      });
+      if (this.statusRevision === statusRevision)
+        this.setStatus({
+          kind: "Warning",
+          busy: true,
+          message: "Checking Copilot sign-in status…",
+        });
+      this.initialized = true;
     } catch (error) {
       this.fail(
         error instanceof Error
           ? error
           : new Error("Copilot Language Server initialization failed."),
+        child,
+        generation,
       );
-      child.kill();
       throw error;
     }
   }
@@ -252,7 +325,7 @@ export class CopilotLanguageServer implements vscode.Disposable {
     text: string,
     languageId = "markdown",
   ): Promise<void> {
-    await this.start();
+    await this.start(uri);
     if (
       !isSafeDocumentUri(uri) ||
       !Number.isSafeInteger(version) ||
@@ -284,7 +357,7 @@ export class CopilotLanguageServer implements vscode.Disposable {
   }
 
   public async focusDocument(uri: string | undefined): Promise<void> {
-    await this.start();
+    await this.start(uri);
     if (uri !== undefined && !this.documents.has(uri))
       throw new Error("The focused Copilot document has not been opened.");
     if (this.focusedUri === uri) return;
@@ -437,11 +510,17 @@ export class CopilotLanguageServer implements vscode.Disposable {
     );
   }
 
-  private receive(chunk: Buffer | string): void {
+  private receive(
+    chunk: Buffer | string,
+    child: ChildProcessWithoutNullStreams,
+    generation: number,
+  ): void {
     const data = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk, "utf8");
     if (this.buffer.length + data.length > MAX_RPC_MESSAGE_BYTES + 8_192) {
       this.fail(
         new Error("Copilot Language Server message buffer exceeded its limit."),
+        child,
+        generation,
       );
       return;
     }
@@ -461,6 +540,8 @@ export class CopilotLanguageServer implements vscode.Disposable {
       ) {
         this.fail(
           new Error("Copilot Language Server sent an invalid message frame."),
+          child,
+          generation,
         );
         return;
       }
@@ -474,20 +555,33 @@ export class CopilotLanguageServer implements vscode.Disposable {
         if (!isRecord(parsed)) throw new Error("not an object");
         message = parsed;
       } catch {
-        this.fail(new Error("Copilot Language Server sent invalid JSON."));
+        this.fail(
+          new Error("Copilot Language Server sent invalid JSON."),
+          child,
+          generation,
+        );
         return;
       }
-      void this.handleMessage(message).catch((error: unknown) => {
-        this.fail(
-          error instanceof Error
-            ? error
-            : new Error("Copilot Language Server message handling failed."),
-        );
-      });
+      void this.handleMessage(message, child, generation).catch(
+        (error: unknown) => {
+          this.fail(
+            error instanceof Error
+              ? error
+              : new Error("Copilot Language Server message handling failed."),
+            child,
+            generation,
+          );
+        },
+      );
     }
   }
 
-  private async handleMessage(message: RpcMessage): Promise<void> {
+  private async handleMessage(
+    message: RpcMessage,
+    child: ChildProcessWithoutNullStreams,
+    generation: number,
+  ): Promise<void> {
+    if (!this.isCurrentChild(child, generation)) return;
     if (typeof message.id === "number" && !message.method) {
       const pending = this.pending.get(message.id);
       if (!pending) return;
@@ -503,7 +597,7 @@ export class CopilotLanguageServer implements vscode.Disposable {
     }
     if (typeof message.method !== "string") return;
     if (message.id !== undefined) {
-      await this.handleServerRequest(message);
+      await this.handleServerRequest(message, child, generation);
       return;
     }
     const params = isRecord(message.params) ? message.params : {};
@@ -517,6 +611,7 @@ export class CopilotLanguageServer implements vscode.Disposable {
         kind,
         busy: params.busy === true,
         message: boundedString(params.message, MAX_STATUS_TEXT) ?? "",
+        ...(this.focusedUri ? { documentUri: this.focusedUri } : {}),
         ...(isRecord(params.command) && typeof params.command.title === "string"
           ? { actionTitle: params.command.title.slice(0, 128) }
           : {}),
@@ -529,7 +624,11 @@ export class CopilotLanguageServer implements vscode.Disposable {
     // window/logMessage and unknown notifications are intentionally discarded.
   }
 
-  private async handleServerRequest(message: RpcMessage): Promise<void> {
+  private async handleServerRequest(
+    message: RpcMessage,
+    child: ChildProcessWithoutNullStreams,
+    generation: number,
+  ): Promise<void> {
     if (typeof message.id !== "number" || typeof message.method !== "string")
       return;
     let result: unknown = null;
@@ -609,7 +708,7 @@ export class CopilotLanguageServer implements vscode.Disposable {
     };
     if (error) response.error = error;
     else response.result = result;
-    this.write(response);
+    if (this.isCurrentChild(child, generation)) this.write(response);
   }
 
   private configurationFor(item: unknown): unknown {
@@ -621,9 +720,14 @@ export class CopilotLanguageServer implements vscode.Disposable {
     return null;
   }
 
-  private fail(error: Error): void {
-    if (!this.child) return;
+  private fail(
+    error: Error,
+    child: ChildProcessWithoutNullStreams | undefined = this.child,
+    generation = this.generation,
+  ): void {
+    if (!child || !this.isCurrentChild(child, generation)) return;
     this.child = undefined;
+    this.initialized = false;
     this.documents.clear();
     this.focusedUri = undefined;
     this.buffer = Buffer.alloc(0);
@@ -634,42 +738,177 @@ export class CopilotLanguageServer implements vscode.Disposable {
     });
     for (const pending of this.pending.values()) pending.reject(error);
     this.pending.clear();
+    this.detachDataListeners(child);
+    if (child.exitCode === null) {
+      const cleanup = this.terminateFailedChild(child);
+      this.cleanupPromises.set(child, cleanup);
+      void cleanup.finally(() => this.cleanupPromises.delete(child));
+    } else {
+      this.cleanupChild(child);
+    }
+  }
+
+  private isCurrentChild(
+    child: ChildProcessWithoutNullStreams,
+    generation: number,
+  ): boolean {
+    return this.child === child && this.generation === generation;
+  }
+
+  private detachDataListeners(child: ChildProcessWithoutNullStreams): void {
+    const listeners = this.childListeners.get(child);
+    if (!listeners) return;
+    child.stdout.removeListener("data", listeners.onData);
+    child.stderr.removeListener("data", listeners.onStderr);
+  }
+
+  private cleanupChild(child: ChildProcessWithoutNullStreams): void {
+    const listeners = this.childListeners.get(child);
+    if (listeners) {
+      child.stdout.removeListener("data", listeners.onData);
+      child.stderr.removeListener("data", listeners.onStderr);
+      child.stdin.removeListener("error", listeners.onStreamError);
+      child.stdout.removeListener("error", listeners.onStreamError);
+      child.stderr.removeListener("error", listeners.onStreamError);
+      child.removeListener("error", listeners.onError);
+      child.removeListener("exit", listeners.onExit);
+      this.childListeners.delete(child);
+    }
+    this.ownedChildren.delete(child);
+  }
+
+  private handleChildExit(
+    child: ChildProcessWithoutNullStreams,
+    generation: number,
+    code: number | null,
+    signal: NodeJS.Signals | null,
+  ): void {
+    if (this.isCurrentChild(child, generation)) {
+      if (this.disposed) {
+        this.child = undefined;
+        this.initialized = false;
+        this.documents.clear();
+        this.focusedUri = undefined;
+        for (const pending of this.pending.values())
+          pending.reject(new Error("Copilot Language Server was stopped."));
+        this.pending.clear();
+        this.setStatus({
+          kind: "Warning",
+          busy: false,
+          message: "Copilot Language Server is stopped.",
+        });
+      } else {
+        this.fail(
+          new Error(
+            `Copilot Language Server exited (${signal ?? code ?? "unknown"}).`,
+          ),
+          child,
+          generation,
+        );
+      }
+    }
+    this.cleanupChild(child);
+  }
+
+  private async terminateFailedChild(
+    child: ChildProcessWithoutNullStreams,
+  ): Promise<void> {
+    try {
+      child.stdin.end();
+    } catch {
+      // The transport may already be closed.
+    }
+    if (child.exitCode === null)
+      await waitForExit(child, FAILED_PROCESS_TERM_GRACE_MS);
+    if (child.exitCode === null) {
+      try {
+        child.kill("SIGTERM");
+      } catch {
+        // Continue to SIGKILL after the grace period.
+      }
+      await waitForExit(child, FAILED_PROCESS_TERM_GRACE_MS);
+    }
+    if (child.exitCode === null) {
+      try {
+        child.kill("SIGKILL");
+      } catch {
+        // The process may have exited concurrently.
+      }
+      await waitForExit(child);
+    }
+    if (child.exitCode !== null) this.cleanupChild(child);
   }
 
   private setStatus(status: CopilotServerStatus): void {
+    this.statusRevision += 1;
     this.status = status;
     this.options.onStatus?.(status);
   }
 
-  public async disposeAsync(): Promise<void> {
-    if (this.disposed) return;
+  public disposeAsync(): Promise<void> {
+    if (this.disposePromise) return this.disposePromise;
     this.disposed = true;
+    this.disposePromise = this.disposeInternal();
+    return this.disposePromise;
+  }
+
+  private async disposeInternal(): Promise<void> {
     const child = this.child;
-    if (!child) return;
-    this.child = undefined;
     this.documents.clear();
     this.focusedUri = undefined;
     for (const pending of this.pending.values())
       pending.reject(new Error("Copilot Language Server was stopped."));
     this.pending.clear();
-    try {
-      await this.requestBeforeDispose(child, "shutdown", null);
-    } catch {
-      // exit below still releases the process if shutdown was not acknowledged.
+    const cleanups = [...this.cleanupPromises.values()];
+    if (child) {
+      try {
+        await this.requestBeforeDispose(child, "shutdown", null);
+      } catch {
+        // Exit and signal escalation below still release the process.
+      }
+      try {
+        child.stdin.write(encodeMessage({ jsonrpc: "2.0", method: "exit" }));
+        child.stdin.end();
+      } catch {
+        // The child may have closed its input while shutdown was in flight.
+      }
+      await this.escalateDispose(child);
     }
-    try {
-      child.stdin.write(encodeMessage({ jsonrpc: "2.0", method: "exit" }));
-      child.stdin.end();
-    } catch {
-      // The child may have closed its input while shutdown was in flight.
+    await Promise.all(cleanups);
+    for (const ownedChild of [...this.ownedChildren]) {
+      if (ownedChild === child) continue;
+      const cleanup = this.cleanupPromises.get(ownedChild);
+      if (cleanup) await cleanup;
+      else await this.terminateFailedChild(ownedChild);
     }
-    if (child.exitCode === null) await waitForExit(child, 1_000);
-    if (child.exitCode === null && !child.killed) child.kill();
+    if (child && child.exitCode !== null) this.cleanupChild(child);
     this.setStatus({
       kind: "Warning",
       busy: false,
       message: "Copilot Language Server is stopped.",
     });
+  }
+
+  private async escalateDispose(
+    child: ChildProcessWithoutNullStreams,
+  ): Promise<void> {
+    if (child.exitCode === null) await waitForExit(child, 1_000);
+    if (child.exitCode === null) {
+      try {
+        child.kill("SIGTERM");
+      } catch {
+        // Continue to SIGKILL after the grace period.
+      }
+      await waitForExit(child, DISPOSE_TERM_GRACE_MS);
+    }
+    if (child.exitCode === null) {
+      try {
+        child.kill("SIGKILL");
+      } catch {
+        // The process may have exited concurrently.
+      }
+      await waitForExit(child);
+    }
   }
 
   private requestBeforeDispose(
@@ -704,16 +943,17 @@ export class CopilotLanguageServer implements vscode.Disposable {
 
 function waitForExit(
   child: ChildProcessWithoutNullStreams,
-  timeoutMs: number,
+  timeoutMs?: number,
 ): Promise<void> {
   if (child.exitCode !== null) return Promise.resolve();
   return new Promise((resolve) => {
     const finish = () => {
-      clearTimeout(timer);
+      if (timer !== undefined) clearTimeout(timer);
       child.removeListener("exit", finish);
       resolve();
     };
-    const timer = setTimeout(finish, timeoutMs);
+    const timer =
+      timeoutMs === undefined ? undefined : setTimeout(finish, timeoutMs);
     child.once("exit", finish);
   });
 }
@@ -751,6 +991,17 @@ function languageServerEnvironment(): NodeJS.ProcessEnv {
     if (value !== undefined) safe[name] = value;
   }
   return safe;
+}
+
+function uriBelongsToWorkspace(
+  documentUri: string | undefined,
+  workspaceUri: string,
+): boolean {
+  if (!documentUri) return false;
+  const normalized = workspaceUri.endsWith("/")
+    ? workspaceUri
+    : `${workspaceUri}/`;
+  return documentUri === workspaceUri || documentUri.startsWith(normalized);
 }
 
 function minimalTextChange(

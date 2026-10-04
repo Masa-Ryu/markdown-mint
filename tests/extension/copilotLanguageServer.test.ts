@@ -10,6 +10,7 @@ import {
   CopilotLanguageServer,
   lspPositionToOffset,
   offsetToLspPosition,
+  type CopilotWorkspaceFolder,
   type CopilotLanguageServerOptions,
 } from "../../src/extension/copilotLanguageServer";
 
@@ -33,6 +34,10 @@ class FakeChild extends EventEmitter {
   public readonly stderr = new PassThrough();
   public exitCode: number | null = null;
   public killed = false;
+  public ignoreShutdownResponse = false;
+  public ignoreExitNotification = false;
+  public ignoreSigterm = false;
+  public readonly killSignals: Array<NodeJS.Signals | undefined> = [];
   public readonly requests: Array<Record<string, any>> = [];
   private outgoing = Buffer.alloc(0);
 
@@ -40,9 +45,11 @@ class FakeChild extends EventEmitter {
     super();
     this.stdin.on("data", (chunk: Buffer) => this.read(chunk));
   }
-  public kill(): boolean {
+  public kill(signal?: NodeJS.Signals): boolean {
     this.killed = true;
-    this.exitCode = 0;
+    this.killSignals.push(signal);
+    if (signal === "SIGTERM" && this.ignoreSigterm) return true;
+    this.exitCode = signal === "SIGKILL" ? 137 : 0;
     this.emit("exit", 0, null);
     return true;
   }
@@ -65,9 +72,9 @@ class FakeChild extends EventEmitter {
       ) as Record<string, any>;
       this.requests.push(message);
       this.outgoing = this.outgoing.subarray(end + 4 + length);
-      if (message.method === "shutdown")
+      if (message.method === "shutdown" && !this.ignoreShutdownResponse)
         setTimeout(() => this.respond(message.id, null), 0);
-      if (message.method === "exit")
+      if (message.method === "exit" && !this.ignoreExitNotification)
         setTimeout(() => this.emit("exit", 0, null), 0);
     }
   }
@@ -101,9 +108,20 @@ function cancellationToken() {
   };
 }
 
-async function setup() {
+async function setup(
+  workspaceFolders: readonly CopilotWorkspaceFolder[] = [
+    { name: "project", uri: "file:///workspace" },
+  ],
+) {
   const child = new FakeChild();
-  const spawnProcess = vi.fn(() => child);
+  const children = [child];
+  let spawnCount = 0;
+  const spawnProcess = vi.fn(() => {
+    const next = children[spawnCount];
+    if (!next) throw new Error("No fake child was queued for spawn.");
+    spawnCount += 1;
+    return next;
+  });
   const temporaryDirectory = await mkdtemp(
     join(tmpdir(), "copilot-language-server-test-"),
   );
@@ -117,13 +135,26 @@ async function setup() {
   const options: CopilotLanguageServerOptions = {
     binaryPath,
     extensionVersion: "0.9.0",
-    workspaceFolder: () => ({ name: "project", uri: "file:///workspace" }),
+    workspaceFolder: (documentUri) =>
+      workspaceFolders.find((folder) =>
+        documentUri?.startsWith(`${folder.uri}/`),
+      ) ?? (workspaceFolders.length === 1 ? workspaceFolders[0] : undefined),
+    workspaceFolders: () => workspaceFolders,
     proxy: () => ({ proxy: "", strictSSL: true }),
     onMessage: async (_type, _message, actions) => actions?.[0],
     spawnProcess: spawnProcess as unknown as typeof SpawnProcess,
   };
   const server = new CopilotLanguageServer(options);
-  return { server, child, spawnProcess };
+  return {
+    server,
+    child,
+    spawnProcess,
+    createNextChild: () => {
+      const next = new FakeChild();
+      children.push(next);
+      return next;
+    },
+  };
 }
 
 async function startServer(
@@ -151,6 +182,148 @@ describe("Copilot Language Server transport", () => {
         .splice(0)
         .map((directory) => rm(directory, { recursive: true, force: true })),
     );
+  });
+
+  it("makes concurrent start and document/sign-in operations wait for initialized", async () => {
+    const { server, child } = await setup();
+    const first = server.start();
+    await vi.waitFor(() =>
+      expect(
+        child.requests.find((message) => message.method === "initialize"),
+      ).toBeDefined(),
+    );
+    let secondSettled = false;
+    const second = server.start().then(() => {
+      secondSettled = true;
+    });
+    const documentOpen = server.synchronizeDocument(
+      "file:///workspace/pending.md",
+      1,
+      "Pending",
+    );
+    const signIn = server.signInFromUserAction(async () => false);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(secondSettled).toBe(false);
+    expect(
+      child.requests.some((message) =>
+        ["textDocument/didOpen", "signIn"].includes(message.method),
+      ),
+    ).toBe(false);
+
+    const initialize = child.requests.find(
+      (message) => message.method === "initialize",
+    )!;
+    child.respond(initialize.id, {
+      capabilities: { positionEncoding: "utf-16" },
+    });
+    await Promise.all([first, second, documentOpen]);
+    await vi.waitFor(() =>
+      expect(
+        child.requests.find((message) => message.method === "signIn"),
+      ).toBeDefined(),
+    );
+    const signInRequest = child.requests.find(
+      (message) => message.method === "signIn",
+    )!;
+    child.respond(signInRequest.id, {
+      userCode: "ABCD-EFGH",
+      command: { command: "github.copilot.finishDeviceFlow", arguments: [] },
+    });
+    await expect(signIn).resolves.toBe(false);
+
+    const methods = child.requests.map((message) => message.method);
+    expect(methods.indexOf("initialized")).toBeLessThan(
+      methods.indexOf("textDocument/didOpen"),
+    );
+    expect(methods.indexOf("workspace/didChangeConfiguration")).toBeLessThan(
+      methods.indexOf("textDocument/didOpen"),
+    );
+    await server.disposeAsync();
+  });
+
+  it("rejects an initialize response that selects an unsupported position encoding", async () => {
+    const { server, child } = await setup();
+    const starting = server.start();
+    const result = expect(starting).rejects.toThrow(/position encoding/i);
+    try {
+      await vi.waitFor(() =>
+        expect(
+          child.requests.find((message) => message.method === "initialize"),
+        ).toBeDefined(),
+      );
+      const initialize = child.requests.find(
+        (message) => message.method === "initialize",
+      )!;
+      child.respond(initialize.id, {
+        capabilities: { positionEncoding: "utf-8" },
+      });
+      await result;
+    } finally {
+      await server.disposeAsync();
+    }
+  });
+
+  it("does not overwrite a Normal status delivered with the initialize response", async () => {
+    const { server, child } = await setup();
+    const starting = server.start();
+    await vi.waitFor(() =>
+      expect(
+        child.requests.find((message) => message.method === "initialize"),
+      ).toBeDefined(),
+    );
+    const initialize = child.requests.find(
+      (message) => message.method === "initialize",
+    )!;
+    child.stdout.write(
+      Buffer.concat([
+        frame({
+          jsonrpc: "2.0",
+          id: initialize.id,
+          result: { capabilities: { positionEncoding: "utf-16" } },
+        }),
+        frame({
+          jsonrpc: "2.0",
+          method: "didChangeStatus",
+          params: { kind: "Normal", busy: false, message: "Ready" },
+        }),
+      ]),
+    );
+    await starting;
+
+    expect(server.currentStatus).toMatchObject({ kind: "Normal", busy: false });
+    await server.disposeAsync();
+  });
+
+  it("sends all workspace folders and starts from the target document's folder", async () => {
+    const folders = [
+      { name: "first", uri: "file:///first" },
+      { name: "second", uri: "file:///second" },
+    ];
+    const { server, child, spawnProcess } = await setup(folders);
+    const starting = server.start("file:///second/notes/prose.md");
+    await vi.waitFor(() =>
+      expect(
+        child.requests.find((message) => message.method === "initialize"),
+      ).toBeDefined(),
+    );
+    const initialize = child.requests.find(
+      (message) => message.method === "initialize",
+    )!;
+    expect(initialize.params.workspaceFolders).toEqual(folders);
+    expect(initialize.params.rootUri).toBeNull();
+    const spawnArgs = spawnProcess.mock.calls[0] as unknown as [
+      string,
+      string[],
+      { readonly cwd?: string },
+    ];
+    expect(spawnArgs[2].cwd).toBe("/second");
+    child.respond(initialize.id, {
+      capabilities: { positionEncoding: "utf-16" },
+    });
+    await starting;
+    await server.disposeAsync();
   });
 
   it("initializes once, configures telemetry before synchronizing and focusing the active document", async () => {
@@ -369,6 +542,184 @@ describe("Copilot Language Server transport", () => {
     await expect(response).rejects.toThrow("exited");
     expect(server.isRunning).toBe(false);
   });
+
+  it("terminates and releases a live child after malformed JSON", async () => {
+    const { server, child } = await setup();
+    await startServer(server, child);
+    const uri = "file:///workspace/prose.md";
+    await server.synchronizeDocument(uri, 1, "Hello");
+    await server.focusDocument(uri);
+    const response = server.requestInlineCompletion(
+      uri,
+      1,
+      { line: 0, character: 5 },
+      "manual",
+      cancellationToken().token,
+    );
+    await vi.waitFor(() =>
+      expect(
+        child.requests.find(
+          (message) => message.method === "textDocument/inlineCompletion",
+        ),
+      ).toBeDefined(),
+    );
+
+    child.stdout.write(Buffer.from("Content-Length: 1\r\n\r\n{"));
+    await expect(response).rejects.toThrow(/invalid json/i);
+    await vi.waitFor(() => expect(child.exitCode).not.toBeNull(), {
+      timeout: 2_500,
+    });
+    expect(server.isRunning).toBe(false);
+    expect(child.listenerCount("exit")).toBe(0);
+    await server.disposeAsync();
+  });
+
+  it("terminates and releases a live child after an oversized frame", async () => {
+    const { server, child } = await setup();
+    await startServer(server, child);
+    const uri = "file:///workspace/prose.md";
+    await server.synchronizeDocument(uri, 1, "Hello");
+    await server.focusDocument(uri);
+    const response = server.requestInlineCompletion(
+      uri,
+      1,
+      { line: 0, character: 5 },
+      "manual",
+      cancellationToken().token,
+    );
+    await vi.waitFor(() =>
+      expect(
+        child.requests.find(
+          (message) => message.method === "textDocument/inlineCompletion",
+        ),
+      ).toBeDefined(),
+    );
+
+    child.stdout.write(
+      Buffer.from("Content-Length: 33554433\r\n\r\n", "ascii"),
+    );
+    await expect(response).rejects.toThrow(/invalid message frame/i);
+    await vi.waitFor(() => expect(child.exitCode).not.toBeNull(), {
+      timeout: 2_500,
+    });
+    expect(server.isRunning).toBe(false);
+    expect(child.listenerCount("exit")).toBe(0);
+    await server.disposeAsync();
+  });
+
+  it("handles stdin, stdout, and stderr errors without leaking a request or process", async () => {
+    for (const streamName of ["stdin", "stdout", "stderr"] as const) {
+      const { server, child } = await setup();
+      await startServer(server, child);
+      const uri = "file:///workspace/prose.md";
+      await server.synchronizeDocument(uri, 1, "Hello");
+      await server.focusDocument(uri);
+      const response = server.requestInlineCompletion(
+        uri,
+        1,
+        { line: 0, character: 5 },
+        "manual",
+        cancellationToken().token,
+      );
+      await vi.waitFor(() =>
+        expect(
+          child.requests.find(
+            (message) => message.method === "textDocument/inlineCompletion",
+          ),
+        ).toBeDefined(),
+      );
+
+      child[streamName].emit("error", new Error(`${streamName} failed`));
+      await expect(response).rejects.toThrow(`${streamName} failed`);
+      await vi.waitFor(() => expect(child.exitCode).not.toBeNull(), {
+        timeout: 2_500,
+      });
+      expect(server.isRunning).toBe(false);
+      expect(child.listenerCount("exit")).toBe(0);
+      await server.disposeAsync();
+    }
+  }, 10_000);
+
+  it("ignores events from a failed child after restarting the server", async () => {
+    const { server, child: oldChild, createNextChild } = await setup();
+    await startServer(server, oldChild);
+    oldChild.stdout.write(Buffer.from("Content-Length: 1\r\n\r\n{"));
+    await vi.waitFor(() => expect(oldChild.exitCode).not.toBeNull(), {
+      timeout: 2_500,
+    });
+
+    const child = createNextChild();
+    const starting = server.start();
+    await vi.waitFor(() =>
+      expect(
+        child.requests.find((message) => message.method === "initialize"),
+      ).toBeDefined(),
+    );
+    const initialize = child.requests.find(
+      (message) => message.method === "initialize",
+    )!;
+    child.respond(initialize.id, {
+      capabilities: { positionEncoding: "utf-16" },
+    });
+    await starting;
+    const readyStatus = server.currentStatus;
+    oldChild.stdout.write(
+      frame({
+        jsonrpc: "2.0",
+        method: "didChangeStatus",
+        params: { kind: "Error", busy: false, message: "stale child" },
+      }),
+    );
+    oldChild.emit("exit", 1, null);
+    expect(server.currentStatus).toEqual(readyStatus);
+    expect(server.isRunning).toBe(true);
+
+    const uri = "file:///workspace/restarted.md";
+    await server.synchronizeDocument(uri, 1, "Hello");
+    await server.focusDocument(uri);
+    const response = server.requestInlineCompletion(
+      uri,
+      1,
+      { line: 0, character: 5 },
+      "manual",
+      cancellationToken().token,
+    );
+    await vi.waitFor(() =>
+      expect(
+        child.requests.find(
+          (message) => message.method === "textDocument/inlineCompletion",
+        ),
+      ).toBeDefined(),
+    );
+    const completion = child.requests.find(
+      (message) => message.method === "textDocument/inlineCompletion",
+    )!;
+    child.respond(completion.id, { items: [{ insertText: "Hello!" }] });
+    await expect(response).resolves.toMatchObject({
+      items: [{ insertText: "Hello!" }],
+    });
+    await server.disposeAsync();
+  });
+
+  it("escalates past unresponsive shutdown and SIGTERM and shares double disposal", async () => {
+    const { server, child } = await setup();
+    await startServer(server, child);
+    child.ignoreShutdownResponse = true;
+    child.ignoreExitNotification = true;
+    child.ignoreSigterm = true;
+    const first = server.disposeAsync();
+    let secondSettled = false;
+    const second = server.disposeAsync().then(() => {
+      secondSettled = true;
+    });
+    await Promise.resolve();
+    expect(secondSettled).toBe(false);
+    await Promise.all([first, second]);
+    expect(child.exitCode).not.toBeNull();
+    expect(child.killSignals).toContain("SIGTERM");
+    expect(child.killSignals).toContain("SIGKILL");
+    expect(child.listenerCount("exit")).toBe(0);
+  }, 7_000);
 
   it("converts CRLF and astral Unicode positions as UTF-16", () => {
     const text = "A🌿\r\nB";

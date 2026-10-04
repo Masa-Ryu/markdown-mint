@@ -698,9 +698,10 @@ export class MarkdownMintEditorProvider
     if (panelWithViewState.onDidChangeViewState) {
       session.disposables.push(
         panelWithViewState.onDidChangeViewState(() => {
-          if (!session.panel.active)
+          if (!session.panel.active) {
             this.aiSuggestions.cancelSession(session.aiSessionId);
-          else void this.aiSuggestions.sessionActivated(session.aiSessionId);
+            void this.aiSuggestions.sessionDeactivated(session.aiSessionId);
+          } else void this.aiSuggestions.sessionActivated(session.aiSessionId);
           this.aiSuggestions.publishState(session.aiSessionId);
           this.updateAiCommandContext();
           if (session.mode === "editor" && session.panel.active)

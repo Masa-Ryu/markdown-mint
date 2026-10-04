@@ -455,7 +455,18 @@ Markdown, native TextDocument, dirty/recovery data, clipboard, preview/export,
 or Undo history. Acceptance remains a single normal synced edit with the
 existing native Undo/Redo boundary. Same-version saves do not invalidate a
 waiting response; actual version changes, deactivation, disposal, settings
-changes, cancellation, and timeout do.
+changes, cancellation, and timeout do. Automatic requests are debounced from
+actual user insertion, deletion, and newline input, including IME composition;
+they do not chain from host acknowledgements or arbitrary document changes. A
+composition keeps a candidate only when the confirmed input matches its
+remaining text; otherwise the candidate is discarded before re-evaluation.
+
+Connection/authentication readiness is separate from request busy status and
+per-document `Inactive` exclusions. Switching panels synchronizes and focuses
+the new document before requesting a completion, without carrying an excluded
+document's state to another URI. Up to ten alternatives from one SDK response
+are checked against Markdown insertion safety before any candidate is shown.
+Manual failures have both a visible status line and an `aria-live` announcement.
 
 The stdio transport only answers known LSP configuration and message requests,
 permits the server's constrained GitHub `window/showDocument` URLs, refuses
@@ -464,8 +475,11 @@ the device-flow and accepted-completion commands before invoking the server's
 `workspace/executeCommand`. Status and account/billing messages are presented
 through VS Code UI; server stderr and log notifications are drained/discarded.
 Shutdown sends LSP `shutdown` and `exit`, waits briefly for process exit, then
-forces termination if necessary. The native package is started directly with
-`spawn` and no shell or PATH Node/npm lookup.
+forces termination if necessary. A failed transport remains responsible for
+its child until exit is observed; stale generations cannot handle messages for
+a restarted connection, and shutdown escalates through SIGTERM and SIGKILL as
+needed. The native package is started directly with `spawn` and no shell or
+PATH Node/npm lookup.
 
 SDK build manifest pins `1.551.2` and registry SHA-512 integrity for six
 platform packages: darwin-arm64, darwin-x64, linux-arm64, linux-x64,
@@ -492,8 +506,13 @@ not run the release workflow or publish to Marketplace/GitHub Releases.
 
 Verification after the Language Server conversion:
 
-- `npm run compile`, `npm test` (71 files / 1,405 tests), `npm run lint` (0
+- `npm run compile`, `npm test` (71 files / 1,441 tests), `npm run lint` (0
   errors, 96 warnings), and `npm run format:check` passed.
+- The new regressions cover composition/input-trigger scheduling, status and
+  sign-in notification order, excluded-document switching, same-version save
+  while a completion is pending, auto-trigger disable without losing manual
+  work, safe fallback across SDK alternatives, visible failure feedback,
+  stale-version rejection, and failed Language Server process cleanup.
 - `npm run test:extension` passed in VS Code 1.140.0 through the production
   provider with a fake Language Server. The candidate left native text and
   version unchanged before Tab; acceptance synchronized as one native edit,
@@ -513,13 +532,14 @@ Verification after the Language Server conversion:
 - `npm run benchmark:ai-suggestions` passed with zero real Copilot requests.
   It measures local Markdown position mapping, candidate normalization,
   structural planning, and input reconciliation, not model latency or network
-  usage. On macOS arm64 / Node 24.5.0, the five Markdown fixtures measured
-  p50 5.71–36.49 ms and p95 9.36–38.61 ms; 5,000 prose blocks measured p50
-  57.84 ms / p95 70.83 ms, and 2,000 table rows measured p50 43.94 ms / p95
-  46.49 ms.
-- `npm run package` and `npm run package:platforms` passed. The six 0.9.0 VSIX
-  archives each contain only their matching native binary and license. Their
-  verified archive sizes were:
+  usage. On macOS arm64 / Node 24.5.0, fixture p50 ranged from 0.74 to 32.11
+  ms and p95 from 1.02 to 36.17 ms; 5,000 prose blocks measured p50 55.26 ms /
+  p95 57.81 ms, and 2,000 table rows measured p50 37.23 ms / p95 40.79 ms.
+- Final `npm run package` passed for darwin-arm64 (78 files; 88,717,931
+  compressed bytes / 136,567,747 uncompressed bytes), including the pinned
+  native server and bundled formatter verification. The earlier six-target
+  `npm run package:platforms` verification passed with the recorded archive
+  sizes below; that all-platform command was not rerun for this review fix:
 
   | Target       | Compressed bytes | Uncompressed bytes |
   | ------------ | ---------------: | -----------------: |

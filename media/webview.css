@@ -2404,3 +2404,17 @@ body.vscode-high-contrast-light .mm-file-autocomplete-option.is-active {
   white-space: nowrap;
   border: 0;
 }
+
+.mm-ai-status {
+  flex: 0 0 auto;
+  padding: 3px 10px;
+  border-top: 1px solid
+    var(--vscode-panel-border, rgba(127, 127, 127, 0.18));
+  color: var(--vscode-descriptionForeground, #858585);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.mm-ai-status[hidden] {
+  display: none;
+}

@@ -71,6 +71,27 @@ describe("Copilot Language Server protocol", () => {
     expect(
       isHostMessage({
         protocolVersion: 1,
+        type: "ai-suggestion-result",
+        requestId: request.requestId,
+        sessionId: request.sessionId,
+        documentId: request.documentId,
+        baseVersion: request.baseVersion,
+        editorRevision: request.editorRevision,
+        settingsGeneration: request.settingsGeneration,
+        position: request.position,
+        targetKind: request.targetKind,
+        candidateId: "c-1",
+        text: "**",
+        reason: "ready",
+        candidates: [
+          { candidateId: "c-1", text: "**" },
+          { candidateId: "c-2", text: "safe" },
+        ],
+      }),
+    ).toBe(true);
+    expect(
+      isHostMessage({
+        protocolVersion: 1,
         type: "document",
         markdown: "Hi",
         version: 1,
@@ -106,6 +127,16 @@ describe("Copilot Language Server protocol", () => {
     { reason: "unknown" },
     { candidateId: undefined },
     { partialAcceptanceOffset: 32_769 },
+    { candidates: [] },
+    { candidates: [{ candidateId: "bad/id", text: "x" }] },
+    { candidates: [{ candidateId: "c-1", text: "x", extra: true }] },
+    {
+      candidates: Array.from({ length: 11 }, (_, index) => ({
+        candidateId: `c-${index}`,
+        text: "x",
+      })),
+    },
+    { candidates: [{ candidateId: "c-2", text: "different" }] },
   ])("rejects malformed result %j", (patch) => {
     expect(
       isHostMessage({
@@ -138,6 +169,7 @@ describe("Copilot Language Server protocol", () => {
       parseWebviewMessage({
         protocolVersion: 1,
         type: "ai-suggestion-feedback",
+        requestId: "r1",
         sessionId: "s1",
         candidateId: "c-1",
         action: "partially-accepted",
@@ -148,6 +180,7 @@ describe("Copilot Language Server protocol", () => {
       parseWebviewMessage({
         protocolVersion: 1,
         type: "ai-suggestion-feedback",
+        requestId: "r1",
         sessionId: "s1",
         candidateId: "c-1",
         action: "partially-accepted",

@@ -4,6 +4,7 @@ export const AI_LIMITS = {
   deadlineMs: 35_000,
   maxDocumentLength: 4_000_000,
   maxCompletionLength: 32_768,
+  maxCompletionCandidates: 10,
   maxRequestIdLength: 160,
 } as const;
 
@@ -26,6 +27,7 @@ export const AI_REASONS = [
   "untrusted",
   "blocked",
   "no-suggestion",
+  "excluded",
   "unsafe-suggestion",
   "invalid-context",
   "failed",
@@ -62,12 +64,18 @@ export interface AiSuggestionCancel {
 export interface AiSuggestionFeedback {
   readonly protocolVersion: 1;
   readonly type: "ai-suggestion-feedback";
+  readonly requestId: string;
   readonly sessionId: string;
   readonly candidateId: string;
   readonly action: "shown" | "accepted" | "partially-accepted" | "rejected";
   readonly rejectionReason?: "unsafe-suggestion" | "cancelled";
   /** SDK-defined UTF-16 count from the original completion item's start. */
   readonly acceptedLength?: number;
+}
+export interface AiSuggestionCandidate {
+  readonly candidateId: string;
+  readonly text: string;
+  readonly partialAcceptanceOffset?: number;
 }
 export interface AiSuggestionState {
   readonly protocolVersion: 1;
@@ -90,6 +98,7 @@ export interface AiSuggestionResult extends AiSuggestionIdentity {
   readonly type: "ai-suggestion-result";
   readonly candidateId?: string;
   readonly partialAcceptanceOffset?: number;
+  readonly candidates?: readonly AiSuggestionCandidate[];
   readonly text: string;
   readonly reason: AiSuggestionReason;
 }
@@ -176,12 +185,14 @@ export function isAiWebviewMessage(value: unknown): value is AiWebviewMessage {
       onlyKeys(value, [
         "protocolVersion",
         "type",
+        "requestId",
         "sessionId",
         "candidateId",
         "action",
         "acceptedLength",
         "rejectionReason",
       ]) &&
+      id(value.requestId) &&
       id(value.sessionId) &&
       id(value.candidateId) &&
       (value.action === "shown" ||
@@ -264,6 +275,7 @@ export function isAiHostMessage(value: unknown): value is AiHostMessage {
       "targetKind",
       "candidateId",
       "partialAcceptanceOffset",
+      "candidates",
       "text",
       "reason",
     ]) &&
@@ -273,9 +285,36 @@ export function isAiHostMessage(value: unknown): value is AiHostMessage {
     (value.partialAcceptanceOffset === undefined ||
       (counter(value.partialAcceptanceOffset) &&
         value.partialAcceptanceOffset <= AI_LIMITS.maxCompletionLength)) &&
+    (value.candidates === undefined || validCandidates(value.candidates)) &&
     AI_REASONS.includes(value.reason as AiSuggestionReason) &&
     (value.reason === "ready"
-      ? value.text.length > 0 && id(value.candidateId)
-      : value.text === "" && value.candidateId === undefined)
+      ? value.text.length > 0 &&
+        id(value.candidateId) &&
+        (value.candidates === undefined ||
+          (value.candidates[0]?.candidateId === value.candidateId &&
+            value.candidates[0]?.text === value.text))
+      : value.text === "" &&
+        value.candidateId === undefined &&
+        value.candidates === undefined)
+  );
+}
+
+function validCandidates(value: unknown): value is AiSuggestionCandidate[] {
+  if (
+    !Array.isArray(value) ||
+    value.length < 1 ||
+    value.length > AI_LIMITS.maxCompletionCandidates
+  )
+    return false;
+  return value.every(
+    (candidate) =>
+      record(candidate) &&
+      onlyKeys(candidate, ["candidateId", "text", "partialAcceptanceOffset"]) &&
+      id(candidate.candidateId) &&
+      validCompletionText(candidate.text) &&
+      candidate.text.length > 0 &&
+      (candidate.partialAcceptanceOffset === undefined ||
+        (counter(candidate.partialAcceptanceOffset) &&
+          candidate.partialAcceptanceOffset <= AI_LIMITS.maxCompletionLength)),
   );
 }
