@@ -61,6 +61,8 @@ function fixture(autoTrigger = false) {
   let active = true;
   let ready = true;
   const tokenStates: Array<{ cancelled: boolean }> = [];
+  const synchronizedDocuments = new Set<string>();
+  let focusedUri: string | undefined;
   let statusListener:
     | ((
         availability: AiAvailability,
@@ -83,7 +85,37 @@ function fixture(autoTrigger = false) {
     isRunning: true,
     start: vi.fn(async () => undefined),
     synchronizeDocument: vi.fn(async () => undefined),
-    focusDocument: vi.fn(async () => undefined),
+    synchronizeAndFocusDocument: vi.fn(
+      async (
+        uri: string,
+        _version: number,
+        _markdown: string,
+        isCurrent: () => boolean = () => true,
+      ) => {
+        if (!isCurrent()) return false;
+        synchronizedDocuments.add(uri);
+        for (const documentUri of synchronizedDocuments)
+          if (documentUri !== uri) synchronizedDocuments.delete(documentUri);
+        focusedUri = uri;
+        return isCurrent();
+      },
+    ),
+    focusDocument: vi.fn(
+      async (
+        uri: string | undefined,
+        isCurrent: () => boolean = () => true,
+      ) => {
+        if (!isCurrent()) return;
+        if (uri === undefined) {
+          synchronizedDocuments.clear();
+          focusedUri = undefined;
+        } else {
+          for (const documentUri of synchronizedDocuments)
+            if (documentUri !== uri) synchronizedDocuments.delete(documentUri);
+          focusedUri = uri;
+        }
+      },
+    ),
     requestInlineCompletion: vi.fn(
       () => responses.shift()?.promise ?? Promise.resolve({ items: [] }),
     ),
@@ -211,6 +243,11 @@ function fixture(autoTrigger = false) {
       ready = value;
     },
     cancelToken: () => Boolean(tokenStates.at(-1)?.cancelled),
+    synchronizedDocuments,
+    focusedUri: () => focusedUri,
+    setFocusedUri: (uri: string | undefined) => {
+      focusedUri = uri;
+    },
   };
 }
 
@@ -227,12 +264,233 @@ describe("Copilot Language Server request lifecycle", () => {
     await pending;
     expect(f.ready()).toHaveLength(1);
     expect(f.ready()[0]).toMatchObject({ text: " world🌿", reason: "ready" });
-    expect(f.server.synchronizeDocument).toHaveBeenCalledWith(
+    expect(f.server.synchronizeAndFocusDocument).toHaveBeenCalledWith(
       "file:///prose.md",
       1,
       "Hello",
+      expect.any(Function),
     );
     expect(f.cancelToken()).toBe(true);
+    f.host.dispose();
+  });
+  it("does not synchronize a panel that deactivates while server startup is pending", async () => {
+    const f = fixture(false);
+    const startup = deferred<void>();
+    vi.mocked(f.server.start).mockImplementation(() => startup.promise);
+    const activatingA = f.host.sessionActivated("s1");
+
+    f.setActive(false);
+    const deactivatingA = f.host.sessionDeactivated("s1");
+    let activeB = true;
+    const panelB: AiPanelSession = {
+      id: "s2",
+      documentId: () => "file:///B.md",
+      uri: () => "file:///B.md",
+      version: () => 4,
+      markdown: () => "B body",
+      isReady: () => true,
+      isActive: () => activeB,
+      canStartRequest: () => activeB,
+      focus: vi.fn(),
+      post: vi.fn(),
+    };
+    f.host.registerSession(panelB);
+    const activatingB = f.host.sessionActivated("s2");
+
+    startup.resolve();
+    await Promise.all([activatingA, deactivatingA, activatingB]);
+
+    expect(f.server.synchronizeAndFocusDocument).toHaveBeenCalledTimes(1);
+    expect(f.server.synchronizeAndFocusDocument).toHaveBeenCalledWith(
+      "file:///B.md",
+      4,
+      "B body",
+      expect.any(Function),
+    );
+    expect(f.synchronizedDocuments).toEqual(new Set(["file:///B.md"]));
+    expect(f.focusedUri()).toBe("file:///B.md");
+    f.host.dispose();
+  });
+  it("does not synchronize a session disposed while server startup is pending", async () => {
+    const f = fixture(false);
+    const startup = deferred<void>();
+    vi.mocked(f.server.start).mockImplementation(() => startup.promise);
+    const activating = f.host.sessionActivated("s1");
+    f.host.unregisterSession("s1");
+
+    startup.resolve();
+    await activating;
+
+    expect(f.server.synchronizeAndFocusDocument).not.toHaveBeenCalled();
+    expect(f.synchronizedDocuments).toEqual(new Set());
+    f.host.dispose();
+  });
+  it("does not send a stale document version after the SDK start await", async () => {
+    const f = fixture(false);
+    const sdkStart = deferred<void>();
+    vi.mocked(f.server.synchronizeAndFocusDocument).mockImplementation(
+      async (uri, _version, _markdown, isCurrent) => {
+        await sdkStart.promise;
+        if (!isCurrent()) return false;
+        f.synchronizedDocuments.add(uri);
+        f.setFocusedUri(uri);
+        return true;
+      },
+    );
+    const activating = f.host.sessionActivated("s1");
+    await vi.waitFor(() =>
+      expect(f.server.synchronizeAndFocusDocument).toHaveBeenCalledTimes(1),
+    );
+
+    f.changeVersion(2, "Edited during SDK start");
+    sdkStart.resolve();
+    await activating;
+
+    expect(f.synchronizedDocuments).toEqual(new Set());
+    expect(f.focusedUri()).toBeUndefined();
+    f.host.dispose();
+  });
+  it("uses activation generations for rapid A to B to A switches", async () => {
+    const f = fixture(false);
+    const startup = deferred<void>();
+    vi.mocked(f.server.start).mockImplementation(() => startup.promise);
+    const activatingA1 = f.host.sessionActivated("s1");
+    f.setActive(false);
+    const deactivatingA = f.host.sessionDeactivated("s1");
+    let activeB = true;
+    const panelB: AiPanelSession = {
+      id: "s2",
+      documentId: () => "file:///B.md",
+      uri: () => "file:///B.md",
+      version: () => 2,
+      markdown: () => "B",
+      isReady: () => true,
+      isActive: () => activeB,
+      canStartRequest: () => activeB,
+      focus: vi.fn(),
+      post: vi.fn(),
+    };
+    f.host.registerSession(panelB);
+    const activatingB = f.host.sessionActivated("s2");
+    activeB = false;
+    const deactivatingB = f.host.sessionDeactivated("s2");
+    f.setActive(true);
+    const activatingA2 = f.host.sessionActivated("s1");
+
+    startup.resolve();
+    await Promise.all([
+      activatingA1,
+      deactivatingA,
+      activatingB,
+      deactivatingB,
+      activatingA2,
+    ]);
+
+    expect(f.server.synchronizeAndFocusDocument).toHaveBeenCalledTimes(1);
+    expect(f.server.synchronizeAndFocusDocument).toHaveBeenCalledWith(
+      "file:///prose.md",
+      1,
+      "Hello",
+      expect.any(Function),
+    );
+    expect(f.synchronizedDocuments).toEqual(new Set(["file:///prose.md"]));
+    expect(f.focusedUri()).toBe("file:///prose.md");
+    f.host.dispose();
+  });
+  it("rejects delayed SDK sync continuations from earlier A to B to A activations", async () => {
+    const f = fixture(false);
+    const operations: Array<{
+      uri: string;
+      gate: ReturnType<typeof deferred<void>>;
+    }> = [];
+    vi.mocked(f.server.synchronizeAndFocusDocument).mockImplementation(
+      async (uri, _version, _markdown, isCurrent) => {
+        const gate = deferred<void>();
+        operations.push({ uri, gate });
+        await gate.promise;
+        if (!isCurrent()) return false;
+        f.synchronizedDocuments.clear();
+        f.synchronizedDocuments.add(uri);
+        f.setFocusedUri(uri);
+        return true;
+      },
+    );
+    const activatingA1 = f.host.sessionActivated("s1");
+    await vi.waitFor(() => expect(operations).toHaveLength(1));
+
+    f.setActive(false);
+    const deactivatingA = f.host.sessionDeactivated("s1");
+    let activeB = true;
+    const panelB: AiPanelSession = {
+      id: "s2",
+      documentId: () => "file:///B.md",
+      uri: () => "file:///B.md",
+      version: () => 2,
+      markdown: () => "B",
+      isReady: () => true,
+      isActive: () => activeB,
+      canStartRequest: () => activeB,
+      focus: vi.fn(),
+      post: vi.fn(),
+    };
+    f.host.registerSession(panelB);
+    const activatingB = f.host.sessionActivated("s2");
+    await vi.waitFor(() => expect(operations).toHaveLength(2));
+
+    activeB = false;
+    const deactivatingB = f.host.sessionDeactivated("s2");
+    f.setActive(true);
+    const activatingA2 = f.host.sessionActivated("s1");
+    await vi.waitFor(() => expect(operations).toHaveLength(3));
+
+    operations[1]!.gate.resolve();
+    operations[0]!.gate.resolve();
+    operations[2]!.gate.resolve();
+    await Promise.all([
+      activatingA1,
+      deactivatingA,
+      activatingB,
+      deactivatingB,
+      activatingA2,
+    ]);
+
+    expect(operations.map(({ uri }) => uri)).toEqual([
+      "file:///prose.md",
+      "file:///B.md",
+      "file:///prose.md",
+    ]);
+    expect(f.synchronizedDocuments).toEqual(new Set(["file:///prose.md"]));
+    expect(f.focusedUri()).toBe("file:///prose.md");
+    f.host.dispose();
+  });
+  it("keeps a same-URI document open while another active panel owns it", async () => {
+    const f = fixture(false);
+    await f.host.sessionActivated("s1");
+    let activeB = true;
+    const panelB: AiPanelSession = {
+      id: "s2",
+      documentId: () => "file:///prose.md",
+      uri: () => "file:///prose.md",
+      version: () => 1,
+      markdown: () => "Hello",
+      isReady: () => true,
+      isActive: () => activeB,
+      canStartRequest: () => activeB,
+      focus: vi.fn(),
+      post: vi.fn(),
+    };
+    f.host.registerSession(panelB);
+    await f.host.sessionActivated("s2");
+    f.setActive(false);
+    await f.host.sessionDeactivated("s1");
+
+    expect(f.synchronizedDocuments).toEqual(new Set(["file:///prose.md"]));
+    expect(f.focusedUri()).toBe("file:///prose.md");
+    expect(f.server.focusDocument).not.toHaveBeenCalledWith(
+      undefined,
+      expect.any(Function),
+    );
+    activeB = false;
     f.host.dispose();
   });
   it.each([
@@ -675,25 +933,23 @@ describe("Copilot Language Server request lifecycle", () => {
       message: "This file is excluded",
     });
     await f.host.sessionActivated("s1");
-    expect(f.server.synchronizeDocument).toHaveBeenCalledWith(
+    expect(f.server.synchronizeAndFocusDocument).toHaveBeenCalledWith(
       "file:///workspace/A.md",
       1,
       "excluded text",
+      expect.any(Function),
     );
-    expect(f.server.focusDocument).toHaveBeenCalledWith(
-      "file:///workspace/A.md",
-    );
+    expect(f.focusedUri()).toBe("file:///workspace/A.md");
 
     f.changeDocument("file:///workspace/B.md", "allowed text", 2);
     await f.host.sessionActivated("s1");
-    expect(f.server.synchronizeDocument).toHaveBeenCalledWith(
+    expect(f.server.synchronizeAndFocusDocument).toHaveBeenCalledWith(
       "file:///workspace/B.md",
       2,
       "allowed text",
+      expect.any(Function),
     );
-    expect(f.server.focusDocument).toHaveBeenLastCalledWith(
-      "file:///workspace/B.md",
-    );
+    expect(f.focusedUri()).toBe("file:///workspace/B.md");
 
     f.setServerStatus("ready", {
       kind: "Normal",
@@ -730,7 +986,10 @@ describe("Copilot Language Server request lifecycle", () => {
     f.setActive(false);
     await f.host.sessionDeactivated("s1");
 
-    expect(f.server.focusDocument).toHaveBeenCalledWith(undefined);
+    expect(f.server.focusDocument).toHaveBeenCalledWith(
+      undefined,
+      expect.any(Function),
+    );
     f.host.dispose();
   });
 
@@ -746,10 +1005,16 @@ describe("Copilot Language Server request lifecycle", () => {
     f.host.registerSession(secondPanel);
     f.host.unregisterSession("s1");
 
-    expect(f.server.focusDocument).not.toHaveBeenCalledWith(undefined);
+    expect(f.server.focusDocument).not.toHaveBeenCalledWith(
+      undefined,
+      expect.any(Function),
+    );
     expect(f.server.closeDocument).not.toHaveBeenCalled();
     await f.host.sessionDeactivated("s2");
-    expect(f.server.focusDocument).toHaveBeenLastCalledWith(undefined);
+    expect(f.server.focusDocument).toHaveBeenLastCalledWith(
+      undefined,
+      expect.any(Function),
+    );
     f.host.dispose();
   });
 });

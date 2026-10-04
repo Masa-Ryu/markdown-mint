@@ -918,6 +918,12 @@ it("does not put model communication into the document edit/save queue", async (
     isRunning: true,
     start: async () => undefined,
     synchronizeDocument: async () => undefined,
+    synchronizeAndFocusDocument: async (
+      _uri: string,
+      _version: number,
+      _markdown: string,
+      isCurrent: () => boolean,
+    ) => isCurrent(),
     focusDocument: async () => undefined,
     requestInlineCompletion: () => {
       sends += 1;
@@ -1214,6 +1220,12 @@ async function startDelayedAiSuggestion(markdown = "# Original"): Promise<{
     isRunning: true,
     start: async () => undefined,
     synchronizeDocument: async () => undefined,
+    synchronizeAndFocusDocument: async (
+      _uri: string,
+      _version: number,
+      _markdown: string,
+      isCurrent: () => boolean,
+    ) => isCurrent(),
     focusDocument: async () => undefined,
     requestInlineCompletion: () => {
       requestCount += 1;

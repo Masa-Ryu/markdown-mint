@@ -55,8 +55,14 @@ export interface AiSuggestionsEnvironment {
 interface RegisteredSession {
   readonly panel: AiPanelSession;
 }
+interface ActivationTarget {
+  readonly session: RegisteredSession;
+  readonly uri: string;
+  readonly generation: number;
+}
 interface ActiveRequest {
   readonly session: RegisteredSession;
+  readonly activationTarget: ActivationTarget;
   readonly request: AiSuggestionRequest;
   readonly source: vscode.CancellationTokenSource;
   readonly finish: (reason: AiSuggestionReason) => void;
@@ -81,6 +87,7 @@ interface CandidateRecord {
   readonly documentUri: string;
   readonly connectionGeneration: number;
   readonly documentGeneration: number;
+  readonly activationGeneration: number;
   version: number;
   readonly item: InlineCompletionItem;
   readonly trigger: "auto" | "manual";
@@ -111,6 +118,8 @@ export class AiSuggestionsHost implements vscode.Disposable {
   private readonly sessions = new Map<string, RegisteredSession>();
   private readonly subscriptions: vscode.Disposable[] = [];
   private active: ActiveRequest | undefined;
+  private activeTarget: ActivationTarget | undefined;
+  private activationGeneration = 0;
   private readonly candidates = new Map<string, CandidateRecord>();
   private connectionAvailability: AiAvailability = "disabled";
   private serverMessage = statusText.disabled;
@@ -140,10 +149,11 @@ export class AiSuggestionsHost implements vscode.Disposable {
 
   public registerSession(panel: AiPanelSession): void {
     if (this.disposed) return;
-    this.sessions.set(panel.id, { panel });
+    const session = { panel } satisfies RegisteredSession;
+    this.sessions.set(panel.id, session);
     this.publishState(panel.id);
     if (panel.isReady() && panel.isActive() && this.settings.autoTrigger)
-      void this.ensureStarted(panel.uri());
+      void this.sessionActivated(panel.id);
   }
   public unregisterSession(id: string): void {
     this.cancelSession(id);
@@ -152,25 +162,83 @@ export class AiSuggestionsHost implements vscode.Disposable {
         this.candidates.delete(candidateId);
     const session = this.sessions.get(id);
     this.sessions.delete(id);
-    if (session) {
-      const uri = session.panel.uri();
-      const replacement = [...this.sessions.values()].some(
-        (candidate) =>
-          candidate.panel.uri() === uri &&
-          candidate.panel.isReady() &&
-          candidate.panel.isActive(),
-      );
-      if (
-        !replacement &&
-        this.focusedDocumentUri === uri &&
-        this.environment.server.isRunning
-      ) {
-        this.focusedDocumentUri = undefined;
-        void this.environment.server.focusDocument(undefined);
-      } else if (!replacement && this.environment.server.isRunning) {
-        void this.environment.server.closeDocument(uri);
-      }
+    if (session) void this.releaseActivation(session);
+  }
+  private beginActivation(session: RegisteredSession): ActivationTarget {
+    const uri = session.panel.uri();
+    const previous = this.activeTarget;
+    if (previous?.session === session && previous.uri === uri) return previous;
+    if (previous && (previous.session !== session || previous.uri !== uri)) {
+      this.cancelSession(previous.session.panel.id);
+      this.deleteCandidatesForSession(previous.session.panel.id);
     }
+    const target = {
+      session,
+      uri,
+      generation: ++this.activationGeneration,
+    } satisfies ActivationTarget;
+    this.activeTarget = target;
+    return target;
+  }
+  private activationCurrent(target: ActivationTarget): boolean {
+    return (
+      !this.disposed &&
+      this.activeTarget === target &&
+      target.generation === this.activationGeneration &&
+      this.sessions.get(target.session.panel.id) === target.session &&
+      target.session.panel.isReady() &&
+      target.session.panel.isActive() &&
+      target.session.panel.uri() === target.uri
+    );
+  }
+  private activeSession(exceptId?: string): RegisteredSession | undefined {
+    return [...this.sessions.entries()].find(
+      ([id, session]) =>
+        id !== exceptId && session.panel.isReady() && session.panel.isActive(),
+    )?.[1];
+  }
+  private async continueActivation(target: ActivationTarget): Promise<void> {
+    if (!this.activationCurrent(target)) return;
+    if (!this.settings.autoTrigger && !this.environment.server.isRunning) {
+      this.publishState(target.session.panel.id);
+      return;
+    }
+    if (!(await this.ensureStarted(target.uri))) return;
+    if (!this.activationCurrent(target)) return;
+    await this.synchronizeAndFocus(target);
+    if (this.activationCurrent(target))
+      this.publishState(target.session.panel.id);
+  }
+  private async releaseActivation(session: RegisteredSession): Promise<void> {
+    if (this.activeTarget?.session !== session) return;
+    this.cancelSession(session.panel.id);
+    this.deleteCandidatesForSession(session.panel.id);
+    this.activeTarget = undefined;
+    const generation = ++this.activationGeneration;
+    this.focusedDocumentUri = undefined;
+
+    const replacement = this.activeSession(session.panel.id);
+    if (replacement) {
+      await this.continueActivation(this.beginActivation(replacement));
+      return;
+    }
+    if (!this.environment.server.isRunning) return;
+    try {
+      await this.environment.server.focusDocument(undefined, () =>
+        this.emptyActivationCurrent(generation),
+      );
+    } catch {
+      this.connectionAvailability = "unavailable";
+      this.serverMessage = statusText.unavailable;
+      this.publishAll();
+    }
+  }
+  private emptyActivationCurrent(generation: number): boolean {
+    return (
+      !this.disposed &&
+      this.activeTarget === undefined &&
+      this.activationGeneration === generation
+    );
   }
   public publishState(id: string): void {
     const session = this.sessions.get(id);
@@ -380,13 +448,15 @@ export class AiSuggestionsHost implements vscode.Disposable {
       );
       return;
     }
-    const uri = session.panel.uri();
+    const target = this.beginActivation(session);
+    const uri = target.uri;
     if (!(await this.ensureStarted(uri))) {
       this.environment.notify(this.statusMessage(uri, "unavailable"));
       return;
     }
-    const registered = this.sessions.get(id);
-    if (!registered || !(await this.synchronizeAndFocus(registered))) return;
+    if (!this.activationCurrent(target)) return;
+    if (!(await this.synchronizeAndFocus(target))) return;
+    if (!this.activationCurrent(target)) return;
     const state = this.connectionState(uri);
     if (state === "excluded") {
       this.environment.notify(this.statusMessage(uri, "excluded"));
@@ -414,60 +484,39 @@ export class AiSuggestionsHost implements vscode.Disposable {
     const session = this.sessions.get(id);
     if (!session || !session.panel.isReady() || !session.panel.isActive())
       return;
-    const uri = session.panel.uri();
-    if (!this.settings.autoTrigger && !this.environment.server.isRunning) {
-      this.publishState(id);
-      return;
-    }
-    if (await this.ensureStarted(uri)) await this.synchronizeAndFocus(session);
-    this.publishState(id);
+    await this.continueActivation(this.beginActivation(session));
   }
   public async sessionDeactivated(id: string): Promise<void> {
     const session = this.sessions.get(id);
     if (!session) return;
     this.cancelSession(id);
-    const uri = session.panel.uri();
     this.deleteCandidatesForSession(id);
-    const anotherActivePanel = [...this.sessions.values()].some(
-      (candidate) =>
-        candidate.panel.id !== id &&
-        candidate.panel.uri() === uri &&
-        candidate.panel.isReady() &&
-        candidate.panel.isActive(),
-    );
-    if (
-      anotherActivePanel ||
-      this.focusedDocumentUri !== uri ||
-      !this.environment.server.isRunning
-    )
-      return;
-    this.focusedDocumentUri = undefined;
-    await this.environment.server.focusDocument(undefined);
+    await this.releaseActivation(session);
   }
   private async synchronizeAndFocus(
-    session: RegisteredSession,
+    target: ActivationTarget,
   ): Promise<boolean> {
-    const panel = session.panel;
-    const uri = panel.uri();
+    if (!this.activationCurrent(target)) return false;
+    const panel = target.session.panel;
+    const documentId = panel.documentId();
+    const version = panel.version();
+    const markdown = panel.markdown();
+    const snapshotCurrent = (): boolean =>
+      this.activationCurrent(target) &&
+      panel.documentId() === documentId &&
+      panel.version() === version;
+    if (!snapshotCurrent()) return false;
     try {
-      await this.environment.server.synchronizeDocument(
-        uri,
-        panel.version(),
-        panel.markdown(),
-      );
-      if (
-        this.sessions.get(panel.id) !== session ||
-        !panel.isReady() ||
-        !panel.isActive()
-      )
-        return false;
-      this.focusedDocumentUri = uri;
-      await this.environment.server.focusDocument(uri);
-      return (
-        this.sessions.get(panel.id) === session &&
-        panel.isReady() &&
-        panel.isActive()
-      );
+      const synchronized =
+        await this.environment.server.synchronizeAndFocusDocument(
+          target.uri,
+          version,
+          markdown,
+          snapshotCurrent,
+        );
+      if (!synchronized || !snapshotCurrent()) return false;
+      this.focusedDocumentUri = target.uri;
+      return true;
     } catch {
       this.connectionAvailability = "unavailable";
       this.serverMessage = statusText.unavailable;
@@ -532,6 +581,9 @@ export class AiSuggestionsHost implements vscode.Disposable {
       this.sessions.get(record.session.panel.id) === record.session &&
       record.session.panel.isReady() &&
       record.session.panel.isActive() &&
+      this.activeTarget?.session === record.session &&
+      this.activeTarget.generation === record.activationGeneration &&
+      this.activeTarget.uri === record.documentUri &&
       record.session.panel.documentId() === record.documentId &&
       this.validityCurrent(record)
     );
@@ -543,8 +595,7 @@ export class AiSuggestionsHost implements vscode.Disposable {
       this.active === active &&
       !active.source.token.isCancellationRequested &&
       this.sessions.get(session.panel.id) === session &&
-      session.panel.isReady() &&
-      session.panel.isActive() &&
+      this.activationCurrent(active.activationTarget) &&
       this.validityCurrent(active) &&
       request.settingsGeneration === this.generation &&
       request.documentId === session.panel.documentId() &&
@@ -553,6 +604,7 @@ export class AiSuggestionsHost implements vscode.Disposable {
   }
   private snapshotCurrent(
     session: RegisteredSession,
+    activationTarget: ActivationTarget,
     request: AiSuggestionRequest,
     validity: {
       readonly documentUri: string;
@@ -563,8 +615,7 @@ export class AiSuggestionsHost implements vscode.Disposable {
     return (
       !this.disposed &&
       this.sessions.get(session.panel.id) === session &&
-      session.panel.isReady() &&
-      session.panel.isActive() &&
+      this.activationCurrent(activationTarget) &&
       this.validityCurrent(validity) &&
       request.settingsGeneration === this.generation &&
       request.documentId === session.panel.documentId() &&
@@ -623,6 +674,7 @@ export class AiSuggestionsHost implements vscode.Disposable {
       this.reply(session, request, "stale");
       return;
     }
+    const activationTarget = this.beginActivation(session);
     if (request.trigger === "auto" && !this.settings.autoTrigger) {
       this.reply(session, request, "disabled");
       return;
@@ -635,7 +687,7 @@ export class AiSuggestionsHost implements vscode.Disposable {
       this.reply(session, request, "untrusted");
       return;
     }
-    const documentUri = session.panel.uri();
+    const documentUri = activationTarget.uri;
     const validity = this.captureValidity(documentUri);
     const connectionState = this.connectionState(documentUri);
     if (connectionState === "excluded") {
@@ -650,29 +702,41 @@ export class AiSuggestionsHost implements vscode.Disposable {
       this.reply(session, request, "blocked");
       return;
     }
-    const markdown = session.panel.markdown();
+    const initialMarkdown = session.panel.markdown();
     if (
-      markdown.length > AI_LIMITS.maxDocumentLength ||
-      request.position > markdown.length ||
-      isLowSurrogate(markdown.charCodeAt(request.position))
+      initialMarkdown.length > AI_LIMITS.maxDocumentLength ||
+      request.position > initialMarkdown.length ||
+      isLowSurrogate(initialMarkdown.charCodeAt(request.position))
     ) {
       this.reply(session, request, "invalid-context");
       return;
     }
-    if (!(await this.ensureStarted(session.panel.uri()))) {
+    if (!(await this.ensureStarted(activationTarget.uri))) {
       this.reply(
         session,
         request,
-        this.snapshotCurrent(session, request, validity) ? "failed" : "stale",
+        this.snapshotCurrent(session, activationTarget, request, validity)
+          ? "failed"
+          : "stale",
       );
       return;
     }
-    if (!this.snapshotCurrent(session, request, validity)) {
+    if (!this.snapshotCurrent(session, activationTarget, request, validity)) {
       this.reply(session, request, "stale");
       return;
     }
     if (this.excludedDocuments.has(request.documentId)) {
       this.reply(session, request, "excluded");
+      return;
+    }
+    const markdown = session.panel.markdown();
+    if (
+      !this.snapshotCurrent(session, activationTarget, request, validity) ||
+      markdown.length > AI_LIMITS.maxDocumentLength ||
+      request.position > markdown.length ||
+      isLowSurrogate(markdown.charCodeAt(request.position))
+    ) {
+      this.reply(session, request, "stale");
       return;
     }
     this.cancelActive("cancelled");
@@ -683,6 +747,7 @@ export class AiSuggestionsHost implements vscode.Disposable {
     });
     const active = {
       session,
+      activationTarget,
       request,
       source,
       finish,
@@ -711,6 +776,7 @@ export class AiSuggestionsHost implements vscode.Disposable {
                 documentUri,
                 connectionGeneration: active.connectionGeneration,
                 documentGeneration: active.documentGeneration,
+                activationGeneration: activationTarget.generation,
                 version: request.baseVersion,
                 item: candidate.item,
                 trigger: request.trigger,
@@ -753,19 +819,20 @@ export class AiSuggestionsHost implements vscode.Disposable {
     markdown: string,
   ): Promise<RequestOutcome> {
     try {
-      await this.environment.server.synchronizeDocument(
-        active.session.panel.uri(),
-        active.request.baseVersion,
-        markdown,
-      );
-      if (!this.current(active)) return { reason: "cancelled" };
-      const uri = active.session.panel.uri();
+      const uri = active.activationTarget.uri;
+      const synchronized =
+        await this.environment.server.synchronizeAndFocusDocument(
+          uri,
+          active.request.baseVersion,
+          markdown,
+          () => this.current(active),
+        );
+      if (!synchronized || !this.current(active))
+        return { reason: "cancelled" };
       this.focusedDocumentUri = uri;
-      await this.environment.server.focusDocument(uri);
-      if (!this.current(active)) return { reason: "cancelled" };
       if (this.excludedDocuments.has(uri)) return { reason: "excluded" };
       const completions = await this.environment.server.requestInlineCompletion(
-        active.session.panel.uri(),
+        uri,
         active.request.baseVersion,
         offsetToLspPosition(markdown, active.request.position),
         active.request.trigger,
@@ -908,6 +975,8 @@ export class AiSuggestionsHost implements vscode.Disposable {
   public dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
+    this.activeTarget = undefined;
+    this.activationGeneration += 1;
     this.cancelActive("cancelled");
     this.candidates.clear();
     this.sessions.clear();

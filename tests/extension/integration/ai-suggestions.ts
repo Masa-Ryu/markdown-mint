@@ -36,6 +36,12 @@ export async function runAiSuggestionAcceptance(
     isRunning: true,
     start: async () => undefined,
     synchronizeDocument: async () => undefined,
+    synchronizeAndFocusDocument: async (
+      _uri: string,
+      _version: number,
+      _markdown: string,
+      isCurrent: () => boolean,
+    ) => isCurrent(),
     focusDocument: async () => undefined,
     requestInlineCompletion: async () => {
       modelCalls += 1;

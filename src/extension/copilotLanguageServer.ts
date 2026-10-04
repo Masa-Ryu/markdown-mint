@@ -338,8 +338,36 @@ export class CopilotLanguageServer implements vscode.Disposable {
     version: number,
     text: string,
     languageId = "markdown",
+    isCurrent: () => boolean = () => true,
   ): Promise<void> {
     await this.start(uri);
+    if (!isCurrent()) return;
+    this.validateDocumentSnapshot(uri, version, text);
+    if (!isCurrent()) return;
+    this.synchronizeDocumentStarted(uri, version, text, languageId, isCurrent);
+  }
+
+  /** Synchronize and focus the active document without yielding between sends. */
+  public async synchronizeAndFocusDocument(
+    uri: string,
+    version: number,
+    text: string,
+    isCurrent: () => boolean,
+  ): Promise<boolean> {
+    await this.start(uri);
+    if (!isCurrent()) return false;
+    this.validateDocumentSnapshot(uri, version, text);
+    if (!isCurrent()) return false;
+    this.synchronizeDocumentStarted(uri, version, text, "markdown", isCurrent);
+    if (!isCurrent()) return false;
+    return this.focusDocumentStarted(uri, isCurrent);
+  }
+
+  private validateDocumentSnapshot(
+    uri: string,
+    version: number,
+    text: string,
+  ): void {
     if (
       !isSafeDocumentUri(uri) ||
       !Number.isSafeInteger(version) ||
@@ -349,9 +377,19 @@ export class CopilotLanguageServer implements vscode.Disposable {
       throw new Error(
         "The Markdown document is outside the supported LSP bounds.",
       );
+  }
 
+  private synchronizeDocumentStarted(
+    uri: string,
+    version: number,
+    text: string,
+    languageId: string,
+    isCurrent: () => boolean = () => true,
+  ): void {
+    if (!isCurrent()) return;
     const open = this.documents.get(uri);
     if (!open) {
+      if (!isCurrent()) return;
       this.notify("textDocument/didOpen", {
         textDocument: { uri, languageId, version, text },
       });
@@ -362,6 +400,7 @@ export class CopilotLanguageServer implements vscode.Disposable {
     if (version <= open.version)
       throw new Error("The Copilot document version did not advance.");
     const change = minimalTextChange(open.text, text);
+    if (!isCurrent()) return;
     this.notify("textDocument/didChange", {
       textDocument: { uri, version },
       contentChanges: [{ range: change.range, text: change.text }],
@@ -370,22 +409,43 @@ export class CopilotLanguageServer implements vscode.Disposable {
     open.text = text;
   }
 
-  public async focusDocument(uri: string | undefined): Promise<void> {
+  public async focusDocument(
+    uri: string | undefined,
+    isCurrent: () => boolean = () => true,
+  ): Promise<void> {
     await this.start(uri);
+    if (!isCurrent()) return;
     if (uri !== undefined && !this.documents.has(uri))
       throw new Error("The focused Copilot document has not been opened.");
-    if (this.focusedUri === uri) return;
-    if (this.focusedUri) {
-      const previous = this.documents.get(this.focusedUri);
-      if (previous) {
-        this.notify("textDocument/didClose", {
-          textDocument: { uri: previous.uri },
-        });
-        this.documents.delete(previous.uri);
-      }
-    }
-    this.focusedUri = uri;
+    this.focusDocumentStarted(uri, isCurrent);
+  }
+
+  private focusDocumentStarted(
+    uri: string | undefined,
+    isCurrent: () => boolean,
+  ): boolean {
+    if (!this.closeDocumentsExcept(uri, isCurrent)) return false;
+    if (!isCurrent()) return false;
+    if (this.focusedUri === uri) return true;
+    if (!isCurrent()) return false;
     this.notify("textDocument/didFocus", uri ? { textDocument: { uri } } : {});
+    this.focusedUri = uri;
+    return true;
+  }
+
+  private closeDocumentsExcept(
+    uri: string | undefined,
+    isCurrent: () => boolean,
+  ): boolean {
+    for (const documentUri of [...this.documents.keys()]) {
+      if (documentUri === uri) continue;
+      if (!isCurrent()) return false;
+      this.notify("textDocument/didClose", {
+        textDocument: { uri: documentUri },
+      });
+      this.documents.delete(documentUri);
+    }
+    return isCurrent();
   }
 
   public async requestInlineCompletion(

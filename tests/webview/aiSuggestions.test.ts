@@ -326,6 +326,14 @@ describe("Copilot inline completion ghost", () => {
       isRunning: true,
       start: vi.fn(async () => undefined),
       synchronizeDocument: vi.fn(async () => undefined),
+      synchronizeAndFocusDocument: vi.fn(
+        async (
+          _uri: string,
+          _version: number,
+          _markdown: string,
+          isCurrent: () => boolean,
+        ) => isCurrent(),
+      ),
       focusDocument: vi.fn(async () => undefined),
       requestInlineCompletion: vi.fn(() => response.promise),
       reportShown: vi.fn(),

@@ -355,6 +355,121 @@ describe("Copilot Language Server transport", () => {
     await server.disposeAsync();
   });
 
+  it("does not open a document when its synchronization becomes stale during startup", async () => {
+    const { server, child } = await setup();
+    let currentVersion = 1;
+    const synchronizing = server.synchronizeAndFocusDocument(
+      "file:///workspace/A.md",
+      1,
+      "A body",
+      () => currentVersion === 1,
+    );
+    await vi.waitFor(() =>
+      expect(
+        child.requests.find((message) => message.method === "initialize"),
+      ).toBeDefined(),
+    );
+    currentVersion = 2;
+    const initialize = child.requests.find(
+      (message) => message.method === "initialize",
+    )!;
+    child.respond(initialize.id, { capabilities: {} });
+
+    await expect(synchronizing).resolves.toBe(false);
+    expect(
+      child.requests.some(
+        (message) =>
+          message.method === "textDocument/didOpen" &&
+          message.params?.textDocument?.uri === "file:///workspace/A.md",
+      ),
+    ).toBe(false);
+    expect(child.documents.size).toBe(0);
+    await server.disposeAsync();
+  });
+
+  it("closes all old documents on a current-target switch and clears the last one", async () => {
+    const { server, child } = await setup();
+    await startServer(server, child);
+
+    await expect(
+      server.synchronizeAndFocusDocument(
+        "file:///workspace/A.md",
+        7,
+        "A body",
+        () => true,
+      ),
+    ).resolves.toBe(true);
+    await expect(
+      server.synchronizeAndFocusDocument(
+        "file:///workspace/B.md",
+        12,
+        "B body",
+        () => true,
+      ),
+    ).resolves.toBe(true);
+
+    expect([...child.documents.entries()]).toEqual([
+      ["file:///workspace/B.md", { version: 12, text: "B body" }],
+    ]);
+    const methods = child.requests.map((message) => message.method);
+    expect(methods.indexOf("textDocument/didOpen")).toBeLessThan(
+      methods.indexOf("textDocument/didFocus"),
+    );
+    expect(
+      child.requests.some(
+        (message) =>
+          message.method === "textDocument/didClose" &&
+          message.params?.textDocument?.uri === "file:///workspace/A.md",
+      ),
+    ).toBe(true);
+    const focusB = child.requests.findIndex(
+      (message) =>
+        message.method === "textDocument/didFocus" &&
+        message.params?.textDocument?.uri === "file:///workspace/B.md",
+    );
+    const closeA = child.requests.findIndex(
+      (message) =>
+        message.method === "textDocument/didClose" &&
+        message.params?.textDocument?.uri === "file:///workspace/A.md",
+    );
+    expect(closeA).toBeLessThan(focusB);
+
+    await server.focusDocument(undefined, () => true);
+    expect(child.documents.size).toBe(0);
+    expect(server.focusedDocumentUri).toBeUndefined();
+    expect(
+      child.requests.some(
+        (message) =>
+          message.method === "textDocument/didClose" &&
+          message.params?.textDocument?.uri === "file:///workspace/B.md",
+      ),
+    ).toBe(true);
+    await server.disposeAsync();
+  });
+
+  it("rejects stale cleanup for an old owner of a URI now owned by another panel", async () => {
+    const { server, child } = await setup();
+    await startServer(server, child);
+    const uri = "file:///workspace/shared.md";
+    await server.synchronizeAndFocusDocument(uri, 3, "Shared", () => true);
+
+    let oldOwnerCurrent = true;
+    const staleCleanup = server.focusDocument(undefined, () => oldOwnerCurrent);
+    oldOwnerCurrent = false;
+    await server.synchronizeAndFocusDocument(uri, 3, "Shared", () => true);
+    await staleCleanup;
+
+    expect([...child.documents.keys()]).toEqual([uri]);
+    expect(
+      child.requests.some(
+        (message) =>
+          message.method === "textDocument/didClose" &&
+          message.params?.textDocument?.uri === uri,
+      ),
+    ).toBe(false);
+    await server.disposeAsync();
+  });
+
   it("rejects an initialize response that selects an unsupported position encoding", async () => {
     const { server, child } = await setup();
     const starting = server.start();
