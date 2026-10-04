@@ -2,6 +2,7 @@
 export const AI_LIMITS = {
   debounceMs: 300,
   deadlineMs: 35_000,
+  snapshotCheckDeadlineMs: 3_000,
   maxDocumentLength: 4_000_000,
   maxCompletionLength: 32_768,
   maxRequestIdLength: 160,
@@ -15,6 +16,7 @@ export const AI_AVAILABILITY = [
   "untrusted",
   "no-model",
   "unavailable",
+  "temporarily-unavailable",
   "blocked",
 ] as const;
 export type AiAvailability = (typeof AI_AVAILABILITY)[number];
@@ -31,6 +33,7 @@ export const AI_REASONS = [
   "invalid-context",
   "failed",
   "timeout",
+  "backoff",
   "stale",
   "cancelled",
 ] as const;
@@ -53,6 +56,8 @@ export interface AiSuggestionRequest extends AiSuggestionIdentity {
   readonly protocolVersion: 1;
   readonly type: "ai-suggestion-request";
   readonly trigger: AiTrigger;
+  /** True only for auto requests scheduled after a real user text edit. */
+  readonly afterUserInput?: boolean;
   /** Only host-issued manual triggers have an invocation id. */
   readonly invocationId?: string;
 }
@@ -62,6 +67,13 @@ export interface AiSuggestionCancel {
   readonly requestId: string;
   readonly sessionId: string;
 }
+export interface AiSuggestionSnapshotValidation {
+  readonly protocolVersion: 1;
+  readonly type: "ai-suggestion-snapshot-validation";
+  readonly requestId: string;
+  readonly sessionId: string;
+  readonly current: boolean;
+}
 export interface AiSuggestionState {
   readonly protocolVersion: 1;
   readonly type: "ai-suggestion-state";
@@ -69,6 +81,8 @@ export interface AiSuggestionState {
   readonly settingsGeneration: number;
   readonly autoTrigger: boolean;
   readonly availability: AiAvailability;
+  /** Non-secret setup marker; this never represents model access permission. */
+  readonly autoRestoreOnInput?: boolean;
   readonly active?: boolean;
   readonly statusText?: string;
   readonly modelName?: string;
@@ -80,15 +94,25 @@ export interface AiSuggestionTrigger {
   readonly settingsGeneration: number;
   readonly invocationId: string;
 }
+export interface AiSuggestionSnapshotCheck {
+  readonly protocolVersion: 1;
+  readonly type: "ai-suggestion-snapshot-check";
+  readonly requestId: string;
+  readonly sessionId: string;
+}
 export interface AiSuggestionResult extends AiSuggestionIdentity {
   readonly protocolVersion: 1;
   readonly type: "ai-suggestion-result";
   readonly text: string;
   readonly reason: AiSuggestionReason;
 }
-export type AiWebviewMessage = AiSuggestionRequest | AiSuggestionCancel;
+export type AiWebviewMessage =
+  AiSuggestionRequest | AiSuggestionCancel | AiSuggestionSnapshotValidation;
 export type AiHostMessage =
-  AiSuggestionState | AiSuggestionTrigger | AiSuggestionResult;
+  | AiSuggestionState
+  | AiSuggestionTrigger
+  | AiSuggestionSnapshotCheck
+  | AiSuggestionResult;
 
 function record(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -156,6 +180,19 @@ export function isAiWebviewMessage(value: unknown): value is AiWebviewMessage {
       id(value.requestId) &&
       id(value.sessionId)
     );
+  if (value.type === "ai-suggestion-snapshot-validation")
+    return (
+      onlyKeys(value, [
+        "protocolVersion",
+        "type",
+        "requestId",
+        "sessionId",
+        "current",
+      ]) &&
+      id(value.requestId) &&
+      id(value.sessionId) &&
+      typeof value.current === "boolean"
+    );
   return (
     value.type === "ai-suggestion-request" &&
     onlyKeys(value, [
@@ -170,13 +207,16 @@ export function isAiWebviewMessage(value: unknown): value is AiWebviewMessage {
       "position",
       "targetKind",
       "trigger",
+      "afterUserInput",
       "invocationId",
     ]) &&
     identity(value) &&
     (value.trigger === "auto" || value.trigger === "manual") &&
     (value.trigger === "manual"
-      ? id(value.invocationId)
-      : value.invocationId === undefined)
+      ? id(value.invocationId) && value.afterUserInput === undefined
+      : value.invocationId === undefined &&
+        (value.afterUserInput === undefined ||
+          typeof value.afterUserInput === "boolean"))
   );
 }
 
@@ -191,6 +231,7 @@ export function isAiHostMessage(value: unknown): value is AiHostMessage {
         "settingsGeneration",
         "autoTrigger",
         "availability",
+        "autoRestoreOnInput",
         "active",
         "statusText",
         "modelName",
@@ -198,6 +239,8 @@ export function isAiHostMessage(value: unknown): value is AiHostMessage {
       id(value.sessionId) &&
       counter(value.settingsGeneration) &&
       typeof value.autoTrigger === "boolean" &&
+      (value.autoRestoreOnInput === undefined ||
+        typeof value.autoRestoreOnInput === "boolean") &&
       (value.active === undefined || typeof value.active === "boolean") &&
       (value.statusText === undefined ||
         (typeof value.statusText === "string" &&
@@ -219,6 +262,12 @@ export function isAiHostMessage(value: unknown): value is AiHostMessage {
       id(value.sessionId) &&
       counter(value.settingsGeneration) &&
       id(value.invocationId)
+    );
+  if (value.type === "ai-suggestion-snapshot-check")
+    return (
+      onlyKeys(value, ["protocolVersion", "type", "requestId", "sessionId"]) &&
+      id(value.requestId) &&
+      id(value.sessionId)
     );
   return (
     value.type === "ai-suggestion-result" &&

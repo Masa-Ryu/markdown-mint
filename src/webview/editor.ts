@@ -158,7 +158,7 @@ import {
   replaceCodeLanguageIdentifier,
 } from "../core/visualRendering";
 import { isBlankSpacingNode } from "../core";
-import { buildMarkdownPositionMap } from "../core/markdownPositionMap";
+import { MarkdownPositionMapCache } from "../core/markdownPositionMap";
 import { mergeMarkdownSnapshots } from "../shared/threeWayMerge";
 import {
   createEmptyTableNode,
@@ -2930,6 +2930,7 @@ export class MarkdownEditorApp {
     this.core = options.core;
     this.options = { ...options, hostUndo: options.hostUndo ?? true };
     this.schema = options.core.schema;
+    const aiPositionMapCache = new MarkdownPositionMapCache();
     const imageImportOptions: ImageImportControllerOptions = {
       schema: this.schema,
       ...(this.vscode
@@ -2961,12 +2962,13 @@ export class MarkdownEditorApp {
         if (!this.initialized || this.parseError || this.previewOnly)
           return undefined;
         const source = this.currentMarkdown();
-        const map = buildMarkdownPositionMap(
+        const map = aiPositionMapCache.get(
           source,
           state.doc,
           this.profile,
           this.core,
           this.previousSnapshot,
+          this.version,
         );
         return map.pmPositionToSourceOffset(position);
       },
@@ -11182,6 +11184,7 @@ export class MarkdownEditorApp {
     if (
       message.type === "ai-suggestion-state" ||
       message.type === "ai-suggestion-trigger" ||
+      message.type === "ai-suggestion-snapshot-check" ||
       message.type === "ai-suggestion-result"
     ) {
       this.aiSuggestions.handleMessage(message);

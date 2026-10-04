@@ -16,6 +16,8 @@ export type LanguageModelFailure =
   | "invalid-context"
   | "unsafe-suggestion";
 
+export type LanguageModelChangeReason = "models" | "access";
+
 export interface LanguageModelSelection {
   readonly model: vscode.LanguageModelChat;
   readonly identity: string;
@@ -49,9 +51,14 @@ export interface LanguageModelSuggestionsOptions {
 /** Public VS Code Language Model API adapter; no network or SDK fallback exists. */
 export class LanguageModelSuggestions implements vscode.Disposable {
   private selection: LanguageModelSelection | undefined;
+  private accessCandidate: LanguageModelSelection | undefined;
+  private lastAccessAllowed: boolean | undefined;
+  private selecting: Promise<LanguageModelFailure | undefined> | undefined;
   private disposed = false;
   private readonly subscriptions: vscode.Disposable[] = [];
-  private readonly listeners = new Set<() => void>();
+  private readonly listeners = new Set<
+    (reason: LanguageModelChangeReason, accessAllowed?: boolean) => void
+  >();
 
   constructor(private readonly options: LanguageModelSuggestionsOptions) {
     const modelChange = options.api?.onDidChangeChatModels;
@@ -64,31 +71,58 @@ export class LanguageModelSuggestions implements vscode.Disposable {
           )
             return;
           this.selection = undefined;
-          this.emitChange();
+          this.accessCandidate = undefined;
+          this.lastAccessAllowed = undefined;
+          this.emitChange("models");
         }),
       );
     const accessChange = options.access?.onDidChange;
     if (accessChange)
       this.subscriptions.push(
         accessChange(() => {
-          if (
-            this.selection &&
-            options.access?.canSendRequest(this.selection.model) === true
-          )
+          const candidate = this.accessCandidate;
+          if (!candidate) {
+            this.emitChange("access");
             return;
-          this.selection = undefined;
-          this.emitChange();
+          }
+          const accessAllowed =
+            options.access?.canSendRequest(candidate.model) === true;
+          if (accessAllowed === this.lastAccessAllowed) return;
+          this.lastAccessAllowed = accessAllowed;
+          this.selection = accessAllowed ? candidate : undefined;
+          this.emitChange("access", accessAllowed);
         }),
       );
   }
 
-  public onDidChange(listener: () => void): vscode.Disposable {
+  public onDidChange(
+    listener: (
+      reason: LanguageModelChangeReason,
+      accessAllowed?: boolean,
+    ) => void,
+  ): vscode.Disposable {
     this.listeners.add(listener);
     return { dispose: () => this.listeners.delete(listener) };
   }
 
-  /** Called only from the explicit Suggest Continuation user command. */
-  public async selectForUserAction(): Promise<
+  /** Called only from an explicit command or a real debounced text-input action. */
+  public selectForUserAction(): Promise<LanguageModelFailure | undefined> {
+    if (this.disposed) return Promise.resolve("cancelled");
+    if (this.selecting) return this.selecting;
+    const selecting = this.selectModelForUserAction();
+    this.selecting = selecting;
+    void selecting.then(
+      () => {
+        if (this.selecting === selecting) this.selecting = undefined;
+      },
+      () => {
+        if (this.selecting === selecting) this.selecting = undefined;
+      },
+    );
+    return selecting;
+  }
+
+  private async selectModelForUserAction(): Promise<
     LanguageModelFailure | undefined
   > {
     if (this.disposed) return "cancelled";
@@ -100,9 +134,13 @@ export class LanguageModelSuggestions implements vscode.Disposable {
       const selected = chooseCompletionModel(models);
       if (!selected) {
         this.selection = undefined;
+        this.accessCandidate = undefined;
+        this.lastAccessAllowed = undefined;
         return "no-model";
       }
+      this.accessCandidate = selected;
       const permission = access.canSendRequest(selected.model);
+      this.lastAccessAllowed = permission === true;
       if (permission !== true) {
         this.selection = undefined;
         return "needs-authorization";
@@ -177,13 +215,21 @@ export class LanguageModelSuggestions implements vscode.Disposable {
     if (this.disposed) return;
     this.disposed = true;
     this.selection = undefined;
+    this.accessCandidate = undefined;
+    this.lastAccessAllowed = undefined;
     this.listeners.clear();
     for (const subscription of this.subscriptions.splice(0))
       subscription.dispose();
   }
 
-  private emitChange(): void {
-    for (const listener of this.listeners) listener();
+  private emitChange(
+    reason: LanguageModelChangeReason,
+    accessAllowed?: boolean,
+  ): void {
+    for (const listener of this.listeners) {
+      if (accessAllowed === undefined) listener(reason);
+      else listener(reason, accessAllowed);
+    }
   }
 }
 

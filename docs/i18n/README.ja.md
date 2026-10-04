@@ -64,12 +64,15 @@ Language Model APIはVS Code 1.91でStableになりました。1.90ではMintの
 AI提案はAPI unavailableとして無効になります。
 
 最初のモデル要求とVS Codeの同意は、Command PaletteまたはMintのステータス項目から
-**Markdown Mint: Suggest Continuation** を実行して開始します。その後、
+**Markdown Mint: Suggest Continuation** を実行して開始します。そのセットアップ後、
 `markdownMint.aiSuggestions.autoTrigger` が有効なら通常入力後に候補を表示します。設定の初期値は
 **false** で、ツールバーにON/OFFボタンはありません。自動提案がOFFでも手動提案を使えます。
-公開Language Model APIではモデル取得をユーザー操作から開始する必要があります。Extension Host
-再起動後にモデルと保存済みアクセスを非対話で再取得する公開手段は確認できていないため、現在の
-実装では再起動後に同じコマンドが再度必要です。再起動後の自動復元を確認済みとはしていません。
+Extension Host再起動後は、実際の文字入力と通常の300ms debounceを待ってから、公開モデル選択APIで
+モデルを再取得します。保存されるのはセットアップ完了を示す秘密でないフラグだけで、利用許可の代用には
+しません。各要求前に `canSendRequest(model)` を確認し、falseまたは不明なら自動要求を停止します。
+起動時や設定変更だけでモデル選択は行いません。この再起動経路はfake modelでテスト済みですが、実際の
+VS Code/Copilotセッションでは未確認です。公開アクセス変更イベントで利用許可が戻ったと確認できた場合は、
+次の実入力から最新文脈で新しい要求を開始し、失効した要求や候補は復活させません。
 要求は **Copilot の利用枠を消費する場合があります**。
 
 候補対象は本文・見出し・リストの文中と文末、および文脈のある空段落です。hostはアクティブな

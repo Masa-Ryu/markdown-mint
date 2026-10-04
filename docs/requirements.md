@@ -426,20 +426,29 @@ and selection reason. AI is enabled only in a trusted local desktop Extension
 Host, with normal editing available if the public API or Copilot model is
 unavailable.
 
-Model selection and consent are initiated only by the explicit Suggest
-Continuation command/status action. VS Code's public Language Model guide says
-Copilot consent is implemented by an authentication dialog and
-`selectChatModels` must be called from a user-initiated action. The public
-`canSendRequest(model)` check requires a model object, while `selectChatModels`
-is the public way to reacquire one. The extension therefore does not enumerate
-models in the background on activation or configuration sync. It holds the
-model only in process memory and rechecks access before each request. A fresh
-Extension Host currently requires Suggest Continuation once before automatic
-requests can use the model again. This is a documented limitation against the
-requested restart-resume behavior; no unsupported silent argument or private
-API is used. Manual acceptance in actual supported VS Code/Copilot builds is
-still required to establish whether a future public non-interactive path can
-safely improve restoration. (Reference: https://code.visualstudio.com/api/extension-guides/ai/language-model)
+Initial model selection and consent are initiated by the explicit Suggest
+Continuation command/status action. After that succeeds, Mint persists only a
+non-secret setup-completed marker; it is never treated as permission. VS
+Code's public Language Model guide says Copilot consent is implemented by an
+authentication dialog and `selectChatModels` must be called from a
+user-initiated action. The public `canSendRequest(model)` check requires a
+model object, while `selectChatModels` is the public way to reacquire one.
+After an Extension Host restart, Mint does not enumerate models on activation
+or configuration sync. If auto trigger is enabled and the setup marker exists,
+the first real text edit waits for the regular 300 ms debounce, then starts
+public model selection as the consequence of that user input. Mint checks
+`canSendRequest(model) === true` again before sending; false or unknown access
+stops the request. A known denied transition stays blocked from further
+automatic selection until a public access-change event confirms the cached
+model is permitted or the user explicitly runs Suggest Continuation. An
+unassociated access event does not start model selection or clear a known
+denial. After confirmed recovery, the next debounced real input creates a new
+request from the current snapshot; the old request is never revived. The host
+rechecks the active session, document identity/version, cursor, request
+generation, and cancellation after the public API wait. Real VS Code/Copilot
+acceptance is still required to confirm saved consent restoration and provider
+UI behavior. (Reference:
+https://code.visualstudio.com/api/extension-guides/ai/language-model)
 
 A request is based on the host-owned current unsaved Markdown snapshot and a
 UTF-16 cursor offset checked against the active panel, document URI/version,
@@ -481,21 +490,107 @@ caret move, composition conflict, or stale identity clears it. Tab/Escape and
 keyCode 229 remain unhandled during IME composition. A manual failure is
 reported with visible feedback and not only an aria-live message.
 
-A public-API limitation remains for automatic restoration after an Extension
-Host restart: the model object is process-local, and the only documented model
-selection API may display the consent UI and is required to run in a user
-initiated action. The extension deliberately does not call it at activation or
-from settings events. Consequently this build's exact limitation is that the
-user must run Suggest Continuation once in each fresh Extension Host before
-AI requests resume. VS Code 1.90 finalized these APIs for Insiders only; they
-became available in Stable in 1.91. The extension keeps its 1.90 engine floor
-for ordinary editing and reports AI as unavailable on builds without the
-public API. This environment does not establish Copilot
-consent persistence, real-service behavior, Japanese OS IME interaction,
-Command Palette/Quick Pick focus, screen-reader output, restart restoration,
-or real-user utility/latency. Leave the PR Draft until those manual checks are
-completed. Fake models and browser simulations are automated regressions only,
-not Copilot acceptance evidence.
+Automatic restoration after an Extension Host restart now attempts public
+model selection only after the first real text edit's 300 ms debounce and only
+when the non-secret setup-completed marker was previously set. It checks
+current access before sending and does not restore on activation, setting
+events, cursor-only changes, or a missing setup marker. A real VS Code/Copilot
+restart session has not yet established that consent stays available or that
+provider selection behaves as expected. VS Code 1.90 finalized these APIs for
+Insiders only; they became available in Stable in 1.91. The extension keeps
+its 1.90 engine floor for ordinary editing and reports AI as unavailable on
+builds without the public API. Copilot consent persistence, real-service
+behavior, Japanese OS IME interaction, Command Palette/Quick Pick focus,
+screen-reader output, restart restoration, and real-user utility/latency remain
+manual checks. Leave the PR Draft until those checks are completed. Fake
+models and browser simulations are automated regressions only, not Copilot
+acceptance evidence.
+
+The status-bar item is hidden unless the current active editor is a ready Mint
+panel. The host associates each status update with its active session so an
+inactive panel cannot replace it; leaving the last Mint panel hides the item.
+Transient failed and timed-out outcomes pause further model requests using
+internal exponential backoff of 1, 2, 4, 8, 16, then at most 30 seconds.
+The delay is not shown to users. The current public LanguageModelError
+contract documents code and cause but no retry-after value, so Mint does not
+infer or display a service retry timestamp. A Blocked result remains a
+distinct service/account limit state and is not automatically retried.
+
+#### Copilot product acceptance matrix — pending
+
+This matrix is fixed synthetic input only. No user document, workspace file,
+or private prose is to be sent. The marker ⟦cursor⟧ marks the insertion point
+and is not part of the Markdown sent to the model. The notation \n means one
+actual LF. Each case is planned for three repetitions where service
+availability and quota allow; every attempted opportunity stays in the
+denominator, including no-request, empty response, timeout, unsafe, stale,
+cancelled, and blocked outcomes.
+
+Japanese cases:
+
+- **J01 — 本文・文中:** 「今回の更新では⟦cursor⟧既存の設定を保ちます。」
+- **J02 — 本文・文中:** 「利用者は変更内容を⟦cursor⟧確認してから保存できます。」
+- **J03 — 本文・文末:** 「この処理は既存ファイルを変更しません。⟦cursor⟧」
+- **J04 — 見出し・文中:** 「## 初回の⟦cursor⟧設定手順」
+- **J05 — 見出し・文末:** 「## 変更後の確認⟦cursor⟧」
+- **J06 — 箇条書き・文中:** 「- 設定ファイルを⟦cursor⟧読み込んで状態を確認します。」
+- **J07 — 箇条書き・文末:** 「- 保存結果を⟦cursor⟧」
+- **J08 — 番号付きリスト・文中:** 「1. 入力内容を⟦cursor⟧検証してから処理します。」
+- **J09 — 番号付きリスト・文末:** 「2. 出力先を⟦cursor⟧」
+- **J10 — 入れ子リスト・文中:** 「 - 問題の詳細を⟦cursor⟧記録して担当者へ共有します。」
+- **J11 — 前後に文脈がある空段落:** 「前の段落では手順を説明します。\n\n⟦cursor⟧\n\n次の段落では結果をまとめます。」
+- **J12 — 見出しと本文に挟まれた空段落:** 「## 更新の確認\n既存の設定を読み込みます。\n\n⟦cursor⟧\n\n最後に結果を確認します。」
+- **J13 — リンクを含む本文:** 「参照先は [公開ガイド](https://example.test/guide) にまとめました。⟦cursor⟧」
+- **J14 — 強調を含む本文:** 「**重要な設定**は⟦cursor⟧既定値を変えません。」
+- **J15 — 既存の後続行を保つ文中:** 「変更内容を保存した後は、⟦cursor⟧\n次の手順へ進みます。」
+
+English cases:
+
+- **E01 — body, mid-sentence:** “This update keeps⟦cursor⟧the existing settings intact.”
+- **E02 — body, mid-sentence:** “Users can review the change⟦cursor⟧before saving the file.”
+- **E03 — body, paragraph end:** “This operation does not modify existing files.⟦cursor⟧”
+- **E04 — heading, mid-line:** “## Initial⟦cursor⟧setup steps”
+- **E05 — heading, line end:** “## Verifying the change⟦cursor⟧”
+- **E06 — unordered list, mid-sentence:** “- Read the settings file⟦cursor⟧and verify its values.”
+- **E07 — unordered list, item end:** “- Record the save result⟦cursor⟧”
+- **E08 — ordered list, mid-sentence:** “1. Validate the input⟦cursor⟧before processing it.”
+- **E09 — ordered list, item end:** “2. Choose the output location⟦cursor⟧”
+- **E10 — nested list, mid-sentence:** “ - Record the problem details⟦cursor⟧and share them with the owner.”
+- **E11 — empty paragraph with surrounding context:** “The previous paragraph explains the steps.\n\n⟦cursor⟧\n\nThe next paragraph summarizes the result.”
+- **E12 — empty paragraph between heading and prose:** “## Update check\nLoad the existing settings.\n\n⟦cursor⟧\n\nFinally, verify the result.”
+- **E13 — body containing a link:** “The [public guide](https://example.test/guide) contains more detail.⟦cursor⟧”
+- **E14 — body containing emphasis:** “The **important setting**⟦cursor⟧keeps its default value.”
+- **E15 — mid-sentence with an existing following line:** “After saving the changes,⟦cursor⟧\ncontinue with the next step.”
+
+The operator records a separate row for each case/repetition with: outcome
+category; request sent or not; cold or warm state; model ID and version; VS
+Code version and OS; input-stop-to-request, request-to-first-response,
+request-to-complete-response, and validation-to-display durations; displayed
+and displayed-within-three-seconds flags; and a human rating of usable as-is,
+usable with a minor edit, or unusable with a short reason. Report Japanese and
+English separately. Publish the all-opportunity display rate and timeout rate
+alongside the latency distribution for successful displays. Do not omit slow,
+empty, or failed opportunities to improve p50/p95.
+
+Run one 3–5 minute continuous synthetic-writing session per language. Include
+both cold startup/first authorized request and warm requests. Check first-time
+consent from the command, refusal then explicit recovery, automatic setting
+remaining off until changed, Tab/Escape, native Undo/Redo, and the restart
+scenario. For restart, complete consent in an active Mint panel, enable auto
+trigger explicitly, close and reopen VS Code, then type into the same
+synthetic document without invoking the command. Confirm that selection starts
+only after the 300 ms real-input debounce and that `canSendRequest(model)` is
+true before any request. Record whether VS Code/provider UI asks for further
+consent. If it does not resume, record that result as a blocker; invoke Suggest
+Continuation once only after recording the restart outcome to verify manual
+recovery, not to mark restart acceptance passed.
+
+**Acceptance status: NOT RUN.** Automated fake-model/browser suites made
+**0 real Copilot requests** and do not fill any case or repetition in this
+matrix. Product acceptance remains blocked on a supported VS Code Stable
+build, a Copilot model and user consent, a local trusted desktop workspace,
+and an operator who can perform and rate the synthetic cases. Keep the PR
+Draft until results are recorded here.
 
 Packaging returns to one universal VSIX. `npm run package` starts from a clean
 build, removes any stale `dist/copilot` directory, bundles the extension and
@@ -507,21 +602,23 @@ release-recovery planner's exact note comparison, draft lookup and error
 propagation remain unchanged in purpose. No Marketplace or GitHub Release is
 run by this PR.
 
-On 2026-10-05, the final migration tree passed `npm run compile`, `npm test`
-(1,431 tests across 71 files), `npm run lint` (zero errors; 92 existing
-`no-explicit-any` warnings), and `npm run format:check`. `npm run test:extension`
-passed in VS Code 1.140.0 with an injected fake Language Model adapter through
-the production provider: a same-version save completed during the delayed
-response, native text/version stayed unchanged before Tab, and Tab/Undo/Redo
-used the existing native history boundary. `npm run test:browser:ai` passed
-ghost, input, Tab/Escape, clipboard, eligible-target, theme, and Preview
-exclusion checks. `npm run test:browser:blocks` passed all five required
-fixtures in Rich Editor, dedicated Preview, and native Preview. HTML export
-passed with zero CSP violations; PDF export produced 334,167 bytes and 13 A4
-pages. `npm run benchmark:ai-suggestions` passed on macOS arm64 / Node 24.5.0;
-it reports only local mapping, context, insertion-safety, and input-reconciliation
-costs, not model or network latency. `npm run package` passed with 76 files and
-bundled-formatter verification.
+On 2026-10-05, `npm run compile`, `npm test` (1,453 tests across 71 files),
+`npm run lint` (zero errors; 92 `no-explicit-any` warnings), and
+`npm run format:check` passed. `npm run test:extension` did not reach its AI
+acceptance: on VS Code 1.140.0, the earlier CodeLens integration timed out
+waiting for the Markdown source editor to become active. A diagnostic run of
+the AI fake-model integration displayed a candidate without changing native
+text before adoption, but timed out at its native Undo assertion; that
+diagnostic is not product acceptance. Native AI Undo/Redo therefore remains
+unverified here. `npm run test:browser:ai` passed ghost integrity, Tab,
+browser-host Undo/Redo, input debounce, clipboard exclusion, target, theme, and
+Preview checks. `npm run test:browser:blocks` passed the block interactions and
+all five required fixtures in Rich Editor, dedicated Preview, and native
+Preview. HTML export passed with zero CSP violations; PDF export produced
+334,167 bytes and 13 A4 pages. The AI benchmark passed on macOS arm64 / Node
+24.5.0 and measures only local mapping, context, insertion-safety, and
+input-reconciliation costs; it excludes model and network latency. Packaging
+passed for a 76-file universal VSIX and the bundled formatter.
 
 The same-environment package comparison used Node 24.5.0 on macOS arm64 and the
 checkout's installed dependencies. The exact locally tracked `origin/main`
@@ -530,16 +627,22 @@ base was `397597002f17eea47b52115f5325f4da369c3c9c` (0.8.0):
 | Build                                | Files | Compressed bytes | Uncompressed bytes |
 | ------------------------------------ | ----: | ---------------: | -----------------: |
 | `origin/main` 0.8.0                  |    76 |        4,640,754 |         13,909,932 |
-| This PR 0.9.0 universal VSIX         |    76 |        4,656,247 |         13,955,599 |
+| This PR 0.9.0 universal VSIX         |    76 |        4,658,595 |         13,966,614 |
 | Prior PR 0.9.0 darwin-arm64 SDK VSIX |    78 |       88,717,931 |        136,567,747 |
 
 The previous SDK-package number is the recorded earlier PR validation result,
 not a fresh rebuild in this run. Relative to that recorded build, the universal
 package is 94.75% smaller compressed; the removed native server alone was
-122,589,013 bytes uncompressed. The current package is 15,493 compressed bytes
-(0.33%) larger than the same-run 0.8.0 main package. Its largest members are
-the extension bundle (6,003,587 bytes), Mermaid runtime (3,794,174 bytes),
-Webview bundle (1,833,393 bytes), and third-party notices (524,654 bytes).
+122,589,013 bytes uncompressed. The current package is 17,841 compressed bytes
+(0.38%) larger than the same-run 0.8.0 main package. The AI benchmark's short
+English case measured p50/p95 of 0.530/0.666 ms, and the short Japanese case
+0.527/0.655 ms for local mapping, context, safety planning, and input
+reconciliation only. The 5,000-prose-block case measured 32.48/37.22 ms and
+the 2,000-table-row case 26.66/27.61 ms. Cached position-map lookups ranged
+from 0.00063 to 0.00250 ms across the fixtures. These are not suggestion or
+model-response latencies. Its largest members are the extension bundle
+(6,011,207 bytes), Mermaid runtime (3,794,174 bytes), Webview bundle
+(1,836,245 bytes), and third-party notices (524,654 bytes).
 The VSIX verifier confirmed that no Copilot SDK, standalone executable, or
 target-specific package was included.
 
@@ -549,9 +652,10 @@ restart, VS Code 1.90 behavior, OS Japanese IME, Command Palette/Quick Pick
 focus, screen reader, and service-side exclusion behavior remain unverified.
 The Language Model API is stable starting in VS Code 1.91; 1.90 exposes it only
 in Insiders, so this extension keeps its 1.90 engine floor for ordinary editing
-and disables AI when the public API is absent. Also, the process-local model
-cannot currently be reacquired after restart without running the user-initiated
-Suggest Continuation command again. Keep PR #147 Draft until these product
+and disables AI when the public API is absent. After a saved setup, the
+implementation attempts public model reacquisition only after debounced real
+text input; fake-model tests do not establish provider consent persistence or
+this path's behavior in VS Code. Keep PR #147 Draft until these product
 acceptance gaps, especially restart restoration, are resolved and recorded.
 
 ## Issue #131 standalone HTML export (0.6.0)

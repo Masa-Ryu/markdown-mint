@@ -11,6 +11,66 @@ export interface MarkdownPositionMapBridge {
 }
 
 /**
+ * Reuses source anchors only while every input that defines the synchronized
+ * snapshot remains identical. Callers supply the host document version as an
+ * additional guard for same-text document replacements.
+ */
+export class MarkdownPositionMapCache {
+  private entry:
+    | {
+        readonly source: string;
+        readonly doc: PMNode;
+        readonly profile: Profile;
+        readonly bridge: MarkdownPositionMapBridge;
+        readonly previousSnapshot: unknown;
+        readonly documentVersion: number;
+        readonly map: MarkdownPositionMap;
+      }
+    | undefined;
+
+  public get(
+    source: string,
+    doc: PMNode,
+    profile: Profile,
+    bridge: MarkdownPositionMapBridge,
+    previousSnapshot: unknown,
+    documentVersion: number,
+  ): MarkdownPositionMap {
+    const current = this.entry;
+    if (
+      current?.source === source &&
+      current.doc === doc &&
+      current.profile === profile &&
+      current.bridge === bridge &&
+      current.previousSnapshot === previousSnapshot &&
+      current.documentVersion === documentVersion
+    )
+      return current.map;
+    const map = buildMarkdownPositionMap(
+      source,
+      doc,
+      profile,
+      bridge,
+      previousSnapshot,
+    );
+    this.entry = {
+      source,
+      doc,
+      profile,
+      bridge,
+      previousSnapshot,
+      documentVersion,
+      map,
+    };
+    return map;
+  }
+
+  public clear(): void {
+    this.entry = undefined;
+  }
+}
+
+/**
  * Build exact anchors for one synchronized Markdown/ProseMirror snapshot.
  * A unique plain-text anchor is inserted into a cloned PM document or source,
  * then removed again. The mapping is accepted only when removing the anchor

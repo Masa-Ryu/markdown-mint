@@ -58,8 +58,8 @@ import {
   AI_TRIGGER_COMMAND,
   createAiSuggestionsEnvironment,
   type AiSuggestionsEnvironment,
+  type AiStatusSnapshot,
 } from "./aiSuggestions";
-import type { AiAvailability } from "../shared/aiSuggestions";
 
 export const VIEW_TYPE = MARKDOWN_MINT_VIEW_TYPE;
 export const PREVIEW_VIEW_TYPE = "markdownMint.preview";
@@ -340,12 +340,17 @@ export class MarkdownMintEditorProvider
     if (this.aiStatus) {
       this.aiStatus.name = "Markdown Mint Language Model Suggestions";
       this.aiStatus.command = AI_TRIGGER_COMMAND;
-      this.aiStatus.show();
     }
     this.aiSuggestions = new AiSuggestionsHost(
       aiEnvironment ?? createAiSuggestionsEnvironment(context),
-      (availability: AiAvailability, message: string, autoTrigger: boolean) => {
+      (status: AiStatusSnapshot | undefined) => {
         if (!this.aiStatus) return;
+        const active = this.activeAiSession();
+        if (!status || active?.aiSessionId !== status.sessionId) {
+          this.aiStatus.hide();
+          return;
+        }
+        const { availability, message, autoTrigger } = status;
         this.aiStatus.text =
           availability === "needs-authorization"
             ? "$(account) Mint suggestions"
@@ -360,6 +365,7 @@ export class MarkdownMintEditorProvider
                     : "$(warning) Mint suggestions";
         this.aiStatus.tooltip = message;
         this.aiStatus.command = AI_TRIGGER_COMMAND;
+        this.aiStatus.show();
       },
     );
     this.output = vscode.window.createOutputChannel("Markdown Mint");
@@ -1000,6 +1006,12 @@ export class MarkdownMintEditorProvider
           return;
         case "ai-suggestion-request":
           await this.aiSuggestions.requestSuggestion(
+            session.aiSessionId,
+            message,
+          );
+          return;
+        case "ai-suggestion-snapshot-validation":
+          this.aiSuggestions.confirmSnapshotValidation(
             session.aiSessionId,
             message,
           );

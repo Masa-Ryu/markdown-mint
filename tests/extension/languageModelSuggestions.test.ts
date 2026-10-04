@@ -80,6 +80,22 @@ function setup(model = fakeModel()) {
 }
 
 describe("public VS Code Language Model adapter", () => {
+  it("coalesces concurrent user-initiated model selection while consent is pending", async () => {
+    const f = setup();
+    const pending = deferred<readonly vscode.LanguageModelChat[]>();
+    vi.mocked(f.api.selectChatModels).mockReturnValue(pending.promise);
+    const first = f.adapter.selectForUserAction();
+    const second = f.adapter.selectForUserAction();
+    expect(f.api.selectChatModels).toHaveBeenCalledTimes(1);
+    pending.resolve([f.model]);
+    await expect(Promise.all([first, second])).resolves.toEqual([
+      undefined,
+      undefined,
+    ]);
+    expect(f.adapter.restoreAccess()).toBeUndefined();
+    f.adapter.dispose();
+  });
+
   it("selects an available low-latency family without relying on result order", () => {
     const first = fakeModel({ id: "copilot-z", family: "gpt-4o" });
     const mini = fakeModel({ id: "copilot-a", family: "gpt-4o-mini" });
@@ -163,6 +179,16 @@ describe("public VS Code Language Model adapter", () => {
     f.adapter.onDidChange(changed);
     f.modelsChanged();
     expect(changed).not.toHaveBeenCalled();
+    f.adapter.dispose();
+  });
+
+  it("labels missing-selection change events so the host can recover only on model registration", () => {
+    const f = setup();
+    const changed = vi.fn();
+    f.adapter.onDidChange(changed);
+    f.modelsChanged();
+    f.permit(false);
+    expect(changed.mock.calls).toEqual([["models"], ["access"]]);
     f.adapter.dispose();
   });
 });

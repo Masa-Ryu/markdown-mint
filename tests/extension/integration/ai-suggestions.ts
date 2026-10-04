@@ -60,6 +60,8 @@ export async function runAiSuggestionAcceptance(
       },
       access: { canSendRequest: () => true },
     }),
+    setupCompleted: () => false,
+    markSetupCompleted: async () => undefined,
     supported: () => true,
     trusted: () => true,
     settings: () => ({ autoTrigger: false }),
@@ -171,6 +173,7 @@ export async function runAiSuggestionAcceptance(
         } else if (
           message.type === "ai-suggestion-state" ||
           message.type === "ai-suggestion-trigger" ||
+          message.type === "ai-suggestion-snapshot-check" ||
           message.type === "ai-suggestion-result"
         ) {
           if (message.type === "ai-suggestion-trigger") aiTriggerMessages += 1;

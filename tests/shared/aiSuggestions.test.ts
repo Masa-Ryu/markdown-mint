@@ -159,4 +159,28 @@ describe("VS Code Language Model suggestion protocol", () => {
       }),
     ).toBe(false);
   });
+
+  it("validates the request-snapshot handshake used after consent UI", () => {
+    const check = {
+      protocolVersion: 1,
+      type: "ai-suggestion-snapshot-check",
+      requestId: "r1",
+      sessionId: "s1",
+    };
+    expect(isAiHostMessage(check)).toBe(true);
+    expect(isHostMessage(check)).toBe(true);
+    expect(isAiHostMessage({ ...check, unexpected: true })).toBe(false);
+
+    const validation = {
+      protocolVersion: 1,
+      type: "ai-suggestion-snapshot-validation",
+      requestId: "r1",
+      sessionId: "s1",
+      current: true,
+    };
+    expect(isAiWebviewMessage(validation)).toBe(true);
+    expect(parseWebviewMessage(validation)).toEqual(validation);
+    expect(isAiWebviewMessage({ ...validation, current: "yes" })).toBe(false);
+    expect(isAiWebviewMessage({ ...validation, unexpected: true })).toBe(false);
+  });
 });

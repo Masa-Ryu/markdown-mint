@@ -938,6 +938,8 @@ function fakeAiEnvironment(
       api: { selectChatModels: async () => [model as never] },
       access: { canSendRequest: () => true },
     }),
+    setupCompleted: () => false,
+    markSetupCompleted: async () => undefined,
     supported: () => true,
     trusted: () => true,
     settings: () => ({ autoTrigger: false }),
@@ -1192,11 +1194,22 @@ it("cancels a pending AI response when format-on-save changes the document", asy
 function context(): {
   extensionUri: unknown;
   globalStorageUri: unknown;
+  globalState: {
+    get<T>(key: string): T | undefined;
+    update(key: string, value: unknown): Promise<void>;
+  };
   subscriptions: unknown[];
 } {
+  const values = new Map<string, unknown>();
   return {
     extensionUri: vscode.Uri.file("/extension"),
     globalStorageUri: vscode.Uri.file("/globalStorage"),
+    globalState: {
+      get: <T>(key: string) => values.get(key) as T | undefined,
+      update: async (key: string, value: unknown) => {
+        values.set(key, value);
+      },
+    },
     subscriptions: [],
   };
 }

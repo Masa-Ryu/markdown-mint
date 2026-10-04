@@ -48,7 +48,7 @@ const bundled = await build({
     contents: `
 import { TextSelection } from "prosemirror-state";
 import { parseMarkdown, serializeMarkdown } from ${JSON.stringify(resolve(repository, "src/core/index.ts"))};
-import { buildMarkdownPositionMap } from ${JSON.stringify(resolve(repository, "src/core/markdownPositionMap.ts"))};
+import { MarkdownPositionMapCache } from ${JSON.stringify(resolve(repository, "src/core/markdownPositionMap.ts"))};
 import { matchCompletionInput, planCompletionInsertion } from ${JSON.stringify(resolve(repository, "src/core/inlineCompletion.ts"))};
 import { buildCompletionContext } from ${JSON.stringify(resolve(repository, "src/extension/aiSuggestionPrompt.ts"))};
 import { getSuggestionTarget } from ${JSON.stringify(resolve(repository, "src/webview/aiSuggestionContext.ts"))};
@@ -70,9 +70,23 @@ export const results = ${JSON.stringify(fixtures)}.map(({ name, source, profile 
   const times = [];
   let accepted = false;
   let mappedOffset;
+  const bridge = { parseMarkdown, serializeMarkdown };
+  const mapCache = new MarkdownPositionMapCache();
+  let coldPositionMapMs = 0;
+  let cachedPositionMapLookupMs = 0;
+  if (target) {
+    const coldStart = performance.now();
+    const initialMap = mapCache.get(markdown, snapshot.doc, profile, bridge, snapshot, 1);
+    mappedOffset = initialMap.pmPositionToSourceOffset(target.position);
+    coldPositionMapMs = performance.now() - coldStart;
+    const cachedStart = performance.now();
+    const reusedMap = mapCache.get(markdown, snapshot.doc, profile, bridge, snapshot, 1);
+    reusedMap.pmPositionToSourceOffset(target.position);
+    cachedPositionMapLookupMs = performance.now() - cachedStart;
+  }
   const measure = () => {
     if (!target) return false;
-    const map = buildMarkdownPositionMap(markdown, snapshot.doc, profile, { parseMarkdown, serializeMarkdown }, snapshot);
+    const map = mapCache.get(markdown, snapshot.doc, profile, bridge, snapshot, 1);
     mappedOffset = map.pmPositionToSourceOffset(target.position);
     if (mappedOffset === undefined) return false;
     const context = buildCompletionContext(markdown, mappedOffset, target.kind);
@@ -90,7 +104,7 @@ export const results = ${JSON.stringify(fixtures)}.map(({ name, source, profile 
     times.push(performance.now() - start);
   }
   times.sort((a, b) => a - b);
-  return { name, sourceUnits: source.length, documentUnits: markdown.length, samples, candidatePlanned: accepted, mappedOffset,
+  return { name, sourceUnits: source.length, documentUnits: markdown.length, samples, candidatePlanned: accepted, mappedOffset, coldPositionMapMs, cachedPositionMapLookupMs,
     p50Ms: times[Math.floor(times.length * 0.5)], p95Ms: times[Math.floor(times.length * 0.95)] };
 });`,
     loader: "js",

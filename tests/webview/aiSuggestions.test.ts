@@ -243,6 +243,155 @@ describe("Copilot inline completion ghost", () => {
     expect(automatic.requests()).toHaveLength(1);
   });
 
+  it("reacquires after restart only from a debounced real text edit and preserves that request through consent status", async () => {
+    const f = setup("Hello", true);
+    f.state({
+      availability: "needs-authorization",
+      autoRestoreOnInput: true,
+      statusText: "Type to re-check access",
+    });
+    f.type("!");
+    f.ack();
+    await vi.advanceTimersByTimeAsync(AI_LIMITS.debounceMs - 1);
+    expect(f.requests()).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(1);
+
+    const request = f.requests()[0];
+    expect(request).toMatchObject({
+      trigger: "auto",
+      afterUserInput: true,
+    });
+    f.state({
+      availability: "preparing",
+      autoRestoreOnInput: true,
+      statusText: "Checking access",
+    });
+    f.state({
+      availability: "ready",
+      autoRestoreOnInput: true,
+      statusText: "Ready",
+    });
+    f.result(" continues safely", request);
+    expect(f.root.querySelector(".mm-ai-suggestion")?.textContent).toBe(
+      " continues safely",
+    );
+  });
+
+  it("suspends the normal request deadline while model selection waits for consent", async () => {
+    const f = setup("Hello", true);
+    f.state({
+      availability: "needs-authorization",
+      autoRestoreOnInput: true,
+    });
+    f.type("!");
+    f.ack();
+    await vi.advanceTimersByTimeAsync(AI_LIMITS.debounceMs);
+    const request = f.requests()[0]!;
+    f.state({
+      availability: "preparing",
+      autoRestoreOnInput: true,
+    });
+
+    f.app.view.dom.blur();
+    await vi.advanceTimersByTimeAsync(AI_LIMITS.deadlineMs * 2);
+    expect(
+      f.messages.some((message) => message.type === "ai-suggestion-cancel"),
+    ).toBe(false);
+
+    f.app.view.focus();
+    f.state({
+      availability: "ready",
+      autoRestoreOnInput: true,
+    });
+    await vi.advanceTimersByTimeAsync(AI_LIMITS.deadlineMs - 1);
+    expect(
+      f.messages.some((message) => message.type === "ai-suggestion-cancel"),
+    ).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(
+      f.messages.some((message) => message.type === "ai-suggestion-cancel"),
+    ).toBe(true);
+    expect(request.afterUserInput).toBe(true);
+  });
+
+  it("cancels a consent-wait request when the caret moves to a different snapshot", async () => {
+    const f = setup("Hello", true);
+    f.state({
+      availability: "needs-authorization",
+      autoRestoreOnInput: true,
+    });
+    f.type("!");
+    f.ack();
+    await vi.advanceTimersByTimeAsync(AI_LIMITS.debounceMs);
+    f.state({
+      availability: "preparing",
+      autoRestoreOnInput: true,
+    });
+
+    f.app.view.dispatch(
+      f.app.view.state.tr.setSelection(
+        TextSelection.create(f.app.view.state.doc, 2),
+      ),
+    );
+    expect(
+      f.messages.some((message) => message.type === "ai-suggestion-cancel"),
+    ).toBe(true);
+  });
+
+  it("answers the post-consent snapshot check from the current webview identity", async () => {
+    const f = setup("Hello", true);
+    f.state({
+      availability: "needs-authorization",
+      autoRestoreOnInput: true,
+    });
+    f.type("!");
+    f.ack();
+    await vi.advanceTimersByTimeAsync(AI_LIMITS.debounceMs);
+    const request = f.requests()[0]!;
+    const check = {
+      protocolVersion: 1,
+      type: "ai-suggestion-snapshot-check",
+      requestId: request.requestId,
+      sessionId: request.sessionId,
+    };
+
+    receive(check);
+    expect(f.messages.at(-1)).toMatchObject({
+      type: "ai-suggestion-snapshot-validation",
+      requestId: request.requestId,
+      sessionId: request.sessionId,
+      current: true,
+    });
+
+    f.app.view.dispatch(
+      f.app.view.state.tr.setSelection(
+        TextSelection.create(f.app.view.state.doc, 2),
+      ),
+    );
+    receive(check);
+    expect(f.messages.at(-1)).toMatchObject({
+      type: "ai-suggestion-snapshot-validation",
+      requestId: request.requestId,
+      sessionId: request.sessionId,
+      current: false,
+    });
+  });
+
+  it("does not use cursor movement alone to reacquire authorization after restart", async () => {
+    const f = setup("Hello", true);
+    f.state({
+      availability: "needs-authorization",
+      autoRestoreOnInput: true,
+    });
+    f.app.view.dispatch(
+      f.app.view.state.tr.setSelection(
+        TextSelection.create(f.app.view.state.doc, 2),
+      ),
+    );
+    await vi.advanceTimersByTimeAsync(AI_LIMITS.debounceMs);
+    expect(f.requests()).toHaveLength(0);
+  });
+
   it("rejects stale replies, ends rejected pending requests, and never captures IME Tab/Escape/229", async () => {
     const f = setup("Hello", true);
     f.type("!");

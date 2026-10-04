@@ -4,7 +4,10 @@ import {
   matchCompletionInput,
   planCompletionInsertion,
 } from "../../src/core/inlineCompletion";
-import { buildMarkdownPositionMap } from "../../src/core/markdownPositionMap";
+import {
+  buildMarkdownPositionMap,
+  MarkdownPositionMapCache,
+} from "../../src/core/markdownPositionMap";
 
 function pmPositionFor(
   doc: ReturnType<typeof parseMarkdown>["doc"],
@@ -29,6 +32,49 @@ function pmPositionFor(
 }
 
 describe("AI suggestion Markdown source positions", () => {
+  it("reuses only maps for the exact snapshot, version, profile, and bridge", () => {
+    const source = "A sentence";
+    const snapshot = parseMarkdown(source, "github");
+    const bridge = { parseMarkdown, serializeMarkdown };
+    const cache = new MarkdownPositionMapCache();
+    const get = (
+      patch: {
+        source?: string;
+        doc?: typeof snapshot.doc;
+        profile?: "github" | "gitlab" | "commonmark";
+        bridge?: typeof bridge;
+        previousSnapshot?: unknown;
+        version?: number;
+      } = {},
+    ) =>
+      cache.get(
+        patch.source ?? source,
+        patch.doc ?? snapshot.doc,
+        patch.profile ?? "github",
+        patch.bridge ?? bridge,
+        patch.previousSnapshot ?? snapshot,
+        patch.version ?? 1,
+      );
+    const first = get();
+    expect(get()).toBe(first);
+    expect(get({ version: 2 })).not.toBe(first);
+    const secondVersion = get({ version: 2 });
+    expect(get({ version: 2 })).toBe(secondVersion);
+    expect(get({ profile: "gitlab", version: 2 })).not.toBe(secondVersion);
+    const otherDoc = parseMarkdown(source, "github").doc;
+    expect(get({ doc: otherDoc, version: 2 })).not.toBe(secondVersion);
+    expect(get({ source: "A different sentence", version: 2 })).not.toBe(
+      secondVersion,
+    );
+    expect(get({ previousSnapshot: { ...snapshot }, version: 2 })).not.toBe(
+      secondVersion,
+    );
+    const otherBridge = { parseMarkdown, serializeMarkdown };
+    expect(get({ bridge: otherBridge, version: 2 })).not.toBe(secondVersion);
+    cache.clear();
+    expect(get()).not.toBe(first);
+  });
+
   it("maps UTF-16 positions through Japanese, emoji, emphasis, links, and nested lists", () => {
     const source =
       "日本語🌿 **bold** and [link](https://example.test)\n\n- parent\n  - child";

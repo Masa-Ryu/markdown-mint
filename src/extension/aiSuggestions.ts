@@ -7,6 +7,7 @@ import {
   type AiHostMessage,
   type AiSuggestionReason,
   type AiSuggestionRequest,
+  type AiSuggestionSnapshotValidation,
 } from "../shared/aiSuggestions";
 import {
   LanguageModelSuggestions,
@@ -34,6 +35,8 @@ export interface AiPanelSession {
 }
 export interface AiSuggestionsEnvironment {
   readonly languageModel: LanguageModelSuggestions;
+  setupCompleted(): boolean;
+  markSetupCompleted(): Promise<void>;
   supported(): boolean;
   trusted(): boolean;
   settings(): AiSettings;
@@ -53,11 +56,14 @@ interface ActiveRequest {
   readonly target: ActivationTarget;
   readonly request: AiSuggestionRequest;
   readonly source: vscode.CancellationTokenSource;
-  readonly modelGeneration: number;
+  modelGeneration: number;
   readonly documentGeneration: number;
   readonly markdown: string;
   readonly finish: (reason: AiSuggestionReason) => void;
-  timer: ReturnType<typeof setTimeout>;
+  timer: ReturnType<typeof setTimeout> | undefined;
+  selectingModel: boolean;
+  snapshotValidation: ((current: boolean) => void) | undefined;
+  snapshotValidationTimer: ReturnType<typeof setTimeout> | undefined;
 }
 interface ManualInvocation {
   readonly session: RegisteredSession;
@@ -76,9 +82,33 @@ const statusText: Record<AiAvailability, string> = {
   "no-model": "No Copilot language model is currently available.",
   unavailable:
     "The VS Code Language Model API is unavailable in this extension host.",
+  "temporarily-unavailable":
+    "A temporary model error occurred. Suggestions are paused briefly.",
   blocked:
     "The language model request is blocked by an account, policy, or service limit.",
 };
+
+export interface AiStatusSnapshot {
+  readonly sessionId: string;
+  readonly availability: AiAvailability;
+  readonly message: string;
+  readonly autoTrigger: boolean;
+}
+
+const transientBackoffBaseMs = 1_000;
+const transientBackoffMaxMs = 30_000;
+const transientBackoffMaxAttempts = 6;
+
+export function transientFailureBackoffMs(attempt: number): number {
+  const boundedAttempt = Math.max(
+    1,
+    Math.min(Math.floor(attempt), transientBackoffMaxAttempts),
+  );
+  return Math.min(
+    transientBackoffBaseMs * 2 ** (boundedAttempt - 1),
+    transientBackoffMaxMs,
+  );
+}
 
 /** Keeps editor-session ownership and LM requests separate from the edit queue. */
 export class AiSuggestionsHost implements vscode.Disposable {
@@ -93,6 +123,12 @@ export class AiSuggestionsHost implements vscode.Disposable {
   private activationGeneration = 0;
   private readonly documentGenerations = new Map<string, number>();
   private manualInvocation: ManualInvocation | undefined;
+  private transientFailureCount = 0;
+  private transientRetryAt: number | undefined;
+  private transientRetryTimer: ReturnType<typeof setTimeout> | undefined;
+  private selectionGeneration = 0;
+  private autoRestoreBlocked = false;
+  private manualSelectionCount = 0;
   private modelAvailability: Exclude<AiAvailability, "disabled" | "untrusted"> =
     "needs-authorization";
   private modelMessage = statusText["needs-authorization"];
@@ -100,18 +136,28 @@ export class AiSuggestionsHost implements vscode.Disposable {
   constructor(
     private readonly environment: AiSuggestionsEnvironment,
     private readonly reportStatus?: (
-      availability: AiAvailability,
-      message: string,
-      autoTrigger: boolean,
+      status: AiStatusSnapshot | undefined,
     ) => void,
   ) {
     this.settings = environment.settings();
     this.subscriptions.push(
-      environment.languageModel.onDidChange(() => {
+      environment.languageModel.onDidChange((reason, accessAllowed) => {
+        if (this.active?.selectingModel || this.manualSelectionCount > 0)
+          return;
+        if (
+          reason === "models" &&
+          this.autoRestoreBlocked &&
+          this.modelAvailability === "no-model"
+        )
+          this.autoRestoreBlocked = false;
         this.modelGeneration += 1;
         this.cancelActive("needs-authorization");
-        this.modelAvailability = "needs-authorization";
-        this.modelMessage = statusText["needs-authorization"];
+        this.clearTransientBackoff(true);
+        const access = environment.languageModel.restoreAccess();
+        if (reason === "access" && accessAllowed !== undefined)
+          this.autoRestoreBlocked = !accessAllowed;
+        this.modelAvailability = access ? failureAvailability(access) : "ready";
+        this.modelMessage = access ? reasonMessage(access) : statusText.ready;
         this.publishAll();
       }),
     );
@@ -182,11 +228,24 @@ export class AiSuggestionsHost implements vscode.Disposable {
       settingsGeneration: this.settingsGeneration,
       autoTrigger: this.settings.autoTrigger,
       availability,
+      autoRestoreOnInput:
+        this.environment.setupCompleted() && !this.autoRestoreBlocked,
       statusText: message,
       ...(modelName ? { modelName } : {}),
       active: session.panel.isReady() && session.panel.isActive(),
     });
-    this.reportStatus?.(availability, message, this.settings.autoTrigger);
+    const activeTarget = this.activeTarget;
+    if (activeTarget?.session !== session) return;
+    if (this.activationCurrent(activeTarget)) {
+      this.reportStatus?.({
+        sessionId: id,
+        availability,
+        message,
+        autoTrigger: this.settings.autoTrigger,
+      });
+    } else {
+      this.reportStatus?.(undefined);
+    }
   }
 
   private publishAll(): void {
@@ -204,6 +263,13 @@ export class AiSuggestionsHost implements vscode.Disposable {
   private statusMessage(availability: AiAvailability): string {
     const selection = this.environment.languageModel.currentSelection;
     if (availability === "disabled") return statusText.disabled;
+    if (
+      availability === "needs-authorization" &&
+      this.settings.autoTrigger &&
+      this.environment.setupCompleted() &&
+      !this.autoRestoreBlocked
+    )
+      return "Type in the active Mint editor to re-check Copilot access after restart. This can use Copilot usage.";
     if (availability === "ready" && selection)
       return `Copilot model: ${selection.displayName}. ${selection.reason}. Requests may use Copilot usage.`;
     return this.modelMessage || statusText[availability];
@@ -253,21 +319,57 @@ export class AiSuggestionsHost implements vscode.Disposable {
       this.environment.notify(statusText.untrusted);
       return;
     }
+    if (this.modelAvailability === "blocked") {
+      this.environment.notify(statusText.blocked);
+      return;
+    }
+    if (this.transientRetryAt && Date.now() < this.transientRetryAt) {
+      this.environment.notify(statusText["temporarily-unavailable"]);
+      return;
+    }
 
     const target = this.beginActivation(session);
     this.cancelActive("cancelled");
     this.manualInvocation = undefined;
     this.modelAvailability = "preparing";
     this.modelMessage = statusText.preparing;
+    this.autoRestoreBlocked = false;
+    const selectionGeneration = ++this.selectionGeneration;
     this.publishAll();
-    const failure = await this.environment.languageModel.selectForUserAction();
-    if (!this.activationCurrent(target)) return;
+    this.manualSelectionCount += 1;
+    let failure: LanguageModelFailure | undefined;
+    try {
+      failure = await this.environment.languageModel.selectForUserAction();
+    } finally {
+      this.manualSelectionCount -= 1;
+    }
+    if (
+      !this.activationCurrent(target) ||
+      selectionGeneration !== this.selectionGeneration
+    ) {
+      if (selectionGeneration === this.selectionGeneration) {
+        if (!failure) await this.persistSetupCompletion();
+        this.reconcileSelectionAfterTargetChange(failure);
+      }
+      return;
+    }
+    this.clearTransientBackoff(true);
     this.modelGeneration += 1;
     if (failure) {
+      this.autoRestoreBlocked = true;
       this.modelAvailability = failureAvailability(failure);
       this.modelMessage = reasonMessage(failure);
       this.publishAll();
       this.environment.notify(this.modelMessage);
+      return;
+    }
+    await this.persistSetupCompletion();
+    if (
+      !this.activationCurrent(target) ||
+      selectionGeneration !== this.selectionGeneration
+    ) {
+      if (selectionGeneration === this.selectionGeneration)
+        this.reconcileSelectionAfterTargetChange(undefined);
       return;
     }
     this.modelAvailability = "ready";
@@ -316,7 +418,7 @@ export class AiSuggestionsHost implements vscode.Disposable {
         generation: ++this.activationGeneration,
       };
       this.publishState(replacement.panel.id);
-    }
+    } else this.reportStatus?.(undefined);
   }
 
   public cancelSession(id: string, requestId?: string): void {
@@ -334,6 +436,50 @@ export class AiSuggestionsHost implements vscode.Disposable {
     clearTimeout(active.timer);
     active.source.cancel();
     active.finish(reason);
+    active.snapshotValidation?.(false);
+  }
+
+  public confirmSnapshotValidation(
+    id: string,
+    validation: AiSuggestionSnapshotValidation,
+  ): void {
+    const active = this.active;
+    if (
+      !active ||
+      active.session.panel.id !== id ||
+      validation.sessionId !== id ||
+      active.request.requestId !== validation.requestId
+    )
+      return;
+    active.snapshotValidation?.(validation.current);
+  }
+
+  private validateWebviewSnapshot(active: ActiveRequest): Promise<boolean> {
+    return new Promise((resolve) => {
+      const finish = (current: boolean): void => {
+        if (active.snapshotValidation !== finish) return;
+        active.snapshotValidation = undefined;
+        if (active.snapshotValidationTimer !== undefined)
+          clearTimeout(active.snapshotValidationTimer);
+        active.snapshotValidationTimer = undefined;
+        resolve(current);
+      };
+      active.snapshotValidation = finish;
+      active.snapshotValidationTimer = setTimeout(
+        () => finish(false),
+        AI_LIMITS.snapshotCheckDeadlineMs,
+      );
+      try {
+        active.session.panel.post({
+          protocolVersion: 1,
+          type: "ai-suggestion-snapshot-check",
+          requestId: active.request.requestId,
+          sessionId: active.session.panel.id,
+        });
+      } catch {
+        finish(false);
+      }
+    });
   }
 
   private current(active: ActiveRequest): boolean {
@@ -421,6 +567,14 @@ export class AiSuggestionsHost implements vscode.Disposable {
       this.reply(session, request, "untrusted");
       return;
     }
+    if (this.modelAvailability === "blocked") {
+      this.reply(session, request, "blocked");
+      return;
+    }
+    if (this.transientRetryAt && Date.now() < this.transientRetryAt) {
+      this.reply(session, request, "backoff");
+      return;
+    }
     const target = this.beginActivation(session);
     if (!this.activationCurrent(target)) {
       this.reply(session, request, "stale");
@@ -433,12 +587,6 @@ export class AiSuggestionsHost implements vscode.Disposable {
       isLowSurrogate(markdown.charCodeAt(request.position))
     ) {
       this.reply(session, request, "invalid-context");
-      return;
-    }
-    const access = this.environment.languageModel.restoreAccess();
-    if (access) {
-      const reason = access === "failed" ? "unsupported" : access;
-      this.reply(session, request, reason);
       return;
     }
     this.cancelActive("cancelled");
@@ -456,13 +604,100 @@ export class AiSuggestionsHost implements vscode.Disposable {
       documentGeneration: this.documentGenerations.get(target.uri) ?? 0,
       markdown,
       finish,
-      timer: setTimeout(
-        () => this.cancelActive("timeout"),
-        AI_LIMITS.deadlineMs,
-      ),
+      timer: undefined,
+      selectingModel: false,
+      snapshotValidation: undefined,
+      snapshotValidationTimer: undefined,
     };
     this.active = active;
     try {
+      let access = this.environment.languageModel.restoreAccess();
+      const canRestoreFromInput =
+        request.trigger === "auto" &&
+        request.afterUserInput === true &&
+        this.environment.setupCompleted() &&
+        !this.autoRestoreBlocked;
+      if (access === "needs-authorization" && canRestoreFromInput) {
+        const selectionGeneration = ++this.selectionGeneration;
+        active.selectingModel = true;
+        this.modelAvailability = "preparing";
+        this.modelMessage = statusText.preparing;
+        this.publishAll();
+        const selection = this.environment.languageModel.selectForUserAction();
+        const result = await Promise.race([
+          selection.then((failure) => ({ failure })),
+          interrupted.then((reason) => ({ reason })),
+        ]);
+        active.selectingModel = false;
+        if ("reason" in result) {
+          this.reply(session, request, result.reason);
+          void selection.then((failure) => {
+            if (selectionGeneration === this.selectionGeneration)
+              this.reconcileSelectionAfterTargetChange(failure);
+          });
+          return;
+        }
+        if (!this.current(active)) {
+          this.reply(session, request, "stale");
+          if (selectionGeneration === this.selectionGeneration) {
+            if (!result.failure) void this.persistSetupCompletion();
+            this.reconcileSelectionAfterTargetChange(result.failure);
+          }
+          return;
+        }
+        this.modelGeneration += 1;
+        active.modelGeneration = this.modelGeneration;
+        if (result.failure) {
+          this.autoRestoreBlocked = true;
+          this.modelAvailability = failureAvailability(result.failure);
+          this.modelMessage = reasonMessage(result.failure);
+          this.reply(session, request, result.failure);
+          this.publishAll();
+          return;
+        }
+        this.modelAvailability = "ready";
+        this.modelMessage = statusText.ready;
+        this.publishAll();
+        session.panel.focus();
+        if (!this.current(active)) {
+          this.reply(session, request, "stale");
+          return;
+        }
+        const snapshotCurrent = await Promise.race([
+          this.validateWebviewSnapshot(active).then((current) => ({ current })),
+          interrupted.then((reason) => ({ reason })),
+        ]);
+        if (
+          "reason" in snapshotCurrent ||
+          !snapshotCurrent.current ||
+          !this.current(active)
+        ) {
+          this.reply(
+            session,
+            request,
+            "reason" in snapshotCurrent ? snapshotCurrent.reason : "stale",
+          );
+          return;
+        }
+        access = this.environment.languageModel.restoreAccess();
+      }
+      if (access) {
+        const reason = access === "failed" ? "unsupported" : access;
+        if (canRestoreFromInput) this.autoRestoreBlocked = true;
+        this.modelAvailability = failureAvailability(access);
+        this.modelMessage = reasonMessage(access);
+        this.publishAll();
+        this.reply(session, request, reason);
+        return;
+      }
+      if (!this.current(active)) {
+        this.reply(session, request, "stale");
+        return;
+      }
+      active.timer = setTimeout(
+        () => this.cancelActive("timeout"),
+        AI_LIMITS.deadlineMs,
+      );
       const work = this.environment.languageModel.complete(
         markdown,
         request.position,
@@ -475,12 +710,15 @@ export class AiSuggestionsHost implements vscode.Disposable {
       ]);
       if ("reason" in result) {
         this.reply(session, request, result.reason);
+        if (result.reason === "timeout") this.recordTransientFailure();
       } else if (!this.current(active)) {
         this.reply(session, request, "stale");
       } else if (result.outcome.failure) {
         const reason = result.outcome.failure;
         this.reply(session, request, reason);
-        if (reason === "blocked") {
+        if (reason === "failed" || reason === "timeout") {
+          this.recordTransientFailure();
+        } else if (reason === "blocked") {
           this.modelAvailability = "blocked";
           this.modelMessage = reasonMessage(reason);
           this.publishAll();
@@ -491,12 +729,19 @@ export class AiSuggestionsHost implements vscode.Disposable {
           this.publishAll();
         }
       } else if (result.outcome.text) {
+        this.clearTransientBackoff(true);
+        if (this.modelAvailability === "temporarily-unavailable") {
+          this.modelAvailability = "ready";
+          this.modelMessage = statusText.ready;
+          this.publishAll();
+        }
         this.reply(session, request, "ready", result.outcome.text);
       } else {
+        this.clearTransientBackoff(true);
         this.reply(session, request, "no-suggestion");
       }
     } finally {
-      clearTimeout(active.timer);
+      if (active.timer !== undefined) clearTimeout(active.timer);
       source.cancel();
       source.dispose();
       if (this.active === active) this.active = undefined;
@@ -509,11 +754,79 @@ export class AiSuggestionsHost implements vscode.Disposable {
     this.activeTarget = undefined;
     this.activationGeneration += 1;
     this.manualInvocation = undefined;
+    this.clearTransientBackoff(true);
     this.cancelActive("cancelled");
     for (const subscription of this.subscriptions.splice(0))
       subscription.dispose();
     this.sessions.clear();
+    this.reportStatus?.(undefined);
     this.environment.languageModel.dispose();
+  }
+
+  private reconcileSelectionAfterTargetChange(
+    failure: LanguageModelFailure | undefined,
+  ): void {
+    this.modelGeneration += 1;
+    if (failure) {
+      this.autoRestoreBlocked = true;
+      this.modelAvailability = failureAvailability(failure);
+      this.modelMessage = reasonMessage(failure);
+    } else if (this.environment.languageModel.restoreAccess()) {
+      this.autoRestoreBlocked = true;
+      this.modelAvailability = "needs-authorization";
+      this.modelMessage = statusText["needs-authorization"];
+    } else {
+      this.autoRestoreBlocked = false;
+      this.modelAvailability = "ready";
+      this.modelMessage = statusText.ready;
+    }
+    this.publishAll();
+  }
+
+  private async persistSetupCompletion(): Promise<void> {
+    try {
+      await this.environment.markSetupCompleted();
+    } catch {
+      // Manual use remains available if this non-secret convenience marker
+      // cannot be persisted; automatic restoration then stays disabled.
+    }
+  }
+
+  private recordTransientFailure(): void {
+    this.transientFailureCount = Math.min(
+      this.transientFailureCount + 1,
+      transientBackoffMaxAttempts,
+    );
+    const retryAt =
+      Date.now() + transientFailureBackoffMs(this.transientFailureCount);
+    this.transientRetryAt = retryAt;
+    if (this.transientRetryTimer !== undefined)
+      clearTimeout(this.transientRetryTimer);
+    this.modelAvailability = "temporarily-unavailable";
+    this.modelMessage = statusText["temporarily-unavailable"];
+    this.transientRetryTimer = setTimeout(() => {
+      if (this.disposed || this.transientRetryAt !== retryAt) return;
+      this.transientRetryAt = undefined;
+      this.transientRetryTimer = undefined;
+      const access = this.environment.languageModel.restoreAccess();
+      if (access) {
+        this.modelAvailability = failureAvailability(access);
+        this.modelMessage = reasonMessage(access);
+      } else {
+        this.modelAvailability = "ready";
+        this.modelMessage = statusText.ready;
+      }
+      this.publishAll();
+    }, retryAt - Date.now());
+    this.publishAll();
+  }
+
+  private clearTransientBackoff(resetAttempts: boolean): void {
+    if (this.transientRetryTimer !== undefined)
+      clearTimeout(this.transientRetryTimer);
+    this.transientRetryTimer = undefined;
+    this.transientRetryAt = undefined;
+    if (resetAttempts) this.transientFailureCount = 0;
   }
 }
 
@@ -589,6 +902,16 @@ export function createAiSuggestionsEnvironment(
         autoTrigger:
           (inspected?.globalValue ?? inspected?.defaultValue) === true,
       };
+    },
+    setupCompleted: () =>
+      context.globalState.get<boolean>(
+        "markdownMint.aiSuggestions.setupCompleted",
+      ) === true,
+    markSetupCompleted: async () => {
+      await context.globalState.update(
+        "markdownMint.aiSuggestions.setupCompleted",
+        true,
+      );
     },
     notify: (message) => void vscode.window.showInformationMessage(message),
     tokenSource: () => new vscode.CancellationTokenSource(),

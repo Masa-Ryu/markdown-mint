@@ -75,16 +75,20 @@ as unavailable.
 
 Run **Markdown Mint: Suggest Continuation** from the Command Palette or the
 Mint status item to make the first model request and complete any VS Code
-consent flow. Then type normally to see suggestions when
+consent flow. After that setup succeeds, type normally to see suggestions when
 `markdownMint.aiSuggestions.autoTrigger` is enabled, or continue using the
 manual command. The setting is user-scoped, initially **false**, and has no
 toolbar toggle. Manual suggestions remain available while automatic
-suggestions are off. The Language Model API requires model selection from a
-user-initiated action. Because VS Code exposes no non-interactive way to
-reacquire a model and check its saved access after an Extension Host restart,
-this implementation currently needs the same command again after a restart;
-automatic restoration is not claimed as verified. Requests may consume
-**Copilot usage**.
+suggestions are off. After an Extension Host restart, Mint waits for a real
+text edit and its normal 300 ms debounce before it uses the public model
+selection API to reacquire a model. The saved setup marker is not permission:
+Mint checks `canSendRequest(model)` before every request, and a denied or
+unknown result stops automatic requests. No model is selected at activation or
+because a setting changed. If a public access-change event later confirms the
+cached model is permitted, the next real input starts a fresh request from the
+current text; an old request or candidate is never revived. This restart path
+is covered with fake-model tests but remains unverified in a real
+VS Code/Copilot session. Requests may consume **Copilot usage**.
 
 Suggestions can appear between existing words or at the end of ordinary prose,
 headings, and list items, including a contextually empty paragraph. The host

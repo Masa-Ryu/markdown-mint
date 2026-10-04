@@ -14,7 +14,6 @@ import {
 import {
   AI_LIMITS,
   isAiHostMessage,
-  type AiAvailability,
   type AiHostMessage,
   type AiSuggestionRequest,
   type AiSuggestionResult,
@@ -47,6 +46,7 @@ interface LiveCandidate {
 interface Waiting {
   readonly revision: number;
   readonly trigger: AiTrigger;
+  readonly afterUserInput?: boolean;
   readonly invocationId?: string;
 }
 
@@ -119,6 +119,7 @@ export class AiSuggestionsController {
   private revision = 0;
   private sequence = 0;
   private pending: Snapshot | undefined;
+  private pendingSelectionWait = false;
   private candidate: LiveCandidate | undefined;
   private waiting: Waiting | undefined;
   private timer: ReturnType<typeof setTimeout> | undefined;
@@ -210,10 +211,11 @@ export class AiSuggestionsController {
     listen(view.dom, "compositionend", () => {
       this.composing = false;
       this.compositionEndedAt = Date.now();
+      const afterUserInput = this.compositionDirty;
       const candidatePreserved = this.compositionDirty
         ? this.finishCompositionInput()
         : false;
-      if (!candidatePreserved) this.scheduleAuto();
+      if (!candidatePreserved) this.scheduleAuto(afterUserInput);
       this.compositionDirty = false;
       this.compositionDoc = undefined;
       this.compositionPosition = undefined;
@@ -230,16 +232,18 @@ export class AiSuggestionsController {
         },
         true,
       );
-    listen(view.dom, "blur", () => this.invalidate(), true);
+    listen(view.dom, "blur", () => this.invalidateUnlessSelectingModel(), true);
     listen(root.ownerDocument, "pointerdown", () => this.invalidate(), true);
     listen(root.ownerDocument, "focusin", () => {
-      if (!this.options.canSuggest()) this.invalidate();
+      if (!this.options.canSuggest()) this.invalidateUnlessSelectingModel();
     });
     listen(root.ownerDocument, "visibilitychange", () => {
       if (root.ownerDocument.hidden) this.invalidate();
     });
     if (root.ownerDocument.defaultView)
-      listen(root.ownerDocument.defaultView, "blur", () => this.invalidate());
+      listen(root.ownerDocument.defaultView, "blur", () =>
+        this.invalidateUnlessSelectingModel(),
+      );
   }
 
   public transactionApplied(
@@ -274,7 +278,7 @@ export class AiSuggestionsController {
     this.inputData = undefined;
     this.invalidate();
     if ((ordinaryInput || selectionChanged) && !this.composing)
-      this.scheduleAuto();
+      this.scheduleAuto(ordinaryInput);
   }
 
   private keepMatchingInput(input: string | undefined): boolean {
@@ -374,11 +378,18 @@ export class AiSuggestionsController {
     return false;
   }
 
-  private scheduleAuto(): void {
+  private scheduleAuto(afterUserInput = false): void {
     const state = this.state;
     if (!state?.autoTrigger || this.disposed || this.composing) return;
-    if (state.availability !== "ready") {
-      this.autoWaitingRevision = this.revision;
+    const canRestoreAfterInput =
+      state.availability === "needs-authorization" &&
+      state.autoRestoreOnInput === true &&
+      afterUserInput;
+    if (state.availability !== "ready" && !canRestoreAfterInput) {
+      this.autoWaitingRevision =
+        state.availability === "needs-authorization"
+          ? undefined
+          : this.revision;
       return;
     }
     this.autoWaitingRevision = undefined;
@@ -390,7 +401,11 @@ export class AiSuggestionsController {
     this.timer = setTimeout(() => {
       this.timer = undefined;
       if (revision === this.revision)
-        this.request({ revision, trigger: "auto" });
+        this.request({
+          revision,
+          trigger: "auto",
+          ...(afterUserInput ? { afterUserInput: true } : {}),
+        });
     }, AI_LIMITS.debounceMs);
   }
 
@@ -421,6 +436,7 @@ export class AiSuggestionsController {
     this.pending = undefined;
     if (this.pendingTimer !== undefined) clearTimeout(this.pendingTimer);
     this.pendingTimer = undefined;
+    this.pendingSelectionWait = false;
     this.sendCancel(pending);
   }
   private clearCandidate(sendRejection: boolean): void {
@@ -460,7 +476,8 @@ export class AiSuggestionsController {
       const previousState = this.state;
       const changed =
         this.state?.sessionId !== message.sessionId ||
-        this.state?.settingsGeneration !== message.settingsGeneration;
+        this.state?.settingsGeneration !== message.settingsGeneration ||
+        this.state?.autoRestoreOnInput !== message.autoRestoreOnInput;
       const manualWork =
         this.waiting?.trigger === "manual" ||
         this.pending?.request.trigger === "manual" ||
@@ -470,6 +487,13 @@ export class AiSuggestionsController {
         this.waiting?.trigger === "auto" ||
         this.pending?.request.trigger === "auto" ||
         this.candidate?.snapshot.request.trigger === "auto";
+      const restoringAfterInput =
+        this.pending?.request.trigger === "auto" &&
+        this.pending.request.afterUserInput === true &&
+        message.autoRestoreOnInput === true &&
+        (message.availability === "needs-authorization" ||
+          message.availability === "preparing" ||
+          message.availability === "ready");
       if (
         changed ||
         message.active === false ||
@@ -481,7 +505,8 @@ export class AiSuggestionsController {
             message.availability === "disabled" &&
             !message.autoTrigger &&
             manualWork
-          ))
+          ) &&
+          !restoringAfterInput)
       )
         this.invalidate();
       if (!message.autoTrigger) this.autoWaitingRevision = undefined;
@@ -495,6 +520,36 @@ export class AiSuggestionsController {
         this.autoWaitingRevision = undefined;
         this.scheduleAuto();
       }
+      if (restoringAfterInput && message.availability === "preparing") {
+        this.suspendPendingDeadline();
+      } else if (
+        restoringAfterInput &&
+        message.availability === "ready" &&
+        this.pendingSelectionWait &&
+        this.pending
+      ) {
+        this.pendingSelectionWait = false;
+        this.startPendingDeadline(this.pending);
+      } else if (!restoringAfterInput) {
+        this.pendingSelectionWait = false;
+      }
+      return;
+    }
+    if (message.type === "ai-suggestion-snapshot-check") {
+      const snapshot = this.pending;
+      const current = Boolean(
+        snapshot &&
+        snapshot.request.requestId === message.requestId &&
+        snapshot.request.sessionId === message.sessionId &&
+        this.current(snapshot),
+      );
+      this.options.post({
+        protocolVersion: 1,
+        type: "ai-suggestion-snapshot-validation",
+        requestId: message.requestId,
+        sessionId: message.sessionId,
+        current,
+      });
       return;
     }
     if (message.type === "ai-suggestion-trigger") {
@@ -529,7 +584,13 @@ export class AiSuggestionsController {
       !this.options.canSuggest() ||
       this.composing ||
       (waiting.trigger === "auto" &&
-        (!state.autoTrigger || state.availability !== "ready"))
+        (!state.autoTrigger ||
+          (state.availability !== "ready" &&
+            !(
+              waiting.afterUserInput === true &&
+              state.autoRestoreOnInput === true &&
+              state.availability === "needs-authorization"
+            ))))
     )
       return;
     if (!this.options.synced()) {
@@ -573,6 +634,7 @@ export class AiSuggestionsController {
       position,
       targetKind: target.kind,
       trigger: waiting.trigger,
+      ...(waiting.afterUserInput ? { afterUserInput: true } : {}),
       ...(waiting.invocationId ? { invocationId: waiting.invocationId } : {}),
     };
     const snapshot: Snapshot = {
@@ -582,16 +644,44 @@ export class AiSuggestionsController {
       profile: this.options.profile(),
     };
     this.pending = snapshot;
+    this.pendingSelectionWait = false;
+    this.startPendingDeadline(snapshot);
+    this.options.post(request);
+  }
+
+  private startPendingDeadline(snapshot: Snapshot): void {
+    if (this.pendingTimer !== undefined) clearTimeout(this.pendingTimer);
     this.pendingTimer = setTimeout(() => {
       if (this.pending === snapshot) {
         this.pending = undefined;
+        this.pendingSelectionWait = false;
         this.sendCancel(snapshot);
-        if (waiting.trigger === "manual")
+        if (snapshot.request.trigger === "manual")
           this.setLive("The Copilot suggestion request timed out.");
       }
       this.pendingTimer = undefined;
     }, AI_LIMITS.deadlineMs);
-    this.options.post(request);
+  }
+
+  private suspendPendingDeadline(): void {
+    if (this.pendingTimer !== undefined) clearTimeout(this.pendingTimer);
+    this.pendingTimer = undefined;
+    this.pendingSelectionWait = true;
+  }
+
+  private isSelectingModelForRestoration(): boolean {
+    const request = this.pending?.request;
+    return (
+      request?.trigger === "auto" &&
+      request.afterUserInput === true &&
+      this.state?.autoRestoreOnInput === true &&
+      (this.state.availability === "needs-authorization" ||
+        this.state.availability === "preparing")
+    );
+  }
+
+  private invalidateUnlessSelectingModel(): void {
+    if (!this.isSelectingModelForRestoration()) this.invalidate();
   }
 
   private current(snapshot: Snapshot): boolean {
@@ -603,7 +693,7 @@ export class AiSuggestionsController {
       this.options.synced() &&
       request.sessionId === this.state?.sessionId &&
       this.state.active !== false &&
-      availabilityAllowsPendingWork(this.state.availability, request.trigger) &&
+      availabilityAllowsPendingWork(this.state, request) &&
       request.settingsGeneration === this.state.settingsGeneration &&
       request.documentId === this.options.documentId() &&
       request.baseVersion === this.options.version() &&
@@ -618,6 +708,7 @@ export class AiSuggestionsController {
     this.pending = undefined;
     if (this.pendingTimer !== undefined) clearTimeout(this.pendingTimer);
     this.pendingTimer = undefined;
+    this.pendingSelectionWait = false;
     for (const key of [
       "sessionId",
       "documentId",
@@ -727,10 +818,7 @@ export class AiSuggestionsController {
       !target ||
       !this.options.canSuggest() ||
       !this.state ||
-      !availabilityAllowsPendingWork(
-        this.state.availability,
-        candidate.snapshot.request.trigger,
-      ) ||
+      !availabilityAllowsPendingWork(this.state, candidate.snapshot.request) ||
       view.state.selection.from !== target.position ||
       !view.state.selection.empty
     ) {
@@ -779,12 +867,17 @@ export class AiSuggestionsController {
 }
 
 function availabilityAllowsPendingWork(
-  availability: AiAvailability,
-  trigger: AiSuggestionRequest["trigger"],
+  state: AiSuggestionState,
+  request: AiSuggestionRequest,
 ): boolean {
   return (
-    availability === "ready" ||
-    (availability === "disabled" && trigger === "manual")
+    state.availability === "ready" ||
+    (state.availability === "disabled" && request.trigger === "manual") ||
+    (request.trigger === "auto" &&
+      request.afterUserInput === true &&
+      state.autoRestoreOnInput === true &&
+      (state.availability === "needs-authorization" ||
+        state.availability === "preparing"))
   );
 }
 
@@ -808,6 +901,8 @@ function reasonText(reason: string): string {
       return "Place the cursor in supported Markdown prose, a heading, or a list item.";
     case "timeout":
       return "The Copilot suggestion request timed out.";
+    case "backoff":
+      return "A temporary model error occurred. Suggestions are paused briefly.";
     case "failed":
       return "The language model request failed. Try again later.";
     case "cancelled":

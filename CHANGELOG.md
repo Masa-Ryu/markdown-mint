@@ -6,6 +6,9 @@
   continuations. Automatically choose an available editor-suitable model and
   send bounded context around the active cursor; keep model consent under VS
   Code's user-initiated flow.
+- After explicit setup, reacquire the process-local model after restart only
+  following debounced real text input, and recheck public request access before
+  sending.
 - Keep suggestions transient until Tab acceptance, preserve existing Markdown
   and source structure, and keep AI requests independent of document save/edit
   queue work. Package one universal VSIX without a bundled Copilot SDK.
