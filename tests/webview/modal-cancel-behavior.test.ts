@@ -251,7 +251,7 @@ describe("input dialog cancellation", () => {
 
     root
       .querySelector<HTMLButtonElement>(
-        ".mm-discard-changes-dialog button:not([type=submit])",
+        ".mm-discard-changes-dialog button:not([type=submit]):not([hidden])",
       )
       ?.click();
     expect(dialog.open).toBe(true);
@@ -261,7 +261,7 @@ describe("input dialog cancellation", () => {
 
     dialog
       .querySelector<HTMLButtonElement>(
-        ".mm-dialog-actions button:not([type=submit])",
+        ".mm-dialog-actions button:not([type=submit]):not([hidden])",
       )
       ?.click();
     expect(confirmation(root)).not.toBeNull();
@@ -275,7 +275,7 @@ describe("input dialog cancellation", () => {
     )!;
     cleanDialog
       .querySelector<HTMLButtonElement>(
-        ".mm-dialog-actions button:not([type=submit])",
+        ".mm-dialog-actions button:not([type=submit]):not([hidden])",
       )
       ?.click();
     expect(cleanDialog.open).toBe(false);
@@ -315,7 +315,7 @@ describe("input dialog cancellation", () => {
     expect(confirmation(root)).toBeNull();
     dialog
       .querySelector<HTMLButtonElement>(
-        ".mm-dialog-actions button:not([type=submit])",
+        ".mm-dialog-actions button:not([type=submit]):not([hidden])",
       )
       ?.click();
     expect(confirmation(root)).not.toBeNull();
@@ -375,7 +375,7 @@ describe("input dialog cancellation", () => {
     changeInput(rows!, "3");
     dialog
       .querySelector<HTMLButtonElement>(
-        ".mm-dialog-actions button:not([type=submit])",
+        ".mm-dialog-actions button:not([type=submit]):not([hidden])",
       )
       ?.click();
     expect(dialog.open).toBe(false);
@@ -391,7 +391,7 @@ describe("input dialog cancellation", () => {
     changeInput(dirtyColumns, "4");
     dirtyDialog
       .querySelector<HTMLButtonElement>(
-        ".mm-dialog-actions button:not([type=submit])",
+        ".mm-dialog-actions button:not([type=submit]):not([hidden])",
       )
       ?.click();
     expect(confirmation(root)).not.toBeNull();

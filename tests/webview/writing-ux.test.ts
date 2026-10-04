@@ -2084,7 +2084,9 @@ describe("bounded writing controls", () => {
         );
       } else {
         dialog
-          .querySelector<HTMLButtonElement>("button:not([type='submit'])")!
+          .querySelector<HTMLButtonElement>(
+            ".mm-dialog-actions button:not([type='submit']):not([hidden])",
+          )!
           .click();
       }
 

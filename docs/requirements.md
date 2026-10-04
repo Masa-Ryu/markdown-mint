@@ -18,6 +18,389 @@ system IME candidate UI remains unverified.
 | R07         | GitHub and GitLab profiles                       | `github`, `gitlab`, and `commonmark` are validated protocol/profile values. Profile settings reach the editor, dedicated preview, and native adapter. The 0.0.3 native acceptance suite verified GitHub versus CommonMark table output; GitLab-specific fixtures remain a follow-up compatibility check.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | R08         | Safe formatting and format-on-save               | Prettier runs with the bundled Markdown parser/plugin, after/before core validation, project `.prettierrc` JSON/YAML options, `.editorconfig` EOL settings, `.prettierignore`, and explicit extension option overrides. Save-time failures leave the source unchanged, write diagnostics to the Markdown Mint output channel, and use a standard VS Code error notification when user action is required. The VS Code auto-save setting is not changed by the extension.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 
+## Issue #141 Mermaid templates and live preview (0.8.0)
+
+In GitHub/GitLab profiles, an unselected Mermaid insertion opens a grouped
+single-selection template list in the existing modal. The 13 examples cover
+10 diagram types; the three flowcharts offer TD/LR candidate generation.
+Only the selected candidate renders. A new insertion without selected Mermaid
+code opens the picker, where **Next: Edit code** moves the candidate into the
+draft and opens code editing. Selected Mermaid code and existing diagrams open
+code editing directly. The editor has a left-aligned **← Templates** button
+above **Edit Mermaid**; it returns to the picker for both new and existing
+diagrams. It is available only in the active editor and is disabled during
+composition or hidden during replacement confirmation. **Back to code** appears
+only on a picker revisit. The initial picker footer contains only Cancel and
+**Next: Edit code**. Picker changes do not alter the draft or document.
+Returning from the picker with **Back to code** preserves the draft and input
+geometry. Code and preview use two columns at wide widths and stack below 640px.
+
+The picker footer has one primary **Next: Edit code** action, and the code
+editor footer has one primary **Insert diagram** or **Update diagram** action
+beside Cancel. The preview has no separate action buttons. Replacement
+confirmation shows only its message inside the modal, with **Keep current
+code**, Cancel, and the relevant confirmation action in the shared footer.
+Only the code editor's Insert/Update actions can change the Markdown document;
+moving between the picker, confirmation, and code editor creates no document
+transaction.
+
+**← Templates** preserves the draft, input selection, and scroll position while
+browsing. Replacing existing/selected/edited source requires an inline
+confirmation, while identical source is a no-op. The opening dirty baseline is
+never recaptured during template changes, and navigation snapshots disappear
+on close. Template selection has no separate undo action; ordinary document
+undo/redo continues to handle committed Markdown edits.
+Escape is the Mermaid modal's whole-dialog Cancel action. It closes a clean
+draft and uses the existing discard confirmation for a changed draft, including
+when replacement confirmation is open. Only **Keep current code** rejects a
+replacement request. Escape during IME composition cancels the composition
+without closing the modal. Escape in the discard dialog keeps that dialog's
+existing local behavior and does not also cancel its parent. Listbox arrows
+select; Home and End jump to the first and last templates. Navigation at an
+already selected boundary is a no-op, and only the template list scrolls to
+reveal a keyboard selection. Enter/Space do not apply a candidate. Submit
+shortcuts and composition events cannot commit from the picker or replacement
+confirmation.
+
+User-authored drafts keep the existing 300ms debounced validation and
+200,000-character limit. Built-in candidates use an immediate direct-render
+queue with one running request and one latest pending candidate; a newer
+request replaces the pending one, and outdated render results are discarded.
+Candidate selection never calls `validateMermaidSource()`. Cache misses go
+directly to the shared `renderSafeMermaidSvg()` path; cache hits reuse a
+sanitized, normalized SVG clone without parsing or rendering. A preview render
+result never substitutes for a successful user-input validation. Applying an
+internal template records its id, direction, and exact source only in the open
+modal session. Insert/Update may skip the extra user-input validation only
+while that exact applied source remains unchanged; actual user input returns
+the draft to normal validation. Merely browsing a candidate, existing
+Mermaid, and selected text do not get this exception.
+
+Successfully rendered candidates use a session-only LRU cache capped at the 16
+built-in template variants. Its key includes template id, direction, exact
+source, theme signature, bundled runtime version, and viewport width. It stores
+only sanitized, normalized SVG clones; stale, failed, and old-theme results are
+not retained, and closing the modal clears the cache. Checking and rendering
+clear stale SVG and expose progress through `aria-busy` without status text.
+Empty, invalid, and unavailable states show actionable messages and remove stale
+SVG immediately. A render failure is reported separately from syntax
+validation. Preview work compares generation, source, session, theme, and
+visible target. The document and modal share `renderSafeMermaidSvg()` for source
+normalization, strict initialization, palette, sanitation, and SVG
+normalization. Saved output remains ordinary Mermaid fenced source, and only
+Insert/Update uses the existing document transaction path.
+
+The unit suite includes catalog, picker navigation boundaries and list-only
+scrolling, replacement session, preview queue and status accessibility, and
+modal integration tests. `npm run test:browser:mermaid` uses the shipped
+Mermaid 11.17.2 bundle and CSS to render all 16 variants, checks visible
+English/Japanese labels (including Mindmap/Timeline), inserts and reopens each
+diagram, and checks no-op updates. It also exercises caret/scroll restoration,
+inline confirmation, composition events, footer visibility, picker/editor
+transitions, direct-submit guards, tab order, keyboard focus, browser-host
+Undo/Redo, external/read-only guards, GitHub/GitLab/CommonMark, four live
+themes and a 380×640 viewport. It also checks that boundary navigation does not
+restart preview work, progress is conveyed through `aria-busy`, and list
+navigation does not move the dialog or page. No external template requests
+occur.
+
+The ER, Pie, Timeline, Mindmap, and Gantt assertions inspect rendered SVG
+geometry and paint, including text-to-background contrast, labels, connectors,
+and status surfaces. They run across the candidate picker, code editor,
+inserted document, existing-diagram editor, dedicated Preview, and native
+preview. The four VS Code theme classes are switched while the dialog remains
+open; all 13 templates and 16 variants are asserted under each theme. Japanese
+deep Mindmap labels and Gantt short tasks, statuses, milestones, multiple
+sections, and today markers inside and outside the date range are covered.
+Duplicate Pie values, reordered sectors, commented ER attributes, and a
+sectionless Timeline exercise source-driven rendering. PNG captures for the
+five asserted diagram families in all four themes are kept under
+`docs/screenshots/issue-141/`.
+
+On 2026-10-03, the final footer revision passed `npm run compile`, all 1,268
+unit tests, `npm run lint` (zero errors; existing warnings only),
+`npm run format:check`, both Mermaid and block browser suites, and
+`npm run package`. The five AGENTS fixtures (`common-test.md`,
+`github-test.md`, `github-test-class-B.md`, `gitlab-test.md`,
+`gitlab-test-class-B.md`) passed Rich/Preview/native display checks. The Mermaid
+browser suite checked the picker across light/dark/both high-contrast themes
+and narrow layouts, and captured the initial picker, revisited picker, new and
+existing code editors, and replacement confirmation. The five final screenshots
+are retained under `docs/screenshots/issue-141/`. Native Extension
+Development Host acceptance, real OS IME candidate UI, and screen-reader
+announcements were not rerun or inspected for this final footer revision.
+The existing HTML/PDF export browser suites passed earlier with the shared
+rendering helper (HTML CSP violations: zero; PDF: 13 A4 pages).
+
+The final 0.8.0 Mermaid editor navigation revision on 2026-10-03 passed
+`npm run compile`, `npm test` (1,317 tests across 63 files),
+`npm run lint` (zero errors; 94 warnings), `npm run format:check`,
+`npm run test:browser:mermaid`, `npm run test:browser:blocks`,
+`npm run test:extension`, and `npm run package` (76 files; 4,613,481 bytes).
+Browser checks cover the
+editor-first navigation button, replacement confirmation for existing,
+selected, and edited code, IME guards, and document Undo/Redo. All five AGENTS
+fixtures pass Rich/Preview/native display checks. The initial picker, revisited
+picker, new editor, existing editor, and replacement confirmation screenshots
+are retained under `docs/screenshots/issue-141/`. The real OS IME candidate UI
+and screen-reader announcements remain unverified; no release, tag, or workflow
+was run.
+
+PR #145 CSP follow-up on 2026-10-03 reproduced Git graph paint loss with the
+bundled Mermaid 11.17.2 runtime under the browser suite's current CSP. The
+inline SVG stylesheet was blocked; path.arrow computed to black fill and no
+stroke, and commit/branch/label surfaces also fell back to black. The fix
+scopes SVG normalization and static theme-aware CSS to
+aria-roledescription="gitGraph"; the CSP and shared sanitizer remain unchanged.
+The browser suite checks connector paint, commit colors, merge rings, label
+contrast, and theme switching while the modal stays open. The four captures
+gitgraph-light.png, gitgraph-dark.png, gitgraph-high-contrast.png, and
+gitgraph-high-contrast-light.png are retained in docs/screenshots/issue-141/.
+
+This follow-up passed npm run compile, npm test (1,312 tests / 63 files),
+npm run lint (0 errors; 94 existing warnings), npm run format:check,
+npm run test:browser:mermaid (all 13 templates and 16 direction variants),
+npm run test:browser:blocks (all five fixtures in Rich/Preview/native),
+npm run test:browser:html-export (zero CSP violations),
+npm run test:browser:pdf-export (13 A4 pages), and npm run package
+(76 files; 4,613,456 bytes). npm run test:extension, real OS IME candidate
+UI, and screen-reader announcements were not run for this follow-up.
+
+The final PR #145 review pass on 2026-10-03 keeps version 0.8.0. Escape now
+uses the whole-dialog Cancel and existing dirty-draft confirmation from both
+the editor and replacement confirmation; IME Escape remains composition-first.
+ER, Pie, and Timeline use paired theme-aware backgrounds and text in the shared
+sanitized renderer and scoped document CSS. The browser suite measures actual
+SVG fills behind labels, not only text presence, in candidate, editor, inserted,
+re-edited, dedicated Preview, and native-preview paths. Twelve chart captures
+(three diagrams by four VS Code themes) are kept under
+`docs/screenshots/issue-141/`.
+
+Template measurements used Headless Chrome 153 on macOS, a 1280x900 viewport,
+the Light theme, and 20 samples for each warm case. Cold open was one sample.
+The ca945 review reference had the 300ms candidate validation debounce; the
+current live PR head f31139 had already removed that debounce in a later
+commit. The table keeps both baselines visible so the later correction is not
+mistaken for this review pass:
+
+| Revision                             | Cold open to first SVG | Warm miss, selection to display (p50/p95) |      Revisit, selection to display (p50/p95) | Three-candidate burst, last visible (p50/p95) |
+| ------------------------------------ | ---------------------: | ----------------------------------------: | -------------------------------------------: | --------------------------------------------: |
+| ca945 review reference               |              616.07 ms |      337.4 / 342.3 ms (1 parse, 1 render) | 334 / 337.5 ms (1 parse, 1 render; no cache) |          324.5 / 337.8 ms (1 parse, 1 render) |
+| f31139 live PR head                  |               295.5 ms |            20 / 22 ms (0 parse, 1 render) |             8.8 / 9.9 ms (0 parse, 0 render) |           29.1 / 31.4 ms (0 parse, 2 renders) |
+| review working tree (pre-correction) |              294.04 ms |          23.9 / 27 ms (1 parse, 1 render) |             8.8 / 9.5 ms (0 parse, 0 render) |            18.4 / 19.3 ms (1 parse, 1 render) |
+
+The picker has no fixed 300ms wait. The `review working tree (pre-correction)`
+row records an earlier implementation that explicitly parsed a built-in on a
+cache miss; the current policy below removes that parser call entirely. The
+historical rows remain for comparison, not as evidence for the current
+candidate path. These are local measurements, not a hardware-independent
+performance claim.
+
+The 2026-10-03 Mindmap/Gantt follow-up reproduced both failures in the shipped
+Mermaid 11.17.2 runtime with the browser harness's current CSP. Mermaid's
+inline SVG stylesheet was blocked, leaving Mindmap branch surfaces and Gantt
+task bars with black fallback paint. The shared safe renderer now applies
+role-gated Mindmap/Gantt SVG normalization, and static CSS supplies theme-aware
+node, branch, task, section, label, grid, and today-marker styles. The CSP,
+shared renderer, and sanitizer remain unchanged. The Mindmap root keeps its
+neutral circle and Mermaid-generated geometry, with its text anchor explicitly
+centered after the blocked inline stylesheet would otherwise leave it
+misaligned. Gantt source dates, task durations, dependencies, and milestone
+geometry remain renderer-owned.
+
+The CSP browser suite checks computed fill/stroke/width, node-to-branch and
+task-status colors, >=4.5:1 label contrast, axis/today visibility, text anchors,
+viewBox clipping, and unchanged geometry across theme switches. The candidate
+picker checks all 13 templates and 16 variants under Light, Dark, High Contrast,
+and High Contrast Light. It checks every template in code editing, insertion,
+and existing-diagram re-editing; dedicated Preview covers ER, Pie, Timeline,
+Mindmap, and Gantt, while native Preview checks seven diagram types under all
+four themes. Separate fixtures cover Japanese/deep Mindmap and Gantt
+short-duration, long-label, active/done/critical, milestone, multi-section, and
+today-in/out-of-range cases. Four final captures per Mindmap/Gantt diagram and
+the pre-fix Light/Dark captures plus computed-style evidence are kept in
+`docs/screenshots/issue-141/`.
+
+The final class-diagram visual review also found Mermaid's `edgeTerminals`
+multiplicity text overlapping a `userSpaceOnUse` arrowhead, and a horizontal
+relationship label could touch the start multiplicity. The shared normalizer
+now measures the generated SVG in the current document, moves only a terminal
+label that collides, and chooses the smallest free-space translation that
+keeps it clear of arrowheads, class boxes, and other labels inside the SVG
+viewport. It does not apply a fixed offset or alter Mermaid's relationship
+layout. Both TD and LR cases are checked with screen-space boxes, including
+class-box clipping, label-to-label overlap, and 4.5:1 text contrast. The eight
+native captures `class-diagram-terminals-{light,dark,high-contrast,high-contrast-light}.png`
+and `class-diagram-terminals-lr-{light,dark,high-contrast,high-contrast-light}.png`
+show the final arrowheads and multiplicities. The
+`class-basic-candidate-{light,dark,high-contrast,high-contrast-light}.png`
+captures also verify the `places` relationship label under all four themes.
+
+The 2026-10-03 ER zoom report's full-marker bounding-box clearance was later
+found to be the wrong acceptance condition: it treated geometry hidden by the
+entity as visible, and the code had changed Mermaid's endpoint references.
+The 2026-10-04 correction below supersedes that measurement and removes the
+duplicated screen-box assertion. It checks the renderer's original marker
+attributes, actual path/circle paint, and finished diagrams instead.
+
+Interactive built-in template selection, editor entry, and unchanged
+Insert/Update use zero explicit Mint-side syntax parses. User edits still run
+the existing debounced validation and invalid text stays uncommittable. In
+Headless Chrome 153 at 1280x900, Light theme, and 20 warm samples, cold open
+was 295.76 ms; a warm cache miss was 22.3 / 23.1 ms p50/p95 (zero prevalidation,
+one render); a cache hit was 8.8 / 9.6 ms (zero parse/render); a three-candidate
+latest-only burst was 30.8 / 34.1 ms (zero prevalidation, two renders: the
+already-running request and the latest pending request). These local numbers
+do not imply a hardware-independent performance budget.
+
+The earlier pre-visual-correction review pass passed `npm run compile`, `npm test` (1,335 tests / 64
+files), `npm run lint` (zero errors; 94 warnings), `npm run format:check`,
+`npm run test:browser:mermaid` (all 13 templates / 16 variants, current CSP,
+four themes, Escape, rendering paths, and performance cases),
+`npm run test:browser:blocks` (all five AGENTS fixtures in Rich/Preview/native),
+`npm run test:browser:html-export` (zero CSP violations),
+`npm run test:browser:pdf-export` (334,167 bytes; 13 A4 pages),
+`npm run test:extension`, and `npm run package` (0.8.0; 76 files;
+4,632,692 bytes). At that review, fetched main was already an ancestor of the
+PR branch and the release workflow and 0.8.0 metadata were retained. The final
+revalidation also found cached `origin/main` (`f6ad692c4d1b10e56afaaeeba7a99c5e3bb137b7`)
+to be an ancestor. Refreshing the remote during this run was blocked by the
+shared worktree's `FETCH_HEAD` permission boundary; a read-only `git ls-remote`
+also failed because GitHub DNS was unavailable, so the live main tip could not
+be reconfirmed. Real OS IME candidate UI and screen-reader
+announcements were not manually inspected. No release, tag, or workflow was
+run.
+
+A separate isolated VS Code smoke run on the initial Issue #141 UI inserted a
+Japanese Mindmap template, saved it, exercised native Cmd+Z / Cmd+Shift+Z and
+saved each result, canceled candidate browsing, and reopened/updated an
+unchanged diagram. Disk bytes, source, and host versions matched the expected
+boundaries. That check used a temporary CDP script under
+`output/playwright/native-mermaid/`; it predates this footer revision and does
+not verify its final screen flow.
+
+The native save smoke also showed a misleading “VS Code did not save the
+Markdown document” notification despite matching saved bytes and a clean
+editor. The same notification was independently reproduced using the baseline
+0.7.0 VSIX; the host save implementation is unchanged in this PR.
+
+The final 2026-10-03 revalidation after the visual corrections passed
+`npm run compile`, `npm test` (1,338 tests / 64 files), `npm run lint` (zero
+errors; 94 existing warnings), `npm run format:check`, the full
+`npm run test:browser:mermaid` suite (13 templates / 16 variants under the
+current CSP, including live four-theme candidate screenshots and TD/LR class
+label geometry), `npm run test:browser:blocks` (all five required Markdown
+fixtures in Rich, dedicated Preview, and native Preview), HTML export (zero CSP
+violations), and PDF export (13 A4 pages). A separate four-theme `themeChecks`
+rerun refreshed and visually confirmed `catalog-class-basic-light.png`; its
+`places`, `1`, `many`, and arrowhead are visible with measured bounds and
+contrast. `npm run package` passed for version 0.8.0 (76 files; 4,638,400
+bytes). `npm run test:extension` was attempted once after these changes but
+the VS Code test process exited with `SIGABRT` before producing test results;
+it was not retried. Native OS-level IME remains unverified. The version remains
+0.8.0, and no release, tag, or workflow was run.
+
+The class-basic preview's conditional geometry pass was measured separately
+under Headless Chrome 153, Light theme, 1280x900, with 20 samples. A warm cache
+miss (one render, zero Mint-side prevalidation calls) measured 27.4 / 29.6 ms
+p50/p95 from selection to display and 22.3 / 24.2 ms for render time. Reopening
+the normalized SVG cache (zero parse/render calls) measured 8.2 / 8.6 ms p50/p95
+to display. These local measurements confirm the added geometry work is limited
+to the first class-diagram render and do not define a hardware-independent
+performance budget.
+
+Five fresh local Chromium contexts per case used the same
+`scripts/benchmark-mermaid-startup.mjs` command on `origin/main` 0.7.0 and the
+final 0.8.0 revision on 2026-10-03. The VSIX sizes were verified from the
+corresponding 76-file packages. These are local measurements, not a claim of
+acceleration or a hardware-independent budget:
+
+| Measurement                        | main 0.7.0 |     0.8.0 |
+| ---------------------------------- | ---------: | --------: |
+| Webview bundle bytes               |  1,753,249 | 1,779,727 |
+| Mermaid loader bytes               |    464,943 |   465,257 |
+| Mermaid bundle bytes               |  3,768,758 | 3,769,089 |
+| VSIX bytes (76 files)              |  4,603,843 | 4,612,240 |
+| Ordinary document editability      |   222.0 ms |  221.2 ms |
+| First Mermaid use to rendered SVG  |   275.6 ms |  276.7 ms |
+| Ordinary document runtime requests |          0 |         0 |
+| First-use runtime requests         |          1 |         1 |
+
+The 2026-10-04 Mindmap/ER rendering correction keeps version 0.8.0.
+
+Mindmap branches were visible through the center node because the renderer
+already returned `g.nodes` above `g.edgePaths`, but `normalizeMindmapSvg()`
+painted the node with a translucent VS Code surface. The normalizer now
+composites that surface over the resolved opaque editor background and applies
+`fill-opacity: 1` and `opacity: 1` only to `.node-bkg` / `.label-container`
+backgrounds. Root text contrast is selected against that final opaque color.
+The existing layer ordering remains in place; branch path coordinates,
+endpoints, transforms, and node geometry are unchanged. Light `rgba(0, 0, 0,
+0.06)` resolves to `#f0f0f0`; Dark `rgba(127, 127, 127, 0.12)` resolves to
+`#2a2a2a`. Transparent surfaces are resolved against the active Light or Dark
+editor background. Under the browser CSP, the pre-fix pixel comparison found
+299 differing pixels among 25,065 sampled node-interior pixels; after the fix,
+the difference is zero for translucent Light/Dark and transparent Light/Dark.
+The comparison hides `g.edgePaths` only in a rasterized test clone and excludes
+node outlines and text. It separately verifies that the real branch strokes
+remain visible outside nodes.
+
+The earlier ER endpoint correction was wrong: `normalizeErSvg()` replaced
+Mermaid's per-symbol `refX` with zero or `markerWidth`, exposing the hidden
+parts of one-or-more / zero-or-more crowfoot paths and making them look like
+eyes or leaves. The normalizer now leaves the generated marker attributes and
+shape paths untouched. The browser test compares the normalized output with the
+raw `render()` output from the same bundled Mermaid 11.17.2 runtime; it checks
+`refX`, `refY`, marker dimensions/units/orientation/viewBox, and path geometry.
+The pinned runtime's reference points are:
+
+| Marker       | Start `refX` | End `refX` |
+| ------------ | -----------: | ---------: |
+| `onlyOne`    |            0 |         18 |
+| `zeroOrOne`  |            0 |         30 |
+| `oneOrMore`  |           18 |         27 |
+| `zeroOrMore` |           18 |         39 |
+
+ER line paths now use `fill: none` with Mermaid's 1px stroke; zero-cardinality
+circles use a 1px outline and an opaque surface fill; `.outer-path` entity
+backgrounds and relationship-label backgrounds also use that opaque surface.
+The ER label-translation workaround and its marker bounding-box acceptance
+check were removed, so label transforms remain the renderer's original values.
+`markerScreenRect()` and the separate label handling for Class diagrams remain
+unchanged. Role-scoped static CSS covers both `.markdown-body` and
+`.mm-document-content` while preserving Flowchart and Class marker paint.
+
+The release-gate browser test covers all four cardinalities on both endpoints
+in ER diagrams with TB, BT, LR, and RL directions. It checks the complete
+rendered relation, opaque entity backgrounds, path/circle paint, original
+marker attributes and path geometry, and original label transforms without
+copying the product's screen-box calculation. Captures in
+`docs/screenshots/issue-141/` include `mindmap-alpha-{light,dark}-{before,after}.png`,
+`mindmap-alpha-dark-zoom-{before,after}.png`, `er-markers-before-{light,dark}.png`,
+`er-markers-after-{light,dark}.png`, `er-cardinality-{tb,bt,lr,rl}-after.png`,
+and `er-cardinality-tb-zoom-after.png`.
+
+Revalidation on 2026-10-04 passed `npm run compile`, `npm test` (1,344 tests /
+64 files), `npm run lint` (zero errors; 94 existing warnings), and
+`npm run format:check`. The complete `npm run test:browser:mermaid` passed all
+13 templates / 16 variants under the unchanged CSP and four themes, including
+candidate, code editor, insertion, re-edit, dedicated Preview, native Preview,
+cache behavior, theme changes, and the Mindmap pixel comparison. The browser
+suite measured a warm candidate cache miss at 22.7 / 23.4 ms p50/p95 (zero
+explicit prevalidation parses, one render), a cache hit at 8.4 / 9.3 ms (zero
+parse/render), and a three-candidate latest-only burst at 31.0 / 34.7 ms (zero
+prevalidation, two renders). `npm run test:browser:blocks` passed the five
+required Markdown fixtures in Rich, Preview, and native Preview. HTML export
+reported zero CSP violations; PDF export produced 334,167 bytes and 13 A4
+pages. The single requested isolated `npm run test:extension` run passed. The
+0.8.0 package passed verification with 76 files and 4,640,639 bytes.
+
+The live remote `main` and PR base both resolve to
+`f6ad692c4d1b10e56afaaeeba7a99c5e3bb137b7`, which is already an ancestor of
+the PR branch; no merge was needed. `package.json` and `package-lock.json`
+remain at 0.8.0. OS-level IME candidate UI and screen-reader behavior were not
+manually inspected. No version bump, release, tag, or workflow was run.
+
 ## Quality requirements
 
 | Requirement                            | Implementation                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
@@ -242,15 +625,16 @@ textarea retains its accessible name. The header reports the bundled Mermaid
 runtime version and the current validation state, including a humanized
 diagram type after a successful parse.
 
-The dialog titles are `Insert Mermaid` and `Edit Mermaid`; the shared feature
-labels and the existing Math, Alert, Details, and other feature dialog titles
-remain unchanged.
+An empty new Mermaid insertion opens at `Choose a Mermaid template`; the code
+editor title is `Edit Mermaid` for both new and existing diagrams. Existing
+Math, Alert, Details, and other feature dialog titles remain unchanged.
 
 Validation removes the same NUL characters and Mermaid directives as the
 renderer before calling the bundled Mermaid runtime's `parse()` method. It is
 debounced during typing, rejects empty and over-limit input, and guards
-delayed results against newer input or a closed dialog. Insert and Update,
-including Ctrl/Cmd+Enter, require a current successful validation result.
+delayed results against newer input or a closed dialog. Insert diagram and
+Update diagram, including Ctrl/Cmd+Enter, require a current successful
+validation result.
 The renderer continues to use the existing strict security configuration and
 sanitization path.
 

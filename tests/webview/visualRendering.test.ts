@@ -375,6 +375,7 @@ describe("local Mermaid rendering lifecycle", () => {
       render: () =>
         '<svg><rect class="background" width="100" height="50" />' +
         '<g class="edgePaths"><path class="flowchart-link" /></g>' +
+        '<path class="messageLine0" />' +
         '<g class="edgeLabel"><rect class="labelBkg" /></g></svg>',
     };
     (globalThis as Record<string, unknown>).markdownMintMermaid = runtime;
@@ -390,9 +391,523 @@ describe("local Mermaid rendering lifecycle", () => {
     expect(svg?.querySelector<SVGElement>(".flowchart-link")?.style.fill).toBe(
       "none",
     );
+    expect(svg?.querySelector<SVGElement>(".messageLine0")?.style.fill).toBe(
+      "none",
+    );
     expect(
       svg?.querySelector<SVGElement>(".edgeLabel .labelBkg")?.style.fill,
     ).toBe("var(--mm-mermaid-background)");
+    enhancer.dispose();
+  });
+
+  it("normalizes Git graph arrows after SVG sanitization", async () => {
+    const runtime: MermaidRuntime = {
+      render: () =>
+        '<svg aria-roledescription="gitGraph">' +
+        '<path class="arrow arrow0" fill="red" onclick="alert(1)" />' +
+        "<script>alert(1)</script></svg>",
+    };
+    (globalThis as Record<string, unknown>).markdownMintMermaid = runtime;
+    const element = diagram("gitGraph\n    commit");
+    const enhancer = enhanceRenderedContent(document.body);
+    await flush();
+
+    const svg = element.querySelector("svg");
+    const arrow = svg?.querySelector<SVGPathElement>("path.arrow");
+    expect(svg?.getAttribute("aria-roledescription")).toBe("gitGraph");
+    expect(arrow?.style.getPropertyValue("fill")).toBe("none");
+    expect(arrow?.getAttribute("fill")).toBe("red");
+    expect(arrow?.hasAttribute("onclick")).toBe(false);
+    expect(svg?.querySelector("script")).toBeNull();
+    enhancer.dispose();
+  });
+
+  it("normalizes only Mindmap nodes and edges, preserving node shapes and branch colors", async () => {
+    const runtime: MermaidRuntime = {
+      render: () =>
+        '<svg aria-roledescription="mindmap">' +
+        '<g class="mindmap-node section-root section--1"><circle class="label-container" />' +
+        "<text><tspan>Center</tspan></text></g>" +
+        '<g class="mindmap-node section-0"><path class="node-bkg" fill="black" />' +
+        '<path class="compound-outline" fill="none" />' +
+        '<line class="node-line-0" /><text><tspan>Branch</tspan></text></g>' +
+        '<path class="edge section-edge-0 edge-depth-1" fill="black" />' +
+        "</svg>",
+    };
+    (globalThis as Record<string, unknown>).markdownMintMermaid = runtime;
+    const element = diagram("mindmap\n root((Center))\n  Branch");
+    const enhancer = enhanceRenderedContent(document.body);
+    await flush();
+
+    const svg = element.querySelector<SVGElement>("svg")!;
+    const center = svg.querySelector<SVGCircleElement>(".section-root circle")!;
+    const branch = svg.querySelector<SVGPathElement>(".section-0 .node-bkg")!;
+    const outline = svg.querySelector<SVGPathElement>(".compound-outline")!;
+    const edge = svg.querySelector<SVGPathElement>("path.edge")!;
+    expect(center.style.fill).not.toBe("black");
+    expect(branch.style.fill).not.toBe("black");
+    expect(branch.style.stroke).not.toBe("");
+    expect(outline.style.fill).toBe("");
+    expect(edge.style.fill).toBe("none");
+    expect(edge.style.stroke).not.toBe("");
+    expect(Number.parseFloat(edge.style.strokeWidth)).toBeGreaterThan(0);
+    expect(
+      svg.querySelector<SVGTextElement>(".section-root text")?.style.textAnchor,
+    ).toBe("middle");
+    expect(
+      svg.querySelector<SVGTextElement>(".section-root tspan")?.style
+        .textAnchor,
+    ).toBe("middle");
+    expect(
+      svg.querySelector<SVGTextElement>(".section-0 text tspan")?.style.fill,
+    ).not.toBe("");
+    expect(
+      svg.querySelector<SVGTextElement>(".section-0 text")?.style.textAnchor,
+    ).toBe("");
+    enhancer.dispose();
+  });
+
+  it("restores hollow and filled class markers only for class diagrams", async () => {
+    const runtime: MermaidRuntime = {
+      render: (_id, source) => {
+        const role = source.startsWith("classDiagram")
+          ? "classDiagram"
+          : "flowchart-v2";
+        return (
+          `<svg aria-roledescription="${role}">` +
+          '<g class="node default"><path class="label-container" fill="black" />' +
+          '<g class="divider"><path fill="black" /></g><text>Class</text></g>' +
+          (role === "classDiagram"
+            ? '<text class="edgeTerminals" transform="translate(10, 20)">1</text>'
+            : "") +
+          '<path class="relation" fill="black" />' +
+          '<marker id="mm-classDiagram-extensionEnd-markerID-margin"><path fill="black" /></marker>' +
+          '<marker id="mm-classDiagram-aggregationEnd-markerID-margin"><path fill="black" /></marker>' +
+          '<marker id="mm-classDiagram-compositionEnd"><path fill="black" /></marker>' +
+          '<marker id="mm-classDiagram-dependencyEnd"><path fill="black" /></marker>' +
+          '<marker id="mm-classDiagram-lollipopEnd"><circle fill="black" /></marker>' +
+          "</svg>"
+        );
+      },
+    };
+    (globalThis as Record<string, unknown>).markdownMintMermaid = runtime;
+    const classElement = diagram("classDiagram\nA <|-- B");
+    const otherElement = diagram("flowchart TD\nA --> B");
+    const enhancer = enhanceRenderedContent(document.body);
+    await flush();
+
+    const classSvg = classElement.querySelector<SVGElement>("svg")!;
+    const surface = classSvg.querySelector<SVGPathElement>(
+      ".node.default .label-container",
+    )!;
+    const divider = classSvg.querySelector<SVGPathElement>(
+      ".node.default .divider path",
+    )!;
+    const extension = classSvg.querySelector<SVGPathElement>(
+      "#mm-classDiagram-extensionEnd-markerID-margin path",
+    )!;
+    const aggregation = classSvg.querySelector<SVGPathElement>(
+      "#mm-classDiagram-aggregationEnd-markerID-margin path",
+    )!;
+    const composition = classSvg.querySelector<SVGPathElement>(
+      "#mm-classDiagram-compositionEnd path",
+    )!;
+    const dependency = classSvg.querySelector<SVGPathElement>(
+      "#mm-classDiagram-dependencyEnd path",
+    )!;
+    const lollipop = classSvg.querySelector<SVGCircleElement>(
+      "#mm-classDiagram-lollipopEnd circle",
+    )!;
+    expect(surface.style.fill).not.toBe("black");
+    expect(divider.style.fill).toBe("none");
+    expect(
+      classSvg.querySelector<SVGTextElement>(".node.default text")?.style.fill,
+    ).not.toBe("");
+    expect(
+      classSvg
+        .querySelector<SVGTextElement>(".edgeTerminals")
+        ?.getAttribute("transform"),
+    ).toBe("translate(10, 20)");
+    expect(extension.style.fill).toBe("transparent");
+    expect(aggregation.style.fill).toBe("transparent");
+    expect(composition.style.fill).not.toBe("transparent");
+    expect(dependency.style.fill).not.toBe("transparent");
+    expect(lollipop.style.fill).not.toBe("transparent");
+    expect(extension.style.strokeWidth).toBe("1px");
+    expect(
+      classSvg.querySelector<SVGPathElement>("path.relation")?.style.fill,
+    ).toBe("none");
+
+    const otherSvg = otherElement.querySelector<SVGElement>("svg")!;
+    expect(
+      otherSvg.querySelector<SVGPathElement>(".label-container")?.style.fill,
+    ).toBe("");
+    expect(
+      otherSvg.querySelector(".edgeTerminals")?.getAttribute("transform"),
+    ).toBeUndefined();
+    expect(
+      otherSvg.querySelector<SVGPathElement>(
+        'marker[id^="mm-classDiagram-extensionEnd-"] path',
+      )?.style.fill,
+    ).toBe("");
+    enhancer.dispose();
+  });
+
+  it("does not apply class marker paint to markers in other diagram types", async () => {
+    const runtime: MermaidRuntime = {
+      render: () =>
+        '<svg aria-roledescription="flowchart-v2">' +
+        '<marker id="flowchart-classDiagram-extensionEnd"><path fill="black" /></marker>' +
+        "</svg>",
+    };
+    (globalThis as Record<string, unknown>).markdownMintMermaid = runtime;
+    const element = diagram("flowchart TD\nA --> B");
+    const enhancer = enhanceRenderedContent(document.body);
+    await flush();
+
+    const markerPath = element.querySelector<SVGPathElement>("marker path")!;
+    expect(markerPath.style.fill).toBe("");
+    expect(markerPath.style.stroke).toBe("");
+    enhancer.dispose();
+  });
+
+  it("keeps ER relationship lines and crowfoot markers at their one-pixel stroke", async () => {
+    const runtime: MermaidRuntime = {
+      render: () =>
+        '<svg aria-roledescription="er">' +
+        '<path class="relationshipLine" />' +
+        '<g class="marker er"><path /></g></svg>',
+    };
+    (globalThis as Record<string, unknown>).markdownMintMermaid = runtime;
+    const element = diagram("erDiagram\nUSER ||--o{ ORDER");
+    const enhancer = enhanceRenderedContent(document.body);
+    await flush();
+
+    const svg = element.querySelector<SVGElement>("svg")!;
+    expect(
+      svg.querySelector<SVGPathElement>(".relationshipLine")?.style.strokeWidth,
+    ).toBe("1px");
+    expect(
+      svg.querySelector<SVGPathElement>(".marker.er path")?.style.strokeWidth,
+    ).toBe("1px");
+    enhancer.dispose();
+  });
+
+  it("preserves ER marker geometry and separates line and circle paint", async () => {
+    document.documentElement.className = "vscode-dark";
+    document.documentElement.style.setProperty(
+      "--vscode-editor-background",
+      "#1e1e1e",
+    );
+    document.documentElement.style.setProperty(
+      "--vscode-editor-foreground",
+      "#d4d4d4",
+    );
+    document.documentElement.style.setProperty(
+      "--vscode-textCodeBlock-background",
+      "rgba(127, 127, 127, 0.12)",
+    );
+    const markerKinds = [
+      { kind: "onlyOne", width: 18, height: 18, start: 0, end: 18, refY: 9 },
+      { kind: "zeroOrOne", width: 30, height: 18, start: 0, end: 30, refY: 9 },
+      {
+        kind: "oneOrMore",
+        width: 45,
+        height: 36,
+        start: 18,
+        end: 27,
+        refY: 18,
+      },
+      {
+        kind: "zeroOrMore",
+        width: 57,
+        height: 36,
+        start: 18,
+        end: 39,
+        refY: 18,
+      },
+    ] as const;
+    const markers = markerKinds
+      .flatMap(({ kind, width, height, start, end, refY }) =>
+        (["Start", "End"] as const).map((side) => {
+          const refX = side === "Start" ? start : end;
+          const circle = kind === "zeroOrOne" || kind === "zeroOrMore";
+          return (
+            `<marker id="er-${kind}${side}" class="marker er ${kind}" ` +
+            `refX="${refX}" refY="${refY}" markerWidth="${width}" ` +
+            `markerHeight="${height}" markerUnits="strokeWidth" ` +
+            'orient="auto" viewBox="0 0 57 36">' +
+            (circle ? '<circle cx="9" cy="18" r="6" />' : "") +
+            '<path d="M0,18 Q18,0 36,18 Q18,36 0,18" /></marker>'
+          );
+        }),
+      )
+      .join("");
+    const runtime: MermaidRuntime = {
+      render: () =>
+        '<svg aria-roledescription="er">' +
+        '<g class="outer-path"><path class="entity-background" />' +
+        '<path class="entity-border" /></g>' +
+        '<path class="relationshipLine" marker-start="url(#er-oneOrMoreStart)" />' +
+        markers +
+        "</svg>",
+    };
+    (globalThis as Record<string, unknown>).markdownMintMermaid = runtime;
+    const element = diagram("erDiagram\nA ||--o{ B");
+    const enhancer = enhanceRenderedContent(document.body);
+    await flush();
+
+    const svg = element.querySelector<SVGElement>("svg")!;
+    const markerElements = Array.from(
+      svg.querySelectorAll<SVGMarkerElement>("marker.er"),
+    );
+    expect(markerElements).toHaveLength(8);
+    const before = markerKinds.flatMap(
+      ({ kind, width, height, start, end, refY }) =>
+        (["Start", "End"] as const).map((side) => ({
+          id: `er-${kind}${side}`,
+          refX: String(side === "Start" ? start : end),
+          refY: String(refY),
+          width: String(width),
+          height: String(height),
+          markerUnits: "strokeWidth",
+          orient: "auto",
+          viewBox: "0 0 57 36",
+        })),
+    );
+    expect(
+      markerElements.map((marker) => ({
+        id: marker.id,
+        refX: marker.getAttribute("refX"),
+        refY: marker.getAttribute("refY"),
+        width: marker.getAttribute("markerWidth"),
+        height: marker.getAttribute("markerHeight"),
+        markerUnits: marker.getAttribute("markerUnits"),
+        orient: marker.getAttribute("orient"),
+        viewBox: marker.getAttribute("viewBox"),
+      })),
+    ).toEqual(before);
+    for (const path of Array.from(
+      svg.querySelectorAll<SVGPathElement>("marker.er path"),
+    )) {
+      expect(path.style.fill).toBe("none");
+      expect(path.style.strokeWidth).toBe("1px");
+      expect(path.style.stroke).not.toBe("");
+    }
+    for (const circle of Array.from(
+      svg.querySelectorAll<SVGCircleElement>("marker.er circle"),
+    )) {
+      expect(circle.style.fill).toBe("#2a2a2a");
+      expect(circle.style.fillOpacity).toBe("1");
+      expect(circle.style.opacity).toBe("1");
+      expect(circle.style.strokeWidth).toBe("1px");
+    }
+    const entityBackground = svg.querySelector<SVGPathElement>(
+      ".outer-path .entity-background",
+    )!;
+    expect(entityBackground.style.fill).toBe("#2a2a2a");
+    expect(entityBackground.style.fillOpacity).toBe("1");
+    expect(entityBackground.style.opacity).toBe("1");
+    enhancer.dispose();
+  });
+
+  it("composites translucent Mindmap node backgrounds and fully masks branches", async () => {
+    document.documentElement.className = "vscode-dark";
+    document.documentElement.style.setProperty(
+      "--vscode-editor-background",
+      "#1e1e1e",
+    );
+    document.documentElement.style.setProperty(
+      "--vscode-editor-foreground",
+      "#d4d4d4",
+    );
+    document.documentElement.style.setProperty(
+      "--vscode-textCodeBlock-background",
+      "rgba(127, 127, 127, 0.12)",
+    );
+    const runtime: MermaidRuntime = {
+      render: () =>
+        '<svg aria-roledescription="mindmap">' +
+        '<g class="nodes"><g class="mindmap-node section-root section--1">' +
+        '<circle class="node-bkg" fill-opacity="0.12" opacity="0.5" />' +
+        "<text>Ideas</text></g>" +
+        '<g class="mindmap-node section-0"><path class="label-container" ' +
+        'fill-opacity="0.12" opacity="0.5" /><text>Goals</text></g></g>' +
+        '<g class="edgePaths"><path class="edge section-edge-0 edge-depth-1" /></g>' +
+        "</svg>",
+    };
+    (globalThis as Record<string, unknown>).markdownMintMermaid = runtime;
+    const element = diagram("mindmap\nroot((Ideas))\n  Goals");
+    const enhancer = enhanceRenderedContent(document.body);
+    await flush();
+
+    const svg = element.querySelector<SVGElement>("svg")!;
+    const center = svg.querySelector<SVGCircleElement>(
+      ".section-root .node-bkg",
+    )!;
+    const branch = svg.querySelector<SVGPathElement>(
+      ".section-0 .label-container",
+    )!;
+    expect(center.style.fill).toBe("#2a2a2a");
+    expect(center.style.fillOpacity).toBe("1");
+    expect(center.style.opacity).toBe("1");
+    expect(branch.style.fillOpacity).toBe("1");
+    expect(branch.style.opacity).toBe("1");
+    expect(
+      svg.querySelector(".section-root text")?.getAttribute("style"),
+    ).toContain("#d4d4d4");
+    const connector = svg.querySelector<SVGPathElement>("path.edge")!;
+    expect(connector.style.stroke).not.toBe("");
+    expect(connector.style.fill).toBe("none");
+    enhancer.dispose();
+  });
+
+  it("paints Mindmap connectors beneath their node surfaces", async () => {
+    const runtime: MermaidRuntime = {
+      render: () =>
+        '<svg aria-roledescription="mindmap">' +
+        '<g class="nodes"><g class="mindmap-node section-root section--1">' +
+        '<circle class="node-bkg" /><text>Ideas</text></g></g>' +
+        '<g class="edgePaths"><path class="edge section-edge-0 edge-depth-1" /></g>' +
+        "</svg>",
+    };
+    (globalThis as Record<string, unknown>).markdownMintMermaid = runtime;
+    const element = diagram("mindmap\nroot((Ideas))");
+    const enhancer = enhanceRenderedContent(document.body);
+    await flush();
+
+    const svg = element.querySelector<SVGElement>("svg")!;
+    const edgeLayer = svg.querySelector("g.edgePaths")!;
+    const nodeLayer = svg.querySelector("g.nodes")!;
+    expect(edgeLayer.parentElement).toBe(nodeLayer.parentElement);
+    expect(
+      Array.from(edgeLayer.parentElement!.children).indexOf(edgeLayer),
+    ).toBeLessThan(
+      Array.from(edgeLayer.parentElement!.children).indexOf(nodeLayer),
+    );
+    enhancer.dispose();
+  });
+
+  it("uses one Pie separator color while retaining the separate outer ring", async () => {
+    const runtime: MermaidRuntime = {
+      render: () =>
+        '<svg aria-roledescription="pie">' +
+        '<circle class="pieOuterCircle" />' +
+        '<path class="pieCircle" fill="#0969da" />' +
+        '<path class="pieCircle" fill="#bc4c00" />' +
+        '<path class="pieCircle" fill="#1a7f37" />' +
+        "</svg>",
+    };
+    (globalThis as Record<string, unknown>).markdownMintMermaid = runtime;
+    const element = diagram('pie\n    "A": 50\n    "B": 30\n    "C": 20');
+    const enhancer = enhanceRenderedContent(document.body);
+    await flush();
+
+    const svg = element.querySelector<SVGElement>("svg")!;
+    const slices = Array.from(
+      svg.querySelectorAll<SVGPathElement>(".pieCircle"),
+    );
+    const separator = slices[0]?.style.stroke;
+    expect(separator).not.toBe("");
+    expect(new Set(slices.map((slice) => slice.style.stroke)).size).toBe(1);
+    const outer = svg.querySelector<SVGCircleElement>(".pieOuterCircle")!;
+    expect(outer.style.stroke).not.toBe(separator);
+    expect(new Set(slices.map((slice) => slice.style.fill)).size).toBe(3);
+    expect(Array.from(svg.children).at(-1)).toBe(outer);
+    enhancer.dispose();
+  });
+
+  it("normalizes Gantt state colors and inside/outside label alignment", async () => {
+    const calls: Array<Record<string, unknown>> = [];
+    const runtime: MermaidRuntime = {
+      initialize: (options) => calls.push(options),
+      render: () =>
+        '<svg aria-roledescription="gantt">' +
+        '<rect class="section section0" />' +
+        '<rect class="task task0" />' +
+        '<rect class="task activeCrit0" />' +
+        '<rect class="task doneCrit0" />' +
+        '<text class="taskText taskText0">Inside</text>' +
+        '<text class="taskTextOutsideRight taskTextOutside0">Outside</text>' +
+        '<text class="titleText">Schedule</text>' +
+        '<text class="sectionTitle">Build</text>' +
+        '<g class="grid"><path class="domain" fill="black" />' +
+        '<g class="tick"><line /><text>Date</text></g></g>' +
+        '<line class="today" />' +
+        "</svg>",
+    };
+    (globalThis as Record<string, unknown>).markdownMintMermaid = runtime;
+    const element = diagram("gantt\n title Schedule");
+    const enhancer = enhanceRenderedContent(document.body);
+    await flush();
+
+    const svg = element.querySelector<SVGElement>("svg")!;
+    const tasks = svg.querySelectorAll<SVGRectElement>("rect.task");
+    const inside = svg.querySelector<SVGTextElement>(".taskText")!;
+    const outside = svg.querySelector<SVGTextElement>(".taskTextOutsideRight")!;
+    expect(calls[0]).toMatchObject({
+      themeVariables: {
+        sectionBkgColor: expect.any(String),
+        sectionBkgColor2: expect.any(String),
+        altSectionBkgColor: expect.any(String),
+        gridColor: expect.any(String),
+        taskBkgColor: expect.any(String),
+        taskBorderColor: expect.any(String),
+        activeTaskBkgColor: expect.any(String),
+        doneTaskBkgColor: expect.any(String),
+        critBkgColor: expect.any(String),
+        critBorderColor: expect.any(String),
+        todayLineColor: expect.any(String),
+      },
+    });
+    expect(svg.querySelector<SVGRectElement>(".section")?.style.fill).not.toBe(
+      "black",
+    );
+    expect(tasks[0]?.style.fill).not.toBe("black");
+    expect(tasks[1]?.style.fill).not.toBe(tasks[0]?.style.fill);
+    expect(tasks[1]?.style.stroke).toBe(tasks[2]?.style.stroke);
+    expect(inside.style.textAnchor).toBe("middle");
+    expect(outside.style.textAnchor).toBe("start");
+    expect(outside.style.fill).not.toBe(inside.style.fill);
+    expect(svg.querySelector<SVGPathElement>(".grid path")?.style.fill).toBe(
+      "none",
+    );
+    expect(
+      svg.querySelector<SVGLineElement>("line.today")?.style.stroke,
+    ).not.toBe("none");
+    enhancer.dispose();
+  });
+
+  it("does not apply Mindmap or Gantt corrections to diagrams with other roles", async () => {
+    const runtime: MermaidRuntime = {
+      render: () =>
+        '<svg aria-roledescription="timeline">' +
+        '<g class="section-0"><path class="node-bkg" fill="black" />' +
+        '<path class="edge" fill="black" /></g></svg>',
+    };
+    (globalThis as Record<string, unknown>).markdownMintMermaid = runtime;
+    const element = diagram("timeline\n Q1 : Plan");
+    const enhancer = enhanceRenderedContent(document.body);
+    await flush();
+
+    const svg = element.querySelector<SVGElement>("svg")!;
+    expect(svg.querySelector<SVGPathElement>(".node-bkg")?.style.fill).toBe("");
+    expect(svg.querySelector<SVGPathElement>(".edge")?.style.fill).toBe("");
+    enhancer.dispose();
+  });
+
+  it("leaves filled paths in non-Git graph diagrams unchanged", async () => {
+    const runtime: MermaidRuntime = {
+      render: () => '<svg><path class="arrow" fill="red" /></svg>',
+    };
+    (globalThis as Record<string, unknown>).markdownMintMermaid = runtime;
+    const element = diagram('pie\n    "A": 1');
+    const enhancer = enhanceRenderedContent(document.body);
+    await flush();
+
+    const arrow = element.querySelector<SVGPathElement>("svg path.arrow");
+    expect(arrow?.style.getPropertyValue("fill")).toBe("");
+    expect(arrow?.getAttribute("fill")).toBe("red");
     enhancer.dispose();
   });
 
@@ -472,8 +987,11 @@ describe("local Mermaid rendering lifecycle", () => {
     element.dataset.mermaidSource = "flowchart TD\\n A-->C";
     enhancer.invalidate();
     await flush();
-    expect(resolvers).toHaveLength(2);
+    expect(resolvers).toHaveLength(1);
     resolvers[0]?.('<svg id="PLACEHOLDER"><g>old</g></svg>');
+    await flush();
+    expect(element.querySelector("svg")).toBeNull();
+    expect(resolvers).toHaveLength(2);
     resolvers[1]?.('<svg id="PLACEHOLDER"><g>new</g></svg>');
     await flush();
     expect(element.querySelector("svg")?.textContent).toBe("new");

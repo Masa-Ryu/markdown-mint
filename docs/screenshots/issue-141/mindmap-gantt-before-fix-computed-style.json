@@ -1,0 +1,1332 @@
+{
+  "csp": "default-src 'none'; style-src 'self'; style-src-elem 'self'; style-src-attr 'unsafe-inline'; script-src 'self' 'nonce-mm-test-nonce'; connect-src 'none'",
+  "runtime": "Mermaid 11.17.2",
+  "captures": {
+    "mindmap-basic": {
+      "vscode-light": {
+        "role": "mindmap",
+        "viewBox": "5 5 300.19097900390625 359.32794189453125",
+        "nodes": [
+          {
+            "classes": "node mindmap-node section-root section--1",
+            "label": "Project",
+            "shapes": [
+              {
+                "className": "basic label-container",
+                "fill": "rgb(246, 248, 250)",
+                "stroke": "rgb(87, 96, 106)",
+                "strokeWidth": "1px",
+                "box": [
+                  -31.46875,
+                  -31.46875,
+                  62.9375,
+                  62.9375
+                ]
+              }
+            ],
+            "labelStyle": [
+              {
+                "tag": "text",
+                "className": null,
+                "text": "Project",
+                "fill": "rgb(31, 35, 40)",
+                "textAnchor": "start",
+                "alignmentBaseline": "auto",
+                "dominantBaseline": "auto",
+                "box": [
+                  0,
+                  -0.0006008406635373831,
+                  45.72071838378906,
+                  17.000732421875
+                ]
+              },
+              {
+                "tag": "tspan",
+                "className": "text-outer-tspan row",
+                "text": "Project",
+                "fill": "rgb(31, 35, 40)",
+                "textAnchor": "start",
+                "alignmentBaseline": "auto",
+                "dominantBaseline": "auto",
+                "box": [
+                  0,
+                  -0.0006008406635373831,
+                  45.72071838378906,
+                  17.000732421875
+                ]
+              },
+              {
+                "tag": "tspan",
+                "className": "text-inner-tspan",
+                "text": "Project",
+                "fill": "rgb(31, 35, 40)",
+                "textAnchor": "start",
+                "alignmentBaseline": "auto",
+                "dominantBaseline": "auto",
+                "box": [
+                  0,
+                  -0.0006008406635373831,
+                  45.72071838378906,
+                  17.000732421875
+                ]
+              }
+            ]
+          },
+          {
+            "classes": "node mindmap-node section-0",
+            "label": "Goals",
+            "shapes": [
+              {
+                "className": "node-bkg node-0",
+                "fill": "rgb(0, 0, 0)",
+                "stroke": "none",
+                "strokeWidth": "1px",
+                "box": [
+                  -37.140625,
+                  -13,
+                  74.28125,
+                  26
+                ]
+              }
+            ],
+            "labelStyle": [
+              {
+                "tag": "text",
+                "className": null,
+                "text": "Goals",
+                "fill": "rgb(31, 35, 40)",
+                "textAnchor": "start",
+                "alignmentBaseline": "auto",
+                "dominantBaseline": "auto",
+                "box": [
+                  0,
+                  -0.0006008406635373831,
+                  36.54844665527344,
+                  17.000732421875
+                ]
+              },
+              {
+                "tag": "tspan",
+                "className": "text-outer-tspan row",
+                "text": "Goals",
+                "fill": "rgb(31, 35, 40)",
+                "textAnchor": "start",
+                "alignmentBaseline": "auto",
+                "dominantBaseline": "auto",
+                "box": [
+                  0,
+                  -0.0006008406635373831,
+                  36.54844665527344,
+                  17.000732421875
+                ]
+              },
+              {
+                "tag": "tspan",
+                "className": "text-inner-tspan",
+                "text": "Goals",
+                "fill": "rgb(31, 35, 40)",
+                "textAnchor": "start",
+                "alignmentBaseline": "auto",
+                "dominantBaseline": "auto",
+                "box": [
+                  0,
+                  -0.0006008406635373831,
+                  36.54844665527344,
+                  17.000732421875
+                ]
+              }
+            ]
+          },
+          {
+            "classes": "node mindmap-node section-0",
+            "label": "Quality",
+            "shapes": [
+              {
+                "className": "node-bkg node-0",
+                "fill": "rgb(0, 0, 0)",
+                "stroke": "none",
+                "strokeWidth": "1px",
+                "box": [
+                  -41.2734375,
+                  -13,
+                  82.546875,
+                  26
+                ]
+              }
+            ],
+            "labelStyle": [
+              {
+                "tag": "text",
+                "className": null,
+                "text": "Quality",
+                "fill": "rgb(31, 35, 40)",
+                "textAnchor": "start",
+                "alignmentBaseline": "auto",
+                "dominantBaseline": "auto",
+                "box": [
+                  0,
+                  -0.0006008406635373831,
+                  45.298824310302734,
+                  17.000732421875
+                ]
+              },
+              {
+                "tag": "tspan",
+                "className": "text-outer-tspan row",
+                "text": "Quality",
+                "fill": "rgb(31, 35, 40)",
+                "textAnchor": "start",
+                "alignmentBaseline": "auto",
+                "dominantBaseline": "auto",
+                "box": [
+                  0,
+                  -0.0006008406635373831,
+                  45.298824310302734,
+                  17.000732421875
+                ]
+              },
+              {
+                "tag": "tspan",
+                "className": "text-inner-tspan",
+                "text": "Quality",
+                "fill": "rgb(31, 35, 40)",
+                "textAnchor": "start",
+                "alignmentBaseline": "auto",
+                "dominantBaseline": "auto",
+                "box": [
+                  0,
+                  -0.0006008406635373831,
+                  45.298824310302734,
+                  17.000732421875
+                ]
+              }
+            ]
+          },
+          {
+            "classes": "node mindmap-node section-0",
+            "label": "Simplicity",
+            "shapes": [
+              {
+                "className": "node-bkg node-0",
+                "fill": "rgb(0, 0, 0)",
+                "stroke": "none",
+                "strokeWidth": "1px",
+                "box": [
+                  -49.375,
+                  -13,
+                  98.75,
+                  26
+                ]
+              }
+            ],
+            "labelStyle": [
+              {
+                "tag": "text",
+                "className": null,
+                "text": "Simplicity",
+                "fill": "rgb(31, 35, 40)",
+                "textAnchor": "start",
+                "alignmentBaseline": "auto",
+                "dominantBaseline": "auto",
+                "box": [
+                  0,
+                  -0.0006008406635373831,
+                  62.54956817626953,
+                  17.000732421875
+                ]
+              },
+              {
+                "tag": "tspan",
+                "className": "text-outer-tspan row",
+                "text": "Simplicity",
+                "fill": "rgb(31, 35, 40)",
+                "textAnchor": "start",
+                "alignmentBaseline": "auto",
+                "dominantBaseline": "auto",
+                "box": [
+                  0,
+                  -0.0006008406635373831,
+                  62.54956817626953,
+                  17.000732421875
+                ]
+              },
+              {
+                "tag": "tspan",
+                "className": "text-inner-tspan",
+                "text": "Simplicity",
+                "fill": "rgb(31, 35, 40)",
+                "textAnchor": "start",
+                "alignmentBaseline": "auto",
+                "dominantBaseline": "auto",
+                "box": [
+                  0,
+                  -0.0006008406635373831,
+                  62.54956817626953,
+                  17.000732421875
+                ]
+              }
+            ]
+          },
+          {
+            "classes": "node mindmap-node section-1",
+            "label": "People",
+            "shapes": [
+              {
+                "className": "node-bkg node-0",
+                "fill": "rgb(0, 0, 0)",
+                "stroke": "none",
+                "strokeWidth": "1px",
+                "box": [
+                  -40.6875,
+                  -13,
+                  81.375,
+                  26
+                ]
+              }
+            ],
+            "labelStyle": [
+              {
+                "tag": "text",
+                "className": null,
+                "text": "People",
+                "fill": "rgb(31, 35, 40)",
+                "textAnchor": "start",
+                "alignmentBaseline": "auto",
+                "dominantBaseline": "auto",
+                "box": [
+                  0,
+                  -0.0006008406635373831,
+                  44.11127471923828,
+                  17.000732421875
+                ]
+              },
+              {
+                "tag": "tspan",
+                "className": "text-outer-tspan row",
+                "text": "People",
+                "fill": "rgb(31, 35, 40)",
+                "textAnchor": "start",
+                "alignmentBaseline": "auto",
+                "dominantBaseline": "auto",
+                "box": [
+                  0,
+                  -0.0006008406635373831,
+                  44.11127471923828,
+                  17.000732421875
+                ]
+              },
+              {
+                "tag": "tspan",
+                "className": "text-inner-tspan",
+                "text": "People",
+                "fill": "rgb(31, 35, 40)",
+                "textAnchor": "start",
+                "alignmentBaseline": "auto",
+                "dominantBaseline": "auto",
+                "box": [
+                  0,
+                  -0.0006008406635373831,
+                  44.11127471923828,
+                  17.000732421875
+                ]
+              }
+            ]
+          },
+          {
+            "classes": "node mindmap-node section-1",
+            "label": "Team",
+            "shapes": [
+              {
+                "className": "node-bkg node-0",
+                "fill": "rgb(0, 0, 0)",
+                "stroke": "none",
+                "strokeWidth": "1px",
+                "box": [
+                  -36.2890625,
+                  -13,
+                  72.578125,
+                  26
+                ]
+              }
+            ],
+            "labelStyle": [
+              {
+                "tag": "text",
+                "className": null,
+                "text": "Team",
+                "fill": "rgb(31, 35, 40)",
+                "textAnchor": "start",
+                "alignmentBaseline": "auto",
+                "dominantBaseline": "auto",
+                "box": [
+                  0,
+                  -0.0006008406635373831,
+                  34.79837417602539,
+                  17.000732421875
+                ]
+              },
+              {
+                "tag": "tspan",
+                "className": "text-outer-tspan row",
+                "text": "Team",
+                "fill": "rgb(31, 35, 40)",
+                "textAnchor": "start",
+                "alignmentBaseline": "auto",
+                "dominantBaseline": "auto",
+                "box": [
+                  0,
+                  -0.0006008406635373831,
+                  34.79837417602539,
+                  17.000732421875
+                ]
+              },
+              {
+                "tag": "tspan",
+                "className": "text-inner-tspan",
+                "text": "Team",
+                "fill": "rgb(31, 35, 40)",
+                "textAnchor": "start",
+                "alignmentBaseline": "auto",
+                "dominantBaseline": "auto",
+                "box": [
+                  0,
+                  -0.0006008406635373831,
+                  34.79837417602539,
+                  17.000732421875
+                ]
+              }
+            ]
+          },
+          {
+            "classes": "node mindmap-node section-1",
+            "label": "Users",
+            "shapes": [
+              {
+                "className": "node-bkg node-0",
+                "fill": "rgb(0, 0, 0)",
+                "stroke": "none",
+                "strokeWidth": "1px",
+                "box": [
+                  -37.5390625,
+                  -13,
+                  75.078125,
+                  26
+                ]
+              }
+            ],
+            "labelStyle": [
+              {
+                "tag": "text",
+                "className": null,
+                "text": "Users",
+                "fill": "rgb(31, 35, 40)",
+                "textAnchor": "start",
+                "alignmentBaseline": "auto",
+                "dominantBaseline": "auto",
+                "box": [
+                  0,
+                  -0.0006008406635373831,
+                  37.407859802246094,
+                  17.000732421875
+                ]
+              },
+              {
+                "tag": "tspan",
+                "className": "text-outer-tspan row",
+                "text": "Users",
+                "fill": "rgb(31, 35, 40)",
+                "textAnchor": "start",
+                "alignmentBaseline": "auto",
+                "dominantBaseline": "auto",
+                "box": [
+                  0,
+                  -0.0006008406635373831,
+                  37.407859802246094,
+                  17.000732421875
+                ]
+              },
+              {
+                "tag": "tspan",
+                "className": "text-inner-tspan",
+                "text": "Users",
+                "fill": "rgb(31, 35, 40)",
+                "textAnchor": "start",
+                "alignmentBaseline": "auto",
+                "dominantBaseline": "auto",
+                "box": [
+                  0,
+                  -0.0006008406635373831,
+                  37.407859802246094,
+                  17.000732421875
+                ]
+              }
+            ]
+          }
+        ],
+        "edges": [
+          {
+            "classes": "edge-thickness-normal edge-pattern-solid edge section-edge-0 edge-depth-1",
+            "fill": "none",
+            "stroke": "rgb(87, 96, 106)",
+            "width": "1px"
+          },
+          {
+            "classes": "edge-thickness-normal edge-pattern-solid edge section-edge-0 edge-depth-5",
+            "fill": "none",
+            "stroke": "rgb(87, 96, 106)",
+            "width": "1px"
+          },
+          {
+            "classes": "edge-thickness-normal edge-pattern-solid edge section-edge-0 edge-depth-5",
+            "fill": "none",
+            "stroke": "rgb(87, 96, 106)",
+            "width": "1px"
+          },
+          {
+            "classes": "edge-thickness-normal edge-pattern-solid edge section-edge-1 edge-depth-1",
+            "fill": "none",
+            "stroke": "rgb(87, 96, 106)",
+            "width": "1px"
+          },
+          {
+            "classes": "edge-thickness-normal edge-pattern-solid edge section-edge-1 edge-depth-5",
+            "fill": "none",
+            "stroke": "rgb(87, 96, 106)",
+            "width": "1px"
+          },
+          {
+            "classes": "edge-thickness-normal edge-pattern-solid edge section-edge-1 edge-depth-5",
+            "fill": "none",
+            "stroke": "rgb(87, 96, 106)",
+            "width": "1px"
+          }
+        ]
+      },
+      "vscode-dark": {
+        "role": "mindmap",
+        "viewBox": "5 5 300.19097900390625 359.32794189453125",
+        "nodes": [
+          {
+            "classes": "node mindmap-node section-root section--1",
+            "label": "Project",
+            "shapes": [
+              {
+                "className": "basic label-container",
+                "fill": "rgb(37, 37, 38)",
+                "stroke": "rgb(157, 165, 180)",
+                "strokeWidth": "1px",
+                "box": [
+                  -31.46875,
+                  -31.46875,
+                  62.9375,
+                  62.9375
+                ]
+              }
+            ],
+            "labelStyle": [
+              {
+                "tag": "text",
+                "className": null,
+                "text": "Project",
+                "fill": "rgb(212, 212, 212)",
+                "textAnchor": "start",
+                "alignmentBaseline": "auto",
+                "dominantBaseline": "auto",
+                "box": [
+                  0,
+                  -0.0006008406635373831,
+                  45.72071838378906,
+                  17.000732421875
+                ]
+              },
+              {
+                "tag": "tspan",
+                "className": "text-outer-tspan row",
+                "text": "Project",
+                "fill": "rgb(212, 212, 212)",
+                "textAnchor": "start",
+                "alignmentBaseline": "auto",
+                "dominantBaseline": "auto",
+                "box": [
+                  0,
+                  -0.0006008406635373831,
+                  45.72071838378906,
+                  17.000732421875
+                ]
+              },
+              {
+                "tag": "tspan",
+                "className": "text-inner-tspan",
+                "text": "Project",
+                "fill": "rgb(212, 212, 212)",
+                "textAnchor": "start",
+                "alignmentBaseline": "auto",
+                "dominantBaseline": "auto",
+                "box": [
+                  0,
+                  -0.0006008406635373831,
+                  45.72071838378906,
+                  17.000732421875
+                ]
+              }
+            ]
+          },
+          {
+            "classes": "node mindmap-node section-0",
+            "label": "Goals",
+            "shapes": [
+              {
+                "className": "node-bkg node-0",
+                "fill": "rgb(0, 0, 0)",
+                "stroke": "none",
+                "strokeWidth": "1px",
+                "box": [
+                  -37.140625,
+                  -13,
+                  74.28125,
+                  26
+                ]
+              }
+            ],
+            "labelStyle": [
+              {
+                "tag": "text",
+                "className": null,
+                "text": "Goals",
+                "fill": "rgb(212, 212, 212)",
+                "textAnchor": "start",
+                "alignmentBaseline": "auto",
+                "dominantBaseline": "auto",
+                "box": [
+                  0,
+                  -0.0006008406635373831,
+                  36.54844665527344,
+                  17.000732421875
+                ]
+              },
+              {
+                "tag": "tspan",
+                "className": "text-outer-tspan row",
+                "text": "Goals",
+                "fill": "rgb(212, 212, 212)",
+                "textAnchor": "start",
+                "alignmentBaseline": "auto",
+                "dominantBaseline": "auto",
+                "box": [
+                  0,
+                  -0.0006008406635373831,
+                  36.54844665527344,
+                  17.000732421875
+                ]
+              },
+              {
+                "tag": "tspan",
+                "className": "text-inner-tspan",
+                "text": "Goals",
+                "fill": "rgb(212, 212, 212)",
+                "textAnchor": "start",
+                "alignmentBaseline": "auto",
+                "dominantBaseline": "auto",
+                "box": [
+                  0,
+                  -0.0006008406635373831,
+                  36.54844665527344,
+                  17.000732421875
+                ]
+              }
+            ]
+          },
+          {
+            "classes": "node mindmap-node section-0",
+            "label": "Quality",
+            "shapes": [
+              {
+                "className": "node-bkg node-0",
+                "fill": "rgb(0, 0, 0)",
+                "stroke": "none",
+                "strokeWidth": "1px",
+                "box": [
+                  -41.2734375,
+                  -13,
+                  82.546875,
+                  26
+                ]
+              }
+            ],
+            "labelStyle": [
+              {
+                "tag": "text",
+                "className": null,
+                "text": "Quality",
+                "fill": "rgb(212, 212, 212)",
+                "textAnchor": "start",
+                "alignmentBaseline": "auto",
+                "dominantBaseline": "auto",
+                "box": [
+                  0,
+                  -0.0006008406635373831,
+                  45.298824310302734,
+                  17.000732421875
+                ]
+              },
+              {
+                "tag": "tspan",
+                "className": "text-outer-tspan row",
+                "text": "Quality",
+                "fill": "rgb(212, 212, 212)",
+                "textAnchor": "start",
+                "alignmentBaseline": "auto",
+                "dominantBaseline": "auto",
+                "box": [
+                  0,
+                  -0.0006008406635373831,
+                  45.298824310302734,
+                  17.000732421875
+                ]
+              },
+              {
+                "tag": "tspan",
+                "className": "text-inner-tspan",
+                "text": "Quality",
+                "fill": "rgb(212, 212, 212)",
+                "textAnchor": "start",
+                "alignmentBaseline": "auto",
+                "dominantBaseline": "auto",
+                "box": [
+                  0,
+                  -0.0006008406635373831,
+                  45.298824310302734,
+                  17.000732421875
+                ]
+              }
+            ]
+          },
+          {
+            "classes": "node mindmap-node section-0",
+            "label": "Simplicity",
+            "shapes": [
+              {
+                "className": "node-bkg node-0",
+                "fill": "rgb(0, 0, 0)",
+                "stroke": "none",
+                "strokeWidth": "1px",
+                "box": [
+                  -49.375,
+                  -13,
+                  98.75,
+                  26
+                ]
+              }
+            ],
+            "labelStyle": [
+              {
+                "tag": "text",
+                "className": null,
+                "text": "Simplicity",
+                "fill": "rgb(212, 212, 212)",
+                "textAnchor": "start",
+                "alignmentBaseline": "auto",
+                "dominantBaseline": "auto",
+                "box": [
+                  0,
+                  -0.0006008406635373831,
+                  62.54956817626953,
+                  17.000732421875
+                ]
+              },
+              {
+                "tag": "tspan",
+                "className": "text-outer-tspan row",
+                "text": "Simplicity",
+                "fill": "rgb(212, 212, 212)",
+                "textAnchor": "start",
+                "alignmentBaseline": "auto",
+                "dominantBaseline": "auto",
+                "box": [
+                  0,
+                  -0.0006008406635373831,
+                  62.54956817626953,
+                  17.000732421875
+                ]
+              },
+              {
+                "tag": "tspan",
+                "className": "text-inner-tspan",
+                "text": "Simplicity",
+                "fill": "rgb(212, 212, 212)",
+                "textAnchor": "start",
+                "alignmentBaseline": "auto",
+                "dominantBaseline": "auto",
+                "box": [
+                  0,
+                  -0.0006008406635373831,
+                  62.54956817626953,
+                  17.000732421875
+                ]
+              }
+            ]
+          },
+          {
+            "classes": "node mindmap-node section-1",
+            "label": "People",
+            "shapes": [
+              {
+                "className": "node-bkg node-0",
+                "fill": "rgb(0, 0, 0)",
+                "stroke": "none",
+                "strokeWidth": "1px",
+                "box": [
+                  -40.6875,
+                  -13,
+                  81.375,
+                  26
+                ]
+              }
+            ],
+            "labelStyle": [
+              {
+                "tag": "text",
+                "className": null,
+                "text": "People",
+                "fill": "rgb(212, 212, 212)",
+                "textAnchor": "start",
+                "alignmentBaseline": "auto",
+                "dominantBaseline": "auto",
+                "box": [
+                  0,
+                  -0.0006008406635373831,
+                  44.11127471923828,
+                  17.000732421875
+                ]
+              },
+              {
+                "tag": "tspan",
+                "className": "text-outer-tspan row",
+                "text": "People",
+                "fill": "rgb(212, 212, 212)",
+                "textAnchor": "start",
+                "alignmentBaseline": "auto",
+                "dominantBaseline": "auto",
+                "box": [
+                  0,
+                  -0.0006008406635373831,
+                  44.11127471923828,
+                  17.000732421875
+                ]
+              },
+              {
+                "tag": "tspan",
+                "className": "text-inner-tspan",
+                "text": "People",
+                "fill": "rgb(212, 212, 212)",
+                "textAnchor": "start",
+                "alignmentBaseline": "auto",
+                "dominantBaseline": "auto",
+                "box": [
+                  0,
+                  -0.0006008406635373831,
+                  44.11127471923828,
+                  17.000732421875
+                ]
+              }
+            ]
+          },
+          {
+            "classes": "node mindmap-node section-1",
+            "label": "Team",
+            "shapes": [
+              {
+                "className": "node-bkg node-0",
+                "fill": "rgb(0, 0, 0)",
+                "stroke": "none",
+                "strokeWidth": "1px",
+                "box": [
+                  -36.2890625,
+                  -13,
+                  72.578125,
+                  26
+                ]
+              }
+            ],
+            "labelStyle": [
+              {
+                "tag": "text",
+                "className": null,
+                "text": "Team",
+                "fill": "rgb(212, 212, 212)",
+                "textAnchor": "start",
+                "alignmentBaseline": "auto",
+                "dominantBaseline": "auto",
+                "box": [
+                  0,
+                  -0.0006008406635373831,
+                  34.79837417602539,
+                  17.000732421875
+                ]
+              },
+              {
+                "tag": "tspan",
+                "className": "text-outer-tspan row",
+                "text": "Team",
+                "fill": "rgb(212, 212, 212)",
+                "textAnchor": "start",
+                "alignmentBaseline": "auto",
+                "dominantBaseline": "auto",
+                "box": [
+                  0,
+                  -0.0006008406635373831,
+                  34.79837417602539,
+                  17.000732421875
+                ]
+              },
+              {
+                "tag": "tspan",
+                "className": "text-inner-tspan",
+                "text": "Team",
+                "fill": "rgb(212, 212, 212)",
+                "textAnchor": "start",
+                "alignmentBaseline": "auto",
+                "dominantBaseline": "auto",
+                "box": [
+                  0,
+                  -0.0006008406635373831,
+                  34.79837417602539,
+                  17.000732421875
+                ]
+              }
+            ]
+          },
+          {
+            "classes": "node mindmap-node section-1",
+            "label": "Users",
+            "shapes": [
+              {
+                "className": "node-bkg node-0",
+                "fill": "rgb(0, 0, 0)",
+                "stroke": "none",
+                "strokeWidth": "1px",
+                "box": [
+                  -37.5390625,
+                  -13,
+                  75.078125,
+                  26
+                ]
+              }
+            ],
+            "labelStyle": [
+              {
+                "tag": "text",
+                "className": null,
+                "text": "Users",
+                "fill": "rgb(212, 212, 212)",
+                "textAnchor": "start",
+                "alignmentBaseline": "auto",
+                "dominantBaseline": "auto",
+                "box": [
+                  0,
+                  -0.0006008406635373831,
+                  37.407859802246094,
+                  17.000732421875
+                ]
+              },
+              {
+                "tag": "tspan",
+                "className": "text-outer-tspan row",
+                "text": "Users",
+                "fill": "rgb(212, 212, 212)",
+                "textAnchor": "start",
+                "alignmentBaseline": "auto",
+                "dominantBaseline": "auto",
+                "box": [
+                  0,
+                  -0.0006008406635373831,
+                  37.407859802246094,
+                  17.000732421875
+                ]
+              },
+              {
+                "tag": "tspan",
+                "className": "text-inner-tspan",
+                "text": "Users",
+                "fill": "rgb(212, 212, 212)",
+                "textAnchor": "start",
+                "alignmentBaseline": "auto",
+                "dominantBaseline": "auto",
+                "box": [
+                  0,
+                  -0.0006008406635373831,
+                  37.407859802246094,
+                  17.000732421875
+                ]
+              }
+            ]
+          }
+        ],
+        "edges": [
+          {
+            "classes": "edge-thickness-normal edge-pattern-solid edge section-edge-0 edge-depth-1",
+            "fill": "none",
+            "stroke": "rgb(157, 165, 180)",
+            "width": "1px"
+          },
+          {
+            "classes": "edge-thickness-normal edge-pattern-solid edge section-edge-0 edge-depth-5",
+            "fill": "none",
+            "stroke": "rgb(157, 165, 180)",
+            "width": "1px"
+          },
+          {
+            "classes": "edge-thickness-normal edge-pattern-solid edge section-edge-0 edge-depth-5",
+            "fill": "none",
+            "stroke": "rgb(157, 165, 180)",
+            "width": "1px"
+          },
+          {
+            "classes": "edge-thickness-normal edge-pattern-solid edge section-edge-1 edge-depth-1",
+            "fill": "none",
+            "stroke": "rgb(157, 165, 180)",
+            "width": "1px"
+          },
+          {
+            "classes": "edge-thickness-normal edge-pattern-solid edge section-edge-1 edge-depth-5",
+            "fill": "none",
+            "stroke": "rgb(157, 165, 180)",
+            "width": "1px"
+          },
+          {
+            "classes": "edge-thickness-normal edge-pattern-solid edge section-edge-1 edge-depth-5",
+            "fill": "none",
+            "stroke": "rgb(157, 165, 180)",
+            "width": "1px"
+          }
+        ]
+      }
+    },
+    "gantt-project": {
+      "vscode-light": {
+        "role": "gantt",
+        "viewBox": "0 0 1280 172",
+        "sections": [
+          {
+            "className": "section section0",
+            "fill": "rgb(0, 0, 0)",
+            "box": [
+              0,
+              48,
+              1242.5,
+              24
+            ]
+          },
+          {
+            "className": "section section0",
+            "fill": "rgb(0, 0, 0)",
+            "box": [
+              0,
+              72,
+              1242.5,
+              24
+            ]
+          },
+          {
+            "className": "section section0",
+            "fill": "rgb(0, 0, 0)",
+            "box": [
+              0,
+              96,
+              1242.5,
+              24
+            ]
+          }
+        ],
+        "tasks": [
+          {
+            "className": "task task0",
+            "fill": "rgb(0, 0, 0)",
+            "stroke": "none",
+            "strokeWidth": "1px",
+            "box": [
+              75,
+              50,
+              339,
+              20
+            ]
+          },
+          {
+            "className": "task task0",
+            "fill": "rgb(0, 0, 0)",
+            "stroke": "none",
+            "strokeWidth": "1px",
+            "box": [
+              414,
+              74,
+              565,
+              20
+            ]
+          },
+          {
+            "className": "task task0",
+            "fill": "rgb(0, 0, 0)",
+            "stroke": "none",
+            "strokeWidth": "1px",
+            "box": [
+              979,
+              98,
+              226,
+              20
+            ]
+          }
+        ],
+        "labels": [
+          {
+            "className": "taskText taskText0  width-36.265625",
+            "text": "Design",
+            "fill": "rgb(31, 35, 40)",
+            "textAnchor": "start",
+            "box": [
+              244.5,
+              53.902793884277344,
+              36.25196075439453,
+              11.996512413024902
+            ]
+          },
+          {
+            "className": "taskText taskText0  width-55.15625",
+            "text": "Implement",
+            "fill": "rgb(31, 35, 40)",
+            "textAnchor": "start",
+            "box": [
+              696.5,
+              77.90279388427734,
+              55.108978271484375,
+              11.996512413024902
+            ]
+          },
+          {
+            "className": "taskText taskText0  width-22.140625",
+            "text": "Test",
+            "fill": "rgb(31, 35, 40)",
+            "textAnchor": "start",
+            "box": [
+              1092,
+              101.90279388427734,
+              22.11857032775879,
+              11.996512413024902
+            ]
+          },
+          {
+            "className": "sectionTitle sectionTitle0",
+            "text": "Project",
+            "fill": "rgb(31, 35, 40)",
+            "textAnchor": "start",
+            "box": [
+              10,
+              80.00173950195312,
+              37.189186096191406,
+              11.996512413024902
+            ]
+          },
+          {
+            "className": "titleText",
+            "text": "Project schedule",
+            "fill": "rgb(31, 35, 40)",
+            "textAnchor": "start",
+            "box": [
+              640,
+              10.604185104370117,
+              107.96861267089844,
+              16.92293357849121
+            ]
+          }
+        ],
+        "axes": [
+          {
+            "className": "domain",
+            "fill": "none",
+            "stroke": "rgb(31, 35, 40)",
+            "strokeWidth": "1px",
+            "box": [
+              0.5,
+              -87,
+              1130,
+              87.5
+            ]
+          },
+          {
+            "className": null,
+            "fill": "none",
+            "stroke": "rgb(31, 35, 40)",
+            "strokeWidth": "1px",
+            "box": [
+              0,
+              -87,
+              0,
+              87
+            ]
+          }
+        ]
+      },
+      "vscode-dark": {
+        "role": "gantt",
+        "viewBox": "0 0 1280 172",
+        "sections": [
+          {
+            "className": "section section0",
+            "fill": "rgb(0, 0, 0)",
+            "box": [
+              0,
+              48,
+              1242.5,
+              24
+            ]
+          },
+          {
+            "className": "section section0",
+            "fill": "rgb(0, 0, 0)",
+            "box": [
+              0,
+              72,
+              1242.5,
+              24
+            ]
+          },
+          {
+            "className": "section section0",
+            "fill": "rgb(0, 0, 0)",
+            "box": [
+              0,
+              96,
+              1242.5,
+              24
+            ]
+          }
+        ],
+        "tasks": [
+          {
+            "className": "task task0",
+            "fill": "rgb(0, 0, 0)",
+            "stroke": "none",
+            "strokeWidth": "1px",
+            "box": [
+              75,
+              50,
+              339,
+              20
+            ]
+          },
+          {
+            "className": "task task0",
+            "fill": "rgb(0, 0, 0)",
+            "stroke": "none",
+            "strokeWidth": "1px",
+            "box": [
+              414,
+              74,
+              565,
+              20
+            ]
+          },
+          {
+            "className": "task task0",
+            "fill": "rgb(0, 0, 0)",
+            "stroke": "none",
+            "strokeWidth": "1px",
+            "box": [
+              979,
+              98,
+              226,
+              20
+            ]
+          }
+        ],
+        "labels": [
+          {
+            "className": "taskText taskText0  width-36.265625",
+            "text": "Design",
+            "fill": "rgb(212, 212, 212)",
+            "textAnchor": "start",
+            "box": [
+              244.5,
+              53.902793884277344,
+              36.25196075439453,
+              11.996512413024902
+            ]
+          },
+          {
+            "className": "taskText taskText0  width-55.15625",
+            "text": "Implement",
+            "fill": "rgb(212, 212, 212)",
+            "textAnchor": "start",
+            "box": [
+              696.5,
+              77.90279388427734,
+              55.108978271484375,
+              11.996512413024902
+            ]
+          },
+          {
+            "className": "taskText taskText0  width-22.140625",
+            "text": "Test",
+            "fill": "rgb(212, 212, 212)",
+            "textAnchor": "start",
+            "box": [
+              1092,
+              101.90279388427734,
+              22.11857032775879,
+              11.996512413024902
+            ]
+          },
+          {
+            "className": "sectionTitle sectionTitle0",
+            "text": "Project",
+            "fill": "rgb(212, 212, 212)",
+            "textAnchor": "start",
+            "box": [
+              10,
+              80.00173950195312,
+              37.189186096191406,
+              11.996512413024902
+            ]
+          },
+          {
+            "className": "titleText",
+            "text": "Project schedule",
+            "fill": "rgb(212, 212, 212)",
+            "textAnchor": "start",
+            "box": [
+              640,
+              10.604185104370117,
+              107.96861267089844,
+              16.92293357849121
+            ]
+          }
+        ],
+        "axes": [
+          {
+            "className": "domain",
+            "fill": "none",
+            "stroke": "rgb(212, 212, 212)",
+            "strokeWidth": "1px",
+            "box": [
+              0.5,
+              -87,
+              1130,
+              87.5
+            ]
+          },
+          {
+            "className": null,
+            "fill": "none",
+            "stroke": "rgb(212, 212, 212)",
+            "strokeWidth": "1px",
+            "box": [
+              0,
+              -87,
+              0,
+              87
+            ]
+          }
+        ]
+      }
+    }
+  }
+}

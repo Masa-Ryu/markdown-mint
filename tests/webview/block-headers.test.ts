@@ -200,7 +200,9 @@ describe("block header actions", () => {
     expect(doubleClick.defaultPrevented).toBe(true);
     expect(alertView.classList.contains("mm-alert-dialog-open")).toBe(true);
     dialog
-      .querySelector<HTMLButtonElement>("button:not([type='submit'])")!
+      .querySelector<HTMLButtonElement>(
+        ".mm-dialog-actions button:not([type='submit']):not([hidden])",
+      )!
       .click();
     expect(alertView.classList.contains("mm-alert-dialog-open")).toBe(false);
     expect(document.activeElement).toBe(body);
@@ -244,7 +246,9 @@ describe("block header actions", () => {
       )!.value,
     ).toBe("body");
     syntheticDialog
-      .querySelector<HTMLButtonElement>("button:not([type='submit'])")!
+      .querySelector<HTMLButtonElement>(
+        ".mm-dialog-actions button:not([type='submit']):not([hidden])",
+      )!
       .click();
 
     const secondPhysicalClick = new MouseEvent("click", {
@@ -419,7 +423,9 @@ describe("block header actions", () => {
       expect(dialog.dataset.profileFeatureMode).toBe("edit");
       expect(dialog.querySelector("h2")?.textContent).toBe(`Edit ${label}`);
       dialog
-        .querySelector<HTMLButtonElement>("button:not([type='submit'])")!
+        .querySelector<HTMLButtonElement>(
+          ".mm-dialog-actions button:not([type='submit']):not([hidden])",
+        )!
         .click();
 
       rendered.focus();
@@ -436,7 +442,9 @@ describe("block header actions", () => {
         )!;
         expect(dialog).not.toBeNull();
         dialog
-          .querySelector<HTMLButtonElement>("button:not([type='submit'])")!
+          .querySelector<HTMLButtonElement>(
+            ".mm-dialog-actions button:not([type='submit']):not([hidden])",
+          )!
           .click();
       }
 
@@ -686,7 +694,9 @@ describe("block header actions", () => {
     )!;
     expect(input.value).toBe("x^2");
     dialog
-      .querySelector<HTMLButtonElement>("button:not([type='submit'])")!
+      .querySelector<HTMLButtonElement>(
+        ".mm-dialog-actions button:not([type='submit']):not([hidden])",
+      )!
       .click();
     expect(serializeMarkdown(app.view.state.doc)).toBe(source);
     expect(
@@ -835,7 +845,9 @@ describe("block header actions", () => {
     )!;
     expect(input.value).toBe("x\\$y");
     dialog
-      .querySelector<HTMLButtonElement>("button:not([type='submit'])")!
+      .querySelector<HTMLButtonElement>(
+        ".mm-dialog-actions button:not([type='submit']):not([hidden])",
+      )!
       .click();
     expect(serializeMarkdown(app.view.state.doc)).toBe(source);
 

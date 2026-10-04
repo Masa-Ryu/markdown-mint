@@ -32,6 +32,13 @@ Markdown Mint は、GitHub や GitLab などのプラットフォームが提供
 
 **GitHub Mode**（GitHub モード）では、**Alerts**（アラート）や **Mermaid 図**など、GitHub 固有の機能をビジュアルエディターで直接利用できます。
 
+GitHub／GitLab モードでは、完成図を見ながら13件のMermaidテンプレートから選び、
+**Next: Edit code**で候補を下書きへ取り込んでライブプレビューの隣で編集します。
+選択コードのない新規作成では最初にテンプレートを選びます。コード編集画面の
+**← Templates**から一覧へ戻れます。既存図や選択したコードは直接コード編集で開きます。
+現在のコードを置き換えるときは確認を表示します。Markdown本文を変更するのは
+**Insert diagram**／**Update diagram**だけです。
+
 ![プラットフォーム固有の機能のデモ](../media/platform-specific-demo.gif)
 
 ## ほかにも便利な機能を搭載

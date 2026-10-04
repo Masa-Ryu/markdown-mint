@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.8.0
+
+- Add a Mermaid template picker with 13 examples across 10 diagram types,
+  vertical/horizontal flowchart variants, and a live preview of the current
+  code. Open the picker for a new insertion without selected Mermaid code, and
+  open selected Mermaid code and existing diagrams directly in code editing.
+- Confirm replacement of existing or edited code, restore the previous code
+  with its caret and scroll position, and commit only through Insert/Update.
+  Share the existing lazy local runtime, strict rendering, SVG sanitization,
+  and source/history guards across document and modal previews.
+- Preserve Git graph connector, commit, and label rendering under the strict
+  content security policy.
+- Keep Mermaid template navigation above the code editor heading and remove
+  the modal-only replacement restore action. Replacement confirmation remains,
+  and committed Markdown changes use normal document Undo/Redo.
+
 ## 0.7.2
 
 - Preserve release-note bytes during GitHub Release draft recovery and report

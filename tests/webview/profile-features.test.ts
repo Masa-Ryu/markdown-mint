@@ -182,6 +182,9 @@ describe("profile feature toolbar", () => {
   it("shows Mermaid-only metadata and keeps the accessible source label", async () => {
     const { root } = makeApp();
     featureButton(root, "mermaid").click();
+    Array.from(root.querySelectorAll<HTMLButtonElement>("button"))
+      .find((button) => button.textContent === "Next: Edit code")
+      ?.click();
     const dialog = root.querySelector<HTMLDialogElement>(
       ".mm-profile-feature-dialog",
     )!;
@@ -191,15 +194,28 @@ describe("profile feature toolbar", () => {
     const status = dialog.querySelector<HTMLElement>(
       ".mm-mermaid-validation-status",
     )!;
+    const navigation = dialog.querySelector<HTMLButtonElement>(
+      ".mm-mermaid-back-to-templates",
+    )!;
+    const title = dialog.querySelector("h2")!;
     expect(dialog.dataset.profileFeature).toBe("mermaid");
-    expect(dialog.querySelector("h2")?.textContent).toBe("Insert Mermaid");
+    expect(title.textContent).toBe("Edit Mermaid");
+    expect(navigation.textContent).toBe("← Templates");
+    expect(navigation.getAttribute("aria-label")).toBe(
+      "Back to Mermaid templates",
+    );
+    expect(navigation.hidden).toBe(false);
+    expect(
+      navigation.compareDocumentPosition(title) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
     expect(
       dialog.querySelector<HTMLElement>(".mm-mermaid-dialog-meta")!.hidden,
     ).toBe(false);
     expect(
       dialog.querySelector<HTMLElement>(".mm-mermaid-version")!.textContent,
     ).toBe("Mermaid 11.17.2");
-    expect(status.textContent).toBe("Checking…");
+    expect(status.textContent).toBe("Built-in template · Flowchart");
     expect(
       dialog.querySelector("[data-feature-field-container=body] > span"),
     ).not.toBeNull();
@@ -207,7 +223,10 @@ describe("profile feature toolbar", () => {
     expect(
       dialog.querySelector<HTMLButtonElement>('button[type="submit"]')!
         .disabled,
-    ).toBe(true);
+    ).toBe(false);
+    body.value += "\n%% user edit";
+    body.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(status.textContent).toBe("Checking…");
     await settleMermaidValidation();
     expect(status.textContent).toBe("✓ Valid · Flowchart");
     expect(
@@ -216,18 +235,45 @@ describe("profile feature toolbar", () => {
     ).toBe(false);
 
     dialog
-      .querySelector<HTMLButtonElement>("button:not([type=submit])")!
+      .querySelector<HTMLButtonElement>(
+        ".mm-dialog-actions button:not([type=submit]):not([hidden])",
+      )!
       .click();
+    const discard = root.querySelector<HTMLDialogElement>(
+      ".mm-discard-changes-dialog",
+    );
+    if (discard?.open)
+      Array.from(discard.querySelectorAll<HTMLButtonElement>("button"))
+        .find((button) => button.textContent === "Discard")
+        ?.click();
     featureButton(root, "math").click();
     expect(dialog.dataset.profileFeature).toBe("math");
+    expect(dialog.querySelector("h2")?.textContent).toBe("Insert Math");
+    expect(navigation.hidden).toBe(true);
     expect(
       dialog.querySelector<HTMLElement>(".mm-mermaid-dialog-meta")!.hidden,
     ).toBe(true);
+    expect(
+      dialog.querySelector<HTMLElement>(".mm-dialog-actions")!.classList,
+    ).not.toContain("mm-mermaid-footer");
+    for (const selector of [
+      ".mm-mermaid-footer-helper",
+      ".mm-mermaid-primary",
+      ".mm-mermaid-footer-main-actions",
+    ])
+      expect(dialog.querySelector<HTMLElement>(selector)!.hidden).toBe(true);
+    expect(
+      dialog.querySelector<HTMLButtonElement>('button[type="submit"]')!
+        .textContent,
+    ).toBe("Insert");
   });
 
   it("blocks invalid and empty Mermaid source, including direct form submission", async () => {
     const { root, app, messages } = makeApp();
     featureButton(root, "mermaid").click();
+    Array.from(root.querySelectorAll<HTMLButtonElement>("button"))
+      .find((button) => button.textContent === "Next: Edit code")
+      ?.click();
     const dialog = root.querySelector<HTMLDialogElement>(
       ".mm-profile-feature-dialog",
     )!;
@@ -269,6 +315,9 @@ describe("profile feature toolbar", () => {
     const disposeShortcut = installModalSubmitShortcut(root, "Linux x86_64");
     try {
       featureButton(root, "mermaid").click();
+      Array.from(root.querySelectorAll<HTMLButtonElement>("button"))
+        .find((button) => button.textContent === "Next: Edit code")
+        ?.click();
       const dialog = root.querySelector<HTMLDialogElement>(
         ".mm-profile-feature-dialog",
       )!;
@@ -367,10 +416,22 @@ describe("profile feature toolbar", () => {
           alert: "Insert Alert",
           details: "Insert Details",
           math: "Insert Math",
-          mermaid: "Insert Mermaid",
+          mermaid: "Choose a Mermaid template",
         }[entry.id],
       );
       expect(dialog.getAttribute("data-profile-feature")).toBe(entry.id);
+      const navigation = dialog.querySelector<HTMLButtonElement>(
+        ".mm-mermaid-back-to-templates",
+      )!;
+      if (entry.id === "mermaid") {
+        expect(navigation.hidden).toBe(true);
+        Array.from(dialog.querySelectorAll<HTMLButtonElement>("button"))
+          .find((button) => button.textContent === "Next: Edit code")
+          ?.click();
+        expect(navigation.hidden).toBe(false);
+      } else {
+        expect(navigation.hidden).toBe(true);
+      }
       entry.configure(dialog);
       if (entry.id === "mermaid") {
         dialog
@@ -453,6 +514,10 @@ describe("profile feature toolbar", () => {
       const dialog = root.querySelector<HTMLDialogElement>(
         '[data-feature-dialog="true"]',
       )!;
+      if (entry.id === "mermaid")
+        Array.from(dialog.querySelectorAll<HTMLButtonElement>("button"))
+          .find((button) => button.textContent === "Next: Edit code")
+          ?.click();
       entry.configure(dialog);
       if (entry.id === "mermaid") {
         dialog
@@ -487,7 +552,9 @@ describe("profile feature toolbar", () => {
       '[data-feature-dialog="true"]',
     )!;
     dialog
-      .querySelector<HTMLButtonElement>("button:not([type='submit'])")!
+      .querySelector<HTMLButtonElement>(
+        ".mm-dialog-actions button:not([type='submit']):not([hidden])",
+      )!
       .click();
 
     expect(currentSource(app)).toBe(before);
@@ -598,7 +665,9 @@ describe("profile feature toolbar", () => {
       '[data-feature-field="body"]',
     )!.value = "Changed";
     dialog
-      .querySelector<HTMLButtonElement>("button:not([type='submit'])")!
+      .querySelector<HTMLButtonElement>(
+        ".mm-dialog-actions button:not([type='submit']):not([hidden])",
+      )!
       .click();
 
     expect(currentSource(app)).toBe(source);
@@ -606,7 +675,7 @@ describe("profile feature toolbar", () => {
     expect(root.querySelector(".mm-discard-changes-dialog")).not.toBeNull();
     root
       .querySelector<HTMLButtonElement>(
-        ".mm-discard-changes-dialog button:not([type='submit'])",
+        ".mm-discard-changes-dialog button:not([type='submit']):not([hidden])",
       )!
       .click();
     expect(dialog.hasAttribute("open")).toBe(true);
@@ -615,7 +684,9 @@ describe("profile feature toolbar", () => {
         .value,
     ).toBe("Changed");
     dialog
-      .querySelector<HTMLButtonElement>("button:not([type='submit'])")!
+      .querySelector<HTMLButtonElement>(
+        ".mm-dialog-actions button:not([type='submit']):not([hidden])",
+      )!
       .click();
     expect(root.querySelector(".mm-discard-changes-dialog")).not.toBeNull();
     root
@@ -739,7 +810,9 @@ describe("profile feature toolbar", () => {
       '[data-feature-dialog="true"]',
     )!;
     dialog
-      .querySelector<HTMLButtonElement>("button:not([type='submit'])")!
+      .querySelector<HTMLButtonElement>(
+        ".mm-dialog-actions button:not([type='submit']):not([hidden])",
+      )!
       .click();
     expect(editCount(messages)).toBe(0);
     expect(document.activeElement).toBe(button);

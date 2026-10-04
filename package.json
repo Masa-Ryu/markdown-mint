@@ -2,7 +2,7 @@
   "name": "markdown-mint",
   "displayName": "Markdown Mint — Visual Markdown Editor",
   "description": "A visual WYSIWYG Markdown editor for VS Code with powerful table editing, GitHub/GitLab Markdown, Mermaid, math, and source editing.",
-  "version": "0.7.2",
+  "version": "0.8.0",
   "publisher": "masa-ryu",
   "icon": "assets/icon/icon.png",
   "license": "MIT",
@@ -187,6 +187,7 @@
     "verify:package": "npm run build && node scripts/verify-package.mjs",
     "package": "npm run build && vsce package --no-dependencies && node scripts/verify-package.mjs && node scripts/verify-vsix.mjs",
     "test:browser:blocks": "npm run build:webview && node tests/browser/block-editing.test.mjs",
+    "test:browser:mermaid": "npm run build:webview && node tests/browser/mermaid-templates.test.mjs",
     "test:browser:html-export": "npm run build && node tests/browser/html-export.test.mjs",
     "test:browser:pdf-export": "npm run build && node tests/browser/pdf-export.test.mjs"
   },

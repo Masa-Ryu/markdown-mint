@@ -17,6 +17,7 @@ export interface MermaidValidationResult {
   valid: boolean;
   diagramType?: string;
   error?: string;
+  errorKind?: "syntax" | "runtime" | "limit";
 }
 
 export interface MermaidValidationSnapshot extends MermaidValidationResult {
@@ -28,6 +29,8 @@ export const MERMAID_RUNTIME_READY_EVENT = "markdown-mint-mermaid-ready";
 export const MERMAID_RUNTIME_LOAD_START_MARK =
   "markdown-mint-mermaid-load-start";
 export const MERMAID_RUNTIME_LOAD_END_MARK = "markdown-mint-mermaid-load-end";
+export const MERMAID_VALIDATION_PARSE_MARK =
+  "markdown-mint-mermaid-validation-parse";
 
 export interface MermaidRuntimeLoaderOptions {
   src?: string;
@@ -246,8 +249,11 @@ function errorMessage(error: unknown): string {
   return compact.slice(0, 500);
 }
 
-function invalidResult(error: string): MermaidValidationResult {
-  return { valid: false, error };
+function invalidResult(
+  error: string,
+  errorKind?: MermaidValidationResult["errorKind"],
+): MermaidValidationResult {
+  return { valid: false, error, ...(errorKind ? { errorKind } : {}) };
 }
 
 export async function validateMermaidSource(
@@ -257,13 +263,18 @@ export async function validateMermaidSource(
   if (source.length > MAX_MERMAID_SOURCE_LENGTH)
     return invalidResult(
       `Mermaid source exceeds the ${MAX_MERMAID_SOURCE_LENGTH.toLocaleString()} character limit.`,
+      "limit",
     );
   const normalized = normalizeMermaidSource(source);
   if (!normalized) return invalidResult("Mermaid source is empty.");
   const resolvedRuntime = runtime ?? (await ensureMermaidRuntime());
   if (!resolvedRuntime?.parse)
-    return invalidResult("Mermaid validator is unavailable offline.");
+    return invalidResult(
+      "Mermaid validator is unavailable offline.",
+      "runtime",
+    );
   try {
+    markPerformance(MERMAID_VALIDATION_PARSE_MARK);
     const parsed = await Promise.resolve(resolvedRuntime.parse(normalized));
     if (!parsed || typeof parsed !== "object")
       return invalidResult("Mermaid syntax is invalid.");
@@ -272,7 +283,7 @@ export async function validateMermaidSource(
       return invalidResult("Mermaid did not identify a diagram type.");
     return { valid: true, diagramType: diagramType.trim() };
   } catch (error) {
-    return invalidResult(errorMessage(error));
+    return invalidResult(errorMessage(error), "syntax");
   }
 }
 
@@ -305,6 +316,7 @@ export class MermaidValidationController {
         status: "invalid",
         ...invalidResult(
           `Mermaid source exceeds the ${MAX_MERMAID_SOURCE_LENGTH.toLocaleString()} character limit.`,
+          "limit",
         ),
       });
       return;
