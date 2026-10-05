@@ -112,6 +112,7 @@ export interface AiSuggestionsControllerOptions {
   profile(): "commonmark" | "github" | "gitlab";
   sourceOffset(state: EditorState, position: number): number | undefined;
   post(message: AiWebviewMessage): void;
+  onStateChanged?(state: AiSuggestionState): void;
   dispatch(transaction: Transaction): boolean;
   parseMarkdown(
     source: string,
@@ -477,6 +478,18 @@ export class AiSuggestionsController {
     }
   }
 
+  public toggleAutomaticSuggestions(): void {
+    const state = this.state;
+    if (!state || this.disposed || state.active === false) return;
+    if (state.availability !== "ready" && state.availability !== "disabled")
+      this.autoWaitingRevision = undefined;
+    this.options.post({
+      protocolVersion: 1,
+      type: "ai-suggestion-toolbar-action",
+      sessionId: state.sessionId,
+    });
+  }
+
   public handleMessage(message: AiHostMessage): void {
     if (this.disposed || !isAiHostMessage(message)) return;
     if (message.type === "ai-suggestion-state") {
@@ -546,6 +559,7 @@ export class AiSuggestionsController {
       } else if (!restoringAfterInput) {
         this.pendingSelectionWait = false;
       }
+      this.options.onStateChanged?.(message);
       return;
     }
     if (message.type === "ai-suggestion-adoption-validation") {

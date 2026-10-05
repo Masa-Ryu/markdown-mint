@@ -65,6 +65,7 @@ export async function runAiSuggestionAcceptance(
     supported: () => true,
     trusted: () => true,
     settings: () => ({ autoTrigger: false }),
+    updateAutoTrigger: async () => undefined,
     notify: (message) => assert.fail("Unexpected AI status: " + message),
     tokenSource: () => new vscode.CancellationTokenSource(),
   };

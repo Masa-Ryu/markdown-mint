@@ -416,19 +416,24 @@ The Rich Editor requests prose continuations through VS Code's public Language
 Model API. Mint does not ship or launch the Copilot Language Server, use a
 GitHub sign-in command, read authentication credentials, depend on Copilot's
 internal APIs, or pass a model object or execution capability to the Webview.
-The optional `markdownMint.aiSuggestions.autoTrigger` setting remains
-application-scoped and defaults to `false`. Manual suggestions remain
-available with auto trigger off. Model choice is automatic from the models
-returned by `vscode.lm.selectChatModels({ vendor: "copilot" })`; the adapter
+The `markdownMint.aiSuggestions.autoTrigger` setting is application-scoped and
+defaults to `true`. Its first Copilot toolbar click completes model
+selection/consent but does not request a completion. After setup, the same
+button toggles automatic suggestions through the VS Code Configuration API,
+and state is published to every panel. Turning automatic suggestions off cancels automatic requests and
+candidates while preserving manual suggestions. Turning them on does not
+request a completion until the next debounced real text input. Model choice is
+automatic from the models returned by
+`vscode.lm.selectChatModels({ vendor: "copilot" })`; the adapter
 prefers an actually available `mini` family for editor latency and otherwise
 uses a deterministic model-ID order. It displays the selected model identity
 and selection reason. AI is enabled only in a trusted local desktop Extension
 Host, with normal editing available if the public API or Copilot model is
 unavailable.
 
-Initial model selection and consent are initiated by the explicit Suggest
-Continuation command/status action. After that succeeds, Mint persists only a
-non-secret setup-completed marker and selected model ID/version; neither is
+Initial model selection and consent are initiated by the Copilot toolbar setup
+action or the explicit Suggest Continuation command. After that succeeds, Mint
+persists only a non-secret setup-completed marker and selected model ID/version; neither is
 treated as permission. VS
 Code's public Language Model guide says Copilot consent is implemented by an
 authentication dialog and `selectChatModels` must be called from a
@@ -524,15 +529,20 @@ manual checks. Leave the PR Draft until those checks are completed. Fake
 models and browser simulations are automated regressions only, not Copilot
 acceptance evidence.
 
-The status-bar item is hidden unless the current active editor is a ready Mint
-panel. The host associates each status update with its active session so an
-inactive panel cannot replace it; leaving the last Mint panel hides the item.
-Transient failed and timed-out outcomes pause further model requests using
-internal exponential backoff of 1, 2, 4, 8, 16, then at most 30 seconds.
+The toolbar button shows the shared application setting and model availability
+without a separate StatusBarItem. Transient failed and timed-out outcomes pause
+further model requests using internal exponential backoff of 1, 2, 4, 8, 16,
+then at most 30 seconds.
 The delay is not shown to users. The current public LanguageModelError
 contract documents code and cause but no retry-after value, so Mint does not
 infer or display a service retry timestamp. A Blocked result remains a
 distinct service/account limit state and is not automatically retried.
+
+The `copilot`, `copilot-blocked`, and `copilot-not-connected` toolbar SVGs are
+from Microsoft's [vscode-codicons](https://github.com/microsoft/vscode-codicons)
+repository at commit `4dc95c8e7cf691086ace683dcb5755d0190d5eb3`, under the
+[Creative Commons Attribution 4.0 International license](https://creativecommons.org/licenses/by/4.0/).
+The SVG assets are unmodified.
 
 #### Copilot product acceptance matrix — pending
 

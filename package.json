@@ -157,8 +157,8 @@
         },
         "markdownMint.aiSuggestions.autoTrigger": {
           "type": "boolean",
-          "default": false,
-          "description": "Request prose continuations from an available GitHub Copilot language model after typing pauses. Sends only selected context from the active unsaved Markdown document through the VS Code Language Model API. Requires a trusted workspace and user consent; requests may consume Copilot usage.",
+          "default": true,
+          "description": "Enable automatic Copilot prose suggestions while typing in Markdown Mint. Requires an available GitHub Copilot language model, a trusted workspace, and initial VS Code consent; requests may consume Copilot usage.",
           "scope": "application"
         }
       }

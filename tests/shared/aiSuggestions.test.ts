@@ -37,11 +37,11 @@ const result = {
 } as const;
 
 describe("VS Code Language Model suggestion protocol", () => {
-  it("keeps auto suggestions off by default and exposes a manual command only", () => {
+  it("enables auto suggestions by default and keeps the manual command", () => {
     const manifest = JSON.parse(readFileSync("package.json", "utf8"));
     const properties = manifest.contributes.configuration.properties;
     expect(properties["markdownMint.aiSuggestions.autoTrigger"]).toMatchObject({
-      default: false,
+      default: true,
       scope: "application",
       type: "boolean",
     });
@@ -78,6 +78,25 @@ describe("VS Code Language Model suggestion protocol", () => {
         profile: "github",
       }),
     ).toBe(true);
+  });
+
+  it("accepts only a session-scoped Copilot toolbar action", () => {
+    const action = {
+      protocolVersion: 1,
+      type: "ai-suggestion-toolbar-action",
+      sessionId: "s1",
+    } as const;
+    expect(parseWebviewMessage(action)).toEqual(action);
+    expect(isAiWebviewMessage(action)).toBe(true);
+    expect(
+      parseWebviewMessage({ ...action, autoTrigger: false }),
+    ).toBeUndefined();
+    expect(
+      parseWebviewMessage({ ...action, setting: "markdownMint.anything" }),
+    ).toBeUndefined();
+    expect(
+      parseWebviewMessage({ ...action, sessionId: "../other" }),
+    ).toBeUndefined();
   });
 
   it.each([

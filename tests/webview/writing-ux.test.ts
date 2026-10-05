@@ -369,8 +369,22 @@ describe("bounded writing controls", () => {
     const exportMenu = toolbar.querySelector<HTMLDetailsElement>(
       '[data-testid="toolbar-export-menu"]',
     );
+    const copilotButton = toolbar.querySelector<HTMLButtonElement>(
+      '[data-testid="toolbar-copilot"]',
+    );
     const exportButton = toolbar.querySelector<HTMLElement>(
       '[data-testid="toolbar-export"]',
+    );
+    const primaryItems = Array.from(
+      toolbar.querySelector(".mm-toolbar-primary")?.children ?? [],
+    );
+    expect(
+      primaryItems.findIndex((item) => item.matches(".mm-compatibility")),
+    ).toBeLessThan(primaryItems.findIndex((item) => item === copilotButton));
+    expect(copilotButton?.nextElementSibling).toBe(exportMenu);
+    expect(copilotButton?.getAttribute("aria-pressed")).toBe("false");
+    expect(copilotButton?.getAttribute("aria-label")).toBe(
+      "Checking Copilot suggestions…",
     );
     expect(exportButton?.getAttribute("aria-label")).toBe("Export");
     expect(exportMenu?.nextElementSibling).toBe(sourceButton);
@@ -411,6 +425,7 @@ describe("bounded writing controls", () => {
       "Insert table",
       "Horizontal rule",
       "Format Markdown",
+      "Checking Copilot suggestions…",
     ]);
     expect(
       toolbar.querySelector<HTMLButtonElement>('[data-testid="toolbar-image"]')

@@ -44,6 +44,7 @@ export interface AiSuggestionsEnvironment {
   supported(): boolean;
   trusted(): boolean;
   settings(): AiSettings;
+  updateAutoTrigger(enabled: boolean): Promise<void>;
   notify(message: string): void;
   tokenSource(): vscode.CancellationTokenSource;
 }
@@ -81,10 +82,10 @@ interface TrackedCandidate {
 
 const statusText: Record<AiAvailability, string> = {
   disabled:
-    "Automatic suggestions are off. Run Suggest Continuation for a manual suggestion.",
+    "Automatic Copilot suggestions are off. Manual Suggest Continuation remains available.",
   preparing: "Preparing the VS Code Language Model API…",
   "needs-authorization":
-    "Run Suggest Continuation to authorize and start a suggestion. This can use Copilot usage.",
+    "Click the Copilot toolbar button to authorize VS Code model access. This can use Copilot usage.",
   ready: "Copilot language model is available.",
   untrusted: "AI suggestions are disabled in an untrusted workspace.",
   "no-model": "No Copilot language model is currently available.",
@@ -95,13 +96,6 @@ const statusText: Record<AiAvailability, string> = {
   blocked:
     "The language model request is blocked by an account, policy, or service limit.",
 };
-
-export interface AiStatusSnapshot {
-  readonly sessionId: string;
-  readonly availability: AiAvailability;
-  readonly message: string;
-  readonly autoTrigger: boolean;
-}
 
 type AutoRestoreBlockReason = "access" | "no-model" | "failure";
 
@@ -153,12 +147,7 @@ export class AiSuggestionsHost implements vscode.Disposable {
     "needs-authorization";
   private modelMessage = statusText["needs-authorization"];
 
-  constructor(
-    private readonly environment: AiSuggestionsEnvironment,
-    private readonly reportStatus?: (
-      status: AiStatusSnapshot | undefined,
-    ) => void,
-  ) {
+  constructor(private readonly environment: AiSuggestionsEnvironment) {
     this.settings = environment.settings();
     this.subscriptions.push(
       environment.languageModel.onDidChange((reason, accessAllowed) => {
@@ -264,18 +253,6 @@ export class AiSuggestionsHost implements vscode.Disposable {
       ...(modelName ? { modelName } : {}),
       active: session.panel.isReady() && session.panel.isActive(),
     });
-    const activeTarget = this.activeTarget;
-    if (activeTarget?.session !== session) return;
-    if (this.activationCurrent(activeTarget)) {
-      this.reportStatus?.({
-        sessionId: id,
-        availability,
-        message,
-        autoTrigger: this.settings.autoTrigger,
-      });
-    } else {
-      this.reportStatus?.(undefined);
-    }
   }
 
   private publishAll(): void {
@@ -321,6 +298,8 @@ export class AiSuggestionsHost implements vscode.Disposable {
     if (wasEnabled && !next.autoTrigger) {
       if (this.active?.request.trigger === "auto")
         this.cancelActive("cancelled");
+      for (const [id, candidate] of this.candidates)
+        if (candidate.request.trigger === "auto") this.candidates.delete(id);
       // Manual requests remain usable while automatic suggestions are off.
     }
     this.publishAll();
@@ -340,30 +319,40 @@ export class AiSuggestionsHost implements vscode.Disposable {
     if (this.active?.target.uri === documentUri) this.cancelActive("stale");
   }
 
-  /** Model selection and any consent UI are reachable only from this command. */
-  public async triggerFromUserAction(id: string): Promise<void> {
+  private async selectModelFromUserAction(
+    id: string,
+    requireRequestEligibility: boolean,
+  ): Promise<
+    | { readonly session: RegisteredSession; readonly target: ActivationTarget }
+    | undefined
+  > {
     const session = this.sessions.get(id);
-    if (!session || !session.panel.canStartRequest()) {
+    if (
+      !session ||
+      !session.panel.isReady() ||
+      !session.panel.isActive() ||
+      (requireRequestEligibility && !session.panel.canStartRequest())
+    ) {
       this.environment.notify(
         "Open and focus a ready Markdown Mint editor before requesting a suggestion.",
       );
-      return;
+      return undefined;
     }
     if (!this.environment.supported()) {
       this.environment.notify(statusText.unavailable);
-      return;
+      return undefined;
     }
     if (!this.environment.trusted()) {
       this.environment.notify(statusText.untrusted);
-      return;
+      return undefined;
     }
     if (this.modelAvailability === "blocked") {
       this.environment.notify(statusText.blocked);
-      return;
+      return undefined;
     }
     if (this.transientRetryAt && Date.now() < this.transientRetryAt) {
       this.environment.notify(statusText["temporarily-unavailable"]);
-      return;
+      return undefined;
     }
 
     const target = this.beginActivation(session);
@@ -390,7 +379,7 @@ export class AiSuggestionsHost implements vscode.Disposable {
         if (!failure) await this.persistSetupCompletion();
         this.reconcileSelectionAfterTargetChange(failure);
       }
-      return;
+      return undefined;
     }
     this.clearTransientBackoff(true);
     this.modelGeneration += 1;
@@ -400,7 +389,7 @@ export class AiSuggestionsHost implements vscode.Disposable {
       this.modelMessage = reasonMessage(failure);
       this.publishAll();
       this.environment.notify(this.modelMessage);
-      return;
+      return undefined;
     }
     await this.persistSetupCompletion();
     if (
@@ -409,10 +398,20 @@ export class AiSuggestionsHost implements vscode.Disposable {
     ) {
       if (selectionGeneration === this.selectionGeneration)
         this.reconcileSelectionAfterTargetChange(undefined);
-      return;
+      return undefined;
     }
     this.modelAvailability = "ready";
     this.modelMessage = statusText.ready;
+    this.publishAll();
+    return { session, target };
+  }
+
+  /** Model selection and consent are reachable only from an explicit action. */
+  public async triggerFromUserAction(id: string): Promise<void> {
+    const selected = await this.selectModelFromUserAction(id, true);
+    if (!selected) return;
+    const { session, target } = selected;
+    if (!this.activationCurrent(target)) return;
     this.cancelActive("cancelled");
     const invocationId = `manual-${randomUUID()}`;
     this.manualInvocation = { session, target, id: invocationId };
@@ -425,6 +424,54 @@ export class AiSuggestionsHost implements vscode.Disposable {
       invocationId,
     });
     this.publishAll();
+  }
+
+  /** Set up or toggle automatic suggestions from the active editor toolbar. */
+  public async handleToolbarAction(id: string): Promise<void> {
+    const session = this.sessions.get(id);
+    if (
+      !session ||
+      !session.panel.isReady() ||
+      !session.panel.isActive() ||
+      this.disposed
+    )
+      return;
+    if (!this.environment.supported()) {
+      this.environment.notify(statusText.unavailable);
+      return;
+    }
+    if (!this.environment.trusted()) {
+      this.environment.notify(statusText.untrusted);
+      return;
+    }
+    if (this.modelAvailability === "blocked") {
+      this.environment.notify(statusText.blocked);
+      return;
+    }
+    if (
+      !this.environment.setupCompleted() ||
+      this.modelAvailability === "needs-authorization"
+    ) {
+      const selected = await this.selectModelFromUserAction(id, false);
+      if (!selected) return;
+      await this.updateAutoTrigger(true);
+      return;
+    }
+    if (this.modelAvailability !== "ready") {
+      this.environment.notify(this.statusMessage(this.availability()));
+      return;
+    }
+    await this.updateAutoTrigger(!this.settings.autoTrigger);
+  }
+
+  private async updateAutoTrigger(enabled: boolean): Promise<void> {
+    try {
+      await this.environment.updateAutoTrigger(enabled);
+    } catch {
+      this.environment.notify("Could not update Copilot suggestions setting.");
+      return;
+    }
+    this.refreshSettings();
   }
 
   public async sessionActivated(id: string): Promise<void> {
@@ -457,7 +504,7 @@ export class AiSuggestionsHost implements vscode.Disposable {
         generation: ++this.activationGeneration,
       };
       this.publishState(replacement.panel.id);
-    } else this.reportStatus?.(undefined);
+    }
   }
 
   public cancelSession(id: string, requestId?: string): void {
@@ -904,7 +951,6 @@ export class AiSuggestionsHost implements vscode.Disposable {
     for (const subscription of this.subscriptions.splice(0))
       subscription.dispose();
     this.sessions.clear();
-    this.reportStatus?.(undefined);
     this.environment.languageModel.dispose();
   }
 
@@ -1071,6 +1117,11 @@ export function createAiSuggestionsEnvironment(
         autoTrigger:
           (inspected?.globalValue ?? inspected?.defaultValue) === true,
       };
+    },
+    updateAutoTrigger: async (enabled) => {
+      await vscode.workspace
+        .getConfiguration("markdownMint.aiSuggestions")
+        .update("autoTrigger", enabled, vscode.ConfigurationTarget.Global);
     },
     setupCompleted: () =>
       context.globalState.get<boolean>(

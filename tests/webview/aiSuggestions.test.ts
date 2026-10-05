@@ -154,6 +154,46 @@ afterEach(() => {
 });
 
 describe("Copilot inline completion ghost", () => {
+  it("updates Copilot toolbar icons and posts a session-only setup action", () => {
+    const f = setup("Hello", true);
+    const button = f.root.querySelector<HTMLButtonElement>(
+      '[data-testid="toolbar-copilot"]',
+    );
+    expect(button).not.toBeNull();
+    expect(button?.dataset.state).toBe("on");
+    expect(button?.getAttribute("aria-pressed")).toBe("true");
+    expect(button?.getAttribute("aria-label")).toContain(
+      "Copilot suggestions: On",
+    );
+    expect(button?.querySelector("svg")?.dataset.icon).toBe("copilot");
+
+    f.state({ autoTrigger: false, availability: "disabled" });
+    expect(button?.dataset.state).toBe("off");
+    expect(button?.getAttribute("aria-pressed")).toBe("false");
+    expect(button?.querySelector("svg")?.dataset.icon).toBe("copilot-blocked");
+
+    f.state({
+      autoTrigger: true,
+      availability: "needs-authorization",
+      autoRestoreOnInput: false,
+    });
+    expect(button?.dataset.state).toBe("authorization");
+    expect(button?.getAttribute("aria-label")).toBe(
+      "Enable Copilot suggestions",
+    );
+    expect(button?.querySelector("svg")?.dataset.icon).toBe(
+      "copilot-not-connected",
+    );
+
+    button?.click();
+    expect(f.messages.at(-1)).toEqual({
+      protocolVersion: 1,
+      type: "ai-suggestion-toolbar-action",
+      sessionId: "s1",
+    });
+    expect(f.requests()).toHaveLength(0);
+  });
+
   it("maps a synchronized PM cursor to Markdown UTF-16 source and keeps display transient", async () => {
     const f = setup("日本語🌿 prose");
     f.trigger();

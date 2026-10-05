@@ -349,6 +349,13 @@ textarea:focus-visible {
   padding: 4px 6px;
   cursor: pointer;
 }
+.mm-copilot-button[data-state="off"] .mm-toolbar-icon {
+  opacity: 0.82;
+}
+.mm-copilot-button[data-state="authorization"] .mm-toolbar-icon,
+.mm-copilot-button[data-state="unavailable"] .mm-toolbar-icon {
+  opacity: 0.9;
+}
 .mm-tool-button:disabled,
 .mm-emoji-button:disabled {
   cursor: not-allowed;

@@ -58,7 +58,6 @@ import {
   AI_TRIGGER_COMMAND,
   createAiSuggestionsEnvironment,
   type AiSuggestionsEnvironment,
-  type AiStatusSnapshot,
 } from "./aiSuggestions";
 
 export const VIEW_TYPE = MARKDOWN_MINT_VIEW_TYPE;
@@ -323,7 +322,6 @@ export class MarkdownMintEditorProvider
   private readonly previewPanels = new Map<string, vscode.WebviewPanel>();
   private readonly subscriptions: vscode.Disposable[] = [];
   private readonly output: vscode.OutputChannel;
-  private readonly aiStatus: vscode.StatusBarItem | undefined;
   private readonly workspaceFileSearch = new WorkspaceFileSearchHost();
   private readonly aiSuggestions: AiSuggestionsHost;
   private pdfExportQueue: Promise<void> = Promise.resolve();
@@ -333,47 +331,11 @@ export class MarkdownMintEditorProvider
     private readonly context: vscode.ExtensionContext,
     aiEnvironment?: AiSuggestionsEnvironment,
   ) {
-    this.aiStatus =
-      typeof vscode.window.createStatusBarItem === "function"
-        ? vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, -1)
-        : undefined;
-    if (this.aiStatus) {
-      this.aiStatus.name = "Markdown Mint Language Model Suggestions";
-      this.aiStatus.command = AI_TRIGGER_COMMAND;
-    }
     this.aiSuggestions = new AiSuggestionsHost(
       aiEnvironment ?? createAiSuggestionsEnvironment(context),
-      (status: AiStatusSnapshot | undefined) => {
-        if (!this.aiStatus) return;
-        const active = this.activeAiSession();
-        if (!status || active?.aiSessionId !== status.sessionId) {
-          this.aiStatus.hide();
-          return;
-        }
-        const { availability, message, autoTrigger } = status;
-        this.aiStatus.text =
-          availability === "needs-authorization"
-            ? "$(account) Mint suggestions"
-            : availability === "preparing"
-              ? "$(sync~spin) Mint suggestions"
-              : availability === "ready" && !autoTrigger
-                ? "$(sparkle) Mint suggestions off"
-                : availability === "ready"
-                  ? "$(sparkle) Mint suggestions"
-                  : availability === "disabled"
-                    ? "$(sparkle) Mint suggestions off"
-                    : "$(warning) Mint suggestions";
-        this.aiStatus.tooltip = message;
-        this.aiStatus.command = AI_TRIGGER_COMMAND;
-        this.aiStatus.show();
-      },
     );
     this.output = vscode.window.createOutputChannel("Markdown Mint");
-    this.subscriptions.push(
-      this.workspaceFileSearch,
-      this.aiSuggestions,
-      ...(this.aiStatus ? [this.aiStatus] : []),
-    );
+    this.subscriptions.push(this.workspaceFileSearch, this.aiSuggestions);
     if (typeof vscode.workspace.onDidGrantWorkspaceTrust === "function")
       this.subscriptions.push(
         vscode.workspace.onDidGrantWorkspaceTrust(() =>
@@ -1009,6 +971,10 @@ export class MarkdownMintEditorProvider
             session.aiSessionId,
             message,
           );
+          return;
+        case "ai-suggestion-toolbar-action":
+          if (message.sessionId === session.aiSessionId)
+            await this.aiSuggestions.handleToolbarAction(session.aiSessionId);
           return;
         case "ai-suggestion-snapshot-validation":
           this.aiSuggestions.confirmSnapshotValidation(

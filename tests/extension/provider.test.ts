@@ -414,6 +414,15 @@ const vscode = vi.hoisted(() => {
     setStatusBarMessage(): Disposable {
       return new Disposable();
     },
+    createStatusBarItem: vi.fn(() => ({
+      name: "",
+      command: "",
+      text: "",
+      tooltip: "",
+      hide: vi.fn(),
+      show: vi.fn(),
+      dispose: vi.fn(),
+    })),
     registerCustomEditorProvider(): Disposable {
       return new Disposable();
     },
@@ -923,6 +932,7 @@ function fakeAiEnvironment(
   sendRequest: () => Promise<{ text: AsyncIterable<string> }>,
   onCancel?: () => void,
 ): AiSuggestionsEnvironment {
+  let autoTrigger = false;
   const model = {
     id: "copilot-mini",
     name: "Copilot Mini",
@@ -942,7 +952,10 @@ function fakeAiEnvironment(
     markSetupCompleted: async () => undefined,
     supported: () => true,
     trusted: () => true,
-    settings: () => ({ autoTrigger: false }),
+    settings: () => ({ autoTrigger }),
+    updateAutoTrigger: async (enabled) => {
+      autoTrigger = enabled;
+    },
     notify: () => undefined,
     tokenSource: () => {
       let cancelled = false;
@@ -1372,6 +1385,81 @@ function documentQueueDepth(provider: object): number {
 }
 
 describe("MarkdownMintEditorProvider", () => {
+  it("does not create a Mint suggestions StatusBarItem", () => {
+    vscode.__state.reset();
+    const provider = new MarkdownMintEditorProvider(context() as never);
+
+    expect(vscode.window.createStatusBarItem).not.toHaveBeenCalled();
+    provider.dispose();
+  });
+
+  it("accepts toolbar setup only from the sending editor session", async () => {
+    vscode.__state.reset();
+    const { panel, document } = vscode.__state;
+    const environment = fakeAiEnvironment(async () => modelText(" next"));
+    const selectModel = vi.spyOn(
+      environment.languageModel,
+      "selectForUserAction",
+    );
+    const updateSetting = vi.spyOn(environment, "updateAutoTrigger");
+    const provider = new MarkdownMintEditorProvider(
+      context() as never,
+      environment,
+    );
+    await provider.resolveCustomTextEditor(
+      document as never,
+      panel as never,
+      {} as never,
+    );
+    panel.webview.receive({ protocolVersion: 1, type: "ready" });
+    const statesBeforeAction = panel.webview.messages.filter(
+      (message) =>
+        isHostMessage(message) && message.type === "ai-suggestion-state",
+    ).length;
+
+    panel.webview.receive({
+      protocolVersion: 1,
+      type: "ai-suggestion-toolbar-action",
+      sessionId: "ai-another-panel",
+    });
+    await flush();
+    expect(selectModel).not.toHaveBeenCalled();
+    expect(updateSetting).not.toHaveBeenCalled();
+    expect(
+      panel.webview.messages.filter(
+        (message) =>
+          isHostMessage(message) && message.type === "ai-suggestion-state",
+      ),
+    ).toHaveLength(statesBeforeAction);
+
+    const state = panel.webview.messages
+      .filter(
+        (message) =>
+          isHostMessage(message) && message.type === "ai-suggestion-state",
+      )
+      .at(-1);
+    if (!isHostMessage(state) || state.type !== "ai-suggestion-state")
+      throw Error("Expected a registered editor session ID");
+    panel.webview.receive({
+      protocolVersion: 1,
+      type: "ai-suggestion-toolbar-action",
+      sessionId: state.sessionId,
+    });
+    await waitForCondition(
+      () => updateSetting.mock.calls.length === 1,
+      "toolbar setup to update the application setting",
+    );
+    expect(selectModel).toHaveBeenCalledTimes(1);
+    expect(updateSetting).toHaveBeenCalledWith(true);
+    expect(
+      panel.webview.messages.some(
+        (message) =>
+          isHostMessage(message) && message.type === "ai-suggestion-trigger",
+      ),
+    ).toBe(false);
+    provider.dispose();
+  });
+
   it("allows KaTeX style attributes without broadening script or network policy", () => {
     const policy = webviewContentSecurityPolicy("vscode-resource:", "nonce");
     expect(policy).toContain("style-src vscode-resource:");

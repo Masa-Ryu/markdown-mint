@@ -52,6 +52,7 @@ import {
 } from "../shared/protocol";
 import { isWorkspaceFileSearchQuery } from "../shared/workspaceFileSearch";
 import { AiSuggestionsController } from "./aiSuggestions";
+import type { AiSuggestionState } from "../shared/aiSuggestions";
 import {
   createStarterPlugin,
   getStarterState,
@@ -2594,6 +2595,7 @@ export class MarkdownEditorApp {
   >();
   private readonly imageImport: ImageImportController;
   private readonly aiSuggestions: AiSuggestionsController;
+  private copilotButton?: HTMLButtonElement;
   private previewEnhancer: RenderingEnhancer | undefined;
   /**
    * The last Markdown snapshot produced for the current PM document.
@@ -2975,6 +2977,7 @@ export class MarkdownEditorApp {
       parseMarkdown: (source, profile) =>
         this.core.parseMarkdown(source, profile),
       post: (message) => this.vscode?.postMessage(message),
+      onStateChanged: (state) => this.updateCopilotToolbarState(state),
       dispatch: (transaction) => this.dispatchTransaction(transaction),
     });
     this.initialized = Boolean(options.initialDocument);
@@ -3056,9 +3059,12 @@ export class MarkdownEditorApp {
     const primaryToolbar = toolbar.querySelector<HTMLElement>(
       ".mm-toolbar-primary",
     );
+    const copilotButton = primaryToolbar?.querySelector(".mm-copilot-button");
     const exportMenu = primaryToolbar?.querySelector(".mm-export-menu");
     const sourceButton = primaryToolbar?.querySelector(".mm-source-button");
-    if (exportMenu)
+    if (copilotButton)
+      primaryToolbar?.insertBefore(this.compatibilityEl, copilotButton);
+    else if (exportMenu)
       primaryToolbar?.insertBefore(this.compatibilityEl, exportMenu);
     else if (sourceButton)
       primaryToolbar?.insertBefore(this.compatibilityEl, sourceButton);
@@ -5707,6 +5713,20 @@ export class MarkdownEditorApp {
     this.profileToolbar = this.buildProfileToolbar();
     toolbar.append(this.profileToolbar);
     this.buildProfileFeatureDialog(toolbar);
+    const copilotButton = addButton(
+      "",
+      "Checking Copilot suggestions…",
+      () => this.aiSuggestions.toggleAutomaticSuggestions(),
+      "toolbar-copilot",
+      primary,
+      false,
+      "copilot-not-connected",
+    );
+    copilotButton.classList.add("mm-copilot-button");
+    copilotButton.dataset.state = "preparing";
+    copilotButton.setAttribute("aria-pressed", "false");
+    copilotButton.disabled = true;
+    this.copilotButton = copilotButton;
     primary.append(exportMenu);
     primary.append(sourceButton);
     return toolbar;
@@ -10903,6 +10923,58 @@ export class MarkdownEditorApp {
   private updateProfileSelect(): void {
     if (!this.profileSelect) return;
     this.profileSelect.value = this.profile;
+  }
+
+  private updateCopilotToolbarState(state: AiSuggestionState): void {
+    const button = this.copilotButton;
+    if (!button) return;
+    const authorizationRequired = state.availability === "needs-authorization";
+    const preparing = state.availability === "preparing";
+    let icon: ToolbarIconName;
+    let toolbarState: string;
+    let label: string;
+    if (authorizationRequired) {
+      icon = "copilot-not-connected";
+      toolbarState = "authorization";
+      label = state.autoRestoreOnInput
+        ? "Copilot suggestions need authorization. Click to reconnect"
+        : "Enable Copilot suggestions";
+    } else if (state.availability === "ready" && state.autoTrigger) {
+      icon = "copilot";
+      toolbarState = "on";
+      label = "Copilot suggestions: On. Click to turn off";
+    } else if (
+      (state.availability === "disabled" || state.availability === "ready") &&
+      !state.autoTrigger
+    ) {
+      icon = "copilot-blocked";
+      toolbarState = "off";
+      label = "Copilot suggestions: Off. Click to turn on";
+    } else if (state.availability === "blocked") {
+      icon = "copilot-blocked";
+      toolbarState = "unavailable";
+      label = state.statusText || "Copilot suggestions are blocked";
+    } else {
+      icon = "copilot-not-connected";
+      toolbarState = preparing ? "preparing" : "unavailable";
+      label =
+        state.statusText ||
+        (preparing
+          ? "Preparing Copilot suggestions…"
+          : "Copilot suggestions are unavailable");
+    }
+    if (
+      (state.availability === "ready" || state.availability === "disabled") &&
+      state.statusText
+    )
+      label += `. ${state.statusText}`;
+    button.dataset.state = toolbarState;
+    button.setAttribute("aria-pressed", String(state.autoTrigger));
+    button.setAttribute("aria-label", label);
+    button.dataset.tooltip = label;
+    button.title = label;
+    button.disabled = state.active === false || preparing;
+    appendToolbarIcon(button, icon);
   }
 
   private requestSource(): void {

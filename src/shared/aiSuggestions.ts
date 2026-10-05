@@ -103,6 +103,11 @@ export interface AiSuggestionState {
   readonly statusText?: string;
   readonly modelName?: string;
 }
+export interface AiSuggestionToolbarAction {
+  readonly protocolVersion: 1;
+  readonly type: "ai-suggestion-toolbar-action";
+  readonly sessionId: string;
+}
 export interface AiSuggestionTrigger {
   readonly protocolVersion: 1;
   readonly type: "ai-suggestion-trigger";
@@ -125,6 +130,7 @@ export interface AiSuggestionResult extends AiSuggestionIdentity {
 export type AiWebviewMessage =
   | AiSuggestionRequest
   | AiSuggestionCancel
+  | AiSuggestionToolbarAction
   | AiSuggestionSnapshotValidation
   | AiSuggestionAdoptionCheck;
 export type AiHostMessage =
@@ -194,6 +200,11 @@ function hasAsciiControl(value: string): boolean {
 
 export function isAiWebviewMessage(value: unknown): value is AiWebviewMessage {
   if (!record(value) || value.protocolVersion !== 1) return false;
+  if (value.type === "ai-suggestion-toolbar-action")
+    return (
+      onlyKeys(value, ["protocolVersion", "type", "sessionId"]) &&
+      id(value.sessionId)
+    );
   if (value.type === "ai-suggestion-cancel")
     return (
       onlyKeys(value, ["protocolVersion", "type", "requestId", "sessionId"]) &&

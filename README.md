@@ -65,22 +65,24 @@ Markdown Mint includes additional tools for working with real-world Markdown doc
 Markdown Mint uses VS Code's public Language Model API to request short prose
 continuations from an available GitHub Copilot model. It selects a model for
 editor use from the models VS Code exposes, preferring an available `mini`
-family and otherwise using a stable model-ID order. The model name and ID are
-shown in the suggestion status hover. The feature runs only in a trusted local
-desktop Extension Host on macOS, Windows, or Linux; unsupported hosts keep
-ordinary Markdown editing available.
+family and otherwise using a stable model-ID order. The feature runs only in a
+trusted local desktop Extension Host on macOS, Windows, or Linux; unsupported
+hosts keep ordinary Markdown editing available.
 The Language Model API became available in VS Code Stable in 1.91; on 1.90,
 Mint's ordinary editing remains supported while AI suggestions report the API
 as unavailable.
 
-Run **Markdown Mint: Suggest Continuation** from the Command Palette or the
-Mint status item to make the first model request and complete any VS Code
-consent flow. After that setup succeeds, type normally to see suggestions when
-`markdownMint.aiSuggestions.autoTrigger` is enabled, or continue using the
-manual command. The setting is user-scoped, initially **false**, and has no
-toolbar toggle. Manual suggestions remain available while automatic
-suggestions are off. Setup stores the selected model's non-secret ID and
-version, never the model object or access permission. After an Extension Host
+Automatic Copilot suggestions are enabled by default. On first use, click the
+Copilot icon in the Markdown Mint toolbar to complete VS Code model consent
+when required. This click only performs setup; it does not request a
+completion. After setup, the same icon toggles automatic suggestions on and
+off, and the user-scoped `markdownMint.aiSuggestions.autoTrigger` setting can
+also control them. When enabled, the next ordinary text input starts the 300 ms
+debounce.
+**Markdown Mint: Suggest Continuation** remains available from the Command
+Palette as a manual one-shot suggestion, including while automatic suggestions
+are off. Setup stores the selected model's non-secret ID and version, never
+the model object or access permission. After an Extension Host
 restart, Mint waits for a real text edit and its normal 300 ms debounce before
 reacquiring only that exact model through the public API. It does not enumerate
 the full Copilot model list during automatic restoration. Mint checks

@@ -3,7 +3,6 @@ import type * as vscode from "vscode";
 import {
   AiSuggestionsHost,
   type AiPanelSession,
-  type AiStatusSnapshot,
   type AiSuggestionsEnvironment,
   transientFailureBackoffMs,
 } from "../../src/extension/aiSuggestions";
@@ -109,7 +108,6 @@ function fixture(autoTrigger = false) {
     access,
     savedModelIdentity: () => savedModelIdentity,
   });
-  const statusReports: Array<AiStatusSnapshot | undefined> = [];
   const environment: AiSuggestionsEnvironment = {
     languageModel,
     setupCompleted: () => setupCompleted,
@@ -120,12 +118,13 @@ function fixture(autoTrigger = false) {
     supported: () => true,
     trusted: () => true,
     settings: () => ({ autoTrigger: automatic }),
+    updateAutoTrigger: async (enabled) => {
+      automatic = enabled;
+    },
     notify: vi.fn(),
     tokenSource: cancellationSource,
   };
-  const host = new AiSuggestionsHost(environment, (status) =>
-    statusReports.push(status),
-  );
+  const host = new AiSuggestionsHost(environment);
   const panel: AiPanelSession = {
     id: "s1",
     documentId: () => uri,
@@ -186,7 +185,7 @@ function fixture(autoTrigger = false) {
     api,
     access,
     messages,
-    statusReports,
+    autoTrigger: () => automatic,
     setupCompleted: () => setupCompleted,
     setSetupCompleted: (value: boolean) => {
       setupCompleted = value;
@@ -275,29 +274,176 @@ function fixture(autoTrigger = false) {
 }
 
 describe("AI suggestion lifecycle with the public Language Model API", () => {
-  it("reports status only for the active Mint panel and clears it when none remains", async () => {
+  it("publishes state to each panel without creating a separate status channel", async () => {
     const f = fixture();
     let secondActive = false;
     const second = f.addPanel("s2", "file:///second.md", () => secondActive);
-    expect(f.statusReports.at(-1)).toMatchObject({ sessionId: "s1" });
+    const latestState = (sessionId: string) =>
+      f.messages
+        .filter(
+          (message) =>
+            message.type === "ai-suggestion-state" &&
+            message.sessionId === sessionId,
+        )
+        .at(-1);
+    expect(latestState("s2")).toMatchObject({
+      type: "ai-suggestion-state",
+      sessionId: "s2",
+      autoTrigger: false,
+    });
 
     f.setActive(false);
     await f.host.sessionDeactivated("s1");
-    expect(f.statusReports.at(-1)).toBeUndefined();
 
     secondActive = true;
     await f.activate(second.id);
-    expect(f.statusReports.at(-1)).toMatchObject({ sessionId: "s2" });
+    expect(latestState("s2")).toMatchObject({
+      type: "ai-suggestion-state",
+      sessionId: "s2",
+      active: true,
+    });
 
     secondActive = false;
     await f.host.sessionDeactivated(second.id);
-    expect(f.statusReports.at(-1)).toBeUndefined();
 
     f.setActive(true);
     await f.activate("s1");
-    expect(f.statusReports.at(-1)).toMatchObject({ sessionId: "s1" });
     f.dispose();
-    expect(f.statusReports.at(-1)).toBeUndefined();
+  });
+
+  it("uses the first Copilot toolbar click only for setup, even during an edit queue", async () => {
+    const f = fixture(true);
+    f.setQueueBusy(true);
+    expect(f.api.selectChatModels).not.toHaveBeenCalled();
+    expect(f.send).not.toHaveBeenCalled();
+
+    await f.host.handleToolbarAction("s1");
+
+    expect(f.api.selectChatModels).toHaveBeenCalledTimes(1);
+    expect(f.send).not.toHaveBeenCalled();
+    expect(f.setupCompleted()).toBe(true);
+    expect(f.autoTrigger()).toBe(true);
+    expect(
+      f.messages.some((message) => message.type === "ai-suggestion-trigger"),
+    ).toBe(false);
+    expect(
+      f.messages.some((message) => message.type === "ai-suggestion-result"),
+    ).toBe(false);
+  });
+
+  it("toggles the application setting without a completion and preserves manual requests", async () => {
+    const f = fixture(false);
+    f.addPanel("s2", "file:///second.md", () => false);
+    await f.startManual();
+    const triggerCount = () =>
+      f.messages.filter((message) => message.type === "ai-suggestion-trigger")
+        .length;
+    const latestState = (sessionId: string) =>
+      f.messages
+        .filter(
+          (message) =>
+            message.type === "ai-suggestion-state" &&
+            message.sessionId === sessionId,
+        )
+        .at(-1);
+    const initialTriggerCount = triggerCount();
+
+    await f.host.handleToolbarAction("s1");
+    expect(f.autoTrigger()).toBe(true);
+    expect(latestState("s1")).toMatchObject({
+      type: "ai-suggestion-state",
+      sessionId: "s1",
+      autoTrigger: true,
+      availability: "ready",
+    });
+    expect(latestState("s2")).toMatchObject({ autoTrigger: true });
+    expect(triggerCount()).toBe(initialTriggerCount);
+
+    await f.host.handleToolbarAction("s1");
+    expect(f.autoTrigger()).toBe(false);
+    expect(latestState("s1")).toMatchObject({
+      type: "ai-suggestion-state",
+      sessionId: "s1",
+      autoTrigger: false,
+      availability: "disabled",
+    });
+    expect(latestState("s2")).toMatchObject({ autoTrigger: false });
+    expect(triggerCount()).toBe(initialTriggerCount);
+
+    await f.host.triggerFromUserAction("s1");
+    expect(triggerCount()).toBe(initialTriggerCount + 1);
+  });
+
+  it("turning automatic suggestions off removes candidates and cancels pending work", async () => {
+    const f = fixture(true);
+    await f.startManual();
+
+    const candidateRequest = f.autoRequest("toolbar-off-candidate");
+    f.send.mockResolvedValueOnce(
+      response('{"insertText":" from the automatic candidate."}') as never,
+    );
+    await f.host.requestSuggestion("s1", candidateRequest);
+    expect(f.messages.at(-1)).toMatchObject({
+      type: "ai-suggestion-result",
+      requestId: candidateRequest.requestId,
+      reason: "ready",
+    });
+
+    await f.host.handleToolbarAction("s1");
+    expect(f.autoTrigger()).toBe(false);
+    await f.host.validateCandidateAdoption("s1", {
+      ...candidateRequest,
+      type: "ai-suggestion-adoption-check",
+      attemptId: "toolbar-off-adoption",
+    });
+    expect(f.messages.at(-1)).toMatchObject({
+      type: "ai-suggestion-adoption-validation",
+      attemptId: "toolbar-off-adoption",
+      available: false,
+    });
+
+    await f.host.handleToolbarAction("s1");
+    expect(f.autoTrigger()).toBe(true);
+    const delayed = deferred<Awaited<ReturnType<typeof response>>>();
+    f.send.mockReturnValueOnce(delayed.promise);
+    const pendingRequest = f.autoRequest("toolbar-off-pending");
+    const pending = f.host.requestSuggestion("s1", pendingRequest);
+    await vi.waitFor(() => expect(f.send).toHaveBeenCalledTimes(2));
+
+    await f.host.handleToolbarAction("s1");
+    await pending;
+    delayed.resolve(response('{"insertText":" stale after turning off."}'));
+
+    expect(f.autoTrigger()).toBe(false);
+    expect(
+      f.messages.some(
+        (message) =>
+          message.type === "ai-suggestion-result" &&
+          message.requestId === pendingRequest.requestId &&
+          message.reason === "ready",
+      ),
+    ).toBe(false);
+    expect(f.messages.at(-1)).toMatchObject({
+      type: "ai-suggestion-result",
+      requestId: pendingRequest.requestId,
+      reason: "cancelled",
+    });
+    f.dispose();
+  });
+
+  it("ignores a toolbar action from an inactive or unknown session", async () => {
+    const f = fixture(false);
+    let secondActive = false;
+    f.addPanel("s2", "file:///second.md", () => secondActive);
+
+    await f.host.handleToolbarAction("s2");
+    await f.host.handleToolbarAction("unknown-session");
+
+    expect(f.api.selectChatModels).not.toHaveBeenCalled();
+    expect(f.autoTrigger()).toBe(false);
+    expect(
+      f.messages.some((message) => message.type === "ai-suggestion-trigger"),
+    ).toBe(false);
   });
 
   it("reconciles consent completion to the new panel without triggering the old target", async () => {
@@ -326,10 +472,6 @@ describe("AI suggestion lifecycle with the public Language Model API", () => {
     expect(
       f.messages.some((message) => message.type === "ai-suggestion-trigger"),
     ).toBe(false);
-    expect(f.statusReports.at(-1)).toMatchObject({
-      sessionId: "s2",
-      availability: "ready",
-    });
     f.dispose();
   });
 

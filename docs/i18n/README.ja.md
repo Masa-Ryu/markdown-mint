@@ -57,16 +57,17 @@ Markdown Mint には、実際の Markdown 文書の編集に役立つツール�
 
 Markdown Mint は VS Code 公開の Language Model API を使い、利用可能な GitHub Copilot
 モデルから文章の続きを要求します。エディターでの応答時間を考慮し、取得結果に `mini` family
-があれば優先し、それ以外はモデルID順の安定した方法で選びます。現在のモデル名とIDは
-ステータス項目のホバーで確認できます。AI機能は信頼済みworkspace上のローカルdesktop
+があれば優先し、それ以外はモデルID順の安定した方法で選びます。AI機能は信頼済みworkspace上のローカルdesktop
 Extension Host（macOS、Windows、Linux）で動作します。対象外環境でも通常の編集は使えます。
 Language Model APIはVS Code 1.91でStableになりました。1.90ではMintの通常編集は引き続き使えますが、
 AI提案はAPI unavailableとして無効になります。
 
-最初のモデル要求とVS Codeの同意は、Command PaletteまたはMintのステータス項目から
-**Markdown Mint: Suggest Continuation** を実行して開始します。そのセットアップ後、
-`markdownMint.aiSuggestions.autoTrigger` が有効なら通常入力後に候補を表示します。設定の初期値は
-**false** で、ツールバーにON/OFFボタンはありません。自動提案がOFFでも手動提案を使えます。
+Copilotによる自動提案は初期状態で有効です。初回はMarkdown MintのツールバーにあるCopilotアイコンを
+クリックすると、必要な場合にVS Code標準のモデル利用許可を行います。このクリックはセットアップだけを行い、
+候補生成はしません。セットアップ後は同じアイコンで自動提案をON/OFFでき、ユーザー設定
+`markdownMint.aiSuggestions.autoTrigger` からも変更できます。ONにした後は次の通常入力から300ms debounceで
+提案します。**Markdown Mint: Suggest Continuation** はCommand Paletteの手動1回提案として残り、
+自動提案がOFFでも利用できます。
 セットアップ時に選択したモデルのIDとversion（秘密ではない識別情報）も保存します。モデル本体や利用許可は
 保存しません。Extension Host再起動後は、実際の文字入力と通常の300ms debounceを待ってから、そのモデルだけを
 公開APIの完全一致selectorで再取得します。自動復元時にCopilotの全モデル一覧は列挙しません。各要求前に

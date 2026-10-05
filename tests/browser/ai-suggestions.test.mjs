@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { chromium } from "playwright";
 
@@ -121,6 +121,193 @@ try {
   });
   page = await context.newPage();
   page.setDefaultTimeout(8000);
+  await load();
+  const copilotButton = page.getByTestId("toolbar-copilot");
+  const initialToolbar = await copilotButton.evaluate((button) => ({
+    state: button.dataset.state,
+    pressed: button.getAttribute("aria-pressed"),
+    label: button.getAttribute("aria-label"),
+    icon: button.querySelector("svg")?.dataset.icon,
+    following: Array.from(button.parentElement?.children ?? [])
+      .slice(
+        Array.from(button.parentElement?.children ?? []).indexOf(button) + 1,
+      )
+      .map((child) =>
+        child.classList.contains("mm-export-menu")
+          ? "export"
+          : child.classList.contains("mm-source-button")
+            ? "source"
+            : "other",
+      ),
+  }));
+  assert.deepEqual(initialToolbar, {
+    state: "on",
+    pressed: "true",
+    label: "Copilot suggestions: On. Click to turn off. Fake Copilot ready",
+    icon: "copilot",
+    following: ["export", "source"],
+  });
+  const initialRequestCount = (await requests()).length;
+  await copilotButton.focus();
+  await page.keyboard.press("Enter");
+  await page.waitForFunction(() =>
+    window.__markdownMintHarness.messages.some(
+      (message) => message.type === "ai-suggestion-toolbar-action",
+    ),
+  );
+  assert.equal(
+    (await requests()).length,
+    initialRequestCount,
+    "toolbar setup/toggle click does not request a completion",
+  );
+  await page.evaluate(() =>
+    window.__markdownMintHarness.setAiState({
+      autoTrigger: false,
+      availability: "disabled",
+    }),
+  );
+  assert.equal(await copilotButton.getAttribute("data-state"), "off");
+  assert.equal(await copilotButton.getAttribute("aria-pressed"), "false");
+  assert.equal(
+    await copilotButton.locator("svg").getAttribute("data-icon"),
+    "copilot-blocked",
+  );
+  await page.evaluate(() =>
+    window.__markdownMintHarness.setAiState({
+      autoTrigger: true,
+      availability: "needs-authorization",
+      statusText: "Click to authorize",
+    }),
+  );
+  assert.equal(await copilotButton.getAttribute("data-state"), "authorization");
+  assert.equal(
+    await copilotButton.locator("svg").getAttribute("data-icon"),
+    "copilot-not-connected",
+  );
+  console.log(
+    "Passed accessible Copilot toolbar setup/on/off states and ordering",
+  );
+  for (const [theme, background, foreground] of [
+    ["dark", "#1e1e1e", "#d4d4d4"],
+    ["light", "#ffffff", "#333333"],
+  ]) {
+    await page.evaluate(
+      ([theme, background, foreground]) => {
+        document.documentElement.className = `vscode-${theme}`;
+        document.body.className = `vscode-${theme}`;
+        document.documentElement.style.setProperty(
+          "--vscode-editor-background",
+          background,
+        );
+        document.documentElement.style.setProperty(
+          "--vscode-icon-foreground",
+          foreground,
+        );
+      },
+      [theme, background, foreground],
+    );
+    const appearance = await copilotButton.evaluate((button) => {
+      const svg = button.querySelector("svg");
+      const box = button.getBoundingClientRect();
+      return {
+        visible: box.width >= 28 && box.height >= 28,
+        buttonColor: getComputedStyle(button).color,
+        iconFill: svg ? getComputedStyle(svg).fill : "none",
+        following: Array.from(button.parentElement?.children ?? [])
+          .slice(
+            Array.from(button.parentElement?.children ?? []).indexOf(button) +
+              1,
+          )
+          .map((child) =>
+            child.classList.contains("mm-export-menu")
+              ? "export"
+              : child.classList.contains("mm-source-button")
+                ? "source"
+                : "other",
+          ),
+      };
+    });
+    const expectedForeground = `rgb(${[1, 3, 5]
+      .map((offset) => parseInt(foreground.slice(offset, offset + 2), 16))
+      .join(", ")})`;
+    assert.equal(
+      appearance.visible,
+      true,
+      `${theme} Copilot toolbar visibility`,
+    );
+    assert.equal(
+      appearance.buttonColor,
+      expectedForeground,
+      `${theme} toolbar color`,
+    );
+    assert.equal(
+      appearance.iconFill,
+      expectedForeground,
+      `${theme} icon color`,
+    );
+    assert.deepEqual(
+      appearance.following,
+      ["export", "source"],
+      `${theme} toolbar order`,
+    );
+  }
+  console.log(
+    "Passed Copilot icon contrast and placement in dark and light themes",
+  );
+
+  for (const [filename, profile] of [
+    ["common-test.md", "commonmark"],
+    ["github-test.md", "github"],
+    ["github-test-class-B.md", "github"],
+    ["gitlab-test.md", "gitlab"],
+    ["gitlab-test-class-B.md", "gitlab"],
+  ]) {
+    await load(await readFile(resolve("tests/md", filename), "utf8"), profile);
+    const layout = await page.evaluate(() => {
+      const primary = document.querySelector(".mm-toolbar-primary");
+      const elements = Array.from(primary?.children ?? []);
+      const compatibility = elements.findIndex((element) =>
+        element.matches(".mm-compatibility"),
+      );
+      const copilot = elements.findIndex((element) =>
+        element.matches("[data-testid='toolbar-copilot']"),
+      );
+      const exportMenu = elements.findIndex((element) =>
+        element.matches(".mm-export-menu"),
+      );
+      const source = elements.findIndex((element) =>
+        element.matches(".mm-source-button"),
+      );
+      const button = elements[copilot];
+      const box = button?.getBoundingClientRect();
+      return {
+        width:
+          document.querySelector(".ProseMirror")?.getBoundingClientRect()
+            .width ?? 0,
+        order: [compatibility, copilot, exportMenu, source],
+        buttonWidth: box?.width ?? 0,
+        buttonHeight: box?.height ?? 0,
+        icon: button?.querySelector("svg")?.dataset.icon,
+      };
+    });
+    assert.ok(layout.width > 200, `${filename}: rich document is visible`);
+    assert.ok(
+      layout.buttonWidth >= 28,
+      `${filename}: Copilot button is visible`,
+    );
+    assert.ok(
+      layout.buttonHeight >= 28,
+      `${filename}: Copilot button is visible`,
+    );
+    assert.ok(
+      layout.order[0] < layout.order[1] &&
+        layout.order[1] < layout.order[2] &&
+        layout.order[2] < layout.order[3],
+      `${filename}: compatibility/Copilot/Export/Source order`,
+    );
+    assert.equal(layout.icon, "copilot", `${filename}: default enabled icon`);
+    console.log(`Passed Copilot toolbar fixture layout: ${filename}`);
+  }
   await load();
   const initial = await page.evaluate(() => ({
     document: window.__markdownMintHarness.document,
@@ -354,7 +541,13 @@ try {
         clipboard: "real Chromium keyboard",
         themes: palettes.map(([name]) => name),
         nativeIme: "manual",
-        fixtures: "separate existing fixture suite",
+        fixtures: [
+          "common-test.md",
+          "github-test.md",
+          "github-test-class-B.md",
+          "gitlab-test.md",
+          "gitlab-test-class-B.md",
+        ],
       },
       null,
       2,
