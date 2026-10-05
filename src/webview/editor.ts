@@ -51,6 +51,9 @@ import {
   type WorkspaceFileSearchResultMessage,
 } from "../shared/protocol";
 import { isWorkspaceFileSearchQuery } from "../shared/workspaceFileSearch";
+import { AiSuggestionsController } from "./aiSuggestions";
+import { MermaidAiSuggestionsController } from "./mermaidAiSuggestions";
+import type { AiHostMessage, AiSuggestionState } from "../shared/aiSuggestions";
 import {
   createStarterPlugin,
   getStarterState,
@@ -157,6 +160,7 @@ import {
   replaceCodeLanguageIdentifier,
 } from "../core/visualRendering";
 import { isBlankSpacingNode } from "../core";
+import { MarkdownPositionMapCache } from "../core/markdownPositionMap";
 import { mergeMarkdownSnapshots } from "../shared/threeWayMerge";
 import {
   createEmptyTableNode,
@@ -2591,6 +2595,10 @@ export class MarkdownEditorApp {
     { resolve: (success: boolean) => void; timer?: number }
   >();
   private readonly imageImport: ImageImportController;
+  private readonly aiSuggestions: AiSuggestionsController;
+  private mermaidAiSuggestions: MermaidAiSuggestionsController | undefined;
+  private aiSuggestionState: AiSuggestionState | undefined;
+  private copilotButton?: HTMLButtonElement;
   private previewEnhancer: RenderingEnhancer | undefined;
   /**
    * The last Markdown snapshot produced for the current PM document.
@@ -2927,6 +2935,7 @@ export class MarkdownEditorApp {
     this.core = options.core;
     this.options = { ...options, hostUndo: options.hostUndo ?? true };
     this.schema = options.core.schema;
+    const aiPositionMapCache = new MarkdownPositionMapCache();
     const imageImportOptions: ImageImportControllerOptions = {
       schema: this.schema,
       ...(this.vscode
@@ -2936,6 +2945,48 @@ export class MarkdownEditorApp {
       notify: (message) => this.notifyHost("error", message),
     };
     this.imageImport = new ImageImportController(imageImportOptions);
+    this.aiSuggestions = new AiSuggestionsController({
+      view: () => this.view,
+      canSuggest: () =>
+        this.canEditBlock() &&
+        !this.composing &&
+        !this.view.composing &&
+        !this.formatting &&
+        this.root.ownerDocument.activeElement === this.view.dom &&
+        !this.activePopup &&
+        !this.linkPickerOpen &&
+        !this.root.querySelector("dialog[open]") &&
+        !this.tableStructureSelection,
+      synced: () =>
+        !this.hasPendingHostSync() && !this.pendingExternal && !this.syncPaused,
+      version: () => this.version,
+      documentId: () => this.documentId,
+      markdown: () => this.currentMarkdown(),
+      profile: () => this.profile,
+      sourceOffset: (state, position) => {
+        if (!this.initialized || this.parseError || this.previewOnly)
+          return undefined;
+        const source = this.currentMarkdown();
+        const map = aiPositionMapCache.get(
+          source,
+          state.doc,
+          this.profile,
+          this.core,
+          this.previousSnapshot,
+          this.version,
+        );
+        return map.pmPositionToSourceOffset(position);
+      },
+      parseMarkdown: (source, profile) =>
+        this.core.parseMarkdown(source, profile),
+      post: (message) => this.vscode?.postMessage(message),
+      onStateChanged: (state) => {
+        this.aiSuggestionState = state;
+        this.mermaidAiSuggestions?.handleMessage(state);
+        this.updateCopilotToolbarState(state);
+      },
+      dispatch: (transaction) => this.dispatchTransaction(transaction),
+    });
     this.initialized = Boolean(options.initialDocument);
     const initial = options.initialDocument ?? {
       markdown: "",
@@ -3015,9 +3066,12 @@ export class MarkdownEditorApp {
     const primaryToolbar = toolbar.querySelector<HTMLElement>(
       ".mm-toolbar-primary",
     );
+    const copilotButton = primaryToolbar?.querySelector(".mm-copilot-button");
     const exportMenu = primaryToolbar?.querySelector(".mm-export-menu");
     const sourceButton = primaryToolbar?.querySelector(".mm-source-button");
-    if (exportMenu)
+    if (copilotButton)
+      primaryToolbar?.insertBefore(this.compatibilityEl, copilotButton);
+    else if (exportMenu)
       primaryToolbar?.insertBefore(this.compatibilityEl, exportMenu);
     else if (sourceButton)
       primaryToolbar?.insertBefore(this.compatibilityEl, sourceButton);
@@ -3220,6 +3274,7 @@ export class MarkdownEditorApp {
       this.view.dom.addEventListener("click", this.richLinkClickHandler, true);
     }
     this.sync = new SyncController(this.version, this.vscode, initial.markdown);
+    this.aiSuggestions.attach(this.root);
     this.messageHandler = (event) => this.handleMessage(event.data);
     window.addEventListener("message", this.messageHandler);
     this.sourceEl.addEventListener("input", () => {
@@ -3278,6 +3333,9 @@ export class MarkdownEditorApp {
   }
 
   destroy(): void {
+    this.aiSuggestions.dispose();
+    this.mermaidAiSuggestions?.dispose();
+    this.mermaidAiSuggestions = undefined;
     if (this.pendingRecoveryDialog?.open)
       this.closePendingRecoveryDialog(false);
     this.pendingRecoveryButton?.remove();
@@ -3416,6 +3474,7 @@ export class MarkdownEditorApp {
       createBlockBoundaryPlugin(),
       createRenderingPlugin(() => this.profile),
       this.imageImport.plugin,
+      this.aiSuggestions.plugin,
       keymap(this.createKeymap()),
       tableEditing(),
       createTableNumberingPlugin(),
@@ -4129,6 +4188,11 @@ export class MarkdownEditorApp {
     const storedMarksSet = transactions.some(
       (transaction) => transaction.storedMarksSet,
     );
+    this.aiSuggestions.transactionApplied(
+      docChanged,
+      !oldSelection.eq(this.view.state.selection),
+      storedMarksSet,
+    );
     const keepsTableStructureSelection = transactions.some(
       (transaction) => transaction.getMeta(tableOperationMetaKey) !== undefined,
     );
@@ -4658,6 +4722,7 @@ export class MarkdownEditorApp {
   }
 
   private handleBlockComposition(active: boolean): void {
+    this.invalidateAiSuggestions();
     this.composing = active;
     if (this.blockCompositionTimer !== undefined) {
       clearTimeout(this.blockCompositionTimer);
@@ -5657,6 +5722,20 @@ export class MarkdownEditorApp {
     this.profileToolbar = this.buildProfileToolbar();
     toolbar.append(this.profileToolbar);
     this.buildProfileFeatureDialog(toolbar);
+    const copilotButton = addButton(
+      "",
+      "Checking Copilot suggestions…",
+      () => this.aiSuggestions.toggleAutomaticSuggestions(),
+      "toolbar-copilot",
+      primary,
+      false,
+      "copilot-not-connected",
+    );
+    copilotButton.classList.add("mm-copilot-button");
+    copilotButton.dataset.state = "preparing";
+    copilotButton.setAttribute("aria-pressed", "false");
+    copilotButton.disabled = true;
+    this.copilotButton = copilotButton;
     primary.append(exportMenu);
     primary.append(sourceButton);
     return toolbar;
@@ -5885,10 +5964,32 @@ export class MarkdownEditorApp {
           state.confirmation !== null;
         this.profileFeatureMermaidConfirmation = state.confirmation;
         this.updateMermaidDialogActions(state);
+        this.mermaidAiSuggestions?.surfaceStateChanged(state);
         if (enteringConfirmation)
           this.profileFeatureMermaidConfirmButton.focus();
       },
     });
+    this.mermaidAiSuggestions = new MermaidAiSuggestionsController({
+      input: this.profileFeatureBodyInput,
+      canSuggest: () =>
+        this.profileFeatureId === "mermaid" &&
+        this.profileFeatureDialogOpen &&
+        this.mode === "rich" &&
+        this.canEditBlock() &&
+        !this.formatting &&
+        this.root.ownerDocument.activeElement === this.profileFeatureBodyInput,
+      synced: () =>
+        !this.hasPendingHostSync() && !this.pendingExternal && !this.syncPaused,
+      version: () => this.version,
+      documentId: () => this.documentId,
+      markdown: () => this.currentMarkdown(),
+      dialogGeneration: () => this.mermaidDialog.sessionGeneration,
+      post: (message) => this.vscode?.postMessage(message),
+      reportStatus: (message) => this.aiSuggestions.reportStatus(message),
+    });
+    this.mermaidAiSuggestions.attach();
+    if (this.aiSuggestionState)
+      this.mermaidAiSuggestions.handleMessage(this.aiSuggestionState);
     this.updateMermaidDialogActions(this.mermaidDialog.displayState);
     form.append(
       mermaidTemplates,
@@ -10559,6 +10660,7 @@ export class MarkdownEditorApp {
     options: { refreshPreview?: boolean } = {},
   ): void {
     if (this.previewOnly && mode !== "preview" && mode !== "source") return;
+    if (mode !== this.mode) this.invalidateAiSuggestions();
     if (mode !== this.mode) this.closeDiscardChangesConfirmation(true);
     this.clearTableDeletePreview();
     this.clearTableStructureSelection(false);
@@ -10854,7 +10956,62 @@ export class MarkdownEditorApp {
     this.profileSelect.value = this.profile;
   }
 
+  private updateCopilotToolbarState(state: AiSuggestionState): void {
+    const button = this.copilotButton;
+    if (!button) return;
+    const authorizationRequired = state.availability === "needs-authorization";
+    const preparing = state.availability === "preparing";
+    let icon: ToolbarIconName;
+    let toolbarState: string;
+    let ariaLabel: string;
+    if (authorizationRequired) {
+      icon = "copilot-not-connected";
+      toolbarState = "authorization";
+      ariaLabel = state.autoRestoreOnInput
+        ? "Copilot suggestions need authorization. Click to reconnect"
+        : "Enable Copilot suggestions";
+    } else if (state.availability === "ready" && state.autoTrigger) {
+      icon = "copilot";
+      toolbarState = "on";
+      ariaLabel = "Copilot suggestions: On. Click to turn off";
+    } else if (
+      (state.availability === "disabled" || state.availability === "ready") &&
+      !state.autoTrigger
+    ) {
+      icon = "copilot-blocked";
+      toolbarState = "off";
+      ariaLabel = "Copilot suggestions: Off. Click to turn on";
+    } else if (state.availability === "blocked") {
+      icon = "copilot-blocked";
+      toolbarState = "unavailable";
+      ariaLabel = state.statusText || "Copilot suggestions are blocked";
+    } else {
+      icon = "copilot-not-connected";
+      toolbarState = preparing ? "preparing" : "unavailable";
+      ariaLabel =
+        state.statusText ||
+        (preparing
+          ? "Preparing Copilot suggestions…"
+          : "Copilot suggestions are unavailable");
+    }
+    if (
+      (state.availability === "ready" || state.availability === "disabled") &&
+      state.statusText
+    )
+      ariaLabel += `. ${state.statusText}`;
+    const tooltip = state.autoTrigger
+      ? "Copilot suggestions: On"
+      : "Copilot suggestions: Off";
+    button.dataset.state = toolbarState;
+    button.setAttribute("aria-pressed", String(state.autoTrigger));
+    button.setAttribute("aria-label", ariaLabel);
+    this.setTooltip(button, tooltip);
+    button.disabled = state.active === false || preparing;
+    appendToolbarIcon(button, icon);
+  }
+
   private requestSource(): void {
+    this.invalidateAiSuggestions();
     if (!this.initialized) return;
     if (
       this.composing ||
@@ -10936,6 +11093,7 @@ export class MarkdownEditorApp {
   }
 
   private requestProfileChange(profile: DocumentProfile): void {
+    this.invalidateAiSuggestions();
     if (
       profile !== "github" &&
       profile !== "gitlab" &&
@@ -11012,6 +11170,7 @@ export class MarkdownEditorApp {
   }
 
   private sendHostCommand(type: "undo" | "redo"): boolean {
+    this.invalidateAiSuggestions();
     if (!this.options.hostUndo && type === "undo") return false;
     if (this.syncPaused) {
       this.setNotice(
@@ -11125,12 +11284,48 @@ export class MarkdownEditorApp {
       });
   }
 
+  private invalidateAiSuggestions(): void {
+    this.aiSuggestions.invalidate();
+    this.mermaidAiSuggestions?.invalidate();
+  }
+
+  private handleAiHostMessage(message: AiHostMessage): void {
+    if (message.type === "ai-suggestion-state") {
+      this.aiSuggestionState = message;
+      this.aiSuggestions.handleMessage(message);
+      return;
+    }
+    if (message.type === "ai-suggestion-trigger") {
+      if (this.mermaidAiSuggestions?.ownsFocusedSurface)
+        this.mermaidAiSuggestions.handleMessage(message);
+      else this.aiSuggestions.handleMessage(message);
+      return;
+    }
+    if (message.requestId.startsWith("ai-mermaid-"))
+      this.mermaidAiSuggestions?.handleMessage(message);
+    else this.aiSuggestions.handleMessage(message);
+  }
+
   private handleMessage(message: unknown): void {
     if (!isHostMessage(message)) return;
-    if (message.type === "document") {
+    if (
+      message.type === "ai-suggestion-state" ||
+      message.type === "ai-suggestion-trigger" ||
+      message.type === "ai-suggestion-snapshot-check" ||
+      message.type === "ai-suggestion-adoption-validation" ||
+      message.type === "ai-suggestion-result"
+    ) {
+      this.handleAiHostMessage(message);
+    } else if (message.type === "document") {
       this.clipboardAvailable = message.clipboardAvailable === true;
+      this.mermaidAiSuggestions?.onNativeDocumentChanged(
+        message.documentId ?? this.documentId,
+        message.version,
+        message.markdown,
+      );
       this.receiveDocument(message);
     } else if (message.type === "preview") {
+      this.invalidateAiSuggestions();
       this.clipboardAvailable = message.clipboardAvailable === true;
       this.receivePreview(message);
     } else if (message.type === "export-html-command") {
@@ -11138,6 +11333,7 @@ export class MarkdownEditorApp {
     } else if (message.type === "export-pdf-command") {
       this.requestPdfExport();
     } else if (message.type === "edit-rejected") {
+      this.invalidateAiSuggestions();
       if (message.operationId === this.pendingRecoveryOperationId) {
         this.pendingRecoveryOperationId = undefined;
         this.pendingRecoveryOperationIdentity = undefined;
@@ -11359,6 +11555,34 @@ export class MarkdownEditorApp {
   }
 
   receiveDocument(message: DocumentMessage): void {
+    const ownAck =
+      message.reason === "ack" &&
+      Boolean(
+        message.operationId &&
+        this.sync.isPendingOperation(message.operationId),
+      );
+    const sameDocument =
+      message.documentId === undefined ||
+      message.documentId === this.documentId;
+    const unchangedSnapshot =
+      !message.operationId &&
+      (message.reason === undefined || message.reason === "external") &&
+      message.version === this.version &&
+      message.profile === this.authoritativeProfile &&
+      message.markdown === this.authoritativeMarkdown &&
+      (message.mode === undefined ||
+        message.mode === (this.previewOnly ? "preview" : "editor"));
+    const inputEcho =
+      sameDocument &&
+      (unchangedSnapshot ||
+        (this.sync.hasPending &&
+          this.isDuplicateAuthoritativeSnapshot(message)));
+    if (
+      !ownAck &&
+      !inputEcho &&
+      (message.reason !== "save" || message.version !== this.version)
+    )
+      this.invalidateAiSuggestions();
     this.clearWorkspaceFileSearch();
     this.clipboardAvailable = message.clipboardAvailable === true;
     if (message.documentId) {
@@ -11443,6 +11667,7 @@ export class MarkdownEditorApp {
         this.clearRecoveryIfSaved();
       this.persistRecoveryAfterAcknowledgement(message.markdown);
       this.flushDeferredHostCommand();
+      this.aiSuggestions.syncChanged();
       return;
     }
 
@@ -11471,6 +11696,7 @@ export class MarkdownEditorApp {
         this.persistRecoveryAfterAcknowledgement(message.markdown);
         this.flushDeferredHostCommand();
       }
+      this.aiSuggestions.syncChanged();
       return;
     }
     if (this.isDuplicateAuthoritativeSnapshot(message)) {

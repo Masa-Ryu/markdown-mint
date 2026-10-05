@@ -3,6 +3,13 @@
  * webview. Keep this file dependency-free: it is bundled into both runtimes.
  */
 
+import {
+  isAiHostMessage,
+  isAiWebviewMessage,
+  type AiHostMessage,
+  type AiWebviewMessage,
+} from "./aiSuggestions";
+
 export const PROTOCOL_VERSION = 1 as const;
 export const MAX_MARKDOWN_LENGTH = 2_000_000;
 export const MAX_OPERATION_ID_LENGTH = 160;
@@ -317,6 +324,7 @@ export interface UserNotificationMessage {
 }
 
 export type WebviewMessage =
+  | AiWebviewMessage
   | ReadyMessage
   | EditMessage
   | UndoMessage
@@ -338,6 +346,7 @@ export type WebviewMessage =
   | UserNotificationMessage;
 
 export type HostMessage =
+  | AiHostMessage
   | DocumentMessage
   | PreviewMessage
   | EditRejectedMessage
@@ -405,6 +414,7 @@ export function isHostMessage(value: unknown): value is HostMessage {
   ) {
     return false;
   }
+  if (value.type.startsWith("ai-suggestion-")) return isAiHostMessage(value);
   if (value.type === "document") return isDocumentMessage(value);
   if (value.type === "preview") {
     return (
@@ -510,6 +520,8 @@ export function parseWebviewMessage(
     return undefined;
   }
 
+  if (value.type.startsWith("ai-suggestion-"))
+    return isAiWebviewMessage(value) ? value : undefined;
   switch (value.type) {
     case "ready":
       return value.requestId === undefined

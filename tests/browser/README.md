@@ -82,6 +82,22 @@ be compared at the same viewport and font settings.
 The native fixture supplies a small dark-theme variable sheet because a standalone
 browser tab does not receive VS Code's injected `--vscode-*` theme variables.
 
+## Copilot prose suggestion suite
+
+Run `npm run test:browser:ai` for real Chromium keyboard/clipboard and theme
+checks with a fake provider. `/?ai=1` enables controlled `triggerAi`,
+`respondAi`, and `setAiState` helpers on `window.__markdownMintHarness`.
+The server bundles the production protocol validators for this fixture only.
+Screenshots and a report are saved in `output/playwright/ai-suggestions/`.
+No Copilot request is made; OS IME, provider consent, and native focus remain
+separate manual checks documented in `docs/requirements.md`.
+
+Run `npm run benchmark:ai-suggestions` for bounded local context extraction
+with the five Markdown fixtures, short English/Japanese, 5,000 prose blocks,
+and a 2,000-row table. It writes numeric p50/p95 and context sizes to
+`output/benchmarks/ai-suggestions/context.json`; it excludes parsing and model
+latency and sends no model requests.
+
 ## Standalone HTML export smoke suite
 
 Run the generated-HTML Chromium check with:

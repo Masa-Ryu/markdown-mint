@@ -2,7 +2,7 @@
   "name": "markdown-mint",
   "displayName": "Markdown Mint — Visual Markdown Editor",
   "description": "A visual WYSIWYG Markdown editor for VS Code with powerful table editing, GitHub/GitLab Markdown, Mermaid, math, and source editing.",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "publisher": "masa-ryu",
   "icon": "assets/icon/icon.png",
   "license": "MIT",
@@ -55,7 +55,8 @@
     "onCommand:markdownMint.formatDocument",
     "onCommand:markdownMint.exportHtml",
     "onCommand:markdownMint.exportPdf",
-    "onCommand:markdownMint.openInEditor"
+    "onCommand:markdownMint.openInEditor",
+    "onCommand:markdownMint.aiSuggestions.trigger"
   ],
   "main": "./dist/extension.js",
   "contributes": {
@@ -89,6 +90,11 @@
         "command": "markdownMint.openInEditor",
         "title": "Markdown Mint: Open in Markdown Mint",
         "enablement": "resourceLangId == markdown"
+      },
+      {
+        "command": "markdownMint.aiSuggestions.trigger",
+        "title": "Markdown Mint: Suggest Continuation",
+        "enablement": "markdownMint.aiSuggestions.active"
       }
     ],
     "customEditors": [
@@ -148,6 +154,12 @@
           "default": "",
           "description": "Path to a Chrome, Chromium, or Edge executable used to export PDFs. When empty, Markdown Mint searches for an installed browser in the extension host.",
           "scope": "window"
+        },
+        "markdownMint.aiSuggestions.autoTrigger": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable automatic Copilot suggestions while editing supported Markdown prose, code blocks, and Mermaid source in Markdown Mint. Requires an available GitHub Copilot language model, a trusted workspace, and initial VS Code consent; requests may consume Copilot usage.",
+          "scope": "application"
         }
       }
     },
@@ -179,6 +191,7 @@
     "benchmark:file-search:browser": "npm run build:webview && node scripts/benchmark-file-search-browser.mjs",
     "benchmark:file-search:extension": "npm run compile && npm run build && node scripts/benchmark-file-search-extension.mjs",
     "benchmark:source-serialization": "node scripts/benchmark-source-serialization.mjs",
+    "benchmark:ai-suggestions": "node scripts/benchmark-ai-suggestions.mjs",
     "benchmark:mermaid-startup": "npm run build && node scripts/benchmark-mermaid-startup.mjs",
     "test:watch": "vitest",
     "test:extension": "npm run compile && npm run build && node scripts/test-extension.mjs",
@@ -189,7 +202,8 @@
     "test:browser:blocks": "npm run build:webview && node tests/browser/block-editing.test.mjs",
     "test:browser:mermaid": "npm run build:webview && node tests/browser/mermaid-templates.test.mjs",
     "test:browser:html-export": "npm run build && node tests/browser/html-export.test.mjs",
-    "test:browser:pdf-export": "npm run build && node tests/browser/pdf-export.test.mjs"
+    "test:browser:pdf-export": "npm run build && node tests/browser/pdf-export.test.mjs",
+    "test:browser:ai": "npm run build:webview && node tests/browser/ai-suggestions.test.mjs"
   },
   "dependencies": {
     "highlight.js": "^11.12.0",
@@ -228,5 +242,14 @@
     "playwright": "^1.63.0",
     "typescript": "^5.8.3",
     "vitest": "^3.2.4"
+  },
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": "limited",
+      "description": "AI suggestions require a trusted workspace. Ordinary Markdown editing remains available.",
+      "restrictedConfigurations": [
+        "markdownMint.export.pdf.chromiumExecutablePath"
+      ]
+    }
   }
 }

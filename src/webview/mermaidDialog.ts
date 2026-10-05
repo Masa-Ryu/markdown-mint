@@ -106,6 +106,9 @@ export class MermaidDialog {
   get isEditing(): boolean {
     return this.active && !this.picking && !this.session.confirmation;
   }
+  get sessionGeneration(): number {
+    return this.sessionId;
+  }
   get canSubmit(): boolean {
     return this.isEditing && !this.imeActive;
   }

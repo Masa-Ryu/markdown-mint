@@ -13,6 +13,7 @@
 </head>
 <body data-markdown-mint-mode="editor">
   <main id="app" aria-label="Markdown Mint" data-mermaid-runtime-uri="/dist/mermaid.js" data-mermaid-runtime-nonce="mm-test-nonce"></main>
+  <!-- markdown-mint-ai-protocol -->
   <script nonce="mm-test-nonce">
     window.__markdownMintCspViolations = [];
     document.addEventListener('securitypolicyviolation', event => {
@@ -28,6 +29,17 @@
     });
     (() => {
       const protocolVersion = 1;
+      const aiEnabled = new URLSearchParams(location.search).has('ai');
+      let aiState = {
+        protocolVersion,
+        type: 'ai-suggestion-state',
+        sessionId: 'ai-browser',
+        settingsGeneration: 1,
+        autoTrigger: true,
+        statusText: 'Fake Copilot ready',
+        availability: 'ready'
+      };
+      let aiInvocation = 0;
       const markdownFixture = [
         '# Browser harness',
         '',
@@ -199,6 +211,7 @@
       // bypasses the extension wire contract.
       const validWebviewMessage = value => {
         if (!isRecord(value) || value.protocolVersion !== protocolVersion || typeof value.type !== 'string') return false;
+        if (value.type.startsWith('ai-suggestion-')) return aiEnabled && Boolean(window.__markdownMintAiProtocol.parseWebviewMessage(value));
         switch (value.type) {
           case 'ready': return value.requestId === undefined || (typeof value.requestId === 'string' && value.requestId.length <= 160);
           case 'edit': return versionValue(value.baseVersion) && safeOperation(value.operationId) && safeMarkdown(value.markdown);
@@ -219,7 +232,7 @@
       const deliver = data => window.dispatchEvent(new MessageEvent('message', { data: { protocolVersion, ...data } }));
       const typography = { fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif', fontSize: 14, lineHeight: 1.6 };
       const reject = (operationId, reason, message, draftMarkdown) => deliver({ type: 'edit-rejected', operationId, reason, message, currentMarkdown: markdown, currentVersion: version, ...(draftMarkdown === undefined ? {} : { draftMarkdown }) });
-      const accept = (operationId, reason = 'ack') => deliver({ type: 'document', markdown, version, profile, ...(operationId === undefined ? {} : { operationId }), reason, mode: 'editor', typography });
+      const accept = (operationId, reason = 'ack') => deliver({ type: 'document', markdown, version, profile, ...(operationId === undefined ? {} : { operationId }), ...(aiEnabled ? { documentId: 'file:///browser.md' } : {}), reason, mode: 'editor', typography });
       const mermaidMetrics = () => {
         const visible = svg => {
           const box = svg.getBoundingClientRect();
@@ -344,6 +357,7 @@
             accept(undefined, 'recovery');
           } else if (message.type === 'ready') {
             accept(undefined, 'initial');
+            if (aiEnabled) deliver(aiState);
           } else if (message.type === 'undo' || message.type === 'redo') {
             if (message.baseVersion !== undefined && message.baseVersion !== version) {
               reject(message.operationId, 'stale', 'The Markdown document changed before undo/redo started.');
@@ -387,6 +401,37 @@
           accept(undefined, 'external');
         },
         get state() { return clone(state); },
+        setAiState(patch) {
+          aiState = { ...aiState, ...patch };
+          deliver(aiState);
+        },
+        triggerAi() {
+          deliver({
+            protocolVersion,
+            type: 'ai-suggestion-trigger',
+            sessionId: aiState.sessionId,
+            settingsGeneration: aiState.settingsGeneration,
+            invocationId: 'browser-manual-' + ++aiInvocation
+          });
+        },
+        respondAi(request, text = ' 続きを書きます🌿', reason = 'ready') {
+          const result = {
+            protocolVersion,
+            type: 'ai-suggestion-result',
+            requestId: request.requestId,
+            sessionId: request.sessionId,
+            documentId: request.documentId,
+            baseVersion: request.baseVersion,
+            editorRevision: request.editorRevision,
+            settingsGeneration: request.settingsGeneration,
+            position: request.position,
+            targetKind: request.targetKind,
+            text,
+            reason
+          };
+          if (!window.__markdownMintAiProtocol.isHostMessage(result)) throw Error('Invalid fake AI reply');
+          deliver(result);
+        },
         metrics() {
           const rich = document.querySelector('.mm-rich-panel .ProseMirror');
           const preview = document.querySelector('.mm-preview-panel .mm-document-content');

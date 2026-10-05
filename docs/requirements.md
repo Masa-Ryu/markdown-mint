@@ -410,6 +410,288 @@ manually inspected. No version bump, release, tag, or workflow was run.
 | Q03 webview security                   | Webviews use a nonce-based strict CSP, bounded `localResourceRoots`, safe image/link rendering, bounded message fields, and no arbitrary command or filesystem bridge.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | Q04 profile and resource limits        | Markdown sources are capped at two million UTF-16 code units, clipboard matrices are capped at 10,000 cells with whole-paste rejection, spreadsheet TSV/HTML payloads reuse the shared clipboard text bound, and final spreadsheet serialization is checked before commit. Operation ids and resource URLs are bounded, and relative local images resolve through scoped webview resources.                                                                                                                                                                                                                                                                                                                                        |
 
+## Issue #142 Copilot suggestions: prose, code, and Mermaid (0.9.0)
+
+The Rich Editor requests prose and code continuations, and the Mermaid source
+dialog requests diagram continuations, through VS Code's public Language Model
+API. Mint does not ship or launch the Copilot Language Server, use a
+GitHub sign-in command, read authentication credentials, depend on Copilot's
+internal APIs, or pass a model object or execution capability to the Webview.
+The `markdownMint.aiSuggestions.autoTrigger` setting is application-scoped and
+defaults to `true`. Its first Copilot toolbar click selects a model and, only
+when `canSendRequest(model) !== true`, sends a fixed minimal setup request
+(`Reply with OK.`) with a user-visible justification to start VS Code consent.
+That request contains no document, filename, workspace, or cursor context; its
+response is discarded and is never a candidate. It may consume Copilot usage.
+After setup, the same button toggles automatic suggestions through the VS Code
+Configuration API, and state is published to every panel. Turning automatic
+suggestions off cancels automatic requests and candidates while preserving
+manual suggestions. Turning them on does not request a completion until the
+next debounced real text input. Model choice is automatic from the models returned by
+`vscode.lm.selectChatModels({ vendor: "copilot" })`; the adapter
+prefers an actually available `mini` family for editor latency and otherwise
+uses a deterministic model-ID order. It displays the selected model identity
+and selection reason. AI is enabled only in a trusted local desktop Extension
+Host, with normal editing available if the public API or Copilot model is
+unavailable.
+
+Initial model selection is initiated by the Copilot toolbar setup action or
+the explicit Suggest Continuation command. The toolbar can trigger consent
+only through its context-free setup request; manual Suggest Continuation uses
+its actual bounded-context completion request and does not send a second probe.
+Automatic suggestions and restored selections require
+`canSendRequest(model) === true` before sending and never trigger consent UI.
+After permission is confirmed, Mint persists only a non-secret setup-completed
+marker and selected model ID/version; neither is treated as permission. VS
+Code's public Language Model guide says `canSendRequest()` only checks persisted
+permission and does not show consent, while the first `sendRequest()` can show
+an authentication dialog and therefore must be called from a user action.
+`selectChatModels` is the public way to acquire or reacquire a model.
+After an Extension Host restart, Mint does not enumerate models on activation
+or configuration sync. If auto trigger is enabled and setup previously
+succeeded, the first real text edit waits for the regular 200 ms debounce and
+reacquires only the saved Copilot model ID/version through an exact public
+selector. Automatic restoration never enumerates all Copilot models. Mint
+checks `canSendRequest(model) === true` after obtaining the exact model and
+before sending; false or unknown access stops automatic requests. If no saved
+identity exists, the exact model is missing, or access is denied, the user can
+explicitly run Suggest Continuation. A known denied transition stays blocked from further
+automatic requests until a public access-change event confirms the cached model
+is permitted or the user explicitly runs Suggest Continuation. An unassociated
+access event does not start model selection or clear a known denial. After
+confirmed recovery, the next debounced real input creates a new request from
+the current snapshot; the old request is never revived. The host rechecks the
+active session, document identity/version, cursor, request generation, and
+cancellation after the public API wait. Real VS Code/Copilot acceptance is
+still required to confirm saved consent restoration and provider UI behavior.
+(Reference:
+https://code.visualstudio.com/api/extension-guides/ai/language-model)
+
+The public model-list change event does not identify which model was added or
+removed. Each event marks cached membership stale and cancels in-flight work,
+but it preserves a completed candidate until the user presses Tab. Tab asks
+the host to check the exact selected model ID/version; if it remains listed,
+the candidate is adopted, while a removed model or changed document/cursor
+rejects it. An unrelated model addition or removal therefore does not erase a
+valid candidate. A later real input can recheck a still-authorized cached model
+by exact identity; no model-list event itself selects a model or requests
+consent. Unknown access events preserve both an explicit access-denial block
+and the separate no-model recovery reason. A model-list event can clear the
+latter so a subsequent user input can retry; only a confirmed access grant or
+an explicit command clears an access-denial block. Adoption replies carry a
+separate attempt ID so delayed confirmations cannot accept a later Tab attempt.
+
+A prose or code request is based on the host-owned current unsaved Markdown
+snapshot and a UTF-16 cursor offset checked against the active panel, document
+URI/version, editor revision, settings generation, and model generation. The
+host builds a bounded prose prompt from the paragraph prefix and suffix,
+nearby heading, and adjacent prose. A code prompt separately extracts only
+the current fenced code body, its language info string, and a nearby heading;
+the Markdown fence is never the insertion target. Token input is counted using the selected model's public
+`countTokens` method, with context reduced from distant text first. The
+prompt asks for only an insertion between prefix and suffix and validates an
+exact JSON object after response collection. No tools, file APIs, workspace
+editing, or network fetch capabilities are provided. Only the selected
+context excerpt goes to the chosen model; Mint does not gather other files,
+terminal output, clipboard contents, or Git changes. Mint does not claim that
+Copilot's content exclusion applies identically to arbitrary prompts, that
+cancelled requests consume no usage, or that all service-side data processing
+is known. Requests may use Copilot quota. Prompt and response content are not
+logged or persisted by Mint. A Mermaid request additionally carries only the
+active Mermaid editor's unsaved source draft and caret offset from the Webview
+to the Extension Host because that draft is not part of host-owned Markdown
+until Apply. The model receives only the bounded Mermaid source around that
+caret. No other dialog fields, files, terminal output, clipboard contents, or
+Git changes are included.
+
+Targets include normal prose and headings at supported mid-line and line-end
+positions, list text, and contextual empty paragraphs. A paragraph containing
+a link or inline code remains eligible outside those spans. Ordinary fenced
+code blocks are also targets for code-specific completions; the language comes
+from the existing code-block info string, and Mermaid code blocks are excluded
+from this generic code path. The Mermaid dialog's source textarea is a separate
+target only on its editor screen, outside replacement confirmation and IME
+composition. Link destinations, inline-code contents, tables, math, raw HTML
+editing regions, selected ranges, Source, Preview, and other modal fields
+remain excluded.
+The 200 ms automatic debounce reevaluates after supported input and cursor
+changes without starting during IME composition. Manual requests do not wait
+for debounce. An exact active snapshot is used to combine duplicate work; a
+newer input cancels the previous request. Cancellation, timeout, stream errors,
+settings/model/access changes, panel deactivation, dialog-screen changes, and
+actual document-version changes end stale work. Same-version saves do not
+invalidate a candidate; format-on-save and other real document changes still
+do. Late output from a cancelled generation cannot restore a candidate.
+
+Prose and code use the existing ProseMirror ghost decoration. Code insertion
+is accepted only when parsing proves the original code block, its attributes,
+and all surrounding content remain intact; multiline insertions that escape or
+close the fence are rejected. Candidate display or dismissal does not modify
+the ProseMirror document, serialized Markdown, native TextDocument version,
+dirty or recovery state, clipboard, preview, exports, or Undo history. Tab
+acceptance is one regular ProseMirror transaction using the existing
+synchronization path and native Undo/Redo boundary.
+
+Mermaid uses a separate display-only textarea overlay. Candidate text never
+enters `textarea.value` until Tab; the proposed full diagram is checked through
+the existing `validateMermaidSource()` and local Mermaid runtime before any
+ghost is shown. Missing validator runtime and invalid syntax suppress the
+candidate. Tab inserts through the textarea's normal input event so preview,
+validation, and Apply state follow their existing paths; the native Markdown
+document is changed only by the existing Insert/Update action. Esc dismisses
+only the candidate. Matching input consumes only the matching leading text; a
+mismatch, caret move, composition conflict, screen change, or stale document,
+version, setting, or dialog identity clears it. Both surfaces retain the
+200 ms debounce. Tab/Escape and keyCode 229 remain unhandled during IME
+composition. A manual failure is reported with visible feedback and not only
+an aria-live message.
+
+Automatic restoration after an Extension Host restart now reselects only the
+saved model ID/version after the first real text edit's 200 ms debounce and
+only when the non-secret setup-completed marker and saved model identity exist.
+It checks current access before sending and does not restore on activation,
+setting events, cursor-only changes, a missing setup marker, or a missing model
+identity. A real VS Code/Copilot restart session has not yet established that
+saved access restoration and exact model selection behave as expected. VS Code 1.90 finalized these APIs for
+Insiders only; they became available in Stable in 1.91. The extension keeps
+its 1.90 engine floor for ordinary editing and reports AI as unavailable on
+builds without the public API. Copilot consent persistence, real-service
+behavior, Japanese OS IME interaction, Command Palette/Quick Pick focus,
+screen-reader output, restart restoration, and real-user utility/latency remain
+manual checks. Leave the PR Draft until those checks are completed. Fake
+models and browser simulations are automated regressions only, not Copilot
+acceptance evidence. Real Copilot code and Mermaid completion quality,
+validation, authorization, and usage behavior also remain unverified.
+
+The toolbar button shows the shared application setting and model availability
+without a separate StatusBarItem. Transient failed and timed-out outcomes pause
+further model requests using internal exponential backoff of 1, 2, 4, 8, 16,
+then at most 30 seconds.
+The delay is not shown to users. The current public LanguageModelError
+contract documents code and cause but no retry-after value, so Mint does not
+infer or display a service retry timestamp. A Blocked result remains a
+distinct service/account limit state and is not automatically retried.
+
+The `copilot`, `copilot-blocked`, and `copilot-not-connected` toolbar SVGs are
+from Microsoft's [vscode-codicons](https://github.com/microsoft/vscode-codicons)
+repository at commit `4dc95c8e7cf691086ace683dcb5755d0190d5eb3`, under the
+[Creative Commons Attribution 4.0 International license](https://creativecommons.org/licenses/by/4.0/).
+The SVG assets are unmodified.
+
+#### Copilot product acceptance matrix — pending
+
+This matrix is fixed synthetic input only. No user document, workspace file,
+or private prose is to be sent. The marker ⟦cursor⟧ marks the insertion point
+and is not part of the Markdown sent to the model. The notation \n means one
+actual LF. Each case is planned for three repetitions where service
+availability and quota allow; every attempted opportunity stays in the
+denominator, including no-request, empty response, timeout, unsafe, stale,
+cancelled, and blocked outcomes.
+
+Japanese cases:
+
+- **J01 — 本文・文中:** 「今回の更新では⟦cursor⟧既存の設定を保ちます。」
+- **J02 — 本文・文中:** 「利用者は変更内容を⟦cursor⟧確認してから保存できます。」
+- **J03 — 本文・文末:** 「この処理は既存ファイルを変更しません。⟦cursor⟧」
+- **J04 — 見出し・文中:** 「## 初回の⟦cursor⟧設定手順」
+- **J05 — 見出し・文末:** 「## 変更後の確認⟦cursor⟧」
+- **J06 — 箇条書き・文中:** 「- 設定ファイルを⟦cursor⟧読み込んで状態を確認します。」
+- **J07 — 箇条書き・文末:** 「- 保存結果を⟦cursor⟧」
+- **J08 — 番号付きリスト・文中:** 「1. 入力内容を⟦cursor⟧検証してから処理します。」
+- **J09 — 番号付きリスト・文末:** 「2. 出力先を⟦cursor⟧」
+- **J10 — 入れ子リスト・文中:** 「 - 問題の詳細を⟦cursor⟧記録して担当者へ共有します。」
+- **J11 — 前後に文脈がある空段落:** 「前の段落では手順を説明します。\n\n⟦cursor⟧\n\n次の段落では結果をまとめます。」
+- **J12 — 見出しと本文に挟まれた空段落:** 「## 更新の確認\n既存の設定を読み込みます。\n\n⟦cursor⟧\n\n最後に結果を確認します。」
+- **J13 — リンクを含む本文:** 「参照先は [公開ガイド](https://example.test/guide) にまとめました。⟦cursor⟧」
+- **J14 — 強調を含む本文:** 「**重要な設定**は⟦cursor⟧既定値を変えません。」
+- **J15 — 既存の後続行を保つ文中:** 「変更内容を保存した後は、⟦cursor⟧\n次の手順へ進みます。」
+
+English cases:
+
+- **E01 — body, mid-sentence:** “This update keeps⟦cursor⟧the existing settings intact.”
+- **E02 — body, mid-sentence:** “Users can review the change⟦cursor⟧before saving the file.”
+- **E03 — body, paragraph end:** “This operation does not modify existing files.⟦cursor⟧”
+- **E04 — heading, mid-line:** “## Initial⟦cursor⟧setup steps”
+- **E05 — heading, line end:** “## Verifying the change⟦cursor⟧”
+- **E06 — unordered list, mid-sentence:** “- Read the settings file⟦cursor⟧and verify its values.”
+- **E07 — unordered list, item end:** “- Record the save result⟦cursor⟧”
+- **E08 — ordered list, mid-sentence:** “1. Validate the input⟦cursor⟧before processing it.”
+- **E09 — ordered list, item end:** “2. Choose the output location⟦cursor⟧”
+- **E10 — nested list, mid-sentence:** “ - Record the problem details⟦cursor⟧and share them with the owner.”
+- **E11 — empty paragraph with surrounding context:** “The previous paragraph explains the steps.\n\n⟦cursor⟧\n\nThe next paragraph summarizes the result.”
+- **E12 — empty paragraph between heading and prose:** “## Update check\nLoad the existing settings.\n\n⟦cursor⟧\n\nFinally, verify the result.”
+- **E13 — body containing a link:** “The [public guide](https://example.test/guide) contains more detail.⟦cursor⟧”
+- **E14 — body containing emphasis:** “The **important setting**⟦cursor⟧keeps its default value.”
+- **E15 — mid-sentence with an existing following line:** “After saving the changes,⟦cursor⟧\ncontinue with the next step.”
+
+Code and Mermaid cases use only these synthetic inputs:
+
+- **C01 — JavaScript mid-expression:** `values.⟦cursor⟧map((value) => value * 2)` inside a fenced `js` block. Confirm the model returns code only, the existing prefix/suffix remain exact, and Tab acceptance is one Undo step.
+- **C02 — Python line continuation:** `def greet(name):\n    ⟦cursor⟧` inside a fenced `python` block. Confirm indentation and that no Markdown fence is inserted.
+- **M01 — flowchart continuation:** `flowchart TD\n    A[Start] -->⟦cursor⟧` in the Mermaid source editor. Confirm the complete proposed diagram passes the packaged Mermaid parser before display and the draft remains unapplied until Insert/Update.
+- **M02 — sequence continuation:** `sequenceDiagram\n    Alice->>Bob: ⟦cursor⟧` in the Mermaid source editor. Confirm the resulting diagram remains valid and preserves the existing sequence type.
+
+The operator records a separate row for each case/repetition with: target
+surface; outcome category; request sent or not; cold or warm state; model ID
+and version; VS Code version and OS; input-stop-to-request, request-to-first-response,
+request-to-complete-response, and validation-to-display durations; displayed
+and displayed-within-three-seconds flags; and a human rating of usable as-is,
+usable with a minor edit, or unusable with a short reason. Report Japanese and
+English separately. Publish the all-opportunity display rate and timeout rate
+alongside the latency distribution for successful displays. Do not omit slow,
+empty, or failed opportunities to improve p50/p95.
+
+Run one 3–5 minute continuous synthetic-writing session per language. Include
+both cold startup/first authorized request and warm requests. Check first-time
+consent from the command, refusal then explicit recovery, automatic setting
+remaining off until changed, Tab/Escape, native Undo/Redo, and the restart
+scenario. For restart, complete consent in an active Mint panel, enable auto
+trigger explicitly, close and reopen VS Code, then type into the same
+synthetic document without invoking the command. Confirm that selection starts
+only after the 200 ms real-input debounce and that `canSendRequest(model)` is
+true before any request. Record whether VS Code/provider UI asks for further
+consent. If it does not resume, record that result as a blocker; invoke Suggest
+Continuation once only after recording the restart outcome to verify manual
+recovery, not to mark restart acceptance passed.
+
+**Acceptance status: NOT RUN.** Automated fake-model/browser suites made
+**0 real Copilot requests** and do not fill any case or repetition in this
+matrix. Product acceptance remains blocked on a supported VS Code Stable
+build, a Copilot model and user consent, a local trusted desktop workspace,
+and an operator who can perform and rate the prose, code, and Mermaid synthetic
+cases. Keep the PR
+Draft until results are recorded here.
+
+On 2026-10-05, `npm run compile`, `npm test` (1,504 tests across 72 files),
+`npm run lint` (zero errors; 92 `no-explicit-any` warnings), and
+`npm run format:check` passed. `npm run test:browser:ai` passed ghost
+integrity, Tab, browser-host Undo/Redo, input debounce, clipboard exclusion,
+prose/code/Mermaid targets, themes, and Preview checks. `npm run
+test:browser:blocks` passed block interactions and all five required fixtures
+in Rich Editor, dedicated Preview, and native Preview. `npm run test:extension`
+passed in installed VS Code 1.140.0; its fake Language Model made one request
+and confirmed ghost display left native text unchanged and the isolated
+Undo/Redo boundary passed. This is not real Copilot acceptance. `npm run
+package` passed and verified the 0.9.0 VSIX and bundled formatter.
+
+The recorded AI benchmark on macOS arm64 / Node 24.5.0 measured short English
+mapping/context/insertion-safety/input-reconciliation at p50/p95 0.502/0.765
+ms and Japanese at 0.527/0.592 ms. A 5,000-prose-block case measured
+30.36/35.65 ms and a 2,000-table-row case measured 26.66/27.07 ms. These are
+local processing costs only; the benchmark excludes model and network latency.
+
+Automated runs made zero real Copilot requests. Real Copilot consent and
+Japanese/English usefulness and latency cases, saved-access restoration after
+restart, VS Code 1.90 behavior, OS Japanese IME, Command Palette/Quick Pick
+focus, screen reader, and service-side exclusion behavior remain unverified.
+The Language Model API is stable starting in VS Code 1.91; 1.90 exposes it only
+in Insiders, so this extension keeps its 1.90 engine floor for ordinary editing
+and disables AI when the public API is absent. After a saved setup, the
+implementation attempts public model reacquisition only after debounced real
+text input; fake-model tests do not establish provider consent persistence or
+this path's behavior in VS Code. Keep PR #147 Draft until these product
+acceptance gaps, especially restart restoration, are resolved and recorded.
+
 ## Issue #131 standalone HTML export (0.6.0)
 
 The toolbar's **Export** button and the `Markdown Mint: Export as HTML`

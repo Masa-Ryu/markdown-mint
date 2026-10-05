@@ -7,7 +7,6 @@ export interface MermaidRuntime {
   ) => string | { svg?: string } | Promise<string | { svg?: string }>;
 }
 
-export const MAX_MERMAID_SOURCE_LENGTH = 200_000;
 export const MERMAID_VALIDATION_DEBOUNCE_MS = 300;
 
 export type MermaidValidationStatus =
@@ -387,3 +386,6 @@ export class MermaidValidationController {
     this.timer = undefined;
   }
 }
+import { MAX_MERMAID_SOURCE_LENGTH } from "../shared/mermaid";
+
+export { MAX_MERMAID_SOURCE_LENGTH } from "../shared/mermaid";

@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import MarkdownIt from "markdown-it";
-import { isHostMessage } from "../../src/shared/protocol";
+import { isHostMessage, type HostMessage } from "../../src/shared/protocol";
+import type { AiSuggestionsEnvironment } from "../../src/extension/aiSuggestions";
+import { LanguageModelSuggestions } from "../../src/extension/languageModelSuggestions";
 
 const vscode = vi.hoisted(() => {
   type Listener = (...args: never[]) => void;
@@ -412,6 +414,15 @@ const vscode = vi.hoisted(() => {
     setStatusBarMessage(): Disposable {
       return new Disposable();
     },
+    createStatusBarItem: vi.fn(() => ({
+      name: "",
+      command: "",
+      text: "",
+      tooltip: "",
+      hide: vi.fn(),
+      show: vi.fn(),
+      dispose: vi.fn(),
+    })),
     registerCustomEditorProvider(): Disposable {
       return new Disposable();
     },
@@ -622,6 +633,8 @@ const vscode = vi.hoisted(() => {
     },
   };
   const env = {
+    uiKind: 1,
+    remoteName: undefined,
     async openExternal(uri: Uri): Promise<boolean> {
       openExternalCalls.push(uri);
       if (openExternalError) throw openExternalError;
@@ -759,9 +772,13 @@ const vscode = vi.hoisted(() => {
     TextDocument,
     EndOfLine: { LF: 1, CRLF: 2 },
     ConfigurationTarget: { Global: 1, Workspace: 2, WorkspaceFolder: 3 },
+    UIKind: { Desktop: 1, Webworker: 2 },
     WebviewPanel,
     ViewColumn: { Beside: 2 },
     ProgressLocation: { Notification: 1 },
+    LanguageModelChatMessage: {
+      User: (content: string) => ({ role: 1, content }),
+    },
     window,
     workspace,
     commands,
@@ -884,7 +901,11 @@ const pdfMocks = vi.hoisted(() => {
   };
 });
 
-vi.mock("vscode", () => vscode);
+vi.mock("vscode", () => ({
+  ...vscode,
+  lm: undefined,
+  CancellationTokenSource: undefined,
+}));
 vi.mock("../../src/extension/export/browserDiscovery", () => ({
   PdfBrowserExecutableNotFoundError: pdfMocks.PdfBrowserExecutableNotFoundError,
   resolvePdfBrowserExecutable: pdfMocks.resolvePdfBrowserExecutable,
@@ -899,14 +920,309 @@ const {
   webviewContentSecurityPolicy,
 } = await import("../../src/extension/extension");
 
+function modelText(value: string): { text: AsyncIterable<string> } {
+  return {
+    text: (async function* () {
+      yield value;
+    })(),
+  };
+}
+
+function fakeAiEnvironment(
+  sendRequest: () => Promise<{ text: AsyncIterable<string> }>,
+  onCancel?: () => void,
+): AiSuggestionsEnvironment {
+  let autoTrigger = false;
+  const model = {
+    id: "copilot-mini",
+    name: "Copilot Mini",
+    vendor: "copilot",
+    family: "gpt-4o-mini",
+    version: "test",
+    maxInputTokens: 32_000,
+    countTokens: async () => 40,
+    sendRequest,
+  };
+  return {
+    languageModel: new LanguageModelSuggestions({
+      api: { selectChatModels: async () => [model as never] },
+      access: { canSendRequest: () => true },
+    }),
+    setupCompleted: () => false,
+    markSetupCompleted: async () => undefined,
+    supported: () => true,
+    trusted: () => true,
+    settings: () => ({ autoTrigger }),
+    updateAutoTrigger: async (enabled) => {
+      autoTrigger = enabled;
+    },
+    notify: () => undefined,
+    tokenSource: () => {
+      let cancelled = false;
+      return {
+        token: {
+          get isCancellationRequested() {
+            return cancelled;
+          },
+          onCancellationRequested: () => ({ dispose: () => undefined }),
+        },
+        cancel: () => {
+          cancelled = true;
+          onCancel?.();
+        },
+        dispose: () => undefined,
+      } as never;
+    },
+  };
+}
+
+it("does not put model communication into the document edit/save queue", async () => {
+  vscode.__state.reset();
+  const { panel, document } = vscode.__state;
+  let sends = 0;
+  let cancelled = false;
+  const response = deferred<{ text: AsyncIterable<string> }>();
+  const environment = fakeAiEnvironment(
+    () => {
+      sends += 1;
+      return response.promise;
+    },
+    () => {
+      cancelled = true;
+    },
+  );
+  const provider = new MarkdownMintEditorProvider(
+    context() as never,
+    environment,
+  );
+  await provider.resolveCustomTextEditor(
+    document as never,
+    panel as never,
+    {} as never,
+  );
+  panel.webview.receive({ protocolVersion: 1, type: "ready" });
+  await provider.triggerAiSuggestion();
+  const state = panel.webview.messages
+    .filter(
+      (message) =>
+        isHostMessage(message) && message.type === "ai-suggestion-state",
+    )
+    .at(-1);
+  const trigger = panel.webview.messages
+    .filter(
+      (message) =>
+        isHostMessage(message) && message.type === "ai-suggestion-trigger",
+    )
+    .at(-1);
+  if (
+    !isHostMessage(state) ||
+    state.type !== "ai-suggestion-state" ||
+    !isHostMessage(trigger) ||
+    trigger.type !== "ai-suggestion-trigger"
+  )
+    throw Error("AI command did not publish state and invocation");
+  panel.webview.receive({
+    protocolVersion: 1,
+    type: "ai-suggestion-request",
+    requestId: "held-ai",
+    sessionId: state.sessionId,
+    documentId: document.uri.toString(),
+    baseVersion: document.version,
+    editorRevision: 1,
+    settingsGeneration: state.settingsGeneration,
+    position: document.getText().length,
+    targetKind: "heading",
+    trigger: "manual",
+    invocationId: trigger.invocationId,
+  });
+  await waitForCondition(() => sends === 1, "held fake Language Model request");
+  panel.webview.receive({
+    protocolVersion: 1,
+    type: "edit",
+    baseVersion: document.version,
+    operationId: "edit-during-ai",
+    markdown: "# Edited during AI",
+  });
+  await waitForCondition(
+    () => document.getText() === "# Edited during AI",
+    "edit while model promise is unresolved",
+  );
+  panel.webview.receive({
+    protocolVersion: 1,
+    type: "save",
+    baseVersion: document.version,
+    operationId: "save-during-ai",
+  });
+  await waitForCondition(
+    () =>
+      panel.webview.messages.some(
+        (message) =>
+          isHostMessage(message) &&
+          message.type === "save-result" &&
+          message.operationId === "save-during-ai" &&
+          message.saved,
+      ),
+    "save while model promise is unresolved",
+  );
+  expect(cancelled).toBe(true);
+  expect(document.isDirty).toBe(false);
+  provider.dispose();
+});
+
+it("returns an AI candidate when a non-mutating save is still queued", async () => {
+  const scenario = await startDelayedAiSuggestion();
+  const { document, panel, provider, response } = scenario;
+  try {
+    const markdownBefore = document.getText();
+    const versionBefore = document.version;
+    const enteredSave = deferred<void>();
+    const releaseSave = deferred<void>();
+    document.isDirty = true;
+    document.save = async (): Promise<boolean> => {
+      enteredSave.resolve(undefined);
+      await releaseSave.promise;
+      document.isDirty = false;
+      return true;
+    };
+
+    panel.webview.receive({
+      protocolVersion: 1,
+      type: "save",
+      baseVersion: versionBefore,
+      operationId: "save-with-ai-pending",
+    });
+    await enteredSave.promise;
+    expect(documentQueueDepth(provider)).toBe(1);
+    expect(document.version).toBe(versionBefore);
+    expect(document.getText()).toBe(markdownBefore);
+
+    response.resolve(modelText('{"insertText":" continuation"}'));
+    await waitForCondition(
+      () =>
+        panel.webview.messages.some(
+          (message) =>
+            isHostMessage(message) &&
+            message.type === "ai-suggestion-result" &&
+            message.requestId === "delayed-ai" &&
+            message.reason === "ready",
+        ),
+      "AI candidate while save remains queued",
+    );
+    expect(document.getText()).toBe(markdownBefore);
+    expect(document.version).toBe(versionBefore);
+
+    releaseSave.resolve(undefined);
+    await waitForCondition(
+      () =>
+        panel.webview.messages.some(
+          (message) =>
+            isHostMessage(message) &&
+            message.type === "save-result" &&
+            message.operationId === "save-with-ai-pending" &&
+            message.saved,
+        ),
+      "successful non-mutating save",
+    );
+    expect(document.getText()).toBe(markdownBefore);
+    expect(document.version).toBe(versionBefore);
+    expect(document.isDirty).toBe(false);
+  } finally {
+    provider.dispose();
+  }
+});
+
+it("cancels a pending AI response when format-on-save changes the document", async () => {
+  const scenario = await startDelayedAiSuggestion("#Needs formatting");
+  const { document, panel, provider, response } = scenario;
+  try {
+    const markdownBefore = document.getText();
+    const versionBefore = document.version;
+    vscode.__state.workspaceState.formatOnSave = true;
+    document.isDirty = true;
+    document.save = async (): Promise<boolean> => {
+      const edits = (await vscode.__state.runSave()) as Array<{
+        range: {
+          start: { line: number; character: number };
+          end: { line: number; character: number };
+        };
+        text: string;
+      }>;
+      const formatted = applyTextEdits(markdownBefore, edits);
+      expect(formatted).not.toBe(markdownBefore);
+      document.replaceText(formatted);
+      vscode.__state.emitDocumentChange(document);
+      document.isDirty = false;
+      return true;
+    };
+
+    panel.webview.receive({
+      protocolVersion: 1,
+      type: "save",
+      baseVersion: versionBefore,
+      operationId: "format-save-with-ai-pending",
+    });
+    await waitForCondition(
+      () =>
+        panel.webview.messages.some(
+          (message) =>
+            isHostMessage(message) &&
+            message.type === "save-result" &&
+            message.operationId === "format-save-with-ai-pending" &&
+            message.saved,
+        ),
+      "successful format-on-save",
+      1000,
+    );
+    const formattedDocument = document.getText();
+    const formattedVersion = document.version;
+    expect(formattedDocument).not.toBe(markdownBefore);
+    expect(formattedVersion).toBeGreaterThan(versionBefore);
+    expect(
+      panel.webview.messages.some(
+        (message) =>
+          isHostMessage(message) &&
+          message.type === "document" &&
+          message.version === formattedVersion,
+      ),
+    ).toBe(true);
+
+    response.resolve(modelText('{"insertText":" stale continuation"}'));
+    await flush();
+    expect(document.getText()).toBe(formattedDocument);
+    expect(document.version).toBe(formattedVersion);
+    expect(
+      panel.webview.messages.some(
+        (message) =>
+          isHostMessage(message) &&
+          message.type === "ai-suggestion-result" &&
+          message.requestId === "delayed-ai" &&
+          message.reason === "ready",
+      ),
+    ).toBe(false);
+  } finally {
+    provider.dispose();
+  }
+});
+
 function context(): {
   extensionUri: unknown;
   globalStorageUri: unknown;
+  globalState: {
+    get<T>(key: string): T | undefined;
+    update(key: string, value: unknown): Promise<void>;
+  };
   subscriptions: unknown[];
 } {
+  const values = new Map<string, unknown>();
   return {
     extensionUri: vscode.Uri.file("/extension"),
     globalStorageUri: vscode.Uri.file("/globalStorage"),
+    globalState: {
+      get: <T>(key: string) => values.get(key) as T | undefined,
+      update: async (key: string, value: unknown) => {
+        values.set(key, value);
+      },
+    },
     subscriptions: [],
   };
 }
@@ -926,11 +1242,127 @@ function deferred<T>(): {
   return { promise, resolve };
 }
 
+async function startDelayedAiSuggestion(markdown = "# Original"): Promise<{
+  provider: InstanceType<typeof MarkdownMintEditorProvider>;
+  panel: typeof vscode.__state.panel & {
+    webview: { receive(value: unknown): void; messages: unknown[] };
+  };
+  document: typeof vscode.__state.document & {
+    getText(): string;
+    version: number;
+    isDirty: boolean;
+    save(): Promise<boolean>;
+    replaceText(value: string): void;
+  };
+  response: ReturnType<typeof deferred<{ text: AsyncIterable<string> }>>;
+  requestCount(): number;
+}> {
+  vscode.__state.reset();
+  const { panel, document } = vscode.__state;
+  if (markdown !== document.getText()) document.reset(markdown);
+  const response = deferred<{ text: AsyncIterable<string> }>();
+  let requestCount = 0;
+  const environment = fakeAiEnvironment(() => {
+    requestCount += 1;
+    return response.promise;
+  });
+  const provider = new MarkdownMintEditorProvider(
+    context() as never,
+    environment,
+  );
+  await provider.resolveCustomTextEditor(
+    document as never,
+    panel as never,
+    {} as never,
+  );
+  panel.webview.receive({ protocolVersion: 1, type: "ready" });
+  await provider.triggerAiSuggestion();
+  const state = panel.webview.messages
+    .filter(
+      (message) =>
+        isHostMessage(message) && message.type === "ai-suggestion-state",
+    )
+    .at(-1);
+  const trigger = panel.webview.messages
+    .filter(
+      (message) =>
+        isHostMessage(message) && message.type === "ai-suggestion-trigger",
+    )
+    .at(-1);
+  if (
+    !isHostMessage(state) ||
+    state.type !== "ai-suggestion-state" ||
+    !isHostMessage(trigger) ||
+    trigger.type !== "ai-suggestion-trigger"
+  )
+    throw Error("AI command did not publish state and invocation");
+  panel.webview.receive({
+    protocolVersion: 1,
+    type: "ai-suggestion-request",
+    requestId: "delayed-ai",
+    sessionId: state.sessionId,
+    documentId: document.uri.toString(),
+    baseVersion: document.version,
+    editorRevision: 1,
+    settingsGeneration: state.settingsGeneration,
+    position: document.getText().length,
+    targetKind: "heading",
+    trigger: "manual",
+    invocationId: trigger.invocationId,
+  });
+  await waitForCondition(
+    () => requestCount === 1,
+    "delayed fake Copilot request",
+  );
+  return {
+    provider,
+    panel,
+    document,
+    response,
+    requestCount: () => requestCount,
+  };
+}
+
+function applyTextEdits(
+  markdown: string,
+  edits: readonly {
+    range: {
+      start: { line: number; character: number };
+      end: { line: number; character: number };
+    };
+    text: string;
+  }[],
+): string {
+  const offsetAt = (position: { line: number; character: number }): number => {
+    const lines = markdown.split("\n");
+    let offset = position.character;
+    for (let line = 0; line < position.line; line += 1)
+      offset += (lines[line]?.length ?? 0) + 1;
+    return offset;
+  };
+  const replacements = edits
+    .map((edit) => ({
+      start: offsetAt(edit.range.start),
+      end: offsetAt(edit.range.end),
+      text: edit.text,
+    }))
+    .filter((edit) => edit.start !== edit.end || edit.text.length > 0)
+    .sort((a, b) => b.start - a.start);
+  let formatted = markdown;
+  for (const replacement of replacements)
+    formatted =
+      formatted.slice(0, replacement.start) +
+      replacement.text +
+      formatted.slice(replacement.end);
+  return formatted;
+}
+
 async function waitForCondition(
   condition: () => boolean,
   description: string,
+  attempts = 50,
 ): Promise<void> {
-  for (let attempt = 0; attempt < 50; attempt += 1) {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
     if (condition()) return;
     await flush();
   }
@@ -945,7 +1377,89 @@ function stateCount(provider: object): number {
   ).states.size;
 }
 
+function documentQueueDepth(provider: object): number {
+  const states = (
+    provider as unknown as { states: Map<string, { queueDepth: number }> }
+  ).states;
+  return [...states.values()][0]?.queueDepth ?? 0;
+}
+
 describe("MarkdownMintEditorProvider", () => {
+  it("does not create a Mint suggestions StatusBarItem", () => {
+    vscode.__state.reset();
+    const provider = new MarkdownMintEditorProvider(context() as never);
+
+    expect(vscode.window.createStatusBarItem).not.toHaveBeenCalled();
+    provider.dispose();
+  });
+
+  it("accepts toolbar setup only from the sending editor session", async () => {
+    vscode.__state.reset();
+    const { panel, document } = vscode.__state;
+    const environment = fakeAiEnvironment(async () => modelText(" next"));
+    const selectModel = vi.spyOn(
+      environment.languageModel,
+      "selectForUserAction",
+    );
+    const updateSetting = vi.spyOn(environment, "updateAutoTrigger");
+    const provider = new MarkdownMintEditorProvider(
+      context() as never,
+      environment,
+    );
+    await provider.resolveCustomTextEditor(
+      document as never,
+      panel as never,
+      {} as never,
+    );
+    panel.webview.receive({ protocolVersion: 1, type: "ready" });
+    const statesBeforeAction = panel.webview.messages.filter(
+      (message) =>
+        isHostMessage(message) && message.type === "ai-suggestion-state",
+    ).length;
+
+    panel.webview.receive({
+      protocolVersion: 1,
+      type: "ai-suggestion-toolbar-action",
+      sessionId: "ai-another-panel",
+    });
+    await flush();
+    expect(selectModel).not.toHaveBeenCalled();
+    expect(updateSetting).not.toHaveBeenCalled();
+    expect(
+      panel.webview.messages.filter(
+        (message) =>
+          isHostMessage(message) && message.type === "ai-suggestion-state",
+      ),
+    ).toHaveLength(statesBeforeAction);
+
+    const state = panel.webview.messages
+      .filter(
+        (message) =>
+          isHostMessage(message) && message.type === "ai-suggestion-state",
+      )
+      .at(-1);
+    if (!isHostMessage(state) || state.type !== "ai-suggestion-state")
+      throw Error("Expected a registered editor session ID");
+    panel.webview.receive({
+      protocolVersion: 1,
+      type: "ai-suggestion-toolbar-action",
+      sessionId: state.sessionId,
+    });
+    await waitForCondition(
+      () => updateSetting.mock.calls.length === 1,
+      "toolbar setup to update the application setting",
+    );
+    expect(selectModel).toHaveBeenCalledTimes(1);
+    expect(updateSetting).toHaveBeenCalledWith(true);
+    expect(
+      panel.webview.messages.some(
+        (message) =>
+          isHostMessage(message) && message.type === "ai-suggestion-trigger",
+      ),
+    ).toBe(false);
+    provider.dispose();
+  });
+
   it("allows KaTeX style attributes without broadening script or network policy", () => {
     const policy = webviewContentSecurityPolicy("vscode-resource:", "nonce");
     expect(policy).toContain("style-src vscode-resource:");
@@ -2595,10 +3109,12 @@ describe("MarkdownMintEditorProvider", () => {
     await flush();
 
     const result = vscode.__state.panel.webview.messages.find(
-      (message: any) =>
+      (message): message is Extract<HostMessage, { type: "save-result" }> =>
+        isHostMessage(message) &&
         message.type === "save-result" &&
         message.operationId === "save:during-edit",
-    ) as any;
+    );
+    if (!result) throw new Error("Expected the save result message.");
     expect(document.getText()).toBe("# Typed during save");
     expect(result).toMatchObject({
       type: "save-result",

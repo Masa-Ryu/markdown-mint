@@ -32,6 +32,9 @@ import dividerAsset from "../../assets/menu/common/divider.svg?raw";
 import formatAsset from "../../assets/menu/common/format.svg?raw";
 import undoAsset from "../../assets/menu/common/undo.svg?raw";
 import redoAsset from "../../assets/menu/common/redo.svg?raw";
+import copilotAsset from "../../assets/menu/common/copilot.svg?raw";
+import copilotBlockedAsset from "../../assets/menu/common/copilot-blocked.svg?raw";
+import copilotNotConnectedAsset from "../../assets/menu/common/copilot-not-connected.svg?raw";
 
 export type ToolbarIconName =
   | "bold"
@@ -65,7 +68,10 @@ export type ToolbarIconName =
   | "divider"
   | "format"
   | "undo"
-  | "redo";
+  | "redo"
+  | "copilot"
+  | "copilot-blocked"
+  | "copilot-not-connected";
 
 const ICON_TEMPLATE_CACHE = new Map<ToolbarIconName, SVGSVGElement>();
 
@@ -102,6 +108,9 @@ const ICON_SOURCES: Readonly<Record<ToolbarIconName, string>> = {
   format: formatAsset,
   undo: undoAsset,
   redo: redoAsset,
+  copilot: copilotAsset,
+  "copilot-blocked": copilotBlockedAsset,
+  "copilot-not-connected": copilotNotConnectedAsset,
 };
 
 function removeFormattingWhitespace(node: Node): void {

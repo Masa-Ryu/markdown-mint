@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.9.0
+
+- Use VS Code's public Language Model API for optional Copilot continuations
+  in Markdown prose, fenced code blocks, and Mermaid source. Automatically
+  choose an available editor-suitable model and send bounded context around
+  the active cursor; keep model consent under VS Code's user-initiated flow.
+- After explicit setup, save the non-secret selected model ID/version and
+  reacquire only that exact model after restart on debounced real text input;
+  recheck public request access before sending.
+- Keep suggestions transient until Tab acceptance, preserve existing Markdown
+  and source structure, and keep AI requests independent of document save/edit
+  queue work. Package one universal VSIX without a bundled Copilot SDK.
+- AI suggestions require VS Code 1.91 or newer; ordinary Markdown editing
+  remains available at the existing 1.90 engine minimum.
+
 ## 0.8.0
 
 - Add a Mermaid template picker with 13 examples across 10 diagram types,

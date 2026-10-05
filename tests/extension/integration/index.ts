@@ -5,6 +5,7 @@ import * as vscode from "vscode";
 import { classifyLinkNavigation } from "../../../src/extension/linkNavigation";
 import { WorkspaceFileSearchHost } from "../../../src/extension/workspaceFileSearch";
 import { isImageFileName } from "../../../src/shared/workspaceFileSearch";
+import { runAiSuggestionAcceptance } from "./ai-suggestions";
 
 const VIEW_TYPE = "markdownMint.editor";
 const TEST_FILE = process.env.MARKDOWN_MINT_TEST_FILE;
@@ -39,6 +40,11 @@ export async function run(): Promise<void> {
   if (process.env.MM_FILE_SEARCH_HOST_BENCHMARK === "1")
     await runWorkspaceFileSearchHostBenchmark(filePath);
   await runRequiredMarkdownFixtureAcceptance(api);
+  const aiUri = vscode.Uri.file(
+    path.join(path.dirname(filePath), "ai-suggestions.md"),
+  );
+  await writeFile(aiUri.fsPath, "Native prose\n", "utf8");
+  await runAiSuggestionAcceptance(extension.extensionUri, aiUri);
 
   const commands = await vscode.commands.getCommands(true);
   for (const command of [
@@ -47,6 +53,7 @@ export async function run(): Promise<void> {
     "markdownMint.formatDocument",
     "markdownMint.exportHtml",
     "markdownMint.exportPdf",
+    "markdownMint.aiSuggestions.trigger",
     OPEN_IN_MINT_COMMAND,
   ]) {
     assert.ok(commands.includes(command), `registered command: ${command}`);

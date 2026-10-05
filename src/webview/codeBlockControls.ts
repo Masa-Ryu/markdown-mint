@@ -428,6 +428,15 @@ export function toggleCodeBlockExpanded(block: HTMLElement): void {
   ownerDocument.body?.append(backdrop);
   state.backdrop = backdrop;
   state.keydown = (event: KeyboardEvent): void => {
+    // Pass composition keys through to the editor. A suggestion owns plain
+    // Tab/Escape; modified Tab remains owned by the expanded-block focus trap.
+    if (
+      (event.isComposing ||
+        event.keyCode === 229 ||
+        isPlainSuggestionKey(event)) &&
+      block.querySelector(".mm-ai-suggestion")
+    )
+      return;
     if (event.key === "Escape") {
       // A language picker belongs to the editor NodeView and owns its own
       // Escape handling. Let it close before the surrounding dialog does.
@@ -500,6 +509,16 @@ export function closeCodeBlockExpanded(block: HTMLElement): void {
   )
     state.previousFocus.focus();
   blockStates.delete(block);
+}
+
+function isPlainSuggestionKey(event: KeyboardEvent): boolean {
+  return (
+    (event.key === "Tab" || event.key === "Escape") &&
+    !event.shiftKey &&
+    !event.ctrlKey &&
+    !event.metaKey &&
+    !event.altKey
+  );
 }
 
 /** Backward-compatible name used by existing NodeView callers. */
