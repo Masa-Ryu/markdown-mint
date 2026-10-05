@@ -1,0 +1,3 @@
+{
+  "markdown": "# Project Status\n\nTrack the work that matters this week.\n\n| Feature | Owner | Status |\n| --- | --- | --- |\n| Search | Alice | Done |\n| Export | Bob | WIP |\n| Mermaid | Carol | Done |\n\n\n> [!TIP]\n> Your .md file stays Markdown.\n\n\n"
+}

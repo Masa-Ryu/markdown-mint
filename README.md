@@ -10,7 +10,9 @@ Edit text, tables, checklists, and technical documentation directly in a visual 
 
 No migration required. Just open the Markdown files you already have and start writing.
 
-![overview](./docs/media/overview.gif)
+![Markdown Mint promo demo](https://raw.githubusercontent.com/Masa-Ryu/markdown-mint/main/docs/media/overview.gif)
+
+This browser harness recording shows visual table editing and the Markdown source. In VS Code, Source opens the standard editor.
 
 ## Focus on writing
 
@@ -24,7 +26,7 @@ Keyboard navigation is built in too. Use the **Tab key** to move through selecta
 
 Working with tables is just as simple. Copy and paste table content directly without manually editing Markdown syntax.
 
-![focus-on-writing-demo](./docs/media/focus-on-writing-demo.gif)
+![focus-on-writing-demo](https://raw.githubusercontent.com/Masa-Ryu/markdown-mint/main/docs/media/focus-on-writing-demo.gif)
 
 ## Platform-specific Markdown support
 
@@ -44,7 +46,7 @@ Pressing **Escape** follows the dialog's Cancel behavior: a clean draft closes,
 while an edited draft asks before discarding it. During IME composition, Escape
 cancels the composition first.
 
-![platform-specific-demo](./docs/media/platform-specific-demo.gif)
+![platform-specific-demo](https://raw.githubusercontent.com/Masa-Ryu/markdown-mint/main/docs/media/platform-specific-demo.gif)
 
 ## More built-in features
 
@@ -70,7 +72,7 @@ Edit visually when it is convenient, then switch to **Source** whenever you want
 
 Everything you create in the visual editor is still Markdown.
 
-![markdown-stays-markdown-demo](./docs/media/markdown-stays-markdown-demo.md.gif)
+![markdown-stays-markdown-demo](https://raw.githubusercontent.com/Masa-Ryu/markdown-mint/main/docs/media/markdown-stays-markdown-demo.md.gif)
 
 ## Easy to set up
 
@@ -80,4 +82,4 @@ When a Markdown file is open in the standard VS Code editor, click the **Markdow
 
 If you prefer, you can also set Markdown Mint as the default editor for Markdown files so they automatically open in Mint.
 
-![easy-to-set-up-demo](./docs/media/easy-to-set-up-demo.gif)
+![easy-to-set-up-demo](https://raw.githubusercontent.com/Masa-Ryu/markdown-mint/main/docs/media/easy-to-set-up-demo.gif)
