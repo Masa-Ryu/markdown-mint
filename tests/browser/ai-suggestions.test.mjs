@@ -478,8 +478,63 @@ try {
     0,
     "first Escape dismisses only the expanded code suggestion",
   );
+  await page.keyboard.press("Escape");
+  assert.equal(
+    await codeBlock.getAttribute("data-mm-code-expanded"),
+    "false",
+    "the next Escape closes the expanded code block",
+  );
+  await codeBlock.locator('[data-mm-code-action="expand"]').click();
+  assert.equal(await codeBlock.getAttribute("data-mm-code-expanded"), "true");
+  await placeCaretAtText("values.", "values.".length);
+  await trigger("map((value) => value * 2)");
+  await page.keyboard.press("Shift+Tab");
+  assert.equal(
+    await source(),
+    codeBefore,
+    "Shift+Tab does not accept a candidate",
+  );
+  assert.equal(
+    await codeBlock.getAttribute("data-mm-code-expanded"),
+    "true",
+    "Shift+Tab keeps the expanded code block open",
+  );
+  assert.equal(
+    await page.evaluate(() =>
+      Boolean(document.activeElement?.closest(".mm-code-block")),
+    ),
+    true,
+    "Shift+Tab keeps focus inside the expanded code block",
+  );
+  await placeCaretAtText("values.", "values.".length);
   const acceptedCodeRequest = await trigger("map((value) => value * 2)");
   assert.equal(acceptedCodeRequest.targetKind, "code");
+  const imeKeyResults = await page.evaluate(() =>
+    [
+      new KeyboardEvent("keydown", {
+        key: "Tab",
+        keyCode: 9,
+        isComposing: true,
+        bubbles: true,
+        cancelable: true,
+      }),
+      new KeyboardEvent("keydown", {
+        key: "Escape",
+        keyCode: 229,
+        bubbles: true,
+        cancelable: true,
+      }),
+    ].map((event) => {
+      document.activeElement.dispatchEvent(event);
+      return event.defaultPrevented;
+    }),
+  );
+  assert.deepEqual(imeKeyResults, [false, false]);
+  assert.equal(
+    await source(),
+    codeBefore,
+    "IME keys do not accept the candidate",
+  );
   await page.keyboard.press("Tab");
   await page.waitForFunction(() => !window.markdownMint.sync.hasPending);
   const completedCode = await source();
@@ -571,6 +626,124 @@ try {
     0,
     "Escape dismisses only the Mermaid candidate",
   );
+
+  const matchingMermaidSource = "flowchart TD\n  A -->\n  %% keep this suffix";
+  const matchingPosition = matchingMermaidSource.indexOf("\n  %%");
+  await page.evaluate(() =>
+    window.__markdownMintHarness.setAiState({ autoTrigger: false }),
+  );
+  const mermaidThemes = [
+    ["light", "#ffffff", "#202020", "#6a737d"],
+    ["dark", "#1e1e1e", "#eeeeee", "#a1a1a1"],
+  ];
+  const toRgb = (hex) =>
+    `rgb(${[1, 3, 5].map((offset) => parseInt(hex.slice(offset, offset + 2), 16)).join(", ")})`;
+  for (const [name, background, foreground, ghost] of mermaidThemes) {
+    await page.evaluate(
+      ([theme, themeBackground, themeForeground, ghostForeground]) => {
+        const root = document.documentElement;
+        root.className = `vscode-${theme}`;
+        document.body.className = `vscode-${theme}`;
+        for (const [key, value] of [
+          ["--vscode-editor-background", themeBackground],
+          ["--vscode-editor-foreground", themeForeground],
+          ["--vscode-input-foreground", themeForeground],
+          ["--vscode-editorGhostText-foreground", ghostForeground],
+          ["--vscode-descriptionForeground", ghostForeground],
+        ])
+          root.style.setProperty(key, value);
+        const input = document.querySelector(
+          '.mm-profile-feature-dialog[open] [data-feature-field="body"]',
+        );
+        input.value = "flowchart TD\n  A -->\n  %% keep this suffix";
+        input.setSelectionRange(
+          input.value.indexOf("\n  %%"),
+          input.value.indexOf("\n  %%"),
+        );
+        input.dispatchEvent(
+          new InputEvent("input", {
+            bubbles: true,
+            inputType: "insertReplacementText",
+          }),
+        );
+      },
+      [name, background, foreground, ghost],
+    );
+    const colorRequestCount = (await requests()).length;
+    await page.evaluate(() => window.__markdownMintHarness.triggerAi());
+    await page.waitForFunction(
+      (previous) =>
+        window.__markdownMintHarness.messages.filter(
+          (message) => message.type === "ai-suggestion-request",
+        ).length > previous,
+      colorRequestCount,
+    );
+    const colorRequest = (await requests()).at(-1);
+    assert.equal(colorRequest.surfaceText, matchingMermaidSource);
+    assert.equal(colorRequest.surfacePosition, matchingPosition);
+    await page.evaluate(
+      ([request, text]) =>
+        window.__markdownMintHarness.respondAi(request, text),
+      [colorRequest, " B[End]"],
+    );
+    await page
+      .locator(".mm-ai-textarea-ghost-overlay .mm-ai-suggestion")
+      .waitFor();
+    await mermaidInput.press("Space");
+    await mermaidInput.press("B");
+    const overlaySpans = await page
+      .locator(".mm-ai-textarea-ghost-overlay")
+      .evaluate((overlay) =>
+        Array.from(overlay.children, (span) => ({
+          text: span.textContent,
+          color: getComputedStyle(span).color,
+        })),
+      );
+    assert.deepEqual(
+      overlaySpans,
+      [
+        {
+          text: matchingMermaidSource.slice(0, matchingPosition) + " B",
+          color: toRgb(foreground),
+        },
+        { text: "[End]", color: toRgb(ghost) },
+        {
+          text: matchingMermaidSource.slice(matchingPosition),
+          color: toRgb(foreground),
+        },
+      ],
+      `${name} Mermaid source stays visible while the matching ghost remainder is redrawn`,
+    );
+    await mermaidInput.press("Escape");
+  }
+  await page.evaluate((sourceText) => {
+    const root = document.documentElement;
+    root.className = "";
+    document.body.className = "";
+    for (const name of [
+      "--vscode-editor-background",
+      "--vscode-editor-foreground",
+      "--vscode-input-foreground",
+      "--vscode-editorGhostText-foreground",
+      "--vscode-descriptionForeground",
+    ])
+      root.style.removeProperty(name);
+    const harness = window.__markdownMintHarness;
+    harness.setAiState({ autoTrigger: false });
+    const input = document.querySelector(
+      '.mm-profile-feature-dialog[open] [data-feature-field="body"]',
+    );
+    input.value = sourceText;
+    input.setSelectionRange(sourceText.length, sourceText.length);
+    input.dispatchEvent(
+      new InputEvent("input", {
+        bubbles: true,
+        inputType: "insertReplacementText",
+      }),
+    );
+    harness.setAiState({ autoTrigger: true });
+  }, mermaidBefore);
+  assert.equal(await mermaidInput.inputValue(), mermaidBefore);
 
   await mermaidInput.evaluate((input) => input.focus());
   const nextMermaidRequestCount = (await requests()).length;
@@ -736,6 +909,84 @@ try {
     );
   }
   console.log("Passed light/dark/high-contrast wrapping and preview exclusion");
+
+  await load("Before");
+  await page.locator('button[data-profile-feature="mermaid"]').click();
+  const deletionDialog = page.locator(".mm-profile-feature-dialog[open]");
+  await deletionDialog.waitFor();
+  await deletionDialog.locator('[data-template-id="flowchart-basic"]').click();
+  await deletionDialog
+    .getByRole("button", { name: "Next: Edit code", exact: true })
+    .click();
+  const deletionInput = deletionDialog.locator('[data-feature-field="body"]');
+  const deletionSource = "flowchart TD\n  A -->";
+  await page.evaluate((sourceText) => {
+    window.__markdownMintHarness.setAiState({ autoTrigger: false });
+    const input = document.querySelector(
+      '.mm-profile-feature-dialog[open] [data-feature-field="body"]',
+    );
+    input.value = sourceText;
+    input.setSelectionRange(sourceText.length, sourceText.length);
+    input.focus();
+    input.dispatchEvent(
+      new InputEvent("input", {
+        bubbles: true,
+        inputType: "insertReplacementText",
+      }),
+    );
+  }, deletionSource);
+  const deletionManualCount = (await requests()).length;
+  await page.evaluate(() => window.__markdownMintHarness.triggerAi());
+  await page.waitForFunction(
+    (previous) =>
+      window.__markdownMintHarness.messages.filter(
+        (message) => message.type === "ai-suggestion-request",
+      ).length > previous,
+    deletionManualCount,
+  );
+  const oldMermaidRequest = (await requests()).at(-1);
+  await page.evaluate(
+    ([request, text]) => window.__markdownMintHarness.respondAi(request, text),
+    [oldMermaidRequest, " B[End]"],
+  );
+  await deletionDialog
+    .locator(".mm-ai-textarea-ghost-overlay .mm-ai-suggestion")
+    .waitFor();
+  await page.evaluate(() =>
+    window.__markdownMintHarness.setAiState({ autoTrigger: true }),
+  );
+  await page.clock.install();
+  await page.clock.pauseAt(Date.now());
+  const requestsBeforeDelete = (await requests()).length;
+  await deletionInput.press("Backspace");
+  assert.equal(await deletionInput.inputValue(), "flowchart TD\n  A --");
+  assert.equal((await requests()).length, requestsBeforeDelete);
+  assert.equal(
+    await page.locator(".mm-ai-textarea-ghost-overlay").count(),
+    0,
+    "deleting after a candidate clears the stale ghost immediately",
+  );
+  await page.clock.fastForward(299);
+  const requestsAt299 = await requests();
+  assert.equal(
+    requestsAt299.length,
+    requestsBeforeDelete,
+    `Mermaid deletion does not request before the 300 ms debounce expires: ${JSON.stringify(requestsAt299.slice(requestsBeforeDelete))}`,
+  );
+  await page.clock.fastForward(1);
+  const afterDeleteRequests = await requests();
+  assert.equal(afterDeleteRequests.length, requestsBeforeDelete + 1);
+  const afterDeleteRequest = afterDeleteRequests.at(-1);
+  assert.equal(afterDeleteRequest.trigger, "auto");
+  assert.equal(afterDeleteRequest.surfaceText, "flowchart TD\n  A --");
+  assert.equal(
+    afterDeleteRequest.surfacePosition,
+    "flowchart TD\n  A --".length,
+  );
+  console.log(
+    "Passed Mermaid deletion invalidation and the exact 300 ms automatic debounce",
+  );
+
   await writeFile(
     resolve(output, "report.json"),
     JSON.stringify(

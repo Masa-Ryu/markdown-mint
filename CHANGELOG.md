@@ -2,10 +2,10 @@
 
 ## 0.9.0
 
-- Use VS Code's public Language Model API for optional Copilot prose
-  continuations. Automatically choose an available editor-suitable model and
-  send bounded context around the active cursor; keep model consent under VS
-  Code's user-initiated flow.
+- Use VS Code's public Language Model API for optional Copilot continuations
+  in Markdown prose, fenced code blocks, and Mermaid source. Automatically
+  choose an available editor-suitable model and send bounded context around
+  the active cursor; keep model consent under VS Code's user-initiated flow.
 - After explicit setup, save the non-secret selected model ID/version and
   reacquire only that exact model after restart on debounced real text input;
   recheck public request access before sending.

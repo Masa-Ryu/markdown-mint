@@ -18,6 +18,7 @@ import {
   type MermaidValidationResult,
 } from "./mermaidValidation";
 import { TextareaGhostSuggestion } from "./textareaGhostSuggestion";
+import { isSuggestionInputType } from "./suggestionInputTypes";
 
 interface MermaidSnapshot {
   readonly request: AiSuggestionRequest;
@@ -282,7 +283,7 @@ export class MermaidAiSuggestionsController {
     this.clearCandidate(true);
     this.validating = undefined;
     this.suppressedKey = undefined;
-    if (isTextInputType(inputType)) this.scheduleAuto(true);
+    if (isSuggestionInputType(inputType)) this.scheduleAuto(true);
   }
 
   private keepMatchingInput(inputType: string): boolean {
@@ -344,7 +345,7 @@ export class MermaidAiSuggestionsController {
       if (
         this.ownsFocusedSurface &&
         this.state?.autoTrigger &&
-        isTextInputType(this.beforeInputType ?? "insertCompositionText")
+        isSuggestionInputType(this.beforeInputType ?? "insertCompositionText")
       )
         this.scheduleAuto(true);
     }, 55);
@@ -771,15 +772,6 @@ export class MermaidAiSuggestionsController {
     this.ghost.dispose();
     this.state = undefined;
   }
-}
-
-function isTextInputType(inputType: string): boolean {
-  return (
-    inputType === "insertText" ||
-    inputType === "insertLineBreak" ||
-    inputType === "insertParagraph" ||
-    inputType === "insertCompositionText"
-  );
 }
 
 function hasForbiddenControl(source: string): boolean {

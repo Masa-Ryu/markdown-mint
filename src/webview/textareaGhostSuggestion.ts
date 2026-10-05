@@ -17,10 +17,12 @@ export class TextareaGhostSuggestion {
       return;
     }
     this.ensureOverlay();
+    if (!this.active) {
+      this.sourceColor = this.input.ownerDocument.defaultView?.getComputedStyle(
+        this.input,
+      ).color;
+    }
     this.active = true;
-    this.sourceColor = this.input.ownerDocument.defaultView?.getComputedStyle(
-      this.input,
-    ).color;
     this.input.classList.add("mm-ai-textarea-ghost-source");
     this.prefix!.textContent = prefix;
     this.suggestion!.textContent = suggestion;

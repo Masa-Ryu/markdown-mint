@@ -11,6 +11,7 @@ import {
   planCompletionInsertion,
   type CompletionInsertionPlan,
 } from "../core/inlineCompletion";
+import { isSuggestionInputType } from "./suggestionInputTypes";
 import {
   AI_LIMITS,
   isAiHostMessage,
@@ -1043,29 +1044,6 @@ function reasonText(reason: string): string {
     default:
       return "The Copilot suggestion request could not be completed.";
   }
-}
-
-const SUGGESTION_INPUT_TYPES = new Set([
-  "insertText",
-  "insertCompositionText",
-  "insertFromComposition",
-  "insertReplacementText",
-  "insertParagraph",
-  "insertLineBreak",
-  "deleteContentBackward",
-  "deleteContentForward",
-  "deleteWordBackward",
-  "deleteWordForward",
-  "deleteSoftLineBackward",
-  "deleteSoftLineForward",
-  "deleteHardLineBackward",
-  "deleteHardLineForward",
-  "deleteEntireSoftLine",
-  "deleteByCut",
-]);
-
-function isSuggestionInputType(inputType: string): boolean {
-  return SUGGESTION_INPUT_TYPES.has(inputType);
 }
 
 function isTextInsertionInputType(inputType: string): boolean {

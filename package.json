@@ -158,7 +158,7 @@
         "markdownMint.aiSuggestions.autoTrigger": {
           "type": "boolean",
           "default": true,
-          "description": "Enable automatic Copilot prose suggestions while typing in Markdown Mint. Requires an available GitHub Copilot language model, a trusted workspace, and initial VS Code consent; requests may consume Copilot usage.",
+          "description": "Enable automatic Copilot suggestions while editing supported Markdown prose, code blocks, and Mermaid source in Markdown Mint. Requires an available GitHub Copilot language model, a trusted workspace, and initial VS Code consent; requests may consume Copilot usage.",
           "scope": "application"
         }
       }
