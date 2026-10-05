@@ -166,14 +166,14 @@ describe("Copilot inline completion ghost", () => {
       "Copilot suggestions: On",
     );
     expect(button?.dataset.tooltip).toBe("Copilot suggestions: On");
-    expect(button?.title).toBe("Copilot suggestions: On");
+    expect(button?.hasAttribute("title")).toBe(false);
     expect(button?.querySelector("svg")?.dataset.icon).toBe("copilot");
 
     f.state({ autoTrigger: false, availability: "disabled" });
     expect(button?.dataset.state).toBe("off");
     expect(button?.getAttribute("aria-pressed")).toBe("false");
     expect(button?.dataset.tooltip).toBe("Copilot suggestions: Off");
-    expect(button?.title).toBe("Copilot suggestions: Off");
+    expect(button?.hasAttribute("title")).toBe(false);
     expect(button?.querySelector("svg")?.dataset.icon).toBe("copilot-blocked");
 
     f.state({
@@ -186,7 +186,7 @@ describe("Copilot inline completion ghost", () => {
       "Enable Copilot suggestions",
     );
     expect(button?.dataset.tooltip).toBe("Copilot suggestions: On");
-    expect(button?.title).toBe("Copilot suggestions: On");
+    expect(button?.hasAttribute("title")).toBe(false);
     expect(button?.querySelector("svg")?.dataset.icon).toBe(
       "copilot-not-connected",
     );
@@ -198,7 +198,7 @@ describe("Copilot inline completion ghost", () => {
     });
     expect(button?.dataset.state).toBe("unavailable");
     expect(button?.dataset.tooltip).toBe("Copilot suggestions: On");
-    expect(button?.title).toBe("Copilot suggestions: On");
+    expect(button?.hasAttribute("title")).toBe(false);
     expect(button?.getAttribute("aria-label")).toContain(
       "Long detailed status text",
     );

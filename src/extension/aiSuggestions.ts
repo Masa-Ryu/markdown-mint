@@ -17,6 +17,7 @@ import {
   type LanguageModelApi,
   type LanguageModelFailure,
   type LanguageModelSelection,
+  type LanguageModelUserActionPurpose,
   type SavedLanguageModelIdentity,
 } from "./languageModelSuggestions";
 
@@ -64,6 +65,7 @@ interface ActiveRequest {
   modelGeneration: number;
   readonly documentGeneration: number;
   readonly markdown: string;
+  readonly allowAuthorizationPrompt: boolean;
   readonly finish: (reason: AiSuggestionReason) => void;
   timer: ReturnType<typeof setTimeout> | undefined;
   selectingModel: boolean;
@@ -151,7 +153,13 @@ export class AiSuggestionsHost implements vscode.Disposable {
     this.settings = environment.settings();
     this.subscriptions.push(
       environment.languageModel.onDidChange((reason, accessAllowed) => {
-        if (this.active?.selectingModel || this.manualSelectionCount > 0)
+        if (
+          this.active?.selectingModel ||
+          (this.active?.allowAuthorizationPrompt &&
+            reason === "access" &&
+            accessAllowed === true) ||
+          this.manualSelectionCount > 0
+        )
           return;
         if (reason === "models" && this.autoRestoreBlockReason === "no-model")
           this.setAutoRestoreBlockReason(undefined);
@@ -322,6 +330,7 @@ export class AiSuggestionsHost implements vscode.Disposable {
   private async selectModelFromUserAction(
     id: string,
     requireRequestEligibility: boolean,
+    purpose: LanguageModelUserActionPurpose,
   ): Promise<
     | { readonly session: RegisteredSession; readonly target: ActivationTarget }
     | undefined
@@ -367,7 +376,8 @@ export class AiSuggestionsHost implements vscode.Disposable {
     this.manualSelectionCount += 1;
     let failure: LanguageModelFailure | undefined;
     try {
-      failure = await this.environment.languageModel.selectForUserAction();
+      failure =
+        await this.environment.languageModel.selectForUserAction(purpose);
     } finally {
       this.manualSelectionCount -= 1;
     }
@@ -376,7 +386,8 @@ export class AiSuggestionsHost implements vscode.Disposable {
       selectionGeneration !== this.selectionGeneration
     ) {
       if (selectionGeneration === this.selectionGeneration) {
-        if (!failure) await this.persistSetupCompletion();
+        if (!failure && purpose === "setup")
+          await this.persistSetupCompletion();
         this.reconcileSelectionAfterTargetChange(failure);
       }
       return undefined;
@@ -391,7 +402,7 @@ export class AiSuggestionsHost implements vscode.Disposable {
       this.environment.notify(this.modelMessage);
       return undefined;
     }
-    await this.persistSetupCompletion();
+    if (purpose === "setup") await this.persistSetupCompletion();
     if (
       !this.activationCurrent(target) ||
       selectionGeneration !== this.selectionGeneration
@@ -400,15 +411,20 @@ export class AiSuggestionsHost implements vscode.Disposable {
         this.reconcileSelectionAfterTargetChange(undefined);
       return undefined;
     }
-    this.modelAvailability = "ready";
-    this.modelMessage = statusText.ready;
+    const access = this.environment.languageModel.restoreAccess();
+    this.modelAvailability = access ? failureAvailability(access) : "ready";
+    this.modelMessage = access ? reasonMessage(access) : statusText.ready;
     this.publishAll();
     return { session, target };
   }
 
   /** Model selection and consent are reachable only from an explicit action. */
   public async triggerFromUserAction(id: string): Promise<void> {
-    const selected = await this.selectModelFromUserAction(id, true);
+    const selected = await this.selectModelFromUserAction(
+      id,
+      true,
+      "suggestion",
+    );
     if (!selected) return;
     const { session, target } = selected;
     if (!this.activationCurrent(target)) return;
@@ -452,7 +468,7 @@ export class AiSuggestionsHost implements vscode.Disposable {
       !this.environment.setupCompleted() ||
       this.modelAvailability === "needs-authorization"
     ) {
-      const selected = await this.selectModelFromUserAction(id, false);
+      const selected = await this.selectModelFromUserAction(id, false, "setup");
       if (!selected) return;
       await this.updateAutoTrigger(true);
       return;
@@ -713,6 +729,8 @@ export class AiSuggestionsHost implements vscode.Disposable {
         invocation.id === request.invocationId &&
         invocation.session === session,
       );
+    const allowAuthorizationPrompt =
+      request.trigger === "manual" && validManual;
     if (
       !session.panel.canStartRequest() ||
       !validManual ||
@@ -773,6 +791,7 @@ export class AiSuggestionsHost implements vscode.Disposable {
       modelGeneration: this.modelGeneration,
       documentGeneration: this.documentGenerations.get(target.uri) ?? 0,
       markdown,
+      allowAuthorizationPrompt,
       finish,
       timer: undefined,
       selectingModel: false,
@@ -869,7 +888,10 @@ export class AiSuggestionsHost implements vscode.Disposable {
         }
         access = this.environment.languageModel.restoreAccess();
       }
-      if (access) {
+      if (
+        access &&
+        !(active.allowAuthorizationPrompt && access === "needs-authorization")
+      ) {
         const reason = access === "failed" ? "unsupported" : access;
         if (canTryInputRestoration)
           this.setAutoRestoreBlockReason(autoRestoreBlockReason(access));
@@ -892,6 +914,7 @@ export class AiSuggestionsHost implements vscode.Disposable {
         request.position,
         request.targetKind,
         source.token,
+        { allowConsentPrompt: active.allowAuthorizationPrompt },
       );
       const result = await Promise.race([
         work.then((outcome) => ({ outcome })),
@@ -904,6 +927,19 @@ export class AiSuggestionsHost implements vscode.Disposable {
         this.reply(session, request, "stale");
       } else if (result.outcome.failure) {
         const reason = result.outcome.failure;
+        if (
+          active.allowAuthorizationPrompt &&
+          this.environment.languageModel.hasAuthorizedCachedSelection()
+        ) {
+          await this.persistSetupCompletion();
+          if (!this.current(active)) {
+            this.reply(session, request, "stale");
+            return;
+          }
+          this.modelAvailability = "ready";
+          this.modelMessage = statusText.ready;
+          this.publishAll();
+        }
         this.reply(session, request, reason);
         if (reason === "failed" || reason === "timeout") {
           this.recordTransientFailure();
@@ -918,6 +954,16 @@ export class AiSuggestionsHost implements vscode.Disposable {
           this.publishAll();
         }
       } else if (result.outcome.text) {
+        if (active.allowAuthorizationPrompt) {
+          await this.persistSetupCompletion();
+          if (!this.current(active)) {
+            this.reply(session, request, "stale");
+            return;
+          }
+          this.modelAvailability = "ready";
+          this.modelMessage = statusText.ready;
+          this.publishAll();
+        }
         const selection = this.environment.languageModel.currentSelection;
         if (selection)
           this.candidates.set(session.panel.id, { request, selection });

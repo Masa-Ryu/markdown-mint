@@ -74,14 +74,21 @@ as unavailable.
 
 Automatic Copilot suggestions are enabled by default. On first use, click the
 Copilot icon in the Markdown Mint toolbar to complete VS Code model consent
-when required. This click only performs setup; it does not request a
-completion. After setup, the same icon toggles automatic suggestions on and
-off, and the user-scoped `markdownMint.aiSuggestions.autoTrigger` setting can
-also control them. When enabled, the next ordinary text input starts the 300 ms
-debounce.
+when required. If access has not already been granted, setup sends one fixed,
+minimal prompt with no Markdown or workspace context to open VS Code's consent
+dialog; its response is discarded and never shown as a suggestion. This
+setup-only request may consume Copilot usage. After setup, the same icon toggles
+automatic suggestions on and off, and the user-scoped
+`markdownMint.aiSuggestions.autoTrigger` setting can also control them. When
+enabled, the next ordinary text input starts the 300 ms debounce. Automatic
+requests are sent only when VS Code reports that access is already permitted;
+they do not open consent UI.
 **Markdown Mint: Suggest Continuation** remains available from the Command
 Palette as a manual one-shot suggestion, including while automatic suggestions
-are off. Setup stores the selected model's non-secret ID and version, never
+are off. On first use, that command uses its actual completion request to start
+VS Code consent when needed; it does not send a separate setup probe. The
+request uses the bounded Markdown context described below and may consume
+Copilot usage. Setup stores the selected model's non-secret ID and version, never
 the model object or access permission. After an Extension Host
 restart, Mint waits for a real text edit and its normal 300 ms debounce before
 reacquiring only that exact model through the public API. It does not enumerate

@@ -128,7 +128,7 @@ try {
     pressed: button.getAttribute("aria-pressed"),
     label: button.getAttribute("aria-label"),
     tooltip: button.dataset.tooltip,
-    title: button.title,
+    hasTitle: button.hasAttribute("title"),
     icon: button.querySelector("svg")?.dataset.icon,
     following: Array.from(button.parentElement?.children ?? [])
       .slice(
@@ -147,7 +147,7 @@ try {
     pressed: "true",
     label: "Copilot suggestions: On. Click to turn off. Fake Copilot ready",
     tooltip: "Copilot suggestions: On",
-    title: "Copilot suggestions: On",
+    hasTitle: false,
     icon: "copilot",
     following: ["export", "source"],
   });
@@ -177,8 +177,8 @@ try {
     "Copilot suggestions: Off",
   );
   assert.equal(
-    await copilotButton.getAttribute("title"),
-    "Copilot suggestions: Off",
+    await copilotButton.evaluate((button) => button.hasAttribute("title")),
+    false,
   );
   assert.equal(
     await copilotButton.locator("svg").getAttribute("data-icon"),
@@ -197,8 +197,8 @@ try {
     "Copilot suggestions: On",
   );
   assert.equal(
-    await copilotButton.getAttribute("title"),
-    "Copilot suggestions: On",
+    await copilotButton.evaluate((button) => button.hasAttribute("title")),
+    false,
   );
   assert.equal(
     await copilotButton.locator("svg").getAttribute("data-icon"),

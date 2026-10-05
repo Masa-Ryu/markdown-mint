@@ -57,6 +57,14 @@ export interface LanguageModelSuggestionsOptions {
   readonly modelMessage?: (content: string) => vscode.LanguageModelChatMessage;
 }
 
+export type LanguageModelUserActionPurpose = "setup" | "suggestion";
+
+const setupAuthorizationPrompt = "Reply with OK.";
+const setupAuthorizationJustification =
+  "Enable Copilot prose suggestions in Markdown Mint.";
+const suggestionJustification =
+  "Generate a short prose continuation from the current Markdown in Markdown Mint.";
+
 /** Public VS Code Language Model API adapter; no network or SDK fallback exists. */
 export class LanguageModelSuggestions implements vscode.Disposable {
   private selection: LanguageModelSelection | undefined;
@@ -64,7 +72,12 @@ export class LanguageModelSuggestions implements vscode.Disposable {
   private lastAccessAllowed: boolean | undefined;
   private selectionNeedsUserInitiatedRefresh = false;
   private modelListGeneration = 0;
-  private selecting: Promise<LanguageModelFailure | undefined> | undefined;
+  private selecting:
+    | {
+        readonly purpose: LanguageModelUserActionPurpose;
+        readonly promise: Promise<LanguageModelFailure | undefined>;
+      }
+    | undefined;
   private disposed = false;
   private readonly subscriptions: vscode.Disposable[] = [];
   private readonly listeners = new Set<
@@ -113,26 +126,32 @@ export class LanguageModelSuggestions implements vscode.Disposable {
     return { dispose: () => this.listeners.delete(listener) };
   }
 
-  /** Called only from an explicit command or a real debounced text-input action. */
-  public selectForUserAction(): Promise<LanguageModelFailure | undefined> {
+  /** Selects a model for an explicit toolbar setup or manual suggestion action. */
+  public selectForUserAction(
+    purpose: LanguageModelUserActionPurpose = "setup",
+  ): Promise<LanguageModelFailure | undefined> {
     if (this.disposed) return Promise.resolve("cancelled");
-    if (this.selecting) return this.selecting;
-    const selecting = this.selectModelForUserAction();
-    this.selecting = selecting;
+    if (this.selecting) {
+      return this.selecting.purpose === purpose
+        ? this.selecting.promise
+        : Promise.resolve("cancelled");
+    }
+    const selecting = this.selectModelForUserAction(purpose);
+    this.selecting = { purpose, promise: selecting };
     void selecting.then(
       () => {
-        if (this.selecting === selecting) this.selecting = undefined;
+        if (this.selecting?.promise === selecting) this.selecting = undefined;
       },
       () => {
-        if (this.selecting === selecting) this.selecting = undefined;
+        if (this.selecting?.promise === selecting) this.selecting = undefined;
       },
     );
     return selecting;
   }
 
-  private async selectModelForUserAction(): Promise<
-    LanguageModelFailure | undefined
-  > {
+  private async selectModelForUserAction(
+    purpose: LanguageModelUserActionPurpose,
+  ): Promise<LanguageModelFailure | undefined> {
     if (this.disposed) return "cancelled";
     const { api, access } = this.options;
     if (!api || !access) return "failed";
@@ -164,14 +183,58 @@ export class LanguageModelSuggestions implements vscode.Disposable {
       const permission = access.canSendRequest(selected.model);
       this.lastAccessAllowed = permission === true;
       this.selectionNeedsUserInitiatedRefresh = false;
-      if (permission !== true) {
+      if (permission === true || purpose === "suggestion") {
+        // An explicit manual suggestion may use its actual completion request
+        // to start VS Code's first-use consent UI. Automatic requests still
+        // require cached permission before they can reach complete().
+        this.selection = selected;
+        return undefined;
+      }
+      this.selection = undefined;
+      return await this.requestSetupAuthorization(selected, generation);
+    } catch (error) {
+      this.selection = undefined;
+      return classifyLanguageModelError(error);
+    }
+  }
+
+  private async requestSetupAuthorization(
+    selection: LanguageModelSelection,
+    generation: number,
+  ): Promise<LanguageModelFailure | undefined> {
+    const access = this.options.access;
+    if (!access) return "failed";
+    try {
+      const response = await selection.model.sendRequest(
+        [
+          this.options.modelMessage?.(setupAuthorizationPrompt) ??
+            vscode.LanguageModelChatMessage.User(setupAuthorizationPrompt),
+        ],
+        { justification: setupAuthorizationJustification },
+      );
+      // Drain and discard the setup response. It is never a candidate and
+      // contains no Markdown, path, workspace, or cursor context.
+      for await (const _chunk of response.text) {
+        if (this.disposed || generation !== this.modelListGeneration)
+          return "cancelled";
+      }
+      if (
+        this.disposed ||
+        generation !== this.modelListGeneration ||
+        this.accessCandidate !== selection
+      )
+        return "cancelled";
+      if (access.canSendRequest(selection.model) !== true) {
+        this.lastAccessAllowed = false;
         this.selection = undefined;
         return "needs-authorization";
       }
-      this.selection = selected;
+      this.lastAccessAllowed = true;
+      this.selection = selection;
       return undefined;
     } catch (error) {
       this.selection = undefined;
+      this.lastAccessAllowed = access.canSendRequest(selection.model) === true;
       return classifyLanguageModelError(error);
     }
   }
@@ -343,14 +406,16 @@ export class LanguageModelSuggestions implements vscode.Disposable {
     position: number,
     targetKind: "paragraph" | "heading",
     token: vscode.CancellationToken,
+    options: { readonly allowConsentPrompt?: boolean } = {},
   ): Promise<LanguageModelResult> {
+    const allowConsentPrompt = options.allowConsentPrompt === true;
     const selection = this.selection;
     const model = selection?.model;
     const access = this.options.access;
     if (!model || !access) return { failure: "needs-authorization" };
     if (this.selectionNeedsUserInitiatedRefresh)
       return { failure: "needs-authorization" };
-    if (access.canSendRequest(model) !== true)
+    if (!allowConsentPrompt && access.canSendRequest(model) !== true)
       return { failure: "needs-authorization" };
     const context = buildCompletionContext(markdown, position, targetKind);
     if (!context) return { failure: "invalid-context" };
@@ -361,7 +426,7 @@ export class LanguageModelSuggestions implements vscode.Disposable {
       if (
         this.selectionNeedsUserInitiatedRefresh ||
         this.selection !== selection ||
-        access.canSendRequest(model) !== true
+        (!allowConsentPrompt && access.canSendRequest(model) !== true)
       )
         return { failure: "needs-authorization" };
       // Only a User message is available. The prompt grants no tools or other
@@ -369,7 +434,11 @@ export class LanguageModelSuggestions implements vscode.Disposable {
       const message =
         this.options.modelMessage?.(prompt.content) ??
         vscode.LanguageModelChatMessage.User(prompt.content);
-      const response = await model.sendRequest([message], {}, token);
+      const response = await model.sendRequest(
+        [message],
+        { justification: suggestionJustification },
+        token,
+      );
       let text = "";
       for await (const chunk of response.text) {
         if (token.isCancellationRequested) return { failure: "cancelled" };
@@ -382,6 +451,8 @@ export class LanguageModelSuggestions implements vscode.Disposable {
         this.selection !== selection
       )
         return { failure: "cancelled" };
+      if (access.canSendRequest(model) !== true)
+        return { failure: "needs-authorization" };
       const parsed = parseCompletionResponse(text);
       if (!parsed) return { failure: "unsafe-suggestion" };
       return parsed.insertText
@@ -474,6 +545,7 @@ export function classifyLanguageModelError(
     if (code.includes("blocked")) return "blocked";
     if (code.includes("nopermissions")) return "needs-authorization";
     if (code.includes("notfound")) return "no-model";
+    if (code.includes("cancel")) return "cancelled";
   }
   return "failed";
 }

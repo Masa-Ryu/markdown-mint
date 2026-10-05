@@ -10974,8 +10974,7 @@ export class MarkdownEditorApp {
     button.dataset.state = toolbarState;
     button.setAttribute("aria-pressed", String(state.autoTrigger));
     button.setAttribute("aria-label", ariaLabel);
-    button.dataset.tooltip = tooltip;
-    button.title = tooltip;
+    this.setTooltip(button, tooltip);
     button.disabled = state.active === false || preparing;
     appendToolbarIcon(button, icon);
   }

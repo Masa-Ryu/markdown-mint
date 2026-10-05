@@ -66,7 +66,7 @@ function fixture(autoTrigger = false) {
   let active = true;
   let ready = true;
   let requestIsQueueBusy = false;
-  let allow = true;
+  let allow: boolean | undefined = true;
   let setupCompleted = false;
   let savedModelIdentity: { id: string; version: string } | undefined;
   let snapshotCurrent = true;
@@ -150,7 +150,11 @@ function fixture(autoTrigger = false) {
     },
   };
   host.registerSession(panel);
-  const startManual = async () => {
+  const startManual = async (existingSetup = true) => {
+    if (existingSetup) {
+      setupCompleted = true;
+      savedModelIdentity = { id: model.id, version: model.version };
+    }
     await host.triggerFromUserAction(panel.id);
     const trigger = [...messages]
       .reverse()
@@ -192,6 +196,10 @@ function fixture(autoTrigger = false) {
       savedModelIdentity = value
         ? { id: model.id, version: model.version }
         : undefined;
+    },
+    setAccess: (value: boolean | undefined) => {
+      allow = value;
+      for (const listener of accessListeners) listener();
     },
     setSnapshotCurrent: (value: boolean) => {
       snapshotCurrent = value;
@@ -236,10 +244,6 @@ function fixture(autoTrigger = false) {
     },
     setQueueBusy: (value: boolean) => {
       requestIsQueueBusy = value;
-    },
-    setAccess: (value: boolean) => {
-      allow = value;
-      for (const listener of accessListeners) listener();
     },
     setAutomatic: (value: boolean) => {
       automatic = value;
@@ -329,6 +333,134 @@ describe("AI suggestion lifecycle with the public Language Model API", () => {
     expect(
       f.messages.some((message) => message.type === "ai-suggestion-result"),
     ).toBe(false);
+  });
+
+  it("uses one context-free consent request for first toolbar setup and discards it", async () => {
+    const f = fixture(false);
+    f.setAccess(undefined);
+    f.send.mockImplementationOnce(async () => {
+      f.setAccess(true);
+      return response("ignored setup response");
+    });
+
+    await f.host.handleToolbarAction("s1");
+
+    expect(f.send).toHaveBeenCalledTimes(1);
+    const [messages, options] = f.send.mock.calls[0]! as unknown as [
+      unknown,
+      { justification?: string },
+    ];
+    expect(messages).toEqual([{ role: 1, content: "Reply with OK." }]);
+    expect(options).toMatchObject({
+      justification: "Enable Copilot prose suggestions in Markdown Mint.",
+    });
+    expect(f.setupCompleted()).toBe(true);
+    expect(f.autoTrigger()).toBe(true);
+    expect(
+      f.messages.some((message) => message.type === "ai-suggestion-trigger"),
+    ).toBe(false);
+    expect(
+      f.messages.some((message) => message.type === "ai-suggestion-result"),
+    ).toBe(false);
+  });
+
+  it("does not complete setup or retry when first toolbar consent is refused", async () => {
+    const f = fixture(false);
+    f.setAccess(undefined);
+    f.send.mockRejectedValueOnce(
+      Object.assign(new Error("Consent declined"), { code: "NoPermissions" }),
+    );
+
+    await f.host.handleToolbarAction("s1");
+
+    expect(f.send).toHaveBeenCalledTimes(1);
+    expect(f.setupCompleted()).toBe(false);
+    expect(f.autoTrigger()).toBe(false);
+    expect(
+      [...f.messages]
+        .reverse()
+        .find((message) => message.type === "ai-suggestion-state"),
+    ).toMatchObject({
+      availability: "needs-authorization",
+    });
+    expect(
+      f.messages.some((message) => message.type === "ai-suggestion-trigger"),
+    ).toBe(false);
+  });
+
+  it("uses one actual manual completion request for first-use consent", async () => {
+    const f = fixture(false);
+    f.setAccess(undefined);
+    const request = await f.startManual(false);
+    expect(f.send).not.toHaveBeenCalled();
+    expect(f.setupCompleted()).toBe(false);
+
+    f.send.mockImplementationOnce(async () => {
+      f.setAccess(true);
+      return response('{"insertText":" next"}');
+    });
+    await f.host.requestSuggestion("s1", request);
+
+    expect(f.send).toHaveBeenCalledTimes(1);
+    const [messages, options] = f.send.mock.calls[0]! as unknown as [
+      Array<{ content?: string }>,
+      { justification?: string },
+    ];
+    expect(messages[0]?.content).not.toBe("Reply with OK.");
+    expect(options).toMatchObject({
+      justification:
+        "Generate a short prose continuation from the current Markdown in Markdown Mint.",
+    });
+    expect(f.setupCompleted()).toBe(true);
+    expect(
+      f.messages
+        .filter((message) => message.type === "ai-suggestion-result")
+        .at(-1),
+    ).toMatchObject({
+      type: "ai-suggestion-result",
+      requestId: request.requestId,
+      reason: "ready",
+      text: " next",
+    });
+  });
+
+  it("keeps first-use manual consent refusal blocked without retrying or persisting setup", async () => {
+    const f = fixture(false);
+    f.setAccess(undefined);
+    const manualRequest = await f.startManual(false);
+    f.send.mockRejectedValueOnce(
+      Object.assign(new Error("Consent declined"), { code: "NoPermissions" }),
+    );
+
+    await f.host.requestSuggestion("s1", manualRequest);
+
+    expect(f.send).toHaveBeenCalledTimes(1);
+    expect(f.setupCompleted()).toBe(false);
+    expect(
+      f.messages
+        .filter((message) => message.type === "ai-suggestion-result")
+        .at(-1),
+    ).toMatchObject({
+      type: "ai-suggestion-result",
+      requestId: manualRequest.requestId,
+      reason: "needs-authorization",
+    });
+    f.setAutomatic(true);
+    await f.host.requestSuggestion(
+      "s1",
+      f.autoRequest("no-consent-auto", true),
+    );
+    expect(f.send).toHaveBeenCalledTimes(1);
+    expect(f.setupCompleted()).toBe(false);
+    expect(
+      f.messages
+        .filter((message) => message.type === "ai-suggestion-result")
+        .at(-1),
+    ).toMatchObject({
+      type: "ai-suggestion-result",
+      requestId: "no-consent-auto",
+      reason: "needs-authorization",
+    });
   });
 
   it("toggles the application setting without a completion and preserves manual requests", async () => {
@@ -1021,8 +1153,9 @@ describe("AI suggestion lifecycle with the public Language Model API", () => {
     f.dispose();
   });
 
-  it("keeps an explicit first-use request alive when access changes during consent selection", async () => {
+  it("uses one actual manual request to receive first-use consent", async () => {
     const f = fixture(false);
+    f.setAccess(undefined);
     const selection = deferred<readonly vscode.LanguageModelChat[]>();
     vi.mocked(f.api.selectChatModels).mockReturnValue(selection.promise);
     const command = f.host.triggerFromUserAction("s1");
@@ -1031,7 +1164,7 @@ describe("AI suggestion lifecycle with the public Language Model API", () => {
     f.accessChanged();
     selection.resolve([f.model]);
     await command;
-    expect(f.setupCompleted()).toBe(true);
+    expect(f.setupCompleted()).toBe(false);
     expect(
       f.messages.some((message) => message.type === "ai-suggestion-trigger"),
     ).toBe(true);
@@ -1061,15 +1194,17 @@ describe("AI suggestion lifecycle with the public Language Model API", () => {
       trigger: "manual",
       invocationId: trigger.invocationId,
     };
-    f.send.mockResolvedValueOnce(
-      response('{"insertText":" from the authorized request."}') as never,
-    );
+    f.send.mockImplementationOnce(async () => {
+      f.setAccess(true);
+      return response('{"insertText":" from the authorized request."}');
+    });
     await f.host.requestSuggestion("s1", request);
     expect(
       f.messages
         .filter((message) => message.type === "ai-suggestion-result")
         .at(-1),
     ).toMatchObject({ reason: "ready" });
+    expect(f.setupCompleted()).toBe(true);
     f.dispose();
   });
 

@@ -417,13 +417,16 @@ Model API. Mint does not ship or launch the Copilot Language Server, use a
 GitHub sign-in command, read authentication credentials, depend on Copilot's
 internal APIs, or pass a model object or execution capability to the Webview.
 The `markdownMint.aiSuggestions.autoTrigger` setting is application-scoped and
-defaults to `true`. Its first Copilot toolbar click completes model
-selection/consent but does not request a completion. After setup, the same
-button toggles automatic suggestions through the VS Code Configuration API,
-and state is published to every panel. Turning automatic suggestions off cancels automatic requests and
-candidates while preserving manual suggestions. Turning them on does not
-request a completion until the next debounced real text input. Model choice is
-automatic from the models returned by
+defaults to `true`. Its first Copilot toolbar click selects a model and, only
+when `canSendRequest(model) !== true`, sends a fixed minimal setup request
+(`Reply with OK.`) with a user-visible justification to start VS Code consent.
+That request contains no document, filename, workspace, or cursor context; its
+response is discarded and is never a candidate. It may consume Copilot usage.
+After setup, the same button toggles automatic suggestions through the VS Code
+Configuration API, and state is published to every panel. Turning automatic
+suggestions off cancels automatic requests and candidates while preserving
+manual suggestions. Turning them on does not request a completion until the
+next debounced real text input. Model choice is automatic from the models returned by
 `vscode.lm.selectChatModels({ vendor: "copilot" })`; the adapter
 prefers an actually available `mini` family for editor latency and otherwise
 uses a deterministic model-ID order. It displays the selected model identity
@@ -431,23 +434,27 @@ and selection reason. AI is enabled only in a trusted local desktop Extension
 Host, with normal editing available if the public API or Copilot model is
 unavailable.
 
-Initial model selection and consent are initiated by the Copilot toolbar setup
-action or the explicit Suggest Continuation command. After that succeeds, Mint
-persists only a non-secret setup-completed marker and selected model ID/version; neither is
-treated as permission. VS
-Code's public Language Model guide says Copilot consent is implemented by an
-authentication dialog and `selectChatModels` must be called from a
-user-initiated action. The public `canSendRequest(model)` check requires a
-model object, while `selectChatModels` is the public way to reacquire one.
+Initial model selection is initiated by the Copilot toolbar setup action or
+the explicit Suggest Continuation command. The toolbar can trigger consent
+only through its context-free setup request; manual Suggest Continuation uses
+its actual bounded-context completion request and does not send a second probe.
+Automatic suggestions and restored selections require
+`canSendRequest(model) === true` before sending and never trigger consent UI.
+After permission is confirmed, Mint persists only a non-secret setup-completed
+marker and selected model ID/version; neither is treated as permission. VS
+Code's public Language Model guide says `canSendRequest()` only checks persisted
+permission and does not show consent, while the first `sendRequest()` can show
+an authentication dialog and therefore must be called from a user action.
+`selectChatModels` is the public way to acquire or reacquire a model.
 After an Extension Host restart, Mint does not enumerate models on activation
 or configuration sync. If auto trigger is enabled and setup previously
 succeeded, the first real text edit waits for the regular 300 ms debounce and
 reacquires only the saved Copilot model ID/version through an exact public
 selector. Automatic restoration never enumerates all Copilot models. Mint
 checks `canSendRequest(model) === true` after obtaining the exact model and
-before sending; false or unknown access stops the request. If no saved identity
-exists, the exact model is missing, or access is denied, the user can explicitly
-run Suggest Continuation. A known denied transition stays blocked from further
+before sending; false or unknown access stops automatic requests. If no saved
+identity exists, the exact model is missing, or access is denied, the user can
+explicitly run Suggest Continuation. A known denied transition stays blocked from further
 automatic requests until a public access-change event confirms the cached model
 is permitted or the user explicitly runs Suggest Continuation. An unassociated
 access event does not start model selection or clear a known denial. After

@@ -47,7 +47,7 @@ function fakeModel(overrides: Record<string, unknown> = {}) {
 }
 
 function setup(model = fakeModel(), savedIdentity = true) {
-  let permitted = true;
+  let permitted: boolean | undefined = true;
   let availableModels: readonly vscode.LanguageModelChat[] = [model];
   const accessListeners = new Set<() => void>();
   const modelListeners = new Set<() => void>();
@@ -77,7 +77,7 @@ function setup(model = fakeModel(), savedIdentity = true) {
     api,
     access,
     model,
-    permit(value: boolean) {
+    permit(value: boolean | undefined) {
       permitted = value;
       for (const listener of accessListeners) listener();
     },
@@ -89,6 +89,93 @@ function setup(model = fakeModel(), savedIdentity = true) {
 }
 
 describe("public VS Code Language Model adapter", () => {
+  it("starts first-use setup consent with one context-free request and discards its response", async () => {
+    const f = setup(fakeModel(), false);
+    f.permit(undefined);
+    vi.mocked(f.model.sendRequest).mockImplementationOnce(async () => {
+      f.permit(true);
+      return {
+        text: (async function* () {
+          yield "ignored setup response";
+        })(),
+      } as never;
+    });
+
+    await expect(f.adapter.selectForUserAction("setup")).resolves.toBe(
+      undefined,
+    );
+
+    expect(f.model.sendRequest).toHaveBeenCalledTimes(1);
+    const [messages, options] = vi.mocked(f.model.sendRequest).mock.calls[0]!;
+    expect(messages).toEqual([{ role: 1, content: "Reply with OK." }]);
+    expect(options).toMatchObject({
+      justification: "Enable Copilot prose suggestions in Markdown Mint.",
+    });
+    expect(f.adapter.currentSelection?.model).toBe(f.model);
+    expect(f.adapter.restoreAccess()).toBeUndefined();
+    f.adapter.dispose();
+  });
+
+  it("leaves setup incomplete after consent is refused and does not retry", async () => {
+    const f = setup(fakeModel(), false);
+    f.permit(undefined);
+    vi.mocked(f.model.sendRequest).mockRejectedValueOnce(
+      Object.assign(new Error("Consent declined"), { code: "NoPermissions" }),
+    );
+
+    await expect(f.adapter.selectForUserAction("setup")).resolves.toBe(
+      "needs-authorization",
+    );
+    expect(f.model.sendRequest).toHaveBeenCalledTimes(1);
+    expect(f.adapter.currentSelection).toBeUndefined();
+    f.adapter.dispose();
+  });
+
+  it("uses the manual completion request itself for first-use consent", async () => {
+    const f = setup(fakeModel(), false);
+    f.permit(undefined);
+
+    await expect(f.adapter.selectForUserAction("suggestion")).resolves.toBe(
+      undefined,
+    );
+    expect(f.model.sendRequest).not.toHaveBeenCalled();
+    vi.mocked(f.model.sendRequest).mockImplementationOnce(async () => {
+      f.permit(true);
+      return {
+        text: (async function* () {
+          yield '{"insertText":" next"}';
+        })(),
+      } as never;
+    });
+
+    await expect(
+      f.adapter.complete("The existing text", 17, "paragraph", token(), {
+        allowConsentPrompt: true,
+      }),
+    ).resolves.toEqual({ text: " next" });
+
+    expect(f.model.sendRequest).toHaveBeenCalledTimes(1);
+    const [messages, options] = vi.mocked(f.model.sendRequest).mock.calls[0]!;
+    expect(messages[0]?.content).not.toBe("Reply with OK.");
+    expect(options).toMatchObject({
+      justification:
+        "Generate a short prose continuation from the current Markdown in Markdown Mint.",
+    });
+    f.adapter.dispose();
+  });
+
+  it("never opens consent from an automatic request when access is unknown", async () => {
+    const f = setup(fakeModel(), false);
+    f.permit(undefined);
+    await f.adapter.selectForUserAction("suggestion");
+
+    await expect(
+      f.adapter.complete("The existing text", 17, "paragraph", token()),
+    ).resolves.toEqual({ failure: "needs-authorization" });
+    expect(f.model.sendRequest).not.toHaveBeenCalled();
+    f.adapter.dispose();
+  });
+
   it("coalesces concurrent user-initiated model selection while consent is pending", async () => {
     const f = setup();
     const pending = deferred<readonly vscode.LanguageModelChat[]>();
