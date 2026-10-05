@@ -9,32 +9,13 @@ import {
   type ReleaseRecoveryState,
 } from "../../scripts/release-recovery.mjs";
 
-const version = "0.9.0";
+const version = "0.7.1";
 const tag = `v${version}`;
 const targetCommitSha = "a".repeat(40);
 const expectedSha256 = "b".repeat(64);
 const differentSha256 = "c".repeat(64);
+const assetName = `markdown-mint-${version}.vsix`;
 const releaseNotes = "- Release note.";
-function artifacts(actual: string | null = null) {
-  return [
-    {
-      assetName: `markdown-mint-${version}.vsix`,
-      expectedSha256,
-      actualAssetSha256: actual,
-    },
-  ];
-}
-
-function uploadedAssets() {
-  return [
-    {
-      id: 84,
-      name: `markdown-mint-${version}.vsix`,
-      state: "uploaded",
-      size: 1024,
-    },
-  ];
-}
 
 function state(
   overrides: Partial<ReleaseRecoveryState> = {},
@@ -45,7 +26,9 @@ function state(
     targetCommitSha,
     tagTargetCommitSha: null,
     release: null,
-    artifacts: artifacts(),
+    assetName,
+    expectedSha256,
+    actualAssetSha256: null,
     releaseNotes,
     ...overrides,
   };
@@ -69,6 +52,10 @@ function existingRelease({
   };
 }
 
+function uploadedAsset() {
+  return { id: 84, name: assetName, state: "uploaded", size: 1024 };
+}
+
 function response(status: number, body: unknown): ReleaseLookupResponse {
   return { status, json: async () => body };
 }
@@ -89,16 +76,13 @@ describe("GitHub Release recovery planning", () => {
     ).toEqual({ action: "create_release", verifyTag: true });
   });
 
-  it("rejects a tag at a different commit and incomplete universal manifests", () => {
+  it("rejects an existing tag at a different commit", () => {
     expect(() =>
       planReleaseRecovery(state({ tagTargetCommitSha: "d".repeat(40) })),
     ).toThrow("not");
-    expect(() =>
-      planReleaseRecovery(state({ artifacts: artifacts().slice(1) })),
-    ).toThrow("one universal VSIX");
   });
 
-  it("uploads the universal VSIX to a draft", () => {
+  it("uploads the expected artifact to a draft without that asset", () => {
     expect(
       planReleaseRecovery(
         state({
@@ -106,93 +90,120 @@ describe("GitHub Release recovery planning", () => {
           release: existingRelease({ draft: true }),
         }),
       ),
-    ).toEqual({
-      action: "upload_asset",
-      releaseId: 42,
-      assetName: `markdown-mint-${version}.vsix`,
-    });
+    ).toEqual({ action: "upload_asset", releaseId: 42 });
   });
 
-  it("preserves release-note bytes, including the final newline, during recovery", () => {
+  it("accepts draft notes that match when they end with a newline", () => {
     const notesWithFinalNewline = `${releaseNotes}\n`;
-    const plan = planReleaseRecovery(
-      state({
-        releaseNotes: notesWithFinalNewline,
-        release: existingRelease({
-          draft: true,
-          body: notesWithFinalNewline,
-        }),
-      }),
-    );
-    expect(plan.action).toBe("upload_asset");
-  });
 
-  it("requests the asset checksum and publishes only after it matches", () => {
-    const assets = uploadedAssets();
-    const draft = existingRelease({ draft: true, assets });
     expect(
       planReleaseRecovery(
         state({
-          release: draft,
-          artifacts: artifacts(),
+          releaseNotes: notesWithFinalNewline,
+          release: existingRelease({
+            draft: true,
+            body: notesWithFinalNewline,
+          }),
         }),
       ),
-    ).toEqual({
-      action: "verify_asset",
-      releaseId: 42,
-      assetName: `markdown-mint-${version}.vsix`,
-    });
+    ).toEqual({ action: "upload_asset", releaseId: 42 });
+  });
 
+  it("accepts an existing verified tag when the draft target names main", () => {
     expect(
       planReleaseRecovery(
-        state({ release: draft, artifacts: artifacts(expectedSha256) }),
+        state({
+          tagTargetCommitSha: targetCommitSha,
+          release: existingRelease({ draft: true, target_commitish: "main" }),
+        }),
+      ),
+    ).toEqual({ action: "upload_asset", releaseId: 42 });
+  });
+
+  it("requires a draft target to match the commit when no Git tag exists", () => {
+    expect(() =>
+      planReleaseRecovery(
+        state({
+          release: existingRelease({ draft: true, target_commitish: "main" }),
+        }),
+      ),
+    ).toThrow("targets main");
+  });
+
+  it("publishes a draft with an asset matching the validated SHA-256", () => {
+    expect(
+      planReleaseRecovery(
+        state({
+          tagTargetCommitSha: targetCommitSha,
+          release: existingRelease({
+            draft: true,
+            assets: [uploadedAsset()],
+          }),
+          actualAssetSha256: expectedSha256,
+        }),
       ),
     ).toEqual({ action: "publish_release", releaseId: 42 });
   });
 
-  it("rejects a mismatched VSIX checksum and unexpected target-specific artifact", () => {
-    const assets = uploadedAssets();
+  it("rejects an asset whose SHA-256 conflicts with the validated VSIX", () => {
     expect(() =>
       planReleaseRecovery(
         state({
-          release: existingRelease({ draft: true, assets }),
-          artifacts: artifacts(differentSha256),
+          tagTargetCommitSha: targetCommitSha,
+          release: existingRelease({
+            draft: true,
+            assets: [uploadedAsset()],
+          }),
+          actualAssetSha256: differentSha256,
         }),
       ),
     ).toThrow("does not match");
-    expect(() =>
-      planReleaseRecovery(
-        state({
-          release: existingRelease({
-            draft: true,
-            assets: [
-              ...assets,
-              {
-                id: 99,
-                name: `markdown-mint-${version}-legacy.vsix`,
-                state: "uploaded",
-                size: 1,
-              },
-            ],
-          }),
-        }),
-      ),
-    ).toThrow("unexpected VSIX asset");
   });
 
-  it("rejects a published release missing its universal package", () => {
+  it("rejects a published release with a conflicting VSIX checksum", () => {
     expect(() =>
       planReleaseRecovery(
         state({
           tagTargetCommitSha: targetCommitSha,
           release: existingRelease({
             draft: false,
-            assets: [],
+            assets: [uploadedAsset()],
           }),
-          artifacts: artifacts(),
+          actualAssetSha256: differentSha256,
         }),
       ),
-    ).toThrow("missing");
+    ).toThrow("does not match");
+  });
+
+  it("accepts a published release with the expected tag, notes, and asset", () => {
+    expect(
+      planReleaseRecovery(
+        state({
+          tagTargetCommitSha: targetCommitSha,
+          release: existingRelease({
+            draft: false,
+            assets: [uploadedAsset()],
+          }),
+          actualAssetSha256: expectedSha256,
+        }),
+      ),
+    ).toEqual({ action: "already_published", releaseId: 42 });
+  });
+
+  it("rejects a published release with mismatched release notes", () => {
+    expect(() =>
+      planReleaseRecovery(
+        state({
+          tagTargetCommitSha: targetCommitSha,
+          release: existingRelease({
+            draft: false,
+            assets: [uploadedAsset()],
+            body: "- Different release note.",
+          }),
+          actualAssetSha256: expectedSha256,
+        }),
+      ),
+    ).toThrow("unexpected notes");
   });
 
   it("deletes only an empty starter upload from a draft", () => {
@@ -201,14 +212,7 @@ describe("GitHub Release recovery planning", () => {
         state({
           release: existingRelease({
             draft: true,
-            assets: [
-              {
-                id: 99,
-                name: artifacts()[0]!.assetName,
-                state: "starter",
-                size: 0,
-              },
-            ],
+            assets: [{ id: 99, name: assetName, state: "starter", size: 0 }],
           }),
         }),
       ),
@@ -216,48 +220,34 @@ describe("GitHub Release recovery planning", () => {
       action: "delete_starter_asset",
       releaseId: 42,
       assetId: 99,
-      assetName: artifacts()[0]!.assetName,
     });
+  });
+
+  it("rejects a nonempty starter upload instead of deleting it", () => {
     expect(() =>
       planReleaseRecovery(
         state({
           release: existingRelease({
             draft: true,
-            assets: [
-              {
-                id: 99,
-                name: artifacts()[0]!.assetName,
-                state: "starter",
-                size: 2,
-              },
-            ],
+            assets: [{ id: 99, name: assetName, state: "starter", size: 2 }],
           }),
         }),
       ),
     ).toThrow("not an empty draft upload");
   });
 
-  it("rejects releases with mismatched notes and accepts a fully verified publication", () => {
+  it("never deletes a starter asset from a published release", () => {
     expect(() =>
       planReleaseRecovery(
         state({
+          tagTargetCommitSha: targetCommitSha,
           release: existingRelease({
-            draft: true,
-            assets: uploadedAssets(),
-            body: "Different notes",
+            draft: false,
+            assets: [{ id: 99, name: assetName, state: "starter", size: 0 }],
           }),
         }),
       ),
-    ).toThrow("unexpected notes");
-    expect(
-      planReleaseRecovery(
-        state({
-          tagTargetCommitSha: targetCommitSha,
-          release: existingRelease({ draft: false, assets: uploadedAssets() }),
-          artifacts: artifacts(expectedSha256),
-        }),
-      ),
-    ).toEqual({ action: "already_published", releaseId: 42 });
+    ).toThrow("not an empty draft upload");
   });
 });
 
@@ -266,35 +256,45 @@ describe("GitHub Release API lookup", () => {
   const restByTag = `https://api.github.com/repos/${repository}/releases/tags/${tag}`;
   const restById = `https://api.github.com/repos/${repository}/releases/42`;
   const graphql = "https://api.github.com/graphql";
-  const options = { repository, tag, token: "test-token" };
+  const options = {
+    repository,
+    tag,
+    token: "test-token",
+  };
 
   it("returns a published release from REST without querying draft state", async () => {
     const published = existingRelease({
       draft: false,
-      assets: uploadedAssets(),
+      assets: [uploadedAsset()],
     });
     const calls: string[] = [];
     const fetchImpl: FetchMock = async (url) => {
       calls.push(url);
       return response(200, published);
     };
+
     await expect(
       lookupReleaseByTag({ ...options, fetchImpl }),
     ).resolves.toEqual(published);
     expect(calls).toEqual([restByTag]);
   });
 
-  it("plans first publication and resumes an interrupted draft before verifying the package", async () => {
+  it("plans first publication and resumes an interrupted draft through mocked APIs", async () => {
     let release: ReleaseRecoveryRelease | null = null;
+    const calls: string[] = [];
     const fetchImpl: FetchMock = async (url, init) => {
-      if (url === restByTag)
+      calls.push(url);
+      if (url === restByTag) {
         return release && !release.draft
           ? response(200, release)
           : response(404, { message: "Not Found" });
+      }
       if (url === graphql) {
         const payload = JSON.parse(init?.body ?? "{}") as {
+          query?: string;
           variables?: { tag?: string };
         };
+        expect(payload.query).toContain("release(tagName: $tag)");
         expect(payload.variables?.tag).toBe(tag);
         return response(200, {
           data: {
@@ -310,39 +310,40 @@ describe("GitHub Release API lookup", () => {
       throw new Error(`Unexpected mocked request: ${url}`);
     };
     const recoveryOptions = { ...options, fetchImpl };
-    const initial = await planCurrentRelease(state(), recoveryOptions);
-    expect(initial.release).toBeNull();
-    expect(initial.plan).toEqual({
-      action: "create_release",
-      verifyTag: false,
-    });
+    const initialState = state();
+    const { release: initialRelease, plan: initialPlan } =
+      await planCurrentRelease(initialState, recoveryOptions);
+    expect(initialRelease).toBeNull();
+    expect(initialPlan).toEqual({ action: "create_release", verifyTag: false });
 
+    // Simulate gh release create returning after it made a draft but before
+    // the workflow could finish uploading the expected VSIX.
     release = existingRelease({ draft: true });
-    const retry = await planCurrentRelease(state(), recoveryOptions);
-    expect(retry.plan).toEqual({
-      action: "upload_asset",
-      releaseId: 42,
-      assetName: artifacts()[0]!.assetName,
-    });
+    const retryState = state({ tagTargetCommitSha: null });
+    const { release: recoveredDraft, plan: retryPlan } =
+      await planCurrentRelease(retryState, recoveryOptions);
+    expect(recoveredDraft).toEqual(release);
+    expect(retryPlan).toEqual({ action: "upload_asset", releaseId: 42 });
+    expect(calls).toContain(restById);
 
-    release = existingRelease({ draft: true, assets: uploadedAssets() });
-    const beforeChecksums = await planCurrentRelease(state(), recoveryOptions);
-    expect(beforeChecksums.plan).toEqual({
-      action: "verify_asset",
-      releaseId: 42,
-      assetName: artifacts()[0]!.assetName,
-    });
-    const verified = await planCurrentRelease(
-      state({ artifacts: artifacts(expectedSha256) }),
+    release = existingRelease({ draft: true, assets: [uploadedAsset()] });
+    const afterUpload = await planCurrentRelease(
+      state({
+        tagTargetCommitSha: null,
+        actualAssetSha256: expectedSha256,
+      }),
       recoveryOptions,
     );
-    expect(verified.plan).toEqual({ action: "publish_release", releaseId: 42 });
+    expect(afterUpload.plan).toEqual({
+      action: "publish_release",
+      releaseId: 42,
+    });
 
-    release = existingRelease({ draft: false, assets: uploadedAssets() });
+    release = existingRelease({ draft: false, assets: [uploadedAsset()] });
     const complete = await planCurrentRelease(
       state({
         tagTargetCommitSha: targetCommitSha,
-        artifacts: artifacts(expectedSha256),
+        actualAssetSha256: expectedSha256,
       }),
       recoveryOptions,
     );

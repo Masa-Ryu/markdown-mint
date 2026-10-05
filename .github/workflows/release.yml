@@ -19,7 +19,7 @@ jobs:
     outputs:
       version: ${{ steps.metadata.outputs.version }}
       artifact_name: ${{ steps.metadata.outputs.artifact_name }}
-      artifacts: ${{ steps.artifact.outputs.artifacts }}
+      sha256: ${{ steps.artifact.outputs.sha256 }}
     steps:
       - name: Check out the selected main commit
         uses: actions/checkout@v4
@@ -109,26 +109,28 @@ jobs:
       - name: Check formatting
         run: npm run format:check
 
-      - name: Package and verify the universal VSIX
+      - name: Package and verify the VSIX
         run: npm run package
 
-      - name: Confirm universal release artifact and checksum
+      - name: Confirm the single release artifact
         id: artifact
         env:
           VERSION: ${{ steps.metadata.outputs.version }}
         shell: bash
         run: |
           set -euo pipefail
-          name="markdown-mint-${VERSION}.vsix"
-          if [[ ! -f "$name" ]]; then
-            echo "::error::Missing verified universal package ${name}."
+          shopt -s nullglob
+          packages=(markdown-mint-*.vsix)
+          expected="markdown-mint-${VERSION}.vsix"
+          if [[ ${#packages[@]} -ne 1 || "${packages[0]}" != "$expected" ]]; then
+            printf '::error::Expected exactly %s; found: %s\n' "$expected" "${packages[*]:-none}"
             exit 1
           fi
-          sha256="$(sha256sum "$name" | cut -d ' ' -f 1)"
-          artifacts="$(jq -cn --arg name "$name" --arg sha256 "$sha256" '[{assetName: $name, sha256: $sha256}]')"
-          printf 'Verified %s (SHA-256 %s)\n' "$name" "$sha256"
+
+          sha256="$(sha256sum "$expected" | cut -d ' ' -f 1)"
           cp "$RUNNER_TEMP/release-notes.md" release-notes.md
-          printf 'artifacts=%s\n' "$artifacts" >> "$GITHUB_OUTPUT"
+          printf 'sha256=%s\n' "$sha256" >> "$GITHUB_OUTPUT"
+          printf 'Verified release artifact: %s (SHA-256 %s)\n' "$expected" "$sha256"
 
       - name: Retain the exact release payload for recovery
         uses: actions/upload-artifact@v4
@@ -165,59 +167,47 @@ jobs:
           name: ${{ needs.validate.outputs.artifact_name }}
           path: release-payload
 
-      - name: Verify downloaded artifacts and checksums
+      - name: Verify the downloaded artifact
         id: payload
         env:
           VERSION: ${{ needs.validate.outputs.version }}
-          EXPECTED_ARTIFACTS: ${{ needs.validate.outputs.artifacts }}
+          EXPECTED_SHA256: ${{ needs.validate.outputs.sha256 }}
         shell: bash
         run: |
           set -euo pipefail
+          vsix="release-payload/markdown-mint-${VERSION}.vsix"
           notes="release-payload/release-notes.md"
-          if [[ ! -f "$notes" ]]; then
-            echo "::error::The validated release notes are missing from the workflow artifact."
-            exit 1
-          fi
-          if [[ "$(jq 'length' <<< "$EXPECTED_ARTIFACTS")" -ne 1 ]]; then
-            echo "::error::The validation job did not retain one universal VSIX checksum."
+          if [[ ! -f "$vsix" || ! -f "$notes" ]]; then
+            echo "::error::The validated VSIX or release notes are missing from the workflow artifact."
             exit 1
           fi
 
-          verified='[]'
-          name="markdown-mint-${VERSION}.vsix"
-          expected_name="$(jq -er '.[0].assetName' <<< "$EXPECTED_ARTIFACTS")"
-          expected_sha256="$(jq -er '.[0].sha256' <<< "$EXPECTED_ARTIFACTS")"
-          vsix="release-payload/${name}"
-          if [[ "$expected_name" != "$name" || ! -f "$vsix" ]]; then
-            echo "::error::The validated universal VSIX ${name} is missing or unexpected."
-            exit 1
-          fi
           actual_sha256="$(sha256sum "$vsix" | cut -d ' ' -f 1)"
-          if [[ "$actual_sha256" != "$expected_sha256" ]]; then
-            echo "::error::The downloaded ${name} checksum does not match its validated artifact."
+          if [[ "$actual_sha256" != "$EXPECTED_SHA256" ]]; then
+            echo "::error::The downloaded VSIX checksum does not match the validated artifact."
             exit 1
           fi
-          verified="$(jq -c --arg name "$name" --arg sha256 "$actual_sha256" '. + [{name: $name, sha256: $sha256}]' <<< "$verified")"
-          printf 'Verified downloaded %s (SHA-256 %s)\n' "$name" "$actual_sha256"
-          printf 'verified=%s\n' "$verified" >> "$GITHUB_OUTPUT"
+          echo "vsix_path=${vsix}" >> "$GITHUB_OUTPUT"
+          echo "The downloaded VSIX matches the validated SHA-256 ${actual_sha256}."
 
-      - name: Create or recover the GitHub Release with the same universal VSIX
+      - name: Create or recover the GitHub Release with the same VSIX
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.validate.outputs.version }}
           ARTIFACT_NAME: ${{ needs.validate.outputs.artifact_name }}
-          EXPECTED_ARTIFACTS: ${{ needs.validate.outputs.artifacts }}
+          EXPECTED_SHA256: ${{ needs.validate.outputs.sha256 }}
+          VSIX_PATH: ${{ steps.payload.outputs.vsix_path }}
         shell: bash
         run: |
           set -euo pipefail
           tag="v${VERSION}"
           title="Markdown Mint v${VERSION}"
+          asset_name="markdown-mint-${VERSION}.vsix"
           notes_file="release-payload/release-notes.md"
           tag_json="$RUNNER_TEMP/release-tag.json"
           annotated_tag_json="$RUNNER_TEMP/annotated-tag.json"
           state_json="$RUNNER_TEMP/release-recovery-state.json"
           plan_json="$RUNNER_TEMP/release-recovery-plan.json"
-          release_asset_hashes='[]'
 
           api_get() {
             local endpoint="$1"
@@ -272,26 +262,23 @@ jobs:
           }
 
           make_recovery_plan() {
-            local artifacts_json
-            artifacts_json="$(jq -cn --argjson expected "$EXPECTED_ARTIFACTS" --argjson verified "$release_asset_hashes" '
-              $expected | map(. as $artifact | {
-                assetName: $artifact.assetName,
-                expectedSha256: $artifact.sha256,
-                actualAssetSha256: ([ $verified[] | select(.name == $artifact.assetName) | .sha256 ][0] // null)
-              })')"
             jq -n \
               --arg version "$VERSION" \
               --arg tag "$tag" \
               --arg targetCommitSha "$GITHUB_SHA" \
               --arg tagTargetCommitSha "$tag_target_commit_sha" \
-              --argjson artifacts "$artifacts_json" \
+              --arg assetName "$asset_name" \
+              --arg expectedSha256 "$EXPECTED_SHA256" \
+              --arg actualAssetSha256 "${actual_asset_sha256:-}" \
               --rawfile releaseNotes "$notes_file" \
               '{
                 version: $version,
                 tag: $tag,
                 targetCommitSha: $targetCommitSha,
                 tagTargetCommitSha: (if $tagTargetCommitSha == "" then null else $tagTargetCommitSha end),
-                artifacts: $artifacts,
+                assetName: $assetName,
+                expectedSha256: $expectedSha256,
+                actualAssetSha256: (if $actualAssetSha256 == "" then null else $actualAssetSha256 end),
                 releaseNotes: $releaseNotes
               }' > "$state_json"
             if ! node scripts/release-recovery.mjs plan-current < "$state_json" > "$plan_json"; then
@@ -304,31 +291,32 @@ jobs:
             printf '%s\n' "$action"
           }
 
-          for attempt in $(seq 1 32); do
+          actual_asset_sha256=""
+          for attempt in 1 2 3 4 5 6 7 8; do
             load_tag_target
             if ! action="$(make_recovery_plan)"; then
               echo "::error::Could not plan GitHub Release recovery for ${tag}."
               exit 1
             fi
-            asset_name="$(jq -r '.plan.assetName // empty' "$plan_json")"
             case "$action" in
               create_release)
-                create_args=(release create "$tag" --draft --title "$title" --notes-file "$notes_file" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA")
+                create_args=(release create "$tag" "$VSIX_PATH" --draft --title "$title" --notes-file "$notes_file" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA")
                 if [[ "$(jq -r '.plan.verifyTag' "$plan_json")" == true ]]; then
                   create_args+=(--verify-tag)
                 fi
                 if ! gh "${create_args[@]}"; then
-                  echo "::error::Draft GitHub Release creation failed for ${tag}. Rerun failed jobs for run ${GITHUB_RUN_ID}; retained payload ${ARTIFACT_NAME} remains available."
+                  echo "::error::Draft GitHub Release creation or asset upload failed for ${tag}. Rerun failed jobs for run ${GITHUB_RUN_ID}; retained payload ${ARTIFACT_NAME} remains available."
                   exit 1
                 fi
                 ;;
               upload_asset)
-                if ! gh release upload "$tag" "release-payload/$asset_name" --repo "$GITHUB_REPOSITORY"; then
+                if ! gh release upload "$tag" "$VSIX_PATH" --repo "$GITHUB_REPOSITORY"; then
                   echo "::error::Uploading ${asset_name} to draft ${tag} failed. Rerun failed jobs for run ${GITHUB_RUN_ID}; retained payload ${ARTIFACT_NAME} remains available for recovery."
                   exit 1
                 fi
                 ;;
               delete_starter_asset)
+                release_id="$(jq -r '.plan.releaseId' "$plan_json")"
                 asset_id="$(jq -r '.plan.assetId' "$plan_json")"
                 if ! gh api --method DELETE "repos/${GITHUB_REPOSITORY}/releases/assets/${asset_id}" > /dev/null; then
                   echo "::error::Could not remove the empty starter asset ${asset_id} from draft ${tag}. Inspect this draft manually before retrying."
@@ -336,30 +324,25 @@ jobs:
                 fi
                 ;;
               verify_asset)
+                release_id="$(jq -r '.plan.releaseId' "$plan_json")"
                 asset_dir="$RUNNER_TEMP/release-asset-${attempt}"
                 mkdir -p "$asset_dir"
                 if ! gh release download "$tag" --repo "$GITHUB_REPOSITORY" --pattern "$asset_name" --dir "$asset_dir"; then
                   echo "::error::Could not download ${asset_name} from GitHub Release ${tag}."
                   exit 1
                 fi
-                actual_sha256="$(sha256sum "$asset_dir/$asset_name" | cut -d ' ' -f 1)"
-                expected_sha256="$(jq -er --arg name "$asset_name" '.[] | select(.assetName == $name) | .sha256' <<< "$EXPECTED_ARTIFACTS")"
-                if [[ "$actual_sha256" != "$expected_sha256" ]]; then
-                  echo "::error::The release asset ${asset_name} does not match the validated VSIX."
-                  exit 1
-                fi
-                release_asset_hashes="$(jq -c --arg name "$asset_name" --arg sha256 "$actual_sha256" 'map(select(.name != $name)) + [{name: $name, sha256: $sha256}]' <<< "$release_asset_hashes")"
+                actual_asset_sha256="$(sha256sum "$asset_dir/$asset_name" | cut -d ' ' -f 1)"
                 ;;
               publish_release)
                 release_id="$(jq -r '.plan.releaseId' "$plan_json")"
                 if ! gh api --method PATCH "repos/${GITHUB_REPOSITORY}/releases/${release_id}" --field draft=false > /dev/null; then
-                  echo "::error::The expected universal VSIX is verified on draft ${tag}, but publishing failed. Rerun failed jobs for run ${GITHUB_RUN_ID}; retained payload ${ARTIFACT_NAME} remains available for recovery."
+                  echo "::error::The expected VSIX is attached to draft ${tag}, but publishing the GitHub Release failed. Rerun failed jobs for run ${GITHUB_RUN_ID}; retained payload ${ARTIFACT_NAME} remains available for recovery."
                   exit 1
                 fi
                 ;;
               already_published)
                 release_url="$(jq -r '.release.html_url' "$plan_json")"
-                echo "::notice::Published ${title} from ${GITHUB_SHA}: ${release_url} (universal VSIX SHA-256 verified)"
+                echo "::notice::Published ${title} from ${GITHUB_SHA}: ${release_url} (VSIX SHA-256 ${EXPECTED_SHA256})"
                 exit 0
                 ;;
               *)
