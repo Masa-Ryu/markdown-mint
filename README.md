@@ -10,9 +10,15 @@ Edit text, tables, checklists, and technical documentation directly in a visual 
 
 No migration required. Just open the Markdown files you already have and start writing.
 
-![Markdown Mint promo demo](https://raw.githubusercontent.com/Masa-Ryu/markdown-mint/main/docs/media/overview.gif)
+![Markdown Mint promo demo](docs/media/overview.gif)
 
-This browser harness recording shows visual table editing and the Markdown source. In VS Code, Source opens the standard editor.
+### Markdown Mint for VS Code
+
+**Paste table data. Reorder columns visually. Keep ordinary Markdown.**
+
+[Install Markdown Mint from the VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=masa-ryu.markdown-mint)
+
+This short demo runs in a browser harness. Its fixed TSV preview feeds Markdown Mint's production paste handler; the Source textarea is a harness fallback. In VS Code, **Source** opens the standard Markdown editor.
 
 ## Focus on writing
 

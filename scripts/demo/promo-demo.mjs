@@ -46,6 +46,7 @@ const timing = Object.freeze({
   slashMenuHoldMs: 650,
   alertHoldMs: 2300,
   sourceHoldMs: 4300,
+  outroHoldMs: 1650,
   markerHoldMs: 360,
 });
 
@@ -57,6 +58,9 @@ const theme = Object.freeze({
   "--vscode-widget-border": "rgba(31, 35, 40, 0.25)",
   "--vscode-focusBorder": "#0969da",
 });
+
+const marketplaceUrl =
+  "https://marketplace.visualstudio.com/items?itemName=masa-ryu.markdown-mint";
 
 const markerColors = Object.freeze({
   "clip-start": "rgb(240, 0, 240)",
@@ -250,7 +254,7 @@ async function waitForRich(page) {
     .waitFor({ state: "visible" });
 }
 
-async function prepareDemo(page, initialMarkdown, baseUrl) {
+async function prepareDemo(page, initialMarkdown, tsv, baseUrl) {
   await page.addInitScript(() => {
     Object.defineProperty(window, "acquireVsCodeApi", {
       configurable: true,
@@ -284,6 +288,9 @@ async function prepareDemo(page, initialMarkdown, baseUrl) {
   );
   await waitForRich(page);
   await page.waitForFunction(() => document.fonts.status === "loaded");
+  await applyPromoLayout(page);
+  await installPromoHeader(page);
+  await installTsvPreview(page, tsv);
   const editor = page.locator(".mm-rich-panel .ProseMirror");
   const profile = page.locator(".mm-profile-select");
   await page.waitForFunction(
@@ -291,23 +298,232 @@ async function prepareDemo(page, initialMarkdown, baseUrl) {
   );
   await editor
     .locator("h1")
-    .filter({ hasText: "Project Status" })
+    .filter({ hasText: "Weekly Release Status" })
     .waitFor({ state: "visible" });
-  await focusTailParagraph(page);
   await installPointerIndicator(page);
   await page.evaluate(() => window.scrollTo(0, 0));
   await assert.equal(await profile.inputValue(), "github");
 }
 
-async function focusTailParagraph(page) {
-  const editor = page.locator(".mm-rich-panel .ProseMirror");
-  const lastParagraph = editor.locator(":scope > p").last();
-  if ((await lastParagraph.count()) === 0)
-    throw new Error(
-      "Initial promo document has no paragraph for the TSV paste.",
-    );
-  await lastParagraph.click();
-  await page.keyboard.press("End");
+async function applyPromoLayout(page) {
+  await page.evaluate(() => {
+    const editor = document.querySelector(".mm-rich-panel .ProseMirror");
+    if (!editor) throw new Error("The promo editor surface is unavailable.");
+    editor.style.setProperty("--mm-document-width", "94%");
+    editor.style.setProperty("--mm-document-min-width", "0px");
+    editor.style.setProperty("--mm-document-max-width", "1600px");
+    editor.style.fontSize = "18px";
+    editor.style.lineHeight = "1.45";
+    editor.style.zoom = "1.25";
+    editor.style.paddingTop = "24px";
+    editor.style.paddingBottom = "56px";
+    const heading = editor.querySelector("h1");
+    if (heading) {
+      heading.style.fontSize = "42px";
+      heading.style.lineHeight = "1.12";
+      heading.style.marginBottom = "10px";
+    }
+    const paragraph = editor.querySelector(":scope > p:last-of-type");
+    if (paragraph) {
+      paragraph.style.fontSize = "20px";
+      paragraph.style.marginBottom = "22px";
+    }
+  });
+}
+
+async function installPromoHeader(page) {
+  await page.evaluate(() => {
+    const header = document.createElement("div");
+    header.dataset.mmPromoHeader = "true";
+    header.setAttribute("aria-hidden", "true");
+    Object.assign(header.style, {
+      position: "fixed",
+      zIndex: "2147483645",
+      top: "49px",
+      left: "24px",
+      right: "24px",
+      minHeight: "43px",
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "space-between",
+      gap: "20px",
+      padding: "5px 14px",
+      border: "1px solid #d0d7de",
+      borderRadius: "8px",
+      background: "rgba(255,255,255,.96)",
+      boxShadow: "0 3px 12px rgba(31,35,40,.12)",
+      color: "#1f2328",
+      fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
+      pointerEvents: "none",
+    });
+
+    const brand = document.createElement("div");
+    Object.assign(brand.style, {
+      display: "flex",
+      alignItems: "baseline",
+      gap: "12px",
+      whiteSpace: "nowrap",
+    });
+    const title = document.createElement("strong");
+    title.textContent = "Markdown Mint for VS Code";
+    Object.assign(title.style, { fontSize: "19px", fontWeight: "700" });
+    const value = document.createElement("span");
+    value.textContent = "Edit visually. Keep your Markdown.";
+    Object.assign(value.style, {
+      fontSize: "15px",
+      color: "#57606a",
+    });
+    brand.append(title, value);
+
+    const steps = document.createElement("div");
+    steps.dataset.mmPromoSteps = "true";
+    Object.assign(steps.style, {
+      display: "flex",
+      alignItems: "center",
+      gap: "8px",
+      whiteSpace: "nowrap",
+      fontSize: "14px",
+      fontWeight: "650",
+    });
+    for (const [index, label] of [
+      "PASTE TABLE",
+      "REORDER COLUMN",
+      "CHECK MARKDOWN",
+    ].entries()) {
+      const step = document.createElement("span");
+      step.dataset.mmPromoStep = String(index + 1);
+      step.textContent = `${index + 1}  ${label}`;
+      Object.assign(step.style, {
+        padding: "6px 9px",
+        borderRadius: "999px",
+        color: "#57606a",
+        background: "#f6f8fa",
+        border: "1px solid #d0d7de",
+      });
+      if (index === 0) {
+        step.style.color = "#0550ae";
+        step.style.background = "#ddf4ff";
+        step.style.borderColor = "#54aeff";
+      }
+      steps.append(step);
+      if (index < 2) {
+        const arrow = document.createElement("span");
+        arrow.textContent = "→";
+        arrow.style.color = "#8c959f";
+        steps.append(arrow);
+      }
+    }
+    header.append(brand, steps);
+    document.body.append(header);
+  });
+}
+
+async function setPromoStep(page, stepNumber) {
+  await page.evaluate((activeStep) => {
+    for (const element of document.querySelectorAll("[data-mm-promo-step]")) {
+      const index = Number(element.dataset.mmPromoStep);
+      const state =
+        index < activeStep
+          ? "done"
+          : index === activeStep
+            ? "active"
+            : "upcoming";
+      element.dataset.state = state;
+      Object.assign(element.style, {
+        color:
+          state === "active"
+            ? "#0550ae"
+            : state === "done"
+              ? "#116329"
+              : "#57606a",
+        background:
+          state === "active"
+            ? "#ddf4ff"
+            : state === "done"
+              ? "#dafbe1"
+              : "#f6f8fa",
+        borderColor:
+          state === "active"
+            ? "#54aeff"
+            : state === "done"
+              ? "#4ac26b"
+              : "#d0d7de",
+      });
+    }
+  }, stepNumber);
+}
+
+async function installTsvPreview(page, tsv) {
+  await page.evaluate((fixedTsv) => {
+    const card = document.createElement("aside");
+    card.dataset.mmPromoTsv = "true";
+    card.setAttribute("aria-label", "Fixed TSV paste preview");
+    Object.assign(card.style, {
+      position: "fixed",
+      zIndex: "2147483644",
+      top: "170px",
+      right: "38px",
+      width: "460px",
+      padding: "16px 18px 18px",
+      border: "1px solid #d0d7de",
+      borderRadius: "10px",
+      background: "#ffffff",
+      boxShadow: "0 12px 34px rgba(31,35,40,.16)",
+      color: "#1f2328",
+      fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
+      pointerEvents: "none",
+      opacity: "1",
+      transition: "opacity 140ms ease-out, transform 140ms ease-out",
+    });
+    const heading = document.createElement("strong");
+    heading.textContent = "PASTE THESE ROWS";
+    Object.assign(heading.style, {
+      display: "block",
+      marginBottom: "4px",
+      fontSize: "16px",
+      letterSpacing: ".04em",
+      color: "#0969da",
+    });
+    const label = document.createElement("div");
+    label.textContent = "Fixed demo input · tab-separated values";
+    Object.assign(label.style, {
+      marginBottom: "12px",
+      color: "#57606a",
+      fontSize: "14px",
+    });
+    const source = document.createElement("pre");
+    source.textContent = fixedTsv.trimEnd();
+    Object.assign(source.style, {
+      margin: "0",
+      padding: "11px 12px",
+      border: "1px solid #d8dee4",
+      borderRadius: "6px",
+      background: "#f6f8fa",
+      color: "#1f2328",
+      fontFamily: "ui-monospace, SFMono-Regular, Consolas, monospace",
+      fontSize: "12px",
+      lineHeight: "1.55",
+      whiteSpace: "pre",
+      tabSize: "3",
+      overflow: "hidden",
+    });
+    card.append(heading, label, source);
+    document.body.append(card);
+  }, tsv);
+}
+
+async function hideTsvPreview(page) {
+  await page.evaluate(() => {
+    const card = document.querySelector("[data-mm-promo-tsv]");
+    if (card) {
+      card.style.opacity = "0";
+      card.style.transform = "translateY(-6px)";
+    }
+  });
+  await page.waitForTimeout(160);
+  await page.evaluate(() =>
+    document.querySelector("[data-mm-promo-tsv]")?.remove(),
+  );
 }
 
 async function installPointerIndicator(page) {
@@ -318,9 +534,9 @@ async function installPointerIndicator(page) {
       position: "fixed",
       zIndex: "2147483646",
       boxSizing: "border-box",
-      width: "16px",
-      height: "16px",
-      margin: "-8px 0 0 -8px",
+      width: "20px",
+      height: "20px",
+      margin: "-10px 0 0 -10px",
       border: "2px solid #fff",
       borderRadius: "50%",
       background: "rgba(9, 105, 218, .45)",
@@ -378,6 +594,33 @@ async function showMarker(page, kind) {
 
 async function pasteFixedTsv(page, tsv) {
   const editor = page.locator(".mm-rich-panel .ProseMirror");
+  const preview = page.locator("[data-mm-promo-tsv]");
+  const previewBox = await preview.boundingBox();
+  assert.ok(previewBox, "The fixed TSV preview is not visible.");
+  const paragraph = editor.locator(":scope > p").last();
+  const paragraphBox = await paragraph.boundingBox();
+  assert.ok(paragraphBox, "The table paste instruction has no visible target.");
+  const textBox = await paragraph.evaluate((element) => {
+    const range = document.createRange();
+    range.selectNodeContents(element);
+    const rect = range.getBoundingClientRect();
+    return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+  });
+  assert.ok(
+    textBox.width > 0,
+    "The table paste instruction has no visible text.",
+  );
+  await page.mouse.move(previewBox.x + 46, previewBox.y + 88, { steps: 8 });
+  await page.waitForTimeout(300);
+  const cursorX = Math.min(
+    textBox.x + textBox.width - 3,
+    paragraphBox.x + paragraphBox.width - 3,
+  );
+  const cursorY = textBox.y + textBox.height / 2;
+  await page.mouse.move(cursorX, cursorY, { steps: 16 });
+  await page.mouse.click(cursorX, cursorY);
+  await page.keyboard.press("End");
+  await page.waitForTimeout(200);
   await editor.evaluate((element, fixedTsv) => {
     const transfer = new DataTransfer();
     transfer.setData("text/plain", fixedTsv);
@@ -395,14 +638,34 @@ async function pasteFixedTsv(page, tsv) {
 }
 
 async function waitForTableValues(page, expectedRows) {
-  await page.waitForFunction((rows) => {
-    const table = document.querySelector(".mm-rich-panel .ProseMirror table");
-    if (!table) return false;
-    const values = Array.from(table.rows, (row) =>
-      Array.from(row.cells, (cell) => cell.textContent?.trim() ?? ""),
+  try {
+    await page.waitForFunction(
+      (rows) => {
+        const table = document.querySelector(
+          ".mm-rich-panel .ProseMirror table",
+        );
+        if (!table) return false;
+        const values = Array.from(table.rows, (row) =>
+          Array.from(row.cells, (cell) => cell.textContent?.trim() ?? ""),
+        );
+        return JSON.stringify(values) === JSON.stringify(rows);
+      },
+      expectedRows,
+      { timeout: 10_000 },
     );
-    return JSON.stringify(values) === JSON.stringify(rows);
-  }, expectedRows);
+  } catch (error) {
+    const actualRows = await page.evaluate(() => {
+      const table = document.querySelector(".mm-rich-panel .ProseMirror table");
+      return table
+        ? Array.from(table.rows, (row) =>
+            Array.from(row.cells, (cell) => cell.textContent?.trim() ?? ""),
+          )
+        : null;
+    });
+    throw new Error(
+      `Promo table did not match the expected rows. Expected ${JSON.stringify(expectedRows)}; received ${JSON.stringify(actualRows)}. ${error instanceof Error ? error.message : error}`,
+    );
+  }
 }
 
 async function moveOwnerColumnBeforeStatus(page) {
@@ -420,9 +683,47 @@ async function moveOwnerColumnBeforeStatus(page) {
   );
   await page.mouse.move(
     ownerBox.x + ownerBox.width / 2,
+    ownerBox.y + ownerBox.height / 2,
+  );
+  await page.waitForTimeout(180);
+  await page.mouse.move(
+    ownerBox.x + ownerBox.width / 2,
     Math.max(8, ownerBox.y - 18),
   );
-  await handle.waitFor({ state: "visible" });
+  await handle.waitFor({ state: "visible", timeout: 2500 }).catch(async () => {
+    const layout = await page.evaluate(() => {
+      const tableElement = document.querySelector(
+        ".mm-rich-panel .ProseMirror table",
+      );
+      const control = document.querySelector(
+        '[data-table-control="column-handle"][data-index="2"]',
+      );
+      const controlRoot = control?.closest(".mm-table-controls");
+      const stage = document.querySelector(".mm-stage");
+      const rect = (element) => {
+        if (!element) return null;
+        const { x, y, width, height } = element.getBoundingClientRect();
+        return { x, y, width, height };
+      };
+      return {
+        table: rect(tableElement),
+        cells: Array.from(tableElement?.rows[0]?.cells ?? [], rect),
+        stage: rect(stage),
+        stageScrollTop: stage?.scrollTop,
+        controlRoot: rect(controlRoot),
+        control: {
+          rect: rect(control),
+          hidden: control?.hidden,
+          left: control?.style.left,
+          top: control?.style.top,
+          hovered: control?.classList.contains("is-hovered"),
+        },
+      };
+    });
+    throw new Error(
+      `Owner column handle did not appear after hover: ${JSON.stringify(layout)}`,
+    );
+  });
   const handleBox = await handle.boundingBox();
   assert.ok(handleBox, "Owner column handle has no visible geometry.");
   await page.waitForTimeout(250);
@@ -436,10 +737,10 @@ async function moveOwnerColumnBeforeStatus(page) {
   await page.waitForTimeout(250);
   await page.mouse.up();
   const expectedRows = [
-    ["Feature", "Owner", "Status"],
-    ["Search", "Alice", "Done"],
-    ["Export", "Bob", "WIP"],
-    ["Mermaid", "Carol", "Done"],
+    ["Workstream", "Owner", "Status"],
+    ["Search and navigation", "Alice Johnson", "Ready"],
+    ["Markdown export", "Bob Chen", "In review"],
+    ["Mermaid templates", "Carol Diaz", "Ready"],
   ];
   await waitForTableValues(page, expectedRows);
   return expectedRows;
@@ -485,16 +786,16 @@ async function insertTipAlert(page) {
   await dialog.locator('[data-feature-field="alert-type"]').selectOption("TIP");
   await dialog
     .locator('[data-feature-field="body"]')
-    .fill("Your .md file stays Markdown.");
+    .fill("Edit visually. Keep your Markdown.");
   await page.waitForTimeout(300);
   await dialog.getByRole("button", { name: "Insert", exact: true }).click();
   await page.waitForFunction(() =>
     Array.from(document.querySelectorAll(".mm-alert-node-view")).some(
       (node) =>
-        node.textContent?.includes("Your .md file stays Markdown.") ||
+        node.textContent?.includes("Edit visually. Keep your Markdown.") ||
         node
           .querySelector("textarea")
-          ?.value.includes("Your .md file stays Markdown."),
+          ?.value.includes("Edit visually. Keep your Markdown."),
     ),
   );
   await page.waitForTimeout(timing.alertHoldMs);
@@ -514,14 +815,14 @@ async function insertTipAlert(page) {
     () => window.markdownMint?.sourceEl?.value ?? "",
   );
   assert.ok(
-    alert.text.includes("Your .md file stays Markdown.") ||
-      alert.body.includes("Your .md file stays Markdown."),
+    alert.text.includes("Edit visually. Keep your Markdown.") ||
+      alert.body.includes("Edit visually. Keep your Markdown."),
   );
   assert.ok(
-    source.includes("> [!TIP]\n> Your .md file stays Markdown."),
+    source.includes("> [!TIP]\n> Edit visually. Keep your Markdown."),
     "TIP Alert source was not generated from the Rich UI action.",
   );
-  return { type: "TIP", body: "Your .md file stays Markdown." };
+  return { type: "TIP", body: "Edit visually. Keep your Markdown." };
 }
 
 async function openSourceAndValidate(page, expected) {
@@ -560,10 +861,15 @@ async function openSourceAndValidate(page, expected) {
   await page.locator(".mm-source-textarea").waitFor({ state: "visible" });
   const sourceLayout = await fitSourceTextarea(page);
   await showMarker(page, "source-start");
-  await page.waitForTimeout(timing.sourceHoldMs);
+  await page.waitForTimeout(timing.sourceHoldMs - timing.outroHoldMs);
+  await installPromoOutro(page);
+  await page.waitForTimeout(timing.outroHoldMs);
   const source = await page.locator(".mm-source-textarea").inputValue();
   assertExpectedSource(source, expected);
   await showMarker(page, "source-end");
+  await page.evaluate(() =>
+    document.querySelector("[data-mm-promo-outro]")?.remove(),
+  );
   return {
     source,
     sourceLineCount: sourceLayout.sourceLineCount,
@@ -614,20 +920,71 @@ async function fitSourceTextarea(page) {
   return layout;
 }
 
+async function installPromoOutro(page) {
+  await page.evaluate((marketplace) => {
+    const card = document.createElement("aside");
+    card.dataset.mmPromoOutro = "true";
+    card.setAttribute("aria-label", "Markdown Mint for VS Code Marketplace");
+    Object.assign(card.style, {
+      position: "fixed",
+      zIndex: "2147483644",
+      right: "28px",
+      bottom: "24px",
+      width: "400px",
+      padding: "14px 18px",
+      border: "1px solid #d0d7de",
+      borderRadius: "10px",
+      background: "rgba(255,255,255,.97)",
+      boxShadow: "0 12px 34px rgba(31,35,40,.16)",
+      color: "#1f2328",
+      fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
+      pointerEvents: "none",
+    });
+    const title = document.createElement("strong");
+    title.textContent = "Markdown Mint for VS Code";
+    Object.assign(title.style, {
+      display: "block",
+      marginBottom: "2px",
+      fontSize: "19px",
+    });
+    const value = document.createElement("div");
+    value.textContent = "Edit visually. Keep your Markdown.";
+    Object.assign(value.style, {
+      marginBottom: "7px",
+      fontSize: "15px",
+      color: "#57606a",
+    });
+    const link = document.createElement("a");
+    link.href = marketplace;
+    link.textContent = "Install from the VS Code Marketplace →";
+    Object.assign(link.style, {
+      color: "#0969da",
+      fontSize: "15px",
+      fontWeight: "650",
+      textDecoration: "none",
+    });
+    card.append(title, value, link);
+    document.body.append(card);
+  }, marketplaceUrl);
+}
+
 async function collectScenario(page, { initialMarkdown, tsv, expected }) {
   await page.waitForTimeout(timing.introHoldMs);
-  process.stdout.write("Showing the prepared Project Status document.\n");
+  process.stdout.write("Showing the TSV source beside the paste target.\n");
   await pasteFixedTsv(page, tsv);
   const initialRows = [
-    ["Feature", "Status", "Owner"],
-    ["Search", "Done", "Alice"],
-    ["Export", "WIP", "Bob"],
-    ["Mermaid", "Done", "Carol"],
+    ["Workstream", "Status", "Owner"],
+    ["Search and navigation", "Ready", "Alice Johnson"],
+    ["Markdown export", "In review", "Bob Chen"],
+    ["Mermaid templates", "Ready", "Carol Diaz"],
   ];
   await waitForTableValues(page, initialRows);
-  process.stdout.write("Validated the pasted 4x3 TSV table.\n");
+  await hideTsvPreview(page);
+  await setPromoStep(page, 2);
+  process.stdout.write("Pasted the fixed 4x3 TSV through Mint's handler.\n");
   await page.waitForTimeout(timing.tableHoldMs);
   const finalRows = await moveOwnerColumnBeforeStatus(page);
+  await setPromoStep(page, 3);
   process.stdout.write("Moved Owner before Status and validated every cell.\n");
   await page.waitForTimeout(timing.reorderedTableHoldMs);
   const alert = await insertTipAlert(page);
@@ -709,7 +1066,7 @@ async function main() {
     page = await context.newPage();
     video = page.video();
     page.on("pageerror", (error) => pageErrors.push(error.message));
-    await prepareDemo(page, initialMarkdown, baseUrl);
+    await prepareDemo(page, initialMarkdown, tsv, baseUrl);
     await showMarker(page, "clip-start");
     const scenario = await collectScenario(page, {
       initialMarkdown,
@@ -781,9 +1138,12 @@ async function main() {
         profile: "github",
         sourceView: "Browser harness Source fallback",
         pasteMethod:
-          "Synthetic paste ClipboardEvent with fixed TSV; Markdown Mint production paste handler ran.",
+          "Synthetic paste ClipboardEvent with fixed TSV preview; pointer clicked the instruction, then Markdown Mint production paste handler ran.",
         pointerIndicator:
           "Demo-only pointer ring following Playwright pointer events.",
+        storyOverlay:
+          "Demo-only brand/value header, three-step rail, exact TSV preview, and closing Marketplace card.",
+        marketplaceUrl,
         initialMarkdownPath: "docs/demo/promo-initial.md",
         tableFixturePath: "docs/demo/promo-table.tsv",
         expectedMarkdownPath: "docs/demo/promo-expected.json",
@@ -791,11 +1151,11 @@ async function main() {
         generatedMarkdownSha256: sha256(scenario.source),
         expectedMarkdownSha256: sha256(expected),
         actions: [
-          "Show the prepared Project Status document.",
-          "Paste the fixed TSV through the editor paste handler.",
-          "Move the Owner column before Status with the table column handle.",
+          "Show the fixed tab-separated source beside the paste instruction.",
+          "Click the instruction and paste the TSV through the editor paste handler.",
+          "Move the Owner column before Status with Mint's column handle.",
           "Open the slash menu and insert a GitHub TIP Alert through its dialog.",
-          "Open Source and compare its content with the expected fixture.",
+          "Open Source, compare its content with the expected fixture, and show the install cue.",
         ],
         initialMarkdown,
         table: {
@@ -805,6 +1165,7 @@ async function main() {
         },
         alert: scenario.alert,
         sourceVisibleHoldRequestedMs: timing.sourceHoldMs,
+        marketplaceCueVisibleMs: timing.outroHoldMs,
         sourceVisibleDurationSeconds: capture.sourceVisibleDurationSeconds,
         sourceLineCount: scenario.sourceLineCount,
         sourceVisibleLineCount: scenario.sourceVisibleLineCount,

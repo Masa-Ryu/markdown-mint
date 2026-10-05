@@ -1,3 +1,3 @@
-# Project Status
+# Weekly Release Status
 
-Track the work that matters this week.
+Paste the tab-separated rows here.

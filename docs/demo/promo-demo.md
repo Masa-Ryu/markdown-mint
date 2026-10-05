@@ -5,12 +5,19 @@ harness. It pastes a fixed TSV through the production editor paste handler,
 moves a table column with the table controls, inserts a GitHub TIP Alert, and
 checks the Source view against an exact Markdown fixture. The run replaces
 `docs/media/overview.gif` only after the scenario, source, recording boundaries,
-and exported files pass validation.
+and exported files pass validation. The 15–20 second sequence shows a fixed TSV
+preview beside its paste instruction, the real table paste, a column reorder
+with Mint's handle, and the generated Markdown in Source.
+The recording applies a restrained 1.25× zoom to the rich editor surface; table
+column sizing and handles continue to use Mint's normal layout and controls.
 
 The browser harness uses the Source textarea fallback because it does not run
 inside VS Code. In VS Code, Markdown Mint's Source command opens the standard
-editor. The recording also adds a demo-only pointer ring to show Playwright
-input; this ring is not part of the extension.
+editor. Demo-only labels show the paste, reorder, and Markdown-check sequence;
+the fixed TSV preview is the payload sent through the production paste handler.
+The closing Marketplace card and pointer ring are also recording overlays, not
+extension UI. The source value is still read from the real webview Source
+textarea and checked against the fixed expected fixture.
 
 ## Requirements
 
@@ -78,7 +85,11 @@ FFprobe may report an average rate near 12 fps.
 the exact generated source, including terminal blank lines; the generated
 Markdown is compared allowing only CRLF/LF newline differences. The report
 binds the WebM, expected source, and generated source by SHA-256 so a later
-render cannot combine outputs from different runs.
+render cannot combine outputs from different runs. The intro rail, TSV panel,
+pointer ring, and closing Marketplace card are demo-only overlays; the TSV
+preview shows the exact payload sent as a synthetic ClipboardEvent through the
+production paste handler. The install link adjacent to the README image is the
+clickable Marketplace CTA.
 
 ## Recorded validation
 
