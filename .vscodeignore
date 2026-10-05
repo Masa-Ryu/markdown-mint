@@ -17,7 +17,6 @@ AGENTS.md
 node_modules/**
 dist/test-extension.js*
 dist/test-pdf-export.js*
-dist/copilot/**
 dist/*.map
 sample.md
 assets/**/*.svg

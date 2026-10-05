@@ -1,11 +1,11 @@
 # Requirements and implementation status
 
 This page keeps the original R01–R08 identifiers unchanged. Status is based on
-the unit suite, the attempted installed VS Code Extension Development Host
-acceptance run (`npm run test:extension`), and the completed browser parity
-pass. Browser evidence and native API evidence are recorded separately;
-browser-level composition events are covered by regression tests, while the
-real operating system IME candidate UI remains unverified.
+the unit suite, the installed VS Code Extension Development Host acceptance
+run (`npm run test:extension`), and the completed browser parity pass. Browser
+evidence and native API evidence are recorded separately; browser-level
+composition events are covered by regression tests, while the real operating
+system IME candidate UI remains unverified.
 
 | Requirement | Intended behavior                                | Implementation and current evidence                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | ----------- | ------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -662,69 +662,23 @@ and an operator who can perform and rate the prose, code, and Mermaid synthetic
 cases. Keep the PR
 Draft until results are recorded here.
 
-Packaging returns to one universal VSIX. `npm run package` starts from a clean
-build, removes any stale `dist/copilot` directory, bundles the extension and
-its declared runtime dependencies, and verifies the resulting archive rejects
-old SDK binaries and runtimes. The release workflow still validates one VSIX,
-records its SHA-256, retains that exact VSIX plus the byte-exact release notes,
-and verifies the downloaded/recovered release asset before publication. The
-release-recovery planner's exact note comparison, draft lookup and error
-propagation remain unchanged in purpose. No Marketplace or GitHub Release is
-run by this PR.
-
-On 2026-10-05, `npm run compile`, `npm test` (1,470 tests across 71 files),
+On 2026-10-05, `npm run compile`, `npm test` (1,504 tests across 72 files),
 `npm run lint` (zero errors; 92 `no-explicit-any` warnings), and
-`npm run format:check` passed. An earlier diagnostic run of the AI fake-model
-integration displayed a candidate without changing native text before
-adoption, but timed out at its native Undo assertion; that diagnostic is not
-product acceptance. The latest `npm run test:extension` completed compile and
-build, but the VS Code 1.140.0 process terminated with `SIGABRT` during AppKit
-application initialization on macOS 26.7, before the integration extension or
-its CodeLens/AI assertions ran. Native AI Undo/Redo therefore remains
-unverified here. `npm run test:browser:ai` passed ghost integrity, Tab,
-browser-host Undo/Redo, input debounce, clipboard exclusion, target, theme, and
-Preview checks. `npm run test:browser:blocks` passed the block interactions and
-all five required fixtures in Rich Editor, dedicated Preview, and native
-Preview. HTML export passed with zero CSP violations; PDF export produced
-334,167 bytes and 13 A4 pages. The AI benchmark passed on macOS arm64 / Node
-24.5.0 and measures only local mapping, context, insertion-safety, and
-input-reconciliation costs; it excludes model and network latency. Packaging
-passed for a 76-file universal VSIX and the bundled formatter.
+`npm run format:check` passed. `npm run test:browser:ai` passed ghost
+integrity, Tab, browser-host Undo/Redo, input debounce, clipboard exclusion,
+prose/code/Mermaid targets, themes, and Preview checks. `npm run
+test:browser:blocks` passed block interactions and all five required fixtures
+in Rich Editor, dedicated Preview, and native Preview. `npm run test:extension`
+passed in installed VS Code 1.140.0; its fake Language Model made one request
+and confirmed ghost display left native text unchanged and the isolated
+Undo/Redo boundary passed. This is not real Copilot acceptance. `npm run
+package` passed and verified the 0.9.0 VSIX and bundled formatter.
 
-Both package measurements were made on macOS arm64 with Node 24.5.0, npm
-11.5.1, and the locked dependency graph from this checkout. The exact fetched
-`origin/main` base was `397597002f17eea47b52115f5325f4da369c3c9c` (0.8.0).
-For the base comparison, that commit was extracted with `git archive` into a
-fresh temporary directory, given the same installed dependencies (its lockfile
-differs only in the root package version), and packaged with its own
-`npm run package` script. The PR artifact was built with the PR's `npm run package` script:
-
-| Build                                | Files | Compressed bytes | Uncompressed bytes |
-| ------------------------------------ | ----: | ---------------: | -----------------: |
-| `origin/main` 0.8.0                  |    76 |        4,640,744 |         13,908,612 |
-| This PR 0.9.0 universal VSIX         |    76 |        4,660,801 |         13,976,935 |
-| Prior PR 0.9.0 darwin-arm64 SDK VSIX |    78 |       88,717,931 |        136,567,747 |
-
-The previous SDK-package number is the recorded earlier PR validation result,
-not a fresh rebuild in this run. Relative to that recorded build, the universal
-package is 94.75% smaller compressed; the removed native server alone was
-122,589,013 bytes uncompressed. The current package is 20,057 compressed bytes
-(0.43%) larger and 68,323 uncompressed bytes larger than the freshly rebuilt
-0.8.0 main package. The verified base VSIX SHA-256 is
-`99df0664ae5ce5967c385bc69ccadc9bbc9fa1e5cac53bd0ea20a8f950bc4df7`; the
-verified PR VSIX SHA-256 is
-`d0dcb8a0792798c3557c7ca2cae9125aa0ace1f68d6b1e00ed2ab3f64b0e6cb8`. The AI
-benchmark's short
-English case measured p50/p95 of 0.502/0.765 ms, and the short Japanese case
-0.527/0.592 ms for local mapping, context, safety planning, and input
-reconciliation only. The 5,000-prose-block case measured 30.36/35.65 ms and
-the 2,000-table-row case 26.66/27.07 ms. Cached position-map lookups ranged
-from 0.00050 to 0.00283 ms across the fixtures. These are not suggestion or
-model-response latencies. Its largest members are the extension bundle
-(6,018,363 bytes), Mermaid runtime (3,794,174 bytes), Webview bundle
-(1,838,885 bytes), and third-party notices (524,654 bytes).
-The VSIX verifier confirmed that no Copilot SDK, standalone executable, or
-target-specific package was included.
+The recorded AI benchmark on macOS arm64 / Node 24.5.0 measured short English
+mapping/context/insertion-safety/input-reconciliation at p50/p95 0.502/0.765
+ms and Japanese at 0.527/0.592 ms. A 5,000-prose-block case measured
+30.36/35.65 ms and a 2,000-table-row case measured 26.66/27.07 ms. These are
+local processing costs only; the benchmark excludes model and network latency.
 
 Automated runs made zero real Copilot requests. Real Copilot consent and
 Japanese/English usefulness and latency cases, saved-access restoration after
