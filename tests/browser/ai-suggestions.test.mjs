@@ -567,6 +567,91 @@ try {
     "Passed source-code prompt target, ghost isolation, Tab, and Undo/Redo",
   );
 
+  const automaticCodeBefore =
+    "```ts\nfunction run() {\n  const result = call();\n}\n```";
+  const automaticCodeTyped =
+    "```ts\nfunction run() {\n  const result = call(s);\n}\n```";
+  const automaticCodeAccepted =
+    "```ts\nfunction run() {\n  const result = call(save);\n}\n```";
+  await load(automaticCodeBefore);
+  await page.evaluate(() =>
+    window.__markdownMintHarness.setAiState({ autoTrigger: true }),
+  );
+  await placeCaretAtText("call();", "call(".length);
+  const automaticCodeRequestCount = (await requests()).filter(
+    (message) => message.trigger === "auto",
+  ).length;
+  await page.keyboard.type("s");
+  await page.waitForFunction(
+    (previous) =>
+      window.__markdownMintHarness.messages.filter(
+        (message) =>
+          message.type === "ai-suggestion-request" &&
+          message.trigger === "auto",
+      ).length > previous,
+    automaticCodeRequestCount,
+  );
+  await page.waitForFunction(
+    (expected) =>
+      window.__markdownMintHarness.document.markdown === expected &&
+      !window.markdownMint.sync.hasPending,
+    automaticCodeTyped,
+  );
+  const automaticCodeRequest = (await requests()).at(-1);
+  assert.equal(automaticCodeRequest.trigger, "auto");
+  assert.equal(automaticCodeRequest.targetKind, "code");
+  assert.equal(automaticCodeRequest.language, "ts");
+  const automaticCodeSnapshot = await page.evaluate(() => ({
+    markdown: window.__markdownMintHarness.document.markdown,
+    version: window.__markdownMintHarness.document.version,
+  }));
+  await page.evaluate(
+    ([request, text]) => window.__markdownMintHarness.respondAi(request, text),
+    [automaticCodeRequest, "ave"],
+  );
+  const automaticCodeGhost = page.locator(".mm-ai-suggestion");
+  await automaticCodeGhost.waitFor();
+  assert.equal(await automaticCodeGhost.textContent(), "ave");
+  assert.equal(
+    await automaticCodeGhost.evaluate((node) =>
+      Boolean(node.closest("pre code")),
+    ),
+    true,
+    "typed-code candidate is displayed inside its original code block",
+  );
+  assert.equal(
+    await page.locator('.mm-code-block[data-mm-code-expanded="true"]').count(),
+    0,
+    "automatic code suggestion does not open the expanded dialog",
+  );
+  assert.deepEqual(
+    await page.evaluate(() => ({
+      markdown: window.__markdownMintHarness.document.markdown,
+      version: window.__markdownMintHarness.document.version,
+    })),
+    automaticCodeSnapshot,
+    "automatic code ghost leaves native Markdown and version unchanged",
+  );
+
+  await page.keyboard.press("Tab");
+  await page.waitForFunction(() => !window.markdownMint.sync.hasPending);
+  assert.equal(await source(), automaticCodeAccepted);
+  await page.keyboard.press(`${modifier}+z`);
+  await page.waitForFunction(
+    (expected) => window.__markdownMintHarness.document.markdown === expected,
+    automaticCodeTyped,
+  );
+  assert.equal(await source(), automaticCodeTyped);
+  await page.keyboard.press(`${modifier}+Shift+z`);
+  await page.waitForFunction(
+    (expected) => window.__markdownMintHarness.document.markdown === expected,
+    automaticCodeAccepted,
+  );
+  assert.equal(await source(), automaticCodeAccepted);
+  console.log(
+    "Passed real-typing fenced-code auto suggestion, Tab, and exact Undo/Redo",
+  );
+
   const listCodeBefore =
     "10. Example\n\n    ```ts\n    const value = 1;\n    value.\n    ```";
   await load(listCodeBefore);
