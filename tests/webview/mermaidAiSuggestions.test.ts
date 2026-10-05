@@ -238,7 +238,7 @@ describe("Mermaid textarea Copilot ghost", () => {
     offline.dispose();
   });
 
-  it("preserves a matching typed prefix and uses one 300ms auto debounce after mismatch", async () => {
+  it("preserves a matching typed prefix and uses one 200ms auto debounce after mismatch", async () => {
     fakeRuntime(() => ({ diagramType: "flowchart-v2" }));
     const f = makeHarness();
     const request = await f.manual();
@@ -272,7 +272,7 @@ describe("Mermaid textarea Copilot ghost", () => {
       }),
     );
     expect(f.container.querySelector(".mm-ai-suggestion")).toBeNull();
-    await vi.advanceTimersByTimeAsync(299);
+    await vi.advanceTimersByTimeAsync(199);
     expect(
       f.messages.filter((message) => message.type === "ai-suggestion-request"),
     ).toHaveLength(1);

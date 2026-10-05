@@ -449,7 +449,7 @@ an authentication dialog and therefore must be called from a user action.
 `selectChatModels` is the public way to acquire or reacquire a model.
 After an Extension Host restart, Mint does not enumerate models on activation
 or configuration sync. If auto trigger is enabled and setup previously
-succeeded, the first real text edit waits for the regular 300 ms debounce and
+succeeded, the first real text edit waits for the regular 200 ms debounce and
 reacquires only the saved Copilot model ID/version through an exact public
 selector. Automatic restoration never enumerates all Copilot models. Mint
 checks `canSendRequest(model) === true` after obtaining the exact model and
@@ -514,7 +514,7 @@ target only on its editor screen, outside replacement confirmation and IME
 composition. Link destinations, inline-code contents, tables, math, raw HTML
 editing regions, selected ranges, Source, Preview, and other modal fields
 remain excluded.
-The 300 ms automatic debounce reevaluates after supported input and cursor
+The 200 ms automatic debounce reevaluates after supported input and cursor
 changes without starting during IME composition. Manual requests do not wait
 for debounce. An exact active snapshot is used to combine duplicate work; a
 newer input cancels the previous request. Cancellation, timeout, stream errors,
@@ -542,12 +542,12 @@ document is changed only by the existing Insert/Update action. Esc dismisses
 only the candidate. Matching input consumes only the matching leading text; a
 mismatch, caret move, composition conflict, screen change, or stale document,
 version, setting, or dialog identity clears it. Both surfaces retain the
-300 ms debounce. Tab/Escape and keyCode 229 remain unhandled during IME
+200 ms debounce. Tab/Escape and keyCode 229 remain unhandled during IME
 composition. A manual failure is reported with visible feedback and not only
 an aria-live message.
 
 Automatic restoration after an Extension Host restart now reselects only the
-saved model ID/version after the first real text edit's 300 ms debounce and
+saved model ID/version after the first real text edit's 200 ms debounce and
 only when the non-secret setup-completed marker and saved model identity exist.
 It checks current access before sending and does not restore on activation,
 setting events, cursor-only changes, a missing setup marker, or a missing model
@@ -648,7 +648,7 @@ remaining off until changed, Tab/Escape, native Undo/Redo, and the restart
 scenario. For restart, complete consent in an active Mint panel, enable auto
 trigger explicitly, close and reopen VS Code, then type into the same
 synthetic document without invoking the command. Confirm that selection starts
-only after the 300 ms real-input debounce and that `canSendRequest(model)` is
+only after the 200 ms real-input debounce and that `canSendRequest(model)` is
 true before any request. Record whether VS Code/provider UI asks for further
 consent. If it does not resume, record that result as a blocker; invoke Suggest
 Continuation once only after recording the restart outcome to verify manual

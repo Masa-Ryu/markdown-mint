@@ -318,7 +318,7 @@ describe("Copilot inline completion ghost", () => {
     ).toContain("print('hello')\nprint('next')");
   });
 
-  it("uses a 300ms opt-in debounce, while manual requests still work when automatic suggestions are off", async () => {
+  it("uses a 200ms opt-in debounce, while manual requests still work when automatic suggestions are off", async () => {
     const f = setup("Hello", false);
     f.type("!");
     f.ack();
@@ -330,10 +330,40 @@ describe("Copilot inline completion ghost", () => {
     const automatic = setup("Words", true);
     automatic.type("!");
     automatic.ack();
-    await vi.advanceTimersByTimeAsync(AI_LIMITS.debounceMs - 1);
+    expect(AI_LIMITS.debounceMs).toBe(200);
+    await vi.advanceTimersByTimeAsync(150);
+    automatic.type("?");
+    automatic.ack();
+    await vi.advanceTimersByTimeAsync(199);
     expect(automatic.requests()).toHaveLength(0);
     await vi.advanceTimersByTimeAsync(1);
     expect(automatic.requests()).toHaveLength(1);
+  });
+
+  it("starts a fenced-code automatic request at the shared 200ms boundary", async () => {
+    const f = setup("```python\nprint('hello')\n```", true);
+    let position: number | undefined;
+    f.app.view.state.doc.descendants((node, start) => {
+      if (node.isText && node.text === "print('hello')")
+        position = start + node.text.length;
+    });
+    expect(position).toBeDefined();
+    f.app.view.dispatch(
+      f.app.view.state.tr.setSelection(
+        TextSelection.create(f.app.view.state.doc, position!),
+      ),
+    );
+
+    f.type(".");
+    f.ack();
+    await vi.advanceTimersByTimeAsync(199);
+    expect(f.requests()).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(f.requests()).toHaveLength(1);
+    expect(f.requests()[0]).toMatchObject({
+      targetKind: "code",
+      language: "python",
+    });
   });
 
   it("reacquires after restart only from a debounced real text edit and preserves that request through consent status", async () => {

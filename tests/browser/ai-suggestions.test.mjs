@@ -1011,12 +1011,12 @@ try {
     0,
     "deleting after a candidate clears the stale ghost immediately",
   );
-  await page.clock.fastForward(299);
-  const requestsAt299 = await requests();
+  await page.clock.fastForward(199);
+  const requestsAt199 = await requests();
   assert.equal(
-    requestsAt299.length,
+    requestsAt199.length,
     requestsBeforeDelete,
-    `Mermaid deletion does not request before the 300 ms debounce expires: ${JSON.stringify(requestsAt299.slice(requestsBeforeDelete))}`,
+    `Mermaid deletion does not request before the 200 ms debounce expires: ${JSON.stringify(requestsAt199.slice(requestsBeforeDelete))}`,
   );
   await page.clock.fastForward(1);
   const afterDeleteRequests = await requests();
@@ -1029,7 +1029,7 @@ try {
     "flowchart TD\n  A --".length,
   );
   console.log(
-    "Passed Mermaid deletion invalidation and the exact 300 ms automatic debounce",
+    "Passed Mermaid deletion invalidation and the exact 200 ms automatic debounce",
   );
 
   await writeFile(

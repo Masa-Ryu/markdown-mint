@@ -2,7 +2,7 @@
 import { MAX_MERMAID_SOURCE_LENGTH } from "./mermaid";
 
 export const AI_LIMITS = {
-  debounceMs: 300,
+  debounceMs: 200,
   deadlineMs: 35_000,
   snapshotCheckDeadlineMs: 3_000,
   modelValidationDeadlineMs: 3_000,
