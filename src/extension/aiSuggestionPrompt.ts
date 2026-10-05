@@ -1,4 +1,5 @@
 import type * as vscode from "vscode";
+import MarkdownIt from "markdown-it";
 import { AI_LIMITS } from "../shared/aiSuggestions";
 import { MAX_MERMAID_SOURCE_LENGTH } from "../shared/mermaid";
 
@@ -34,6 +35,12 @@ export interface ParsedCompletion {
 }
 
 const MAX_CONTEXT_CHARS = 20_000;
+const codeFenceParser = new MarkdownIt("commonmark");
+const suggestionListContainers = new Set([
+  "bullet_list_open",
+  "ordered_list_open",
+  "list_item_open",
+]);
 const PROSE_PROMPT = [
   "You complete prose in a Markdown document.",
   'Return exactly one JSON object with the shape {"insertText":"..."}.',
@@ -310,63 +317,73 @@ function findFencedCodeBlock(
   source: string,
   position: number,
 ): FencedCodeBlock | undefined {
-  let opening:
-    | { start: number; bodyStart: number; fence: string; language?: string }
-    | undefined;
-  let lineStart = 0;
-  while (lineStart <= source.length) {
-    const lineEnd = source.indexOf("\n", lineStart);
-    const nextStart = lineEnd < 0 ? source.length : lineEnd + 1;
-    const contentEnd =
-      lineEnd >= 0 && source[lineEnd - 1] === "\r"
-        ? lineEnd - 1
-        : lineEnd >= 0
-          ? lineEnd
-          : source.length;
-    const line = source.slice(lineStart, contentEnd);
-    if (!opening) {
-      const match = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
-      const fence = match?.[1];
-      const info = match?.[2] ?? "";
-      if (fence && (fence[0] !== "`" || !info.includes("`"))) {
-        const rawLanguage = info.trim().split(/\s+/, 1)[0];
-        opening = {
-          start: lineStart,
-          bodyStart: nextStart,
-          fence,
-          ...(rawLanguage && validCodeLanguage(rawLanguage)
-            ? { language: rawLanguage }
-            : {}),
-        };
-        if (position < nextStart) opening = undefined;
-      }
-    } else {
-      const marker = opening.fence[0] === "`" ? "`" : "~";
-      const close = new RegExp(
-        `^ {0,3}${marker}{${opening.fence.length},}[\\t ]*$`,
-      );
-      if (close.test(line)) {
-        if (position >= opening.bodyStart && position <= lineStart)
-          return {
-            start: opening.start,
-            bodyStart: opening.bodyStart,
-            bodyEnd: lineStart,
-            ...(opening.language ? { language: opening.language } : {}),
-          };
-        opening = undefined;
+  const lineStarts = markdownLineStarts(source);
+  const containers: string[] = [];
+  for (const token of codeFenceParser.parse(source, {})) {
+    if (token.nesting < 0) containers.pop();
+    if (token.type === "fence" && token.map) {
+      if (containers.every((type) => suggestionListContainers.has(type))) {
+        const [startLine, endLine] = token.map;
+        const start = lineStarts[startLine];
+        const bodyStart = lineStarts[startLine + 1];
+        if (start !== undefined && bodyStart !== undefined) {
+          const end = lineStarts[endLine] ?? source.length;
+          const lastLineStart = lineStarts[endLine - 1];
+          const closeLine =
+            lastLineStart === undefined
+              ? undefined
+              : source.slice(
+                  lastLineStart,
+                  markdownLineEnd(source, lastLineStart),
+                );
+          const isClosed =
+            closeLine !== undefined &&
+            lastLineStart !== undefined &&
+            isClosingFence(closeLine, token.markup);
+          const bodyEnd = isClosed ? lastLineStart : end;
+          if (position >= bodyStart && position <= bodyEnd) {
+            const rawLanguage = token.info.trim().split(/\s+/, 1)[0];
+            return {
+              start,
+              bodyStart,
+              bodyEnd,
+              ...(rawLanguage && validCodeLanguage(rawLanguage)
+                ? { language: rawLanguage }
+                : {}),
+            };
+          }
+        }
       }
     }
-    if (lineEnd < 0) break;
-    lineStart = nextStart;
+    if (token.nesting > 0) containers.push(token.type);
   }
-  if (opening && position >= opening.bodyStart)
-    return {
-      start: opening.start,
-      bodyStart: opening.bodyStart,
-      bodyEnd: source.length,
-      ...(opening.language ? { language: opening.language } : {}),
-    };
   return undefined;
+}
+function markdownLineStarts(source: string): number[] {
+  const starts = [0];
+  for (let index = 0; index < source.length; index += 1) {
+    if (source[index] === "\r") {
+      if (source[index + 1] === "\n") index += 1;
+      starts.push(index + 1);
+    } else if (source[index] === "\n") starts.push(index + 1);
+  }
+  return starts;
+}
+function markdownLineEnd(source: string, start: number): number {
+  const lf = source.indexOf("\n", start);
+  const cr = source.indexOf("\r", start);
+  if (lf < 0) return cr < 0 ? source.length : cr;
+  if (cr < 0) return lf;
+  return Math.min(lf, cr);
+}
+function isClosingFence(line: string, openingFence: string): boolean {
+  const match = /^[\t ]*(`+|~+)[\t ]*$/.exec(line);
+  const closingFence = match?.[1];
+  return Boolean(
+    closingFence &&
+    closingFence[0] === openingFence[0] &&
+    closingFence.length >= openingFence.length,
+  );
 }
 function validCodeLanguage(value: string): boolean {
   return (

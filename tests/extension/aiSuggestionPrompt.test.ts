@@ -121,6 +121,86 @@ describe("AI suggestion prompt", () => {
     expect(prompt.content).not.toContain("You complete prose");
   });
 
+  it.each([
+    [
+      "an unordered list",
+      "- Example\n\n  ```typescript\n  const value = 1;\n  value.\n  ```",
+    ],
+    [
+      "a one-digit ordered list",
+      "1. Example\n\n   ```typescript\n   const value = 1;\n   value.\n   ```",
+    ],
+    [
+      "a two-digit ordered list",
+      "10. Example\n\n    ```typescript\n    const value = 1;\n    value.\n    ```",
+    ],
+    [
+      "a nested list",
+      "- Parent\n\n  1. Child\n\n     ```typescript\n     const value = 1;\n     value.\n     ```",
+    ],
+    [
+      "a deeply nested tilde-fenced list",
+      "- Parent\n\n  1. Child\n\n     - Nested\n\n       ~~~~typescript\n       const value = 1;\n       value.\n       ~~~~",
+    ],
+  ])(
+    "finds fenced code inside %s without including its fences",
+    (_, markdown) => {
+      const valuePosition = markdown.indexOf("value.");
+      const position = valuePosition + "value.".length;
+      const bodyLineStart =
+        markdown.lastIndexOf("\n", markdown.indexOf("const")) + 1;
+      const context = buildCompletionContext(
+        markdown,
+        position,
+        "code",
+        "typescript",
+      );
+
+      expect(context).toMatchObject({
+        targetKind: "code",
+        language: "typescript",
+        prefix: expect.stringContaining("value."),
+        suffix: "\n",
+      });
+      expect(context?.prefix).toBe(markdown.slice(bodyLineStart, position));
+      expect(context?.prefix).not.toContain("```");
+      expect(context?.prefix).not.toContain("~~~~");
+      expect(context?.suffix).not.toContain("```");
+      expect(context?.suffix).not.toContain("~~~~");
+    },
+  );
+
+  it("does not treat top-level indented literal fences as fenced code", () => {
+    const markdown =
+      "    ```typescript\n    const value = 1;\n    value.\n    ```";
+    const position = markdown.indexOf("value.") + "value.".length;
+
+    expect(
+      buildCompletionContext(markdown, position, "code", "typescript"),
+    ).toBeUndefined();
+
+    const blockquote = "> ```typescript\n> const value = 1;\n> value.\n> ```";
+    const blockquotePosition = blockquote.indexOf("value.") + "value.".length;
+    expect(
+      buildCompletionContext(
+        blockquote,
+        blockquotePosition,
+        "code",
+        "typescript",
+      ),
+    ).toBeUndefined();
+  });
+
+  it("keeps list-contained Mermaid fences out of generic code suggestions", () => {
+    const markdown =
+      "10. Example\n\n    ```mermaid\n    flowchart TD\n    A --> B\n    ```";
+    const position = markdown.indexOf("A -->") + "A -->".length;
+
+    expect(
+      buildCompletionContext(markdown, position, "code", "mermaid"),
+    ).toBeUndefined();
+  });
+
   it("builds Mermaid-only bounded context and rejects oversized or mismatched input", () => {
     const source = "flowchart TD\n  A[Start] -->";
     const context = buildCompletionContext(source, source.length, "mermaid");

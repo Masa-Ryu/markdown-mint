@@ -567,6 +567,36 @@ try {
     "Passed source-code prompt target, ghost isolation, Tab, and Undo/Redo",
   );
 
+  const listCodeBefore =
+    "10. Example\n\n    ```ts\n    const value = 1;\n    value.\n    ```";
+  await load(listCodeBefore);
+  assert.equal(await source(), listCodeBefore);
+  const listCodeRequest = await trigger(" + 2");
+  assert.equal(listCodeRequest.targetKind, "code");
+  assert.equal(await page.locator(".mm-ai-suggestion").textContent(), " + 2");
+  assert.equal(await source(), listCodeBefore);
+  const listCodeAccepted =
+    "10. Example\n    \n    ```ts\n    const value = 1;\n    value. + 2\n    ```";
+  await page.keyboard.press("Tab");
+  await page.waitForFunction(
+    (expected) => window.__markdownMintHarness.document.markdown === expected,
+    listCodeAccepted,
+  );
+  assert.equal(
+    await source(),
+    listCodeAccepted,
+    "list code acceptance preserves its ordered-list structure and fences",
+  );
+  await page.keyboard.press(`${modifier}+z`);
+  await page.waitForFunction(
+    (expected) => window.__markdownMintHarness.document.markdown === expected,
+    listCodeBefore,
+  );
+  assert.equal(await source(), listCodeBefore);
+  console.log(
+    "Passed ordered-list code suggestion target, ghost isolation, Tab, and Undo",
+  );
+
   await load("Before");
   await page.locator('button[data-profile-feature="mermaid"]').click();
   const mermaidDialog = page.locator(".mm-profile-feature-dialog[open]");
