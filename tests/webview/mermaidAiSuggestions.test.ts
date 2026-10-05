@@ -168,6 +168,9 @@ describe("Mermaid textarea Copilot ghost", () => {
         " B[End]",
       ),
     );
+    expect(f.status).not.toContain(
+      "Suggestion available. Press Tab to accept or Escape to dismiss.",
+    );
     expect(parse).toHaveBeenCalledWith(`${source} B[End]`);
     expect(f.input.value).toBe(source);
     expect(

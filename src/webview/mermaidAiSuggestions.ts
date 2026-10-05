@@ -572,9 +572,7 @@ export class MermaidAiSuggestionsController {
     const candidate = { snapshot, remaining: message.text };
     this.candidate = candidate;
     this.renderCandidate(candidate);
-    this.options.reportStatus?.(
-      "Suggestion available. Press Tab to accept or Escape to dismiss.",
-    );
+    this.options.reportStatus?.("");
   }
 
   private isCurrent(snapshot: MermaidSnapshot): boolean {

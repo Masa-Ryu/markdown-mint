@@ -872,6 +872,10 @@ describe("Copilot inline completion ghost", () => {
     expect(f.root.querySelector(".mm-ai-suggestion")?.textContent).toBe(
       "nice ",
     );
+    expect(f.root.querySelector<HTMLElement>(".mm-ai-status")?.hidden).toBe(
+      true,
+    );
+    expect(f.root.querySelector(".mm-ai-announcement")?.textContent).toBe("");
     expect(f.requests()).toHaveLength(1);
   });
 

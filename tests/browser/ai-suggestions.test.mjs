@@ -337,6 +337,16 @@ try {
     ).length,
   }));
   await trigger();
+  const suggestionStatus = await page.evaluate(() => ({
+    visible: !document.querySelector(".mm-ai-status")?.hidden,
+    statusText: document.querySelector(".mm-ai-status")?.textContent,
+    announcement: document.querySelector(".mm-ai-announcement")?.textContent,
+  }));
+  assert.deepEqual(
+    suggestionStatus,
+    { visible: false, statusText: "", announcement: "" },
+    "showing a ghost candidate does not add an availability announcement",
+  );
   const shown = await page.evaluate(() => ({
     document: window.__markdownMintHarness.document,
     state: window.__markdownMintHarness.state,
@@ -599,6 +609,11 @@ try {
   await page
     .locator(".mm-ai-textarea-ghost-overlay .mm-ai-suggestion")
     .waitFor();
+  assert.equal(
+    await page.locator(".mm-ai-status").isVisible(),
+    false,
+    "showing a Mermaid ghost does not add a visible availability message",
+  );
   const mermaidGhostColor = await page
     .locator(".mm-ai-textarea-ghost-overlay .mm-ai-suggestion")
     .evaluate((ghost) => getComputedStyle(ghost).color);

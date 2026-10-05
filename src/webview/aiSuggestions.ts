@@ -784,9 +784,7 @@ export class AiSuggestionsController {
     };
     this.candidate = candidate;
     this.updateDecoration(candidate);
-    this.setLive(
-      "Suggestion available. Press Tab to accept or Escape to dismiss.",
-    );
+    this.setLive("");
   }
 
   private updateDecoration(candidate: LiveCandidate): void {
