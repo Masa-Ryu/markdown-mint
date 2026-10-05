@@ -410,10 +410,11 @@ manually inspected. No version bump, release, tag, or workflow was run.
 | Q03 webview security                   | Webviews use a nonce-based strict CSP, bounded `localResourceRoots`, safe image/link rendering, bounded message fields, and no arbitrary command or filesystem bridge.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | Q04 profile and resource limits        | Markdown sources are capped at two million UTF-16 code units, clipboard matrices are capped at 10,000 cells with whole-paste rejection, spreadsheet TSV/HTML payloads reuse the shared clipboard text bound, and final spreadsheet serialization is checked before commit. Operation ids and resource URLs are bounded, and relative local images resolve through scoped webview resources.                                                                                                                                                                                                                                                                                                                                        |
 
-## Issue #142 Copilot prose suggestions (0.9.0)
+## Issue #142 Copilot suggestions: prose, code, and Mermaid (0.9.0)
 
-The Rich Editor requests prose continuations through VS Code's public Language
-Model API. Mint does not ship or launch the Copilot Language Server, use a
+The Rich Editor requests prose and code continuations, and the Mermaid source
+dialog requests diagram continuations, through VS Code's public Language Model
+API. Mint does not ship or launch the Copilot Language Server, use a
 GitHub sign-in command, read authentication credentials, depend on Copilot's
 internal APIs, or pass a model object or execution capability to the Webview.
 The `markdownMint.aiSuggestions.autoTrigger` setting is application-scoped and
@@ -480,11 +481,13 @@ latter so a subsequent user input can retry; only a confirmed access grant or
 an explicit command clears an access-denial block. Adoption replies carry a
 separate attempt ID so delayed confirmations cannot accept a later Tab attempt.
 
-A request is based on the host-owned current unsaved Markdown snapshot and a
-UTF-16 cursor offset checked against the active panel, document URI/version,
-editor revision, settings generation, and model generation. The host builds a
-bounded prompt from the current paragraph prefix and suffix, nearby heading,
-and adjacent prose. Token input is counted using the selected model's public
+A prose or code request is based on the host-owned current unsaved Markdown
+snapshot and a UTF-16 cursor offset checked against the active panel, document
+URI/version, editor revision, settings generation, and model generation. The
+host builds a bounded prose prompt from the paragraph prefix and suffix,
+nearby heading, and adjacent prose. A code prompt separately extracts only
+the current fenced code body, its language info string, and a nearby heading;
+the Markdown fence is never the insertion target. Token input is counted using the selected model's public
 `countTokens` method, with context reduced from distant text first. The
 prompt asks for only an insertion between prefix and suffix and validates an
 exact JSON object after response collection. No tools, file APIs, workspace
@@ -494,31 +497,54 @@ terminal output, clipboard contents, or Git changes. Mint does not claim that
 Copilot's content exclusion applies identically to arbitrary prompts, that
 cancelled requests consume no usage, or that all service-side data processing
 is known. Requests may use Copilot quota. Prompt and response content are not
-logged or persisted by Mint.
+logged or persisted by Mint. A Mermaid request additionally carries only the
+active Mermaid editor's unsaved source draft and caret offset from the Webview
+to the Extension Host because that draft is not part of host-owned Markdown
+until Apply. The model receives only the bounded Mermaid source around that
+caret. No other dialog fields, files, terminal output, clipboard contents, or
+Git changes are included.
 
 Targets include normal prose and headings at supported mid-line and line-end
 positions, list text, and contextual empty paragraphs. A paragraph containing
-a link or inline code remains eligible outside those spans. Link destinations,
-inline-code contents, tables, code blocks, Mermaid, math, raw HTML editing
-regions, selected ranges, Source, Preview, and modal fields remain excluded.
+a link or inline code remains eligible outside those spans. Ordinary fenced
+code blocks are also targets for code-specific completions; the language comes
+from the existing code-block info string, and Mermaid code blocks are excluded
+from this generic code path. The Mermaid dialog's source textarea is a separate
+target only on its editor screen, outside replacement confirmation and IME
+composition. Link destinations, inline-code contents, tables, math, raw HTML
+editing regions, selected ranges, Source, Preview, and other modal fields
+remain excluded.
 The 300 ms automatic debounce reevaluates after supported input and cursor
 changes without starting during IME composition. Manual requests do not wait
 for debounce. An exact active snapshot is used to combine duplicate work; a
 newer input cancels the previous request. Cancellation, timeout, stream errors,
-settings/model/access changes, panel deactivation, and actual document-version
-changes end stale work. Same-version saves do not invalidate a candidate;
-format-on-save and other real document changes still do. Late output from a
-cancelled generation cannot restore a candidate.
+settings/model/access changes, panel deactivation, dialog-screen changes, and
+actual document-version changes end stale work. Same-version saves do not
+invalidate a candidate; format-on-save and other real document changes still
+do. Late output from a cancelled generation cannot restore a candidate.
 
-The Webview displays one transient, insertion-only ghost. Candidate display or
-dismissal does not modify the ProseMirror document, serialized Markdown,
-native TextDocument version, dirty or recovery state, clipboard, preview,
-exports, or Undo history. Tab is one regular editor transaction using the
-existing synchronization path and native Undo/Redo boundary. Esc dismisses a
-candidate; matching input consumes only the matching leading text; a mismatch,
-caret move, composition conflict, or stale identity clears it. Tab/Escape and
-keyCode 229 remain unhandled during IME composition. A manual failure is
-reported with visible feedback and not only an aria-live message.
+Prose and code use the existing ProseMirror ghost decoration. Code insertion
+is accepted only when parsing proves the original code block, its attributes,
+and all surrounding content remain intact; multiline insertions that escape or
+close the fence are rejected. Candidate display or dismissal does not modify
+the ProseMirror document, serialized Markdown, native TextDocument version,
+dirty or recovery state, clipboard, preview, exports, or Undo history. Tab
+acceptance is one regular ProseMirror transaction using the existing
+synchronization path and native Undo/Redo boundary.
+
+Mermaid uses a separate display-only textarea overlay. Candidate text never
+enters `textarea.value` until Tab; the proposed full diagram is checked through
+the existing `validateMermaidSource()` and local Mermaid runtime before any
+ghost is shown. Missing validator runtime and invalid syntax suppress the
+candidate. Tab inserts through the textarea's normal input event so preview,
+validation, and Apply state follow their existing paths; the native Markdown
+document is changed only by the existing Insert/Update action. Esc dismisses
+only the candidate. Matching input consumes only the matching leading text; a
+mismatch, caret move, composition conflict, screen change, or stale document,
+version, setting, or dialog identity clears it. Both surfaces retain the
+300 ms debounce. Tab/Escape and keyCode 229 remain unhandled during IME
+composition. A manual failure is reported with visible feedback and not only
+an aria-live message.
 
 Automatic restoration after an Extension Host restart now reselects only the
 saved model ID/version after the first real text edit's 300 ms debounce and
@@ -534,7 +560,8 @@ behavior, Japanese OS IME interaction, Command Palette/Quick Pick focus,
 screen-reader output, restart restoration, and real-user utility/latency remain
 manual checks. Leave the PR Draft until those checks are completed. Fake
 models and browser simulations are automated regressions only, not Copilot
-acceptance evidence.
+acceptance evidence. Real Copilot code and Mermaid completion quality,
+validation, authorization, and usage behavior also remain unverified.
 
 The toolbar button shows the shared application setting and model availability
 without a separate StatusBarItem. Transient failed and timed-out outcomes pause
@@ -597,9 +624,16 @@ English cases:
 - **E14 — body containing emphasis:** “The **important setting**⟦cursor⟧keeps its default value.”
 - **E15 — mid-sentence with an existing following line:** “After saving the changes,⟦cursor⟧\ncontinue with the next step.”
 
-The operator records a separate row for each case/repetition with: outcome
-category; request sent or not; cold or warm state; model ID and version; VS
-Code version and OS; input-stop-to-request, request-to-first-response,
+Code and Mermaid cases use only these synthetic inputs:
+
+- **C01 — JavaScript mid-expression:** `values.⟦cursor⟧map((value) => value * 2)` inside a fenced `js` block. Confirm the model returns code only, the existing prefix/suffix remain exact, and Tab acceptance is one Undo step.
+- **C02 — Python line continuation:** `def greet(name):\n    ⟦cursor⟧` inside a fenced `python` block. Confirm indentation and that no Markdown fence is inserted.
+- **M01 — flowchart continuation:** `flowchart TD\n    A[Start] -->⟦cursor⟧` in the Mermaid source editor. Confirm the complete proposed diagram passes the packaged Mermaid parser before display and the draft remains unapplied until Insert/Update.
+- **M02 — sequence continuation:** `sequenceDiagram\n    Alice->>Bob: ⟦cursor⟧` in the Mermaid source editor. Confirm the resulting diagram remains valid and preserves the existing sequence type.
+
+The operator records a separate row for each case/repetition with: target
+surface; outcome category; request sent or not; cold or warm state; model ID
+and version; VS Code version and OS; input-stop-to-request, request-to-first-response,
 request-to-complete-response, and validation-to-display durations; displayed
 and displayed-within-three-seconds flags; and a human rating of usable as-is,
 usable with a minor edit, or unusable with a short reason. Report Japanese and
@@ -624,7 +658,8 @@ recovery, not to mark restart acceptance passed.
 **0 real Copilot requests** and do not fill any case or repetition in this
 matrix. Product acceptance remains blocked on a supported VS Code Stable
 build, a Copilot model and user consent, a local trusted desktop workspace,
-and an operator who can perform and rate the synthetic cases. Keep the PR
+and an operator who can perform and rate the prose, code, and Mermaid synthetic
+cases. Keep the PR
 Draft until results are recorded here.
 
 Packaging returns to one universal VSIX. `npm run package` starts from a clean

@@ -770,8 +770,12 @@ export class AiSuggestionsHost implements vscode.Disposable {
     const markdown = session.panel.markdown();
     if (
       markdown.length > AI_LIMITS.maxDocumentLength ||
-      request.position > markdown.length ||
-      isLowSurrogate(markdown.charCodeAt(request.position))
+      (request.targetKind !== "mermaid" &&
+        (request.position > markdown.length ||
+          isLowSurrogate(markdown.charCodeAt(request.position)))) ||
+      (request.targetKind === "mermaid" &&
+        (request.surfaceText === undefined ||
+          request.surfacePosition === undefined))
     ) {
       this.reply(session, request, "invalid-context");
       return;
@@ -910,9 +914,16 @@ export class AiSuggestionsHost implements vscode.Disposable {
         AI_LIMITS.deadlineMs,
       );
       const work = this.environment.languageModel.complete(
-        markdown,
-        request.position,
-        request.targetKind,
+        {
+          source:
+            request.targetKind === "mermaid" ? request.surfaceText! : markdown,
+          position:
+            request.targetKind === "mermaid"
+              ? request.surfacePosition!
+              : request.position,
+          targetKind: request.targetKind,
+          ...(request.language ? { language: request.language } : {}),
+        },
         source.token,
         { allowConsentPrompt: active.allowAuthorizationPrompt },
       );

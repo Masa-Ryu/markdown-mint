@@ -283,6 +283,41 @@ describe("Copilot inline completion ghost", () => {
     expect(heading.requests()[0]?.targetKind).toBe("heading");
   });
 
+  it("requests a language-scoped code continuation and keeps its multiline ghost transient", async () => {
+    const source = "```python\nprint('hello')\n```";
+    const f = setup(source);
+    let position: number | undefined;
+    f.app.view.state.doc.descendants((node, start) => {
+      if (node.isText && node.text === "print('hello')")
+        position = start + node.text.length;
+    });
+    expect(position).toBeDefined();
+    f.app.view.dispatch(
+      f.app.view.state.tr.setSelection(
+        TextSelection.create(f.app.view.state.doc, position!),
+      ),
+    );
+
+    f.trigger();
+    await vi.advanceTimersByTimeAsync(0);
+    const request = f.requests()[0]!;
+    expect(request).toMatchObject({
+      targetKind: "code",
+      language: "python",
+    });
+    const originalDoc = f.app.view.state.doc;
+    f.result("\nprint('next')", request);
+    expect(f.root.querySelector(".mm-ai-suggestion")?.textContent).toBe(
+      "\nprint('next')",
+    );
+    expect(f.app.view.state.doc).toBe(originalDoc);
+    expect(f.messages.some((message) => message.type === "edit")).toBe(false);
+    expect(f.key("Tab").defaultPrevented).toBe(true);
+    expect(
+      f.messages.filter((message) => message.type === "edit").at(-1)?.markdown,
+    ).toContain("print('hello')\nprint('next')");
+  });
+
   it("uses a 300ms opt-in debounce, while manual requests still work when automatic suggestions are off", async () => {
     const f = setup("Hello", false);
     f.type("!");

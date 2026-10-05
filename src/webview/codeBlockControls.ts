@@ -428,6 +428,13 @@ export function toggleCodeBlockExpanded(block: HTMLElement): void {
   ownerDocument.body?.append(backdrop);
   state.backdrop = backdrop;
   state.keydown = (event: KeyboardEvent): void => {
+    // A display-only code completion owns the first Tab/Escape action. Let
+    // ProseMirror accept or dismiss it before the expanded-block focus trap.
+    if (
+      (event.key === "Tab" || event.key === "Escape") &&
+      block.querySelector(".mm-ai-suggestion")
+    )
+      return;
     if (event.key === "Escape") {
       // A language picker belongs to the editor NodeView and owns its own
       // Escape handling. Let it close before the surrounding dialog does.

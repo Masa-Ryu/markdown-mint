@@ -2400,6 +2400,26 @@ body.vscode-high-contrast-light .mm-file-autocomplete-option.is-active {
   -webkit-user-select: none;
 }
 
+.mm-ai-textarea-ghost-overlay {
+  position: absolute;
+  z-index: 2;
+  margin: 0;
+  overflow: hidden;
+  pointer-events: none;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.mm-ai-textarea-ghost-source {
+  color: transparent !important;
+  caret-color: var(
+    --vscode-editorCursor-foreground,
+    var(--vscode-input-foreground, #000000)
+  );
+  -webkit-text-fill-color: transparent !important;
+}
+
 .mm-ai-announcement {
   position: absolute;
   width: 1px;

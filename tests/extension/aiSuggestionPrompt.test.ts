@@ -87,6 +87,59 @@ describe("AI suggestion prompt", () => {
       markdown.length,
       "paragraph",
     );
-    expect(context?.listKind).toBe("ordered; nesting depth 1");
+    expect(context?.targetKind).toBe("paragraph");
+    if (
+      context?.targetKind === "paragraph" ||
+      context?.targetKind === "heading"
+    )
+      expect(context.listKind).toBe("ordered; nesting depth 1");
+  });
+
+  it("builds source-code prompts with the fenced block language and exact boundary", () => {
+    const markdown =
+      "# API\n\n```typescript\nconst values = [1, 2, 3];\nvalues.map\n```";
+    const position = markdown.indexOf("values.map") + "values.map".length;
+    const context = buildCompletionContext(
+      markdown,
+      position,
+      "code",
+      "typescript",
+    );
+    expect(context).toMatchObject({
+      targetKind: "code",
+      language: "typescript",
+      prefix: "const values = [1, 2, 3];\nvalues.map",
+      suffix: "\n",
+      heading: "# API",
+    });
+    const prompt = buildCompletionPrompt(context!);
+    expect(prompt.content).toContain(
+      "You complete source code inside a Markdown code block.",
+    );
+    expect(prompt.content).toContain('Language: "typescript"');
+    expect(prompt.content).toContain("Do not include Markdown fences");
+    expect(prompt.content).not.toContain("You complete prose");
+  });
+
+  it("builds Mermaid-only bounded context and rejects oversized or mismatched input", () => {
+    const source = "flowchart TD\n  A[Start] -->";
+    const context = buildCompletionContext(source, source.length, "mermaid");
+    expect(context).toMatchObject({
+      targetKind: "mermaid",
+      prefix: source,
+      suffix: "",
+    });
+    const prompt = buildCompletionPrompt(context!);
+    expect(prompt.content).toContain("You complete Mermaid diagram source.");
+    expect(prompt.content).not.toContain("You complete prose");
+    expect(
+      buildCompletionContext(source, source.length, "code", "python"),
+    ).toBeUndefined();
+    expect(
+      buildCompletionContext("x".repeat(200_001), 1, "mermaid"),
+    ).toBeUndefined();
+    expect(
+      buildCompletionContext("flowchart TD\nA\0B", 1, "mermaid"),
+    ).toBeUndefined();
   });
 });

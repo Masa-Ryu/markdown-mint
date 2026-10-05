@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { EditorState, TextSelection } from "prosemirror-state";
-import { parseMarkdown } from "../../src/core";
+import { parseMarkdown, schema } from "../../src/core";
 import { getSuggestionTarget } from "../../src/webview/aiSuggestionContext";
 
 function state(source: string, offset: number) {
@@ -49,9 +49,46 @@ describe("suggestion cursor targets", () => {
       getSuggestionTarget(state(mixed, sourcePosition(mixed, "after") + 2)),
     ).toBeDefined();
   });
+  it("accepts ordinary fenced code at a collapsed selection with its language", () => {
+    const source = "# API\n\n```typescript\nconst value = 1;\n```";
+    const target = getSuggestionTarget(
+      state(source, sourcePosition(source, "value") + 2),
+    );
+    expect(target).toMatchObject({ kind: "code", language: "typescript" });
+    expect(target?.node.type.name).toBe("code_block");
+  });
+  it("allows an empty code block but keeps Mermaid out of the generic code path", () => {
+    const empty = "## Example\n\n```js\n```";
+    const emptyDoc = parseMarkdown(empty, "github").doc;
+    const emptyBlock = emptyDoc.content.child(1);
+    const emptyPosition =
+      emptyBlock.content.size === 0
+        ? emptyDoc.content.child(0).nodeSize + emptyBlock.nodeSize / 2
+        : 1;
+    expect(
+      getSuggestionTarget(
+        EditorState.create({
+          doc: emptyDoc,
+          selection: TextSelection.create(emptyDoc, Math.floor(emptyPosition)),
+        }),
+      )?.kind,
+    ).toBe("code");
+    const mermaidCode = schema.nodes.code_block!.create(
+      { params: "mermaid" },
+      schema.text("flowchart TD\n  A --> B"),
+    );
+    const mermaidDoc = schema.topNodeType.create(null, mermaidCode);
+    expect(
+      getSuggestionTarget(
+        EditorState.create({
+          doc: mermaidDoc,
+          selection: TextSelection.create(mermaidDoc, 2),
+        }),
+      ),
+    ).toBeUndefined();
+  });
   it.each([
     ["table", "| A | B |\n|---|---|\n| one | two |", 1],
-    ["fenced code", "\x60\x60\x60ts\nconst value = 1;\n\x60\x60\x60", 5],
     ["raw HTML", "<details>\n<summary>x</summary>\n</details>", 2],
   ])("rejects %s content", (_name, source, position) => {
     expect(getSuggestionTarget(state(source, position))).toBeUndefined();

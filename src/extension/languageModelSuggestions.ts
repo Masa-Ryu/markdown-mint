@@ -1,4 +1,5 @@
 import * as vscode from "vscode";
+import type { AiTargetKind } from "../shared/aiSuggestions";
 import {
   buildCompletionContext,
   fitCompletionPrompt,
@@ -38,6 +39,16 @@ export interface LanguageModelResult {
   readonly failure?: LanguageModelFailure;
 }
 
+export interface LanguageModelCompletionInput {
+  /** Host-owned Markdown, or the bounded unsaved Mermaid dialog source. */
+  readonly source: string;
+  /** UTF-16 offset in source. */
+  readonly position: number;
+  readonly targetKind: AiTargetKind;
+  /** Used only to verify a code block's Markdown info string. */
+  readonly language?: string;
+}
+
 export interface LanguageModelApi {
   selectChatModels(
     selector: vscode.LanguageModelChatSelector,
@@ -61,9 +72,9 @@ export type LanguageModelUserActionPurpose = "setup" | "suggestion";
 
 const setupAuthorizationPrompt = "Reply with OK.";
 const setupAuthorizationJustification =
-  "Enable Copilot prose suggestions in Markdown Mint.";
+  "Enable Copilot suggestions in Markdown Mint.";
 const suggestionJustification =
-  "Generate a short prose continuation from the current Markdown in Markdown Mint.";
+  "Generate a short continuation from the active Markdown Mint editor surface.";
 
 /** Public VS Code Language Model API adapter; no network or SDK fallback exists. */
 export class LanguageModelSuggestions implements vscode.Disposable {
@@ -402,9 +413,7 @@ export class LanguageModelSuggestions implements vscode.Disposable {
   }
 
   public async complete(
-    markdown: string,
-    position: number,
-    targetKind: "paragraph" | "heading",
+    input: LanguageModelCompletionInput,
     token: vscode.CancellationToken,
     options: { readonly allowConsentPrompt?: boolean } = {},
   ): Promise<LanguageModelResult> {
@@ -417,7 +426,12 @@ export class LanguageModelSuggestions implements vscode.Disposable {
       return { failure: "needs-authorization" };
     if (!allowConsentPrompt && access.canSendRequest(model) !== true)
       return { failure: "needs-authorization" };
-    const context = buildCompletionContext(markdown, position, targetKind);
+    const context = buildCompletionContext(
+      input.source,
+      input.position,
+      input.targetKind,
+      input.language,
+    );
     if (!context) return { failure: "invalid-context" };
     try {
       const prompt = await fitCompletionPrompt(model, context, token);

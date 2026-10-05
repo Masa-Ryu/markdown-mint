@@ -220,4 +220,45 @@ describe("AI suggestion insertion plans", () => {
         .eq(parseMarkdown(`${source}\n\nSecond paragraph.`, "github").doc),
     ).toBe(true);
   });
+
+  it("accepts code insertions inside the same fenced block and preserves language and suffix", () => {
+    const source = "```ts\nconst value = 1;\nreturn value;\n```";
+    const doc = parseMarkdown(source, "github").doc;
+    const position = pmPositionFor(doc, "const value = 1;", 16);
+    const sourceOffset = source.indexOf("const value") + 16;
+    const plan = planCompletionInsertion(
+      source,
+      doc,
+      sourceOffset,
+      position,
+      "\nconst next = value + 1;",
+      "github",
+      { parseMarkdown },
+    );
+    expect(plan).toBeDefined();
+    const result = doc.replace(position, position, plan!.slice);
+    const expected = parseMarkdown(
+      "```ts\nconst value = 1;\nconst next = value + 1;\nreturn value;\n```",
+      "github",
+    ).doc;
+    expect(result.eq(expected)).toBe(true);
+  });
+
+  it("rejects code insertions that escape or close their original fence", () => {
+    const source = "```js\nconst value = 1;\n```";
+    const doc = parseMarkdown(source, "github").doc;
+    const position = pmPositionFor(doc, "const value", 5);
+    const sourceOffset = source.indexOf("const value") + 5;
+    expect(
+      planCompletionInsertion(
+        source,
+        doc,
+        sourceOffset,
+        position,
+        "\n```\n# outside code",
+        "github",
+        { parseMarkdown },
+      ),
+    ).toBeUndefined();
+  });
 });

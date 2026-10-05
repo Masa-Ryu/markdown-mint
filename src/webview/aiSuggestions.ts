@@ -478,6 +478,10 @@ export class AiSuggestionsController {
     }
   }
 
+  public reportStatus(message: string): void {
+    this.setLive(message);
+  }
+
   public toggleAutomaticSuggestions(): void {
     const state = this.state;
     if (!state || this.disposed || state.active === false) return;
@@ -649,14 +653,14 @@ export class AiSuggestionsController {
     if (!target || position === undefined || !documentId) {
       if (waiting.trigger === "manual")
         this.setLive(
-          "Place the cursor in supported Markdown prose, a heading, or a list item to request a suggestion.",
+          "Place the cursor in supported Markdown prose or a code block to request a suggestion.",
         );
       return;
     }
     const request: AiSuggestionRequest = {
       protocolVersion: 1,
       type: "ai-suggestion-request",
-      requestId: `ai-${Date.now()}-${++this.sequence}`,
+      requestId: `ai-pm-${Date.now()}-${++this.sequence}`,
       sessionId: state.sessionId,
       documentId,
       baseVersion: this.options.version(),
@@ -664,6 +668,9 @@ export class AiSuggestionsController {
       settingsGeneration: state.settingsGeneration,
       position,
       targetKind: target.kind,
+      ...(target.kind === "code" && target.language
+        ? { language: target.language }
+        : {}),
       trigger: waiting.trigger,
       ...(waiting.afterUserInput ? { afterUserInput: true } : {}),
       ...(waiting.invocationId ? { invocationId: waiting.invocationId } : {}),
@@ -721,7 +728,6 @@ export class AiSuggestionsController {
       !this.disposed &&
       this.options.canSuggest() &&
       !this.composing &&
-      this.options.synced() &&
       request.sessionId === this.state?.sessionId &&
       this.state.active !== false &&
       availabilityAllowsPendingWork(this.state, request) &&

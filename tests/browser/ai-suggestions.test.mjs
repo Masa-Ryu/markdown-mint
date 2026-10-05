@@ -431,7 +431,7 @@ try {
   for (const sourceText of [
     "`code`",
     "| A |\n|---|\n| B |",
-    "```ts\nvalue\n```",
+    "```mermaid\nflowchart TD\nA --> B\n```",
     "",
     "<details>\n<summary>T</summary>\n\nBody\n\n</details>",
   ]) {
@@ -440,7 +440,192 @@ try {
     await page.waitForTimeout(60);
     assert.equal((await requests()).length, 0, sourceText);
   }
-  console.log("Passed eligible and excluded editing targets");
+  console.log("Passed prose, code-block, and excluded editing targets");
+
+  await load("```js\nconst values = [1, 2, 3];\nvalues.\n```");
+  const codeBlock = page
+    .locator(".mm-code-block")
+    .filter({ hasText: "values." });
+  await codeBlock.locator('[data-mm-code-action="expand"]').click();
+  assert.equal(await codeBlock.getAttribute("data-mm-code-expanded"), "true");
+  await placeCaretAtText("values.", "values.".length);
+  const codeBefore = await source();
+  const codeRequest = await trigger("map((value) => value * 2)");
+  assert.equal(codeRequest.targetKind, "code");
+  assert.equal(codeRequest.language, "js");
+  assert.equal(
+    await page
+      .locator(".mm-ai-suggestion")
+      .evaluate((node) => Boolean(node.closest("pre code"))),
+    true,
+    "code candidate is rendered inside the existing ProseMirror code block",
+  );
+  assert.equal(await source(), codeBefore, "code ghost did not edit Markdown");
+  assert.equal(
+    await page.evaluate(
+      () =>
+        window.__markdownMintHarness.messages.filter(
+          (message) => message.type === "edit",
+        ).length,
+    ),
+    0,
+    "code ghost emitted no native edit before acceptance",
+  );
+  await page.keyboard.press("Escape");
+  assert.equal(await codeBlock.getAttribute("data-mm-code-expanded"), "true");
+  assert.equal(
+    await page.locator(".mm-ai-suggestion").count(),
+    0,
+    "first Escape dismisses only the expanded code suggestion",
+  );
+  const acceptedCodeRequest = await trigger("map((value) => value * 2)");
+  assert.equal(acceptedCodeRequest.targetKind, "code");
+  await page.keyboard.press("Tab");
+  await page.waitForFunction(() => !window.markdownMint.sync.hasPending);
+  const completedCode = await source();
+  assert.ok(completedCode.includes("values.map((value) => value * 2)"));
+  assert.equal(await codeBlock.getAttribute("data-mm-code-expanded"), "true");
+  await page.keyboard.press("Escape");
+  assert.equal(await codeBlock.getAttribute("data-mm-code-expanded"), "false");
+  await page.keyboard.press(`${modifier}+z`);
+  await page.waitForFunction(
+    (previous) => window.__markdownMintHarness.document.markdown === previous,
+    codeBefore,
+  );
+  await page.keyboard.press(`${modifier}+Shift+z`);
+  await page.waitForFunction(() =>
+    window.__markdownMintHarness.document.markdown.includes(
+      "values.map((value) => value * 2)",
+    ),
+  );
+  console.log(
+    "Passed source-code prompt target, ghost isolation, Tab, and Undo/Redo",
+  );
+
+  await load("Before");
+  await page.locator('button[data-profile-feature="mermaid"]').click();
+  const mermaidDialog = page.locator(".mm-profile-feature-dialog[open]");
+  await mermaidDialog.waitFor();
+  await mermaidDialog.locator('[data-template-id="flowchart-basic"]').click();
+  await mermaidDialog
+    .getByRole("button", { name: "Next: Edit code", exact: true })
+    .click();
+  const mermaidInput = mermaidDialog.locator('[data-feature-field="body"]');
+  await mermaidInput.waitFor();
+  const mermaidBefore = await mermaidInput.inputValue();
+  await mermaidInput.evaluate((input) => {
+    input.focus();
+    input.setSelectionRange(input.value.length, input.value.length);
+  });
+  const mermaidNativeBefore = await source();
+  const mermaidEditCount = await page.evaluate(
+    () =>
+      window.__markdownMintHarness.messages.filter(
+        (message) => message.type === "edit",
+      ).length,
+  );
+  const mermaidRequestCount = (await requests()).length;
+  await page.evaluate(() => window.__markdownMintHarness.triggerAi());
+  await page.waitForFunction(
+    (previous) =>
+      window.__markdownMintHarness.messages.filter(
+        (message) => message.type === "ai-suggestion-request",
+      ).length > previous,
+    mermaidRequestCount,
+  );
+  const mermaidRequest = (await requests()).at(-1);
+  assert.equal(mermaidRequest.targetKind, "mermaid");
+  assert.equal(mermaidRequest.surfaceText, mermaidBefore);
+  assert.equal(mermaidRequest.surfacePosition, mermaidBefore.length);
+  await page.evaluate(
+    ([request, text]) => window.__markdownMintHarness.respondAi(request, text),
+    [mermaidRequest, "\n    B --> C[Done]"],
+  );
+  await page
+    .locator(".mm-ai-textarea-ghost-overlay .mm-ai-suggestion")
+    .waitFor();
+  const mermaidGhostColor = await page
+    .locator(".mm-ai-textarea-ghost-overlay .mm-ai-suggestion")
+    .evaluate((ghost) => getComputedStyle(ghost).color);
+  assert.notEqual(
+    mermaidGhostColor,
+    "rgba(0, 0, 0, 0)",
+    "the textarea overlay keeps the VS Code ghost foreground visible",
+  );
+  assert.equal(await mermaidInput.inputValue(), mermaidBefore);
+  assert.equal(await source(), mermaidNativeBefore);
+  assert.equal(
+    await page.evaluate(
+      () =>
+        window.__markdownMintHarness.messages.filter(
+          (message) => message.type === "edit",
+        ).length,
+    ),
+    mermaidEditCount,
+    "Mermaid ghost does not apply the unsaved dialog draft to Markdown",
+  );
+  await mermaidInput.press("Escape");
+  assert.equal(await mermaidDialog.isVisible(), true);
+  assert.equal(
+    await page.locator(".mm-ai-textarea-ghost-overlay").count(),
+    0,
+    "Escape dismisses only the Mermaid candidate",
+  );
+
+  await mermaidInput.evaluate((input) => input.focus());
+  const nextMermaidRequestCount = (await requests()).length;
+  await page.evaluate(() => window.__markdownMintHarness.triggerAi());
+  await page.waitForFunction(
+    (previous) =>
+      window.__markdownMintHarness.messages.filter(
+        (message) => message.type === "ai-suggestion-request",
+      ).length > previous,
+    nextMermaidRequestCount,
+  );
+  const nextMermaidRequest = (await requests()).at(-1);
+  assert.equal(nextMermaidRequest.targetKind, "mermaid");
+  await page.evaluate(
+    ([request, text]) => window.__markdownMintHarness.respondAi(request, text),
+    [nextMermaidRequest, "\n    B --> C[Done]"],
+  );
+  await page
+    .locator(".mm-ai-textarea-ghost-overlay .mm-ai-suggestion")
+    .waitFor();
+  await mermaidInput.press("Tab");
+  await page.waitForFunction(
+    ([selector, expected]) =>
+      document.querySelector(selector)?.value === expected,
+    ['[data-feature-field="body"]', mermaidBefore + "\n    B --> C[Done]"],
+  );
+  assert.equal(await source(), mermaidNativeBefore);
+  const insertMermaid = mermaidDialog.getByRole("button", {
+    name: "Insert diagram",
+    exact: true,
+  });
+  await page.waitForFunction(() => {
+    const button = Array.from(
+      document.querySelectorAll(".mm-profile-feature-dialog button"),
+    ).find((element) => element.textContent?.trim() === "Insert diagram");
+    return Boolean(button && !button.disabled);
+  });
+  assert.equal(await insertMermaid.isEnabled(), true);
+  await insertMermaid.click();
+  await mermaidDialog.waitFor({ state: "detached" });
+  await page.waitForFunction(() => !window.markdownMint.sync.hasPending);
+  assert.ok((await source()).includes("B --> C[Done]"));
+  assert.equal(
+    await page.evaluate(
+      () =>
+        window.__markdownMintHarness.messages.filter(
+          (message) => message.type === "edit",
+        ).length,
+    ),
+    mermaidEditCount + 1,
+    "only the existing Apply action commits the Mermaid draft",
+  );
+  console.log(
+    "Passed validated Mermaid draft ghost, Escape, Tab, and normal Apply",
+  );
 
   await load("[link](https://example.com)");
   await placeCaretAtText("link", 2);

@@ -6,6 +6,7 @@ import {
   type AiSuggestionRequest,
 } from "../../src/shared/aiSuggestions";
 import { isHostMessage, parseWebviewMessage } from "../../src/shared/protocol";
+import { MAX_MERMAID_SOURCE_LENGTH } from "../../src/shared/mermaid";
 
 const request: AiSuggestionRequest = {
   protocolVersion: 1,
@@ -78,6 +79,61 @@ describe("VS Code Language Model suggestion protocol", () => {
         profile: "github",
       }),
     ).toBe(true);
+  });
+
+  it("validates code and Mermaid completion payloads by target kind", () => {
+    const codeRequest = {
+      ...request,
+      targetKind: "code",
+      language: "typescript",
+    } as const;
+    expect(parseWebviewMessage(codeRequest)).toEqual(codeRequest);
+    expect(
+      parseWebviewMessage({ ...codeRequest, language: "x\nforged" }),
+    ).toBeUndefined();
+    expect(
+      parseWebviewMessage({ ...codeRequest, surfaceText: "forged" }),
+    ).toBeUndefined();
+
+    const mermaidRequest = {
+      ...request,
+      targetKind: "mermaid",
+      position: 0,
+      surfaceText: "flowchart TD\n  A -->",
+      surfacePosition: "flowchart TD\n  A -->".length,
+    } as const;
+    expect(parseWebviewMessage(mermaidRequest)).toEqual(mermaidRequest);
+    expect(
+      parseWebviewMessage({ ...mermaidRequest, surfaceText: undefined }),
+    ).toBeUndefined();
+    expect(
+      parseWebviewMessage({
+        ...mermaidRequest,
+        surfacePosition: mermaidRequest.surfaceText.length + 1,
+      }),
+    ).toBeUndefined();
+    expect(
+      parseWebviewMessage({ ...mermaidRequest, surfaceText: "A\0B" }),
+    ).toBeUndefined();
+    expect(
+      parseWebviewMessage({
+        ...mermaidRequest,
+        surfaceText: "x".repeat(MAX_MERMAID_SOURCE_LENGTH + 1),
+      }),
+    ).toBeUndefined();
+    expect(
+      parseWebviewMessage({
+        ...mermaidRequest,
+        language: "typescript",
+      }),
+    ).toBeUndefined();
+    expect(
+      parseWebviewMessage({
+        ...request,
+        surfaceText: "flowchart TD",
+        surfacePosition: 0,
+      }),
+    ).toBeUndefined();
   });
 
   it("accepts only a session-scoped Copilot toolbar action", () => {

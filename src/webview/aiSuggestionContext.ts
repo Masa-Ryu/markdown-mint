@@ -14,9 +14,10 @@ export interface AiSuggestionTarget {
   readonly kind: AiTargetKind;
   readonly node: PMNode;
   readonly doc: PMNode;
+  readonly language?: string;
 }
 
-/** Only ordinary prose and headings are eligible; links remain editable labels. */
+/** Prose and ordinary fenced code are eligible; Mermaid uses its own surface. */
 export function getSuggestionTarget(
   state: EditorState,
 ): AiSuggestionTarget | undefined {
@@ -25,6 +26,19 @@ export function getSuggestionTarget(
     return undefined;
   const { $from } = selection;
   const kind = $from.parent.type.name;
+  if (kind === "code_block") {
+    for (let depth = 0; depth < $from.depth; depth += 1)
+      if (!allowedContainers.has($from.node(depth).type.name)) return undefined;
+    const language = codeBlockLanguage($from.parent.attrs.params);
+    if (language?.toLowerCase() === "mermaid") return undefined;
+    return {
+      position: selection.from,
+      kind: "code",
+      node: $from.parent,
+      doc: state.doc,
+      ...(language ? { language } : {}),
+    };
+  }
   if (kind !== "paragraph" && kind !== "heading") return undefined;
   if (
     !$from.parent.textContent.trim() &&
@@ -41,6 +55,22 @@ export function getSuggestionTarget(
   )
     return undefined;
   return { position: selection.from, kind, node: $from.parent, doc: state.doc };
+}
+
+function codeBlockLanguage(params: unknown): string | undefined {
+  if (typeof params !== "string") return undefined;
+  const language = params.trim().split(/\s+/, 1)[0];
+  if (!language || language.length > 64 || hasAsciiControl(language))
+    return undefined;
+  return language;
+}
+
+function hasAsciiControl(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code < 0x20 || code === 0x7f) return true;
+  }
+  return false;
 }
 
 function hasAdjacentProse(position: ResolvedPos): boolean {
@@ -93,7 +123,8 @@ export function isSuggestionSnapshotCurrent(
     current.doc === target.doc &&
     current.node === target.node &&
     current.position === target.position &&
-    current.kind === target.kind
+    current.kind === target.kind &&
+    current.language === target.language
   );
 }
 

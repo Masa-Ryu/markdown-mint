@@ -77,8 +77,16 @@ export function planCompletionInsertion(
       return undefined;
     const slice = parsed.slice(start.to, end.from);
     if (slice.content.size === 0) return undefined;
-    if (insertion.includes("\n") && !isSafeMultiline(slice, doc, pmPosition))
+    const originalParent = doc.resolve(pmPosition).parent;
+    if (originalParent.type.name === "code_block") {
+      if (!isSafeCodeInsertion(parsed, start, end, insertion, doc, pmPosition))
+        return undefined;
+    } else if (
+      insertion.includes("\n") &&
+      !isSafeMultiline(slice, doc, pmPosition)
+    ) {
       return undefined;
+    }
     return {
       insertion,
       slice,
@@ -166,6 +174,46 @@ function isSafeMultiline(
       safe = false;
   });
   return safe;
+}
+function isSafeCodeInsertion(
+  parsed: PMNode,
+  start: { readonly from: number; readonly to: number },
+  end: { readonly from: number; readonly to: number },
+  insertion: string,
+  original: PMNode,
+  position: number,
+): boolean {
+  const originalParent = original.resolve(position).parent;
+  if (originalParent.type.name !== "code_block") return false;
+  try {
+    const startParent = parsed.resolve(start.from).parent;
+    const endParent = parsed.resolve(end.from).parent;
+    if (
+      startParent.type.name !== "code_block" ||
+      startParent !== endParent ||
+      JSON.stringify(startParent.attrs) !== JSON.stringify(originalParent.attrs)
+    )
+      return false;
+    const insertionSlice = parsed.slice(start.to, end.from);
+    let onlyText = true;
+    insertionSlice.content.forEach((node) => {
+      if (!node.isText) onlyText = false;
+    });
+    if (
+      insertionSlice.content.childCount === 0 ||
+      !onlyText ||
+      insertionSlice.content.textBetween(
+        0,
+        insertionSlice.content.size,
+        "",
+        "\n",
+      ) !== insertion
+    )
+      return false;
+    return true;
+  } catch {
+    return false;
+  }
 }
 function isBoundedMarkdownText(text: string): boolean {
   if (text.length > 32_768) return false;

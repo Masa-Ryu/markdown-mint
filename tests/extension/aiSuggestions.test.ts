@@ -352,7 +352,7 @@ describe("AI suggestion lifecycle with the public Language Model API", () => {
     ];
     expect(messages).toEqual([{ role: 1, content: "Reply with OK." }]);
     expect(options).toMatchObject({
-      justification: "Enable Copilot prose suggestions in Markdown Mint.",
+      justification: "Enable Copilot suggestions in Markdown Mint.",
     });
     expect(f.setupCompleted()).toBe(true);
     expect(f.autoTrigger()).toBe(true);
@@ -409,7 +409,7 @@ describe("AI suggestion lifecycle with the public Language Model API", () => {
     expect(messages[0]?.content).not.toBe("Reply with OK.");
     expect(options).toMatchObject({
       justification:
-        "Generate a short prose continuation from the current Markdown in Markdown Mint.",
+        "Generate a short continuation from the active Markdown Mint editor surface.",
     });
     expect(f.setupCompleted()).toBe(true);
     expect(
@@ -1250,6 +1250,43 @@ describe("AI suggestion lifecycle with the public Language Model API", () => {
       type: "ai-suggestion-result",
       reason: "ready",
       text: " for safe publishing.",
+    });
+    f.dispose();
+  });
+
+  it("uses only the bounded Mermaid draft with its dedicated completion prompt", async () => {
+    const f = fixture();
+    const manual = await f.startManual();
+    const draft = "flowchart TD\n  A[Start] -->";
+    const request: AiSuggestionRequest = {
+      ...manual,
+      requestId: "r-mermaid",
+      position: 0,
+      targetKind: "mermaid",
+      surfaceText: draft,
+      surfacePosition: draft.length,
+    };
+    f.send.mockResolvedValueOnce(response('{"insertText":" B[End]"}') as never);
+
+    await f.host.requestSuggestion("s1", request);
+
+    const sendCalls = f.send.mock.calls as unknown as Array<[unknown]>;
+    const messages = sendCalls[0]?.[0] as
+      Array<{ content?: string }> | undefined;
+    expect(messages?.[0]?.content).toContain(
+      "You complete Mermaid diagram source.",
+    );
+    expect(messages?.[0]?.content).toContain(
+      `PREFIX: ${JSON.stringify(draft)}`,
+    );
+    expect(messages?.[0]?.content).not.toContain(
+      "You complete prose in a Markdown document.",
+    );
+    expect(f.messages.at(-1)).toMatchObject({
+      type: "ai-suggestion-result",
+      requestId: request.requestId,
+      reason: "ready",
+      text: " B[End]",
     });
     f.dispose();
   });

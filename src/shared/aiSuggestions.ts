@@ -1,4 +1,6 @@
 /** Bounded host/webview protocol for public VS Code Language Model requests. */
+import { MAX_MERMAID_SOURCE_LENGTH } from "./mermaid";
+
 export const AI_LIMITS = {
   debounceMs: 300,
   deadlineMs: 35_000,
@@ -7,6 +9,7 @@ export const AI_LIMITS = {
   maxDocumentLength: 4_000_000,
   maxCompletionLength: 32_768,
   maxRequestIdLength: 160,
+  maxCodeLanguageLength: 64,
 } as const;
 
 export const AI_AVAILABILITY = [
@@ -40,7 +43,7 @@ export const AI_REASONS = [
 ] as const;
 export type AiSuggestionReason = (typeof AI_REASONS)[number];
 export type AiTrigger = "auto" | "manual";
-export type AiTargetKind = "paragraph" | "heading";
+export type AiTargetKind = "paragraph" | "heading" | "code" | "mermaid";
 
 export interface AiSuggestionIdentity {
   readonly requestId: string;
@@ -61,6 +64,12 @@ export interface AiSuggestionRequest extends AiSuggestionIdentity {
   readonly afterUserInput?: boolean;
   /** Only host-issued manual triggers have an invocation id. */
   readonly invocationId?: string;
+  /** Present only for source-code completions. Derived again from host Markdown. */
+  readonly language?: string;
+  /** Unsaved Mermaid editor draft; present only for Mermaid completions. */
+  readonly surfaceText?: string;
+  /** UTF-16 caret offset within surfaceText. Present only for Mermaid requests. */
+  readonly surfacePosition?: number;
 }
 export interface AiSuggestionCancel {
   readonly protocolVersion: 1;
@@ -174,7 +183,42 @@ function identity(value: Record<string, unknown>): boolean {
     counter(value.settingsGeneration) &&
     counter(value.position) &&
     value.position <= AI_LIMITS.maxDocumentLength &&
-    (value.targetKind === "paragraph" || value.targetKind === "heading")
+    (value.targetKind === "paragraph" ||
+      value.targetKind === "heading" ||
+      value.targetKind === "code" ||
+      value.targetKind === "mermaid")
+  );
+}
+function validRequestTarget(value: Record<string, unknown>): boolean {
+  if (value.targetKind === "paragraph" || value.targetKind === "heading")
+    return (
+      value.language === undefined &&
+      value.surfaceText === undefined &&
+      value.surfacePosition === undefined
+    );
+  if (value.targetKind === "code")
+    return (
+      value.surfaceText === undefined &&
+      value.surfacePosition === undefined &&
+      (value.language === undefined || validCodeLanguage(value.language))
+    );
+  if (value.targetKind !== "mermaid") return false;
+  return (
+    value.language === undefined &&
+    typeof value.surfaceText === "string" &&
+    value.surfaceText.length <= MAX_MERMAID_SOURCE_LENGTH &&
+    !hasForbiddenControl(value.surfaceText) &&
+    counter(value.surfacePosition) &&
+    value.surfacePosition <= value.surfaceText.length &&
+    !isLowSurrogate(value.surfaceText.charCodeAt(value.surfacePosition))
+  );
+}
+function validCodeLanguage(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    value.length <= AI_LIMITS.maxCodeLanguageLength &&
+    !hasAsciiControl(value)
   );
 }
 function validCompletionText(value: unknown): value is string {
@@ -196,6 +240,20 @@ function hasAsciiControl(value: string): boolean {
     if (code < 0x20 || code === 0x7f) return true;
   }
   return false;
+}
+function hasForbiddenControl(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (
+      (code < 0x20 && code !== 0x09 && code !== 0x0a && code !== 0x0d) ||
+      code === 0x7f
+    )
+      return true;
+  }
+  return false;
+}
+function isLowSurrogate(code: number): boolean {
+  return code >= 0xdc00 && code <= 0xdfff;
 }
 
 export function isAiWebviewMessage(value: unknown): value is AiWebviewMessage {
@@ -258,8 +316,12 @@ export function isAiWebviewMessage(value: unknown): value is AiWebviewMessage {
       "trigger",
       "afterUserInput",
       "invocationId",
+      "language",
+      "surfaceText",
+      "surfacePosition",
     ]) &&
     identity(value) &&
+    validRequestTarget(value) &&
     (value.trigger === "auto" || value.trigger === "manual") &&
     (value.trigger === "manual"
       ? id(value.invocationId) && value.afterUserInput === undefined

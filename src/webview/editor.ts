@@ -52,7 +52,8 @@ import {
 } from "../shared/protocol";
 import { isWorkspaceFileSearchQuery } from "../shared/workspaceFileSearch";
 import { AiSuggestionsController } from "./aiSuggestions";
-import type { AiSuggestionState } from "../shared/aiSuggestions";
+import { MermaidAiSuggestionsController } from "./mermaidAiSuggestions";
+import type { AiHostMessage, AiSuggestionState } from "../shared/aiSuggestions";
 import {
   createStarterPlugin,
   getStarterState,
@@ -2595,6 +2596,8 @@ export class MarkdownEditorApp {
   >();
   private readonly imageImport: ImageImportController;
   private readonly aiSuggestions: AiSuggestionsController;
+  private mermaidAiSuggestions: MermaidAiSuggestionsController | undefined;
+  private aiSuggestionState: AiSuggestionState | undefined;
   private copilotButton?: HTMLButtonElement;
   private previewEnhancer: RenderingEnhancer | undefined;
   /**
@@ -2977,7 +2980,11 @@ export class MarkdownEditorApp {
       parseMarkdown: (source, profile) =>
         this.core.parseMarkdown(source, profile),
       post: (message) => this.vscode?.postMessage(message),
-      onStateChanged: (state) => this.updateCopilotToolbarState(state),
+      onStateChanged: (state) => {
+        this.aiSuggestionState = state;
+        this.mermaidAiSuggestions?.handleMessage(state);
+        this.updateCopilotToolbarState(state);
+      },
       dispatch: (transaction) => this.dispatchTransaction(transaction),
     });
     this.initialized = Boolean(options.initialDocument);
@@ -3327,6 +3334,8 @@ export class MarkdownEditorApp {
 
   destroy(): void {
     this.aiSuggestions.dispose();
+    this.mermaidAiSuggestions?.dispose();
+    this.mermaidAiSuggestions = undefined;
     if (this.pendingRecoveryDialog?.open)
       this.closePendingRecoveryDialog(false);
     this.pendingRecoveryButton?.remove();
@@ -4713,7 +4722,7 @@ export class MarkdownEditorApp {
   }
 
   private handleBlockComposition(active: boolean): void {
-    this.aiSuggestions.invalidate();
+    this.invalidateAiSuggestions();
     this.composing = active;
     if (this.blockCompositionTimer !== undefined) {
       clearTimeout(this.blockCompositionTimer);
@@ -5955,10 +5964,32 @@ export class MarkdownEditorApp {
           state.confirmation !== null;
         this.profileFeatureMermaidConfirmation = state.confirmation;
         this.updateMermaidDialogActions(state);
+        this.mermaidAiSuggestions?.surfaceStateChanged(state);
         if (enteringConfirmation)
           this.profileFeatureMermaidConfirmButton.focus();
       },
     });
+    this.mermaidAiSuggestions = new MermaidAiSuggestionsController({
+      input: this.profileFeatureBodyInput,
+      canSuggest: () =>
+        this.profileFeatureId === "mermaid" &&
+        this.profileFeatureDialogOpen &&
+        this.mode === "rich" &&
+        this.canEditBlock() &&
+        !this.formatting &&
+        this.root.ownerDocument.activeElement === this.profileFeatureBodyInput,
+      synced: () =>
+        !this.hasPendingHostSync() && !this.pendingExternal && !this.syncPaused,
+      version: () => this.version,
+      documentId: () => this.documentId,
+      markdown: () => this.currentMarkdown(),
+      dialogGeneration: () => this.mermaidDialog.sessionGeneration,
+      post: (message) => this.vscode?.postMessage(message),
+      reportStatus: (message) => this.aiSuggestions.reportStatus(message),
+    });
+    this.mermaidAiSuggestions.attach();
+    if (this.aiSuggestionState)
+      this.mermaidAiSuggestions.handleMessage(this.aiSuggestionState);
     this.updateMermaidDialogActions(this.mermaidDialog.displayState);
     form.append(
       mermaidTemplates,
@@ -10629,7 +10660,7 @@ export class MarkdownEditorApp {
     options: { refreshPreview?: boolean } = {},
   ): void {
     if (this.previewOnly && mode !== "preview" && mode !== "source") return;
-    if (mode !== this.mode) this.aiSuggestions.invalidate();
+    if (mode !== this.mode) this.invalidateAiSuggestions();
     if (mode !== this.mode) this.closeDiscardChangesConfirmation(true);
     this.clearTableDeletePreview();
     this.clearTableStructureSelection(false);
@@ -10980,7 +11011,7 @@ export class MarkdownEditorApp {
   }
 
   private requestSource(): void {
-    this.aiSuggestions.invalidate();
+    this.invalidateAiSuggestions();
     if (!this.initialized) return;
     if (
       this.composing ||
@@ -11062,7 +11093,7 @@ export class MarkdownEditorApp {
   }
 
   private requestProfileChange(profile: DocumentProfile): void {
-    this.aiSuggestions.invalidate();
+    this.invalidateAiSuggestions();
     if (
       profile !== "github" &&
       profile !== "gitlab" &&
@@ -11139,7 +11170,7 @@ export class MarkdownEditorApp {
   }
 
   private sendHostCommand(type: "undo" | "redo"): boolean {
-    this.aiSuggestions.invalidate();
+    this.invalidateAiSuggestions();
     if (!this.options.hostUndo && type === "undo") return false;
     if (this.syncPaused) {
       this.setNotice(
@@ -11253,6 +11284,28 @@ export class MarkdownEditorApp {
       });
   }
 
+  private invalidateAiSuggestions(): void {
+    this.aiSuggestions.invalidate();
+    this.mermaidAiSuggestions?.invalidate();
+  }
+
+  private handleAiHostMessage(message: AiHostMessage): void {
+    if (message.type === "ai-suggestion-state") {
+      this.aiSuggestionState = message;
+      this.aiSuggestions.handleMessage(message);
+      return;
+    }
+    if (message.type === "ai-suggestion-trigger") {
+      if (this.mermaidAiSuggestions?.ownsFocusedSurface)
+        this.mermaidAiSuggestions.handleMessage(message);
+      else this.aiSuggestions.handleMessage(message);
+      return;
+    }
+    if (message.requestId.startsWith("ai-mermaid-"))
+      this.mermaidAiSuggestions?.handleMessage(message);
+    else this.aiSuggestions.handleMessage(message);
+  }
+
   private handleMessage(message: unknown): void {
     if (!isHostMessage(message)) return;
     if (
@@ -11262,12 +11315,17 @@ export class MarkdownEditorApp {
       message.type === "ai-suggestion-adoption-validation" ||
       message.type === "ai-suggestion-result"
     ) {
-      this.aiSuggestions.handleMessage(message);
+      this.handleAiHostMessage(message);
     } else if (message.type === "document") {
       this.clipboardAvailable = message.clipboardAvailable === true;
+      this.mermaidAiSuggestions?.onNativeDocumentChanged(
+        message.documentId ?? this.documentId,
+        message.version,
+        message.markdown,
+      );
       this.receiveDocument(message);
     } else if (message.type === "preview") {
-      this.aiSuggestions.invalidate();
+      this.invalidateAiSuggestions();
       this.clipboardAvailable = message.clipboardAvailable === true;
       this.receivePreview(message);
     } else if (message.type === "export-html-command") {
@@ -11275,7 +11333,7 @@ export class MarkdownEditorApp {
     } else if (message.type === "export-pdf-command") {
       this.requestPdfExport();
     } else if (message.type === "edit-rejected") {
-      this.aiSuggestions.invalidate();
+      this.invalidateAiSuggestions();
       if (message.operationId === this.pendingRecoveryOperationId) {
         this.pendingRecoveryOperationId = undefined;
         this.pendingRecoveryOperationIdentity = undefined;
@@ -11524,7 +11582,7 @@ export class MarkdownEditorApp {
       !inputEcho &&
       (message.reason !== "save" || message.version !== this.version)
     )
-      this.aiSuggestions.invalidate();
+      this.invalidateAiSuggestions();
     this.clearWorkspaceFileSearch();
     this.clipboardAvailable = message.clipboardAvailable === true;
     if (message.documentId) {

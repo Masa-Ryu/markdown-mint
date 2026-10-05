@@ -109,7 +109,7 @@ describe("public VS Code Language Model adapter", () => {
     const [messages, options] = vi.mocked(f.model.sendRequest).mock.calls[0]!;
     expect(messages).toEqual([{ role: 1, content: "Reply with OK." }]);
     expect(options).toMatchObject({
-      justification: "Enable Copilot prose suggestions in Markdown Mint.",
+      justification: "Enable Copilot suggestions in Markdown Mint.",
     });
     expect(f.adapter.currentSelection?.model).toBe(f.model);
     expect(f.adapter.restoreAccess()).toBeUndefined();
@@ -149,9 +149,13 @@ describe("public VS Code Language Model adapter", () => {
     });
 
     await expect(
-      f.adapter.complete("The existing text", 17, "paragraph", token(), {
-        allowConsentPrompt: true,
-      }),
+      f.adapter.complete(
+        { source: "The existing text", position: 17, targetKind: "paragraph" },
+        token(),
+        {
+          allowConsentPrompt: true,
+        },
+      ),
     ).resolves.toEqual({ text: " next" });
 
     expect(f.model.sendRequest).toHaveBeenCalledTimes(1);
@@ -159,7 +163,7 @@ describe("public VS Code Language Model adapter", () => {
     expect(messages[0]?.content).not.toBe("Reply with OK.");
     expect(options).toMatchObject({
       justification:
-        "Generate a short prose continuation from the current Markdown in Markdown Mint.",
+        "Generate a short continuation from the active Markdown Mint editor surface.",
     });
     f.adapter.dispose();
   });
@@ -170,7 +174,10 @@ describe("public VS Code Language Model adapter", () => {
     await f.adapter.selectForUserAction("suggestion");
 
     await expect(
-      f.adapter.complete("The existing text", 17, "paragraph", token()),
+      f.adapter.complete(
+        { source: "The existing text", position: 17, targetKind: "paragraph" },
+        token(),
+      ),
     ).resolves.toEqual({ failure: "needs-authorization" });
     expect(f.model.sendRequest).not.toHaveBeenCalled();
     f.adapter.dispose();
@@ -204,16 +211,17 @@ describe("public VS Code Language Model adapter", () => {
     const f = setup();
     expect(await f.adapter.selectForUserAction()).toBeUndefined();
     const result = await f.adapter.complete(
-      "This function",
-      13,
-      "paragraph",
+      { source: "This function", position: 13, targetKind: "paragraph" },
       token(),
     );
     expect(result).toEqual({ text: " next" });
     expect(f.model.sendRequest).toHaveBeenCalledTimes(1);
     f.permit(false);
     expect(
-      await f.adapter.complete("This function", 13, "paragraph", token()),
+      await f.adapter.complete(
+        { source: "This function", position: 13, targetKind: "paragraph" },
+        token(),
+      ),
     ).toEqual({ failure: "needs-authorization" });
     expect(f.model.sendRequest).toHaveBeenCalledTimes(1);
     f.adapter.dispose();
@@ -259,7 +267,10 @@ describe("public VS Code Language Model adapter", () => {
     await f.adapter.selectForUserAction();
     const delayed = deferred<Awaited<ReturnType<typeof f.model.sendRequest>>>();
     vi.mocked(f.model.sendRequest).mockReturnValue(delayed.promise as never);
-    const request = f.adapter.complete("A sentence", 10, "paragraph", token());
+    const request = f.adapter.complete(
+      { source: "A sentence", position: 10, targetKind: "paragraph" },
+      token(),
+    );
     await vi.waitFor(() =>
       expect(f.model.sendRequest).toHaveBeenCalledTimes(1),
     );
@@ -286,7 +297,10 @@ describe("public VS Code Language Model adapter", () => {
     );
     await f.adapter.selectForUserAction();
     await expect(
-      f.adapter.complete("A sentence", 10, "paragraph", token()),
+      f.adapter.complete(
+        { source: "A sentence", position: 10, targetKind: "paragraph" },
+        token(),
+      ),
     ).resolves.toEqual({ failure: "failed" });
     expect(classifyLanguageModelError({ code: "Blocked" })).toBe("blocked");
     expect(classifyLanguageModelError({ code: "NoPermissions" })).toBe(
