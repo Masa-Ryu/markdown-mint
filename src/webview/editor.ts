@@ -10932,32 +10932,32 @@ export class MarkdownEditorApp {
     const preparing = state.availability === "preparing";
     let icon: ToolbarIconName;
     let toolbarState: string;
-    let label: string;
+    let ariaLabel: string;
     if (authorizationRequired) {
       icon = "copilot-not-connected";
       toolbarState = "authorization";
-      label = state.autoRestoreOnInput
+      ariaLabel = state.autoRestoreOnInput
         ? "Copilot suggestions need authorization. Click to reconnect"
         : "Enable Copilot suggestions";
     } else if (state.availability === "ready" && state.autoTrigger) {
       icon = "copilot";
       toolbarState = "on";
-      label = "Copilot suggestions: On. Click to turn off";
+      ariaLabel = "Copilot suggestions: On. Click to turn off";
     } else if (
       (state.availability === "disabled" || state.availability === "ready") &&
       !state.autoTrigger
     ) {
       icon = "copilot-blocked";
       toolbarState = "off";
-      label = "Copilot suggestions: Off. Click to turn on";
+      ariaLabel = "Copilot suggestions: Off. Click to turn on";
     } else if (state.availability === "blocked") {
       icon = "copilot-blocked";
       toolbarState = "unavailable";
-      label = state.statusText || "Copilot suggestions are blocked";
+      ariaLabel = state.statusText || "Copilot suggestions are blocked";
     } else {
       icon = "copilot-not-connected";
       toolbarState = preparing ? "preparing" : "unavailable";
-      label =
+      ariaLabel =
         state.statusText ||
         (preparing
           ? "Preparing Copilot suggestions…"
@@ -10967,12 +10967,15 @@ export class MarkdownEditorApp {
       (state.availability === "ready" || state.availability === "disabled") &&
       state.statusText
     )
-      label += `. ${state.statusText}`;
+      ariaLabel += `. ${state.statusText}`;
+    const tooltip = state.autoTrigger
+      ? "Copilot suggestions: On"
+      : "Copilot suggestions: Off";
     button.dataset.state = toolbarState;
     button.setAttribute("aria-pressed", String(state.autoTrigger));
-    button.setAttribute("aria-label", label);
-    button.dataset.tooltip = label;
-    button.title = label;
+    button.setAttribute("aria-label", ariaLabel);
+    button.dataset.tooltip = tooltip;
+    button.title = tooltip;
     button.disabled = state.active === false || preparing;
     appendToolbarIcon(button, icon);
   }

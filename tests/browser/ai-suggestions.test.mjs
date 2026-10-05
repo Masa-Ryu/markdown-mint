@@ -127,6 +127,8 @@ try {
     state: button.dataset.state,
     pressed: button.getAttribute("aria-pressed"),
     label: button.getAttribute("aria-label"),
+    tooltip: button.dataset.tooltip,
+    title: button.title,
     icon: button.querySelector("svg")?.dataset.icon,
     following: Array.from(button.parentElement?.children ?? [])
       .slice(
@@ -144,6 +146,8 @@ try {
     state: "on",
     pressed: "true",
     label: "Copilot suggestions: On. Click to turn off. Fake Copilot ready",
+    tooltip: "Copilot suggestions: On",
+    title: "Copilot suggestions: On",
     icon: "copilot",
     following: ["export", "source"],
   });
@@ -169,6 +173,14 @@ try {
   assert.equal(await copilotButton.getAttribute("data-state"), "off");
   assert.equal(await copilotButton.getAttribute("aria-pressed"), "false");
   assert.equal(
+    await copilotButton.getAttribute("data-tooltip"),
+    "Copilot suggestions: Off",
+  );
+  assert.equal(
+    await copilotButton.getAttribute("title"),
+    "Copilot suggestions: Off",
+  );
+  assert.equal(
     await copilotButton.locator("svg").getAttribute("data-icon"),
     "copilot-blocked",
   );
@@ -180,6 +192,14 @@ try {
     }),
   );
   assert.equal(await copilotButton.getAttribute("data-state"), "authorization");
+  assert.equal(
+    await copilotButton.getAttribute("data-tooltip"),
+    "Copilot suggestions: On",
+  );
+  assert.equal(
+    await copilotButton.getAttribute("title"),
+    "Copilot suggestions: On",
+  );
   assert.equal(
     await copilotButton.locator("svg").getAttribute("data-icon"),
     "copilot-not-connected",
