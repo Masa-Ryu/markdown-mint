@@ -4,6 +4,7 @@ import {
   AiSuggestionsHost,
   type AiPanelSession,
   type AiSuggestionsEnvironment,
+  type AiSuggestionsOnboardingChoice,
   transientFailureBackoffMs,
 } from "../../src/extension/aiSuggestions";
 import {
@@ -58,16 +59,33 @@ function cancellationSource(): vscode.CancellationTokenSource {
   } as unknown as vscode.CancellationTokenSource;
 }
 
-function fixture(autoTrigger = false) {
+function fixture(
+  autoTrigger = false,
+  options: {
+    onboardingCompleted?: boolean;
+    setupCompleted?: boolean;
+    explicitAutoTriggerPreference?: boolean;
+    supported?: boolean;
+    trusted?: boolean;
+    active?: boolean;
+    ready?: boolean;
+    promptFirstRun?: () => Promise<AiSuggestionsOnboardingChoice>;
+  } = {},
+) {
   let automatic = autoTrigger;
   let version = 1;
   let text = "The release helper";
   let uri = "file:///document.md";
-  let active = true;
-  let ready = true;
+  let active = options.active ?? true;
+  let ready = options.ready ?? true;
   let requestIsQueueBusy = false;
   let allow: boolean | undefined = true;
-  let setupCompleted = false;
+  let setupCompleted = options.setupCompleted ?? false;
+  let onboardingCompleted = options.onboardingCompleted ?? true;
+  let explicitAutoTriggerPreference =
+    options.explicitAutoTriggerPreference ?? false;
+  let supported = options.supported ?? true;
+  let trusted = options.trusted ?? true;
   let savedModelIdentity: { id: string; version: string } | undefined;
   let snapshotCurrent = true;
   let beforeSnapshotValidation: (() => void) | undefined;
@@ -88,6 +106,8 @@ function fixture(autoTrigger = false) {
     countTokens: vi.fn(async () => 40),
     sendRequest: send,
   } as unknown as vscode.LanguageModelChat;
+  if (setupCompleted)
+    savedModelIdentity = { id: model.id, version: model.version };
   availableModels = [model];
   const api: LanguageModelApi = {
     selectChatModels: vi.fn(async () => availableModels),
@@ -108,6 +128,14 @@ function fixture(autoTrigger = false) {
     access,
     savedModelIdentity: () => savedModelIdentity,
   });
+  const promptFirstRun = vi.fn(
+    options.promptFirstRun ??
+      (async (): Promise<AiSuggestionsOnboardingChoice> => undefined),
+  );
+  const updateAutoTrigger = vi.fn(async (enabled: boolean) => {
+    automatic = enabled;
+    explicitAutoTriggerPreference = !enabled;
+  });
   const environment: AiSuggestionsEnvironment = {
     languageModel,
     setupCompleted: () => setupCompleted,
@@ -115,12 +143,16 @@ function fixture(autoTrigger = false) {
       setupCompleted = true;
       savedModelIdentity = { id: model.id, version: model.version };
     },
-    supported: () => true,
-    trusted: () => true,
-    settings: () => ({ autoTrigger: automatic }),
-    updateAutoTrigger: async (enabled) => {
-      automatic = enabled;
+    onboardingCompleted: () => onboardingCompleted,
+    markOnboardingCompleted: async () => {
+      onboardingCompleted = true;
     },
+    hasExplicitAutoTriggerPreference: () => explicitAutoTriggerPreference,
+    promptFirstRun,
+    supported: () => supported,
+    trusted: () => trusted,
+    settings: () => ({ autoTrigger: automatic }),
+    updateAutoTrigger,
     notify: vi.fn(),
     tokenSource: cancellationSource,
   };
@@ -191,7 +223,10 @@ function fixture(autoTrigger = false) {
     messages,
     autoTrigger: () => automatic,
     setupCompleted: () => setupCompleted,
+    onboardingCompleted: () => onboardingCompleted,
     savedModelIdentity: () => savedModelIdentity,
+    promptFirstRun,
+    updateAutoTrigger,
     setSetupCompleted: (value: boolean) => {
       setupCompleted = value;
       savedModelIdentity = value
@@ -240,6 +275,12 @@ function fixture(autoTrigger = false) {
     setActive: (value: boolean) => {
       active = value;
     },
+    setSupported: (value: boolean) => {
+      supported = value;
+    },
+    setTrusted: (value: boolean) => {
+      trusted = value;
+    },
     setReady: (value: boolean) => {
       ready = value;
     },
@@ -248,6 +289,7 @@ function fixture(autoTrigger = false) {
     },
     setAutomatic: (value: boolean) => {
       automatic = value;
+      explicitAutoTriggerPreference = !value;
       host.refreshSettings();
     },
     activate: (id: string) => host.sessionActivated(id),
@@ -370,6 +412,189 @@ describe("AI suggestion lifecycle with the public Language Model API", () => {
     expect(f.messages.at(-1)).toMatchObject({
       type: "ai-suggestion-state",
       autoTrigger: true,
+      availability: "ready",
+    });
+    f.dispose();
+  });
+
+  it("shows first-run onboarding once and routes Enable through toolbar setup", async () => {
+    const choice = deferred<AiSuggestionsOnboardingChoice>();
+    const f = fixture(true, {
+      onboardingCompleted: false,
+      promptFirstRun: () => choice.promise,
+    });
+
+    expect(f.promptFirstRun).toHaveBeenCalledTimes(1);
+    expect(f.onboardingCompleted()).toBe(false);
+    expect(f.setupCompleted()).toBe(false);
+    expect(f.api.selectChatModels).not.toHaveBeenCalled();
+    expect(f.send).not.toHaveBeenCalled();
+
+    choice.resolve("enable");
+    await f.activate("s1");
+
+    expect(f.onboardingCompleted()).toBe(true);
+    expect(f.setupCompleted()).toBe(true);
+    expect(f.autoTrigger()).toBe(true);
+    expect(f.api.selectChatModels).toHaveBeenCalledTimes(1);
+    expect(f.send).not.toHaveBeenCalled();
+    expect(f.messages.at(-1)).toMatchObject({
+      type: "ai-suggestion-state",
+      autoTrigger: true,
+      availability: "ready",
+    });
+    await f.activate("s1");
+    expect(f.promptFirstRun).toHaveBeenCalledTimes(1);
+    f.dispose();
+  });
+
+  it.each([
+    { choice: "not-now" as const, label: "Not Now" },
+    { choice: undefined, label: "closing the notification" },
+  ])("treats $label as a one-time opt-out", async ({ choice }) => {
+    const f = fixture(true, {
+      onboardingCompleted: false,
+      promptFirstRun: async () => choice,
+    });
+
+    await f.activate("s1");
+
+    expect(f.promptFirstRun).toHaveBeenCalledTimes(1);
+    expect(f.onboardingCompleted()).toBe(true);
+    expect(f.autoTrigger()).toBe(false);
+    expect(f.updateAutoTrigger).toHaveBeenCalledExactlyOnceWith(false);
+    expect(f.setupCompleted()).toBe(false);
+    expect(f.api.selectChatModels).not.toHaveBeenCalled();
+    expect(f.send).not.toHaveBeenCalled();
+
+    await f.activate("s1");
+    expect(f.promptFirstRun).toHaveBeenCalledTimes(1);
+
+    await f.host.handleToolbarAction("s1");
+    expect(f.setupCompleted()).toBe(true);
+    expect(f.autoTrigger()).toBe(true);
+    expect(f.api.selectChatModels).toHaveBeenCalledTimes(1);
+    expect(f.send).not.toHaveBeenCalled();
+    f.dispose();
+  });
+
+  it("does not prompt users with completed setup or an explicit global OFF", async () => {
+    const setup = fixture(true, {
+      onboardingCompleted: false,
+      setupCompleted: true,
+    });
+    await setup.activate("s1");
+    expect(setup.promptFirstRun).not.toHaveBeenCalled();
+    expect(setup.onboardingCompleted()).toBe(true);
+    expect(setup.api.selectChatModels).not.toHaveBeenCalled();
+    setup.dispose();
+
+    const optedOut = fixture(false, {
+      onboardingCompleted: false,
+      explicitAutoTriggerPreference: true,
+      promptFirstRun: async () => "enable",
+    });
+    await optedOut.activate("s1");
+    expect(optedOut.promptFirstRun).not.toHaveBeenCalled();
+    expect(optedOut.onboardingCompleted()).toBe(true);
+    expect(optedOut.autoTrigger()).toBe(false);
+    expect(optedOut.updateAutoTrigger).not.toHaveBeenCalled();
+    expect(optedOut.api.selectChatModels).not.toHaveBeenCalled();
+    expect(optedOut.send).not.toHaveBeenCalled();
+    optedOut.dispose();
+  });
+
+  it("coalesces simultaneous panel activation into one onboarding prompt", async () => {
+    const choice = deferred<AiSuggestionsOnboardingChoice>();
+    const f = fixture(true, {
+      onboardingCompleted: false,
+      promptFirstRun: () => choice.promise,
+    });
+    f.setActive(false);
+    const second = f.addPanel("s2", "file:///second.md", () => true);
+
+    expect(f.promptFirstRun).toHaveBeenCalledTimes(1);
+    choice.resolve("not-now");
+    await f.activate(second.id);
+
+    expect(f.promptFirstRun).toHaveBeenCalledTimes(1);
+    expect(f.onboardingCompleted()).toBe(true);
+    expect(f.autoTrigger()).toBe(false);
+    expect(f.api.selectChatModels).not.toHaveBeenCalled();
+    expect(f.send).not.toHaveBeenCalled();
+    f.dispose();
+  });
+
+  it("waits for a ready active trusted and supported editor before prompting", async () => {
+    const f = fixture(true, {
+      onboardingCompleted: false,
+      active: false,
+      ready: false,
+      supported: false,
+      trusted: false,
+      promptFirstRun: async () => "not-now",
+    });
+
+    await f.activate("s1");
+    f.setReady(true);
+    await f.activate("s1");
+    expect(f.promptFirstRun).not.toHaveBeenCalled();
+
+    f.setActive(true);
+    await f.activate("s1");
+    expect(f.promptFirstRun).not.toHaveBeenCalled();
+
+    f.setSupported(true);
+    await f.activate("s1");
+    expect(f.promptFirstRun).not.toHaveBeenCalled();
+
+    f.setTrusted(true);
+    f.host.trustChanged();
+    await f.activate("s1");
+
+    expect(f.promptFirstRun).toHaveBeenCalledTimes(1);
+    expect(f.onboardingCompleted()).toBe(true);
+    expect(f.autoTrigger()).toBe(false);
+    expect(f.api.selectChatModels).not.toHaveBeenCalled();
+    expect(f.send).not.toHaveBeenCalled();
+    f.dispose();
+  });
+
+  it("keeps failed onboarding setup incomplete and retries from the toolbar", async () => {
+    const choice = deferred<AiSuggestionsOnboardingChoice>();
+    const f = fixture(true, {
+      onboardingCompleted: false,
+      promptFirstRun: () => choice.promise,
+    });
+    f.setAccess(undefined, false);
+    f.send.mockRejectedValueOnce({ code: "Blocked" });
+
+    choice.resolve("enable");
+    await f.activate("s1");
+
+    expect(f.onboardingCompleted()).toBe(true);
+    expect(f.setupCompleted()).toBe(false);
+    expect(f.savedModelIdentity()).toBeUndefined();
+    expect(f.autoTrigger()).toBe(true);
+    expect(f.messages.at(-1)).toMatchObject({
+      type: "ai-suggestion-state",
+      availability: "blocked",
+    });
+
+    f.setAccess(true, false);
+    await f.host.handleToolbarAction("s1");
+
+    expect(f.promptFirstRun).toHaveBeenCalledTimes(1);
+    expect(f.setupCompleted()).toBe(true);
+    expect(f.savedModelIdentity()).toEqual({
+      id: f.model.id,
+      version: f.model.version,
+    });
+    expect(f.autoTrigger()).toBe(true);
+    expect(f.api.selectChatModels).toHaveBeenCalledTimes(2);
+    expect(f.send).toHaveBeenCalledTimes(1);
+    expect(f.messages.at(-1)).toMatchObject({
+      type: "ai-suggestion-state",
       availability: "ready",
     });
     f.dispose();
