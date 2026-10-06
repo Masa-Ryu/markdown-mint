@@ -1295,7 +1295,7 @@ export function createAiSuggestionsEnvironment(
         .inspect<boolean>("autoTrigger")?.globalValue,
     promptFirstRun: async () => {
       const choice = await vscode.window.showInformationMessage(
-        "Enable Copilot suggestions in Markdown Mint? Suggestions appear as ghost text and may use your GitHub Copilot quota.",
+        "Enable Copilot suggestions?\nGet inline suggestions as you type in Markdown Mint. This may use your GitHub Copilot quota.",
         "Enable",
         "Not Now",
       );
