@@ -191,15 +191,16 @@ function fixture(autoTrigger = false) {
     messages,
     autoTrigger: () => automatic,
     setupCompleted: () => setupCompleted,
+    savedModelIdentity: () => savedModelIdentity,
     setSetupCompleted: (value: boolean) => {
       setupCompleted = value;
       savedModelIdentity = value
         ? { id: model.id, version: model.version }
         : undefined;
     },
-    setAccess: (value: boolean | undefined) => {
+    setAccess: (value: boolean | undefined, notifyListeners = true) => {
       allow = value;
-      for (const listener of accessListeners) listener();
+      if (notifyListeners) for (const listener of accessListeners) listener();
     },
     setSnapshotCurrent: (value: boolean) => {
       snapshotCurrent = value;
@@ -333,6 +334,80 @@ describe("AI suggestion lifecycle with the public Language Model API", () => {
     expect(
       f.messages.some((message) => message.type === "ai-suggestion-result"),
     ).toBe(false);
+  });
+
+  it("keeps fresh-install setup lazy until the first Copilot toolbar click", async () => {
+    const f = fixture(true);
+    expect(f.setupCompleted()).toBe(false);
+    expect(f.savedModelIdentity()).toBeUndefined();
+    expect(f.api.selectChatModels).not.toHaveBeenCalled();
+    expect(f.send).not.toHaveBeenCalled();
+    expect(f.messages.at(-1)).toMatchObject({
+      type: "ai-suggestion-state",
+      autoTrigger: true,
+      availability: "needs-authorization",
+    });
+
+    await f.host.requestSuggestion(
+      "s1",
+      f.autoRequest("fresh-install-typing", true),
+    );
+
+    expect(f.api.selectChatModels).not.toHaveBeenCalled();
+    expect(f.send).not.toHaveBeenCalled();
+    expect(f.setupCompleted()).toBe(false);
+
+    await f.host.handleToolbarAction("s1");
+
+    expect(f.api.selectChatModels).toHaveBeenCalledTimes(1);
+    expect(f.send).not.toHaveBeenCalled();
+    expect(f.setupCompleted()).toBe(true);
+    expect(f.savedModelIdentity()).toEqual({
+      id: f.model.id,
+      version: f.model.version,
+    });
+    expect(f.autoTrigger()).toBe(true);
+    expect(f.messages.at(-1)).toMatchObject({
+      type: "ai-suggestion-state",
+      autoTrigger: true,
+      availability: "ready",
+    });
+    f.dispose();
+  });
+
+  it("retries blocked first-run setup on the next explicit toolbar click", async () => {
+    const f = fixture(true);
+    f.setAccess(undefined);
+    f.send.mockRejectedValueOnce({ code: "Blocked" });
+
+    await f.host.handleToolbarAction("s1");
+
+    expect(f.api.selectChatModels).toHaveBeenCalledTimes(1);
+    expect(f.send).toHaveBeenCalledTimes(1);
+    expect(f.setupCompleted()).toBe(false);
+    expect(f.savedModelIdentity()).toBeUndefined();
+    expect(f.messages.at(-1)).toMatchObject({
+      type: "ai-suggestion-state",
+      availability: "blocked",
+    });
+
+    f.setAccess(true, false);
+    await f.host.handleToolbarAction("s1");
+
+    expect(f.api.selectChatModels).toHaveBeenCalledTimes(2);
+    expect(f.send).toHaveBeenCalledTimes(1);
+    expect(f.setupCompleted()).toBe(true);
+    expect(f.savedModelIdentity()).toEqual({
+      id: f.model.id,
+      version: f.model.version,
+    });
+    expect(f.autoTrigger()).toBe(true);
+    expect(f.messages.at(-1)).toMatchObject({
+      type: "ai-suggestion-state",
+      autoTrigger: true,
+      availability: "ready",
+    });
+    f.dispose();
   });
 
   it("uses one context-free consent request for first toolbar setup and discards it", async () => {
@@ -668,7 +743,7 @@ describe("AI suggestion lifecycle with the public Language Model API", () => {
     f.dispose();
   });
 
-  it("keeps quota blocks separate and does not retry a blocked model automatically", async () => {
+  it("retries a blocked model only after an explicit toolbar action", async () => {
     const f = fixture(true);
     const manual = await f.startManual();
     const { invocationId: _invocationId, ...identity } = manual;
@@ -698,8 +773,101 @@ describe("AI suggestion lifecycle with the public Language Model API", () => {
     });
     const modelSelection = vi.mocked(f.api.selectChatModels);
     const modelSelectionCalls = modelSelection.mock.calls.length;
-    await f.host.triggerFromUserAction("s1");
+    vi.useFakeTimers();
+    await f.host.requestSuggestion("s1", request("auto-typed-after-block"));
+    f.host.documentChanged("file:///document.md");
+    await f.activate("s1");
+    f.host.refreshSettings();
+    await vi.advanceTimersByTimeAsync(199);
+    await f.host.requestSuggestion("s1", request("auto-after-199ms"));
+    await vi.advanceTimersByTimeAsync(1);
+    await f.host.requestSuggestion("s1", request("auto-after-200ms"));
+    await vi.advanceTimersByTimeAsync(5_000);
     expect(modelSelection).toHaveBeenCalledTimes(modelSelectionCalls);
+    expect(f.send).toHaveBeenCalledTimes(callsAfterBlock);
+
+    await f.host.handleToolbarAction("s1");
+    expect(modelSelection).toHaveBeenCalledTimes(modelSelectionCalls + 1);
+    expect(f.send).toHaveBeenCalledTimes(callsAfterBlock);
+    expect(f.messages.at(-1)).toMatchObject({
+      type: "ai-suggestion-state",
+      autoTrigger: true,
+      availability: "ready",
+    });
+
+    f.send.mockResolvedValueOnce(
+      response('{"insertText":" for safer publishing."}') as never,
+    );
+    await f.host.requestSuggestion("s1", request("auto-after-explicit-retry"));
+    expect(f.send).toHaveBeenCalledTimes(callsAfterBlock + 1);
+    expect(f.messages.at(-1)).toMatchObject({
+      type: "ai-suggestion-result",
+      reason: "ready",
+    });
+    f.dispose();
+  });
+
+  it("keeps automatic suggestions off after blocked recovery", async () => {
+    const f = fixture(false);
+    const manual = await f.startManual();
+    f.send.mockRejectedValueOnce({ code: "Blocked" });
+    await f.host.requestSuggestion("s1", manual);
+    expect(
+      f.messages
+        .filter((message) => message.type === "ai-suggestion-result")
+        .at(-1),
+    ).toMatchObject({
+      type: "ai-suggestion-result",
+      reason: "blocked",
+    });
+
+    const modelSelectionCalls = vi.mocked(f.api.selectChatModels).mock.calls
+      .length;
+    const requestCalls = f.send.mock.calls.length;
+    await f.host.handleToolbarAction("s1");
+
+    expect(f.api.selectChatModels).toHaveBeenCalledTimes(
+      modelSelectionCalls + 1,
+    );
+    expect(f.send).toHaveBeenCalledTimes(requestCalls);
+    expect(f.setupCompleted()).toBe(true);
+    expect(f.autoTrigger()).toBe(false);
+    expect(f.messages.at(-1)).toMatchObject({
+      type: "ai-suggestion-state",
+      autoTrigger: false,
+      availability: "disabled",
+    });
+    f.dispose();
+  });
+
+  it("lets the explicit Suggest Continuation action recover from blocked", async () => {
+    const f = fixture(true);
+    const manual = await f.startManual();
+    f.send.mockRejectedValueOnce({ code: "Blocked" });
+    await f.host.requestSuggestion("s1", manual);
+    expect(
+      f.messages
+        .filter((message) => message.type === "ai-suggestion-result")
+        .at(-1),
+    ).toMatchObject({ reason: "blocked" });
+
+    const modelSelectionCalls = vi.mocked(f.api.selectChatModels).mock.calls
+      .length;
+    const requestCalls = f.send.mock.calls.length;
+    await f.host.triggerFromUserAction("s1");
+
+    expect(f.api.selectChatModels).toHaveBeenCalledTimes(
+      modelSelectionCalls + 1,
+    );
+    expect(f.send).toHaveBeenCalledTimes(requestCalls);
+    expect(f.messages.at(-1)).toMatchObject({
+      type: "ai-suggestion-state",
+      autoTrigger: true,
+      availability: "ready",
+    });
+    expect(
+      f.messages.filter((message) => message.type === "ai-suggestion-trigger"),
+    ).toHaveLength(2);
     f.dispose();
   });
 

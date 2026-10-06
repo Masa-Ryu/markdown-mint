@@ -355,10 +355,6 @@ export class AiSuggestionsHost implements vscode.Disposable {
       this.environment.notify(statusText.untrusted);
       return undefined;
     }
-    if (this.modelAvailability === "blocked") {
-      this.environment.notify(statusText.blocked);
-      return undefined;
-    }
     if (this.transientRetryAt && Date.now() < this.transientRetryAt) {
       this.environment.notify(statusText["temporarily-unavailable"]);
       return undefined;
@@ -460,10 +456,6 @@ export class AiSuggestionsHost implements vscode.Disposable {
       this.environment.notify(statusText.untrusted);
       return;
     }
-    if (this.modelAvailability === "blocked") {
-      this.environment.notify(statusText.blocked);
-      return;
-    }
     if (
       !this.environment.setupCompleted() ||
       this.modelAvailability === "needs-authorization"
@@ -471,6 +463,10 @@ export class AiSuggestionsHost implements vscode.Disposable {
       const selected = await this.selectModelFromUserAction(id, false, "setup");
       if (!selected) return;
       await this.updateAutoTrigger(true);
+      return;
+    }
+    if (this.modelAvailability === "blocked") {
+      await this.selectModelFromUserAction(id, false, "setup");
       return;
     }
     if (this.modelAvailability !== "ready") {
