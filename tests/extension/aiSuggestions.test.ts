@@ -449,6 +449,73 @@ describe("AI suggestion lifecycle with the public Language Model API", () => {
   });
 
   it.each([
+    { choice: "enable" as const, label: "Enable" },
+    { choice: "not-now" as const, label: "Not Now" },
+    { choice: undefined, label: "dismiss" },
+  ])(
+    "preserves toolbar setup while the first-run prompt is pending ($label)",
+    async ({ choice }) => {
+      const prompt = deferred<AiSuggestionsOnboardingChoice>();
+      const f = fixture(true, {
+        onboardingCompleted: false,
+        promptFirstRun: () => prompt.promise,
+      });
+      const activation = f.activate("s1");
+
+      expect(f.promptFirstRun).toHaveBeenCalledTimes(1);
+      await f.host.handleToolbarAction("s1");
+      expect(f.setupCompleted()).toBe(true);
+      expect(f.autoTrigger()).toBe(true);
+      expect(f.api.selectChatModels).toHaveBeenCalledTimes(1);
+
+      prompt.resolve(choice);
+      await activation;
+
+      expect(f.onboardingCompleted()).toBe(true);
+      expect(f.setupCompleted()).toBe(true);
+      expect(f.autoTrigger()).toBe(true);
+      expect(f.api.selectChatModels).toHaveBeenCalledTimes(1);
+      expect(f.updateAutoTrigger).toHaveBeenCalledExactlyOnceWith(true);
+      expect(f.send).not.toHaveBeenCalled();
+      f.dispose();
+    },
+  );
+
+  it("leaves Enable pending when its Mint session closes and prompts again on activation", async () => {
+    const firstPrompt = deferred<AiSuggestionsOnboardingChoice>();
+    const promptFirstRun = vi
+      .fn(async (): Promise<AiSuggestionsOnboardingChoice> => undefined)
+      .mockReturnValueOnce(firstPrompt.promise)
+      .mockResolvedValueOnce(undefined);
+    const f = fixture(true, {
+      onboardingCompleted: false,
+      promptFirstRun,
+    });
+    const activation = f.activate("s1");
+
+    f.setActive(false);
+    await f.host.sessionDeactivated("s1");
+    firstPrompt.resolve("enable");
+    await activation;
+
+    expect(f.setupCompleted()).toBe(false);
+    expect(f.onboardingCompleted()).toBe(false);
+    expect(f.api.selectChatModels).not.toHaveBeenCalled();
+    expect(f.send).not.toHaveBeenCalled();
+
+    const second = f.addPanel("s2", "file:///second.md", () => true);
+    await f.activate(second.id);
+
+    expect(promptFirstRun).toHaveBeenCalledTimes(2);
+    expect(f.setupCompleted()).toBe(false);
+    expect(f.onboardingCompleted()).toBe(true);
+    expect(f.autoTrigger()).toBe(false);
+    expect(f.api.selectChatModels).not.toHaveBeenCalled();
+    expect(f.send).not.toHaveBeenCalled();
+    f.dispose();
+  });
+
+  it.each([
     { choice: "not-now" as const, label: "Not Now" },
     { choice: undefined, label: "closing the notification" },
   ])("treats $label as a one-time opt-out", async ({ choice }) => {

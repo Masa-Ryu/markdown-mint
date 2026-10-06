@@ -469,9 +469,7 @@ export class AiSuggestionsHost implements vscode.Disposable {
       !this.environment.setupCompleted() ||
       this.modelAvailability === "needs-authorization"
     ) {
-      const selected = await this.selectModelFromUserAction(id, false, "setup");
-      if (!selected) return;
-      await this.updateAutoTrigger(true);
+      await this.enableAutomaticSuggestionsFromUserAction(id);
       return;
     }
     if (this.modelAvailability === "blocked") {
@@ -483,6 +481,14 @@ export class AiSuggestionsHost implements vscode.Disposable {
       return;
     }
     await this.updateAutoTrigger(!this.settings.autoTrigger);
+  }
+
+  private async enableAutomaticSuggestionsFromUserAction(
+    id: string,
+  ): Promise<void> {
+    const selected = await this.selectModelFromUserAction(id, false, "setup");
+    if (!selected) return;
+    await this.updateAutoTrigger(true);
   }
 
   private async updateAutoTrigger(enabled: boolean): Promise<void> {
@@ -546,17 +552,25 @@ export class AiSuggestionsHost implements vscode.Disposable {
     }
 
     const choice = await this.environment.promptFirstRun();
-    if (choice === "enable") {
+    if (this.disposed || this.environment.onboardingCompleted()) return;
+    if (this.environment.setupCompleted()) {
       await this.markOnboardingCompleted();
+      return;
+    }
+
+    if (choice === "enable") {
       const promptedSession = this.sessions.get(id);
-      const targetId =
+      const target =
         promptedSession?.panel.isReady() && promptedSession.panel.isActive()
-          ? id
-          : [...this.sessions.entries()].find(
-              ([, candidate]) =>
-                candidate.panel.isReady() && candidate.panel.isActive(),
-            )?.[0];
-      if (targetId) await this.handleToolbarAction(targetId);
+          ? promptedSession
+          : this.activeSession();
+      if (!target) return;
+
+      const setupAttempt = this.enableAutomaticSuggestionsFromUserAction(
+        target.panel.id,
+      );
+      await this.markOnboardingCompleted();
+      await setupAttempt;
       return;
     }
 
