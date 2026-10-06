@@ -45,7 +45,7 @@ export interface AiSuggestionsEnvironment {
   markSetupCompleted(): Promise<void>;
   onboardingCompleted(): boolean;
   markOnboardingCompleted(): Promise<void>;
-  hasExplicitAutoTriggerPreference(): boolean;
+  explicitAutoTriggerPreference(): boolean | undefined;
   promptFirstRun(): Promise<AiSuggestionsOnboardingChoice>;
   supported(): boolean;
   trusted(): boolean;
@@ -545,15 +545,19 @@ export class AiSuggestionsHost implements vscode.Disposable {
     if (this.environment.onboardingCompleted()) return;
     if (
       this.environment.setupCompleted() ||
-      this.environment.hasExplicitAutoTriggerPreference()
+      this.environment.explicitAutoTriggerPreference() === false
     ) {
       await this.markOnboardingCompleted();
       return;
     }
 
+    const preferenceBeforePrompt =
+      this.environment.explicitAutoTriggerPreference();
     const choice = await this.environment.promptFirstRun();
     if (this.disposed || this.environment.onboardingCompleted()) return;
-    if (this.environment.setupCompleted()) {
+    const preferenceAfterPrompt =
+      this.environment.explicitAutoTriggerPreference();
+    if (preferenceAfterPrompt !== preferenceBeforePrompt) {
       await this.markOnboardingCompleted();
       return;
     }
@@ -565,6 +569,12 @@ export class AiSuggestionsHost implements vscode.Disposable {
           ? promptedSession
           : this.activeSession();
       if (!target) return;
+
+      if (this.environment.setupCompleted()) {
+        await this.updateAutoTrigger(true);
+        await this.markOnboardingCompleted();
+        return;
+      }
 
       const setupAttempt = this.enableAutomaticSuggestionsFromUserAction(
         target.panel.id,
@@ -1279,10 +1289,10 @@ export function createAiSuggestionsEnvironment(
     markOnboardingCompleted: async () => {
       await context.globalState.update(onboardingCompletedKey, true);
     },
-    hasExplicitAutoTriggerPreference: () =>
+    explicitAutoTriggerPreference: () =>
       vscode.workspace
         .getConfiguration("markdownMint.aiSuggestions")
-        .inspect<boolean>("autoTrigger")?.globalValue === false,
+        .inspect<boolean>("autoTrigger")?.globalValue,
     promptFirstRun: async () => {
       const choice = await vscode.window.showInformationMessage(
         "Enable Copilot suggestions in Markdown Mint? Suggestions appear as ghost text and may use your GitHub Copilot quota.",

@@ -64,7 +64,7 @@ export async function runAiSuggestionAcceptance(
     markSetupCompleted: async () => undefined,
     onboardingCompleted: () => true,
     markOnboardingCompleted: async () => undefined,
-    hasExplicitAutoTriggerPreference: () => false,
+    explicitAutoTriggerPreference: () => undefined,
     promptFirstRun: async () => undefined,
     supported: () => true,
     trusted: () => true,

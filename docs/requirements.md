@@ -418,8 +418,30 @@ API. Mint does not ship or launch the Copilot Language Server, use a
 GitHub sign-in command, read authentication credentials, depend on Copilot's
 internal APIs, or pass a model object or execution capability to the Webview.
 The `markdownMint.aiSuggestions.autoTrigger` setting is application-scoped and
-defaults to `true`. Its first Copilot toolbar click selects a model and, only
-when `canSendRequest(model) !== true`, sends a fixed minimal setup request
+defaults to `true`. On a fresh install, the first time a ready, active Rich
+Editor is open in a trusted environment that supports the VS Code Language
+Model API, Mint shows one standard VS Code information notification with
+**Enable** and **Not Now**. Showing the notification does not select a model,
+send a Language Model request, or start consent. **Enable** follows the same
+explicit setup path as the Copilot toolbar. **Not Now** and dismissing the
+notification write global `autoTrigger=false`. The handled onboarding choice
+is stored in `ExtensionContext.globalState` and is not shown again; setup that
+was already complete and an existing explicit global OFF preference also skip
+the notification. If Enable resolves after no ready, active Mint editor remains,
+Mint does not start setup or consent and leaves onboarding incomplete so a
+later active Rich Editor can show the notification again. A newer automatic
+preference set through the toolbar or global settings while the notification is
+open takes precedence over its eventual choice.
+
+Manual **Suggest Continuation** is a separate user action from enabling
+automatic suggestions. Its first-use completion request may start VS Code
+consent and persist the non-secret setup-completed marker, but that marker alone
+does not change `autoTrigger`; if the onboarding choice is still pending,
+**Enable** turns automatic suggestions on without repeating model selection,
+while **Not Now** or dismissing turns them off unless a newer automatic
+preference was set while the notification was open. Toolbar setup and the
+one-time notification **Enable** select a model and, only when
+`canSendRequest(model) !== true`, send a fixed minimal setup request
 (`Reply with OK.`) with a user-visible justification to start VS Code consent.
 That request contains no document, filename, workspace, or cursor context; its
 response is discarded and is never a candidate. It may consume Copilot usage.
@@ -435,11 +457,11 @@ and selection reason. AI is enabled only in a trusted local desktop Extension
 Host, with normal editing available if the public API or Copilot model is
 unavailable.
 
-Initial model selection is initiated by the Copilot toolbar setup action or
-the explicit Suggest Continuation command. The toolbar can trigger consent
-only through its context-free setup request; manual Suggest Continuation uses
-its actual bounded-context completion request and does not send a second probe.
-Automatic suggestions and restored selections require
+Initial model selection is initiated by the one-time onboarding Enable choice,
+the Copilot toolbar setup action, or the explicit Suggest Continuation
+command. Manual Suggest Continuation uses its actual bounded-context
+completion request and does not send a second probe. Automatic suggestions and
+restored selections require
 `canSendRequest(model) === true` before sending and never trigger consent UI.
 After permission is confirmed, Mint persists only a non-secret setup-completed
 marker and selected model ID/version; neither is treated as permission. VS

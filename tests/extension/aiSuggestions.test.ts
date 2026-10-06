@@ -82,8 +82,7 @@ function fixture(
   let allow: boolean | undefined = true;
   let setupCompleted = options.setupCompleted ?? false;
   let onboardingCompleted = options.onboardingCompleted ?? true;
-  let explicitAutoTriggerPreference =
-    options.explicitAutoTriggerPreference ?? false;
+  let explicitAutoTriggerPreference = options.explicitAutoTriggerPreference;
   let supported = options.supported ?? true;
   let trusted = options.trusted ?? true;
   let savedModelIdentity: { id: string; version: string } | undefined;
@@ -134,7 +133,7 @@ function fixture(
   );
   const updateAutoTrigger = vi.fn(async (enabled: boolean) => {
     automatic = enabled;
-    explicitAutoTriggerPreference = !enabled;
+    explicitAutoTriggerPreference = enabled;
   });
   const environment: AiSuggestionsEnvironment = {
     languageModel,
@@ -147,7 +146,7 @@ function fixture(
     markOnboardingCompleted: async () => {
       onboardingCompleted = true;
     },
-    hasExplicitAutoTriggerPreference: () => explicitAutoTriggerPreference,
+    explicitAutoTriggerPreference: () => explicitAutoTriggerPreference,
     promptFirstRun,
     supported: () => supported,
     trusted: () => trusted,
@@ -289,7 +288,7 @@ function fixture(
     },
     setAutomatic: (value: boolean) => {
       automatic = value;
-      explicitAutoTriggerPreference = !value;
+      explicitAutoTriggerPreference = value;
       host.refreshSettings();
     },
     activate: (id: string) => host.sessionActivated(id),
@@ -515,6 +514,104 @@ describe("AI suggestion lifecycle with the public Language Model API", () => {
     f.dispose();
   });
 
+  it("keeps a later toolbar OFF choice when the pending onboarding prompt resolves", async () => {
+    const prompt = deferred<AiSuggestionsOnboardingChoice>();
+    const f = fixture(true, {
+      onboardingCompleted: false,
+      promptFirstRun: () => prompt.promise,
+    });
+    const activation = f.activate("s1");
+
+    await f.host.handleToolbarAction("s1");
+    await f.host.handleToolbarAction("s1");
+    expect(f.setupCompleted()).toBe(true);
+    expect(f.autoTrigger()).toBe(false);
+    expect(f.updateAutoTrigger.mock.calls).toEqual([[true], [false]]);
+
+    prompt.resolve("enable");
+    await activation;
+
+    expect(f.onboardingCompleted()).toBe(true);
+    expect(f.autoTrigger()).toBe(false);
+    expect(f.api.selectChatModels).toHaveBeenCalledTimes(1);
+    expect(f.updateAutoTrigger.mock.calls).toEqual([[true], [false]]);
+    f.dispose();
+  });
+
+  it.each([
+    { choice: "enable" as const, preference: false },
+    { choice: "not-now" as const, preference: true },
+  ])(
+    "preserves an explicit autoTrigger setting changed while onboarding is pending",
+    async ({ choice, preference }) => {
+      const prompt = deferred<AiSuggestionsOnboardingChoice>();
+      const f = fixture(true, {
+        onboardingCompleted: false,
+        promptFirstRun: () => prompt.promise,
+      });
+      const activation = f.activate("s1");
+
+      f.setAutomatic(preference);
+      prompt.resolve(choice);
+      await activation;
+
+      expect(f.onboardingCompleted()).toBe(true);
+      expect(f.autoTrigger()).toBe(preference);
+      expect(f.updateAutoTrigger).not.toHaveBeenCalled();
+      expect(f.api.selectChatModels).not.toHaveBeenCalled();
+      expect(f.send).not.toHaveBeenCalled();
+      f.dispose();
+    },
+  );
+
+  it.each([
+    {
+      choice: "not-now" as const,
+      expectedAutoTrigger: false,
+      label: "Not Now",
+    },
+    { choice: undefined, expectedAutoTrigger: false, label: "dismiss" },
+    { choice: "enable" as const, expectedAutoTrigger: true, label: "Enable" },
+  ])(
+    "applies $label after manual first-use consent without reselecting",
+    async ({ choice, expectedAutoTrigger }) => {
+      const prompt = deferred<AiSuggestionsOnboardingChoice>();
+      const f = fixture(true, {
+        onboardingCompleted: false,
+        promptFirstRun: () => prompt.promise,
+      });
+      const activation = f.activate("s1");
+      f.setAccess(undefined, false);
+
+      const request = await f.startManual(false);
+      expect(f.setupCompleted()).toBe(false);
+      expect(f.api.selectChatModels).toHaveBeenCalledTimes(1);
+      f.send.mockImplementationOnce(async () => {
+        f.setAccess(true);
+        return response('{"insertText":" next"}');
+      });
+      await f.host.requestSuggestion("s1", request);
+
+      expect(f.setupCompleted()).toBe(true);
+      expect(f.autoTrigger()).toBe(true);
+      expect(f.send).toHaveBeenCalledTimes(1);
+      expect(f.updateAutoTrigger).not.toHaveBeenCalled();
+
+      prompt.resolve(choice);
+      await activation;
+
+      expect(f.onboardingCompleted()).toBe(true);
+      expect(f.setupCompleted()).toBe(true);
+      expect(f.autoTrigger()).toBe(expectedAutoTrigger);
+      expect(f.api.selectChatModels).toHaveBeenCalledTimes(1);
+      expect(f.send).toHaveBeenCalledTimes(1);
+      expect(f.updateAutoTrigger).toHaveBeenCalledExactlyOnceWith(
+        expectedAutoTrigger,
+      );
+      f.dispose();
+    },
+  );
+
   it.each([
     { choice: "not-now" as const, label: "Not Now" },
     { choice: undefined, label: "closing the notification" },
@@ -558,7 +655,7 @@ describe("AI suggestion lifecycle with the public Language Model API", () => {
 
     const optedOut = fixture(false, {
       onboardingCompleted: false,
-      explicitAutoTriggerPreference: true,
+      explicitAutoTriggerPreference: false,
       promptFirstRun: async () => "enable",
     });
     await optedOut.activate("s1");
