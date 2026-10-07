@@ -26,6 +26,7 @@ export const AI_TRIGGER_COMMAND = "markdownMint.aiSuggestions.trigger";
 export interface AiSettings {
   readonly autoTrigger: boolean;
 }
+export type AiSuggestionsOnboardingChoice = "enable" | "not-now" | undefined;
 export interface AiPanelSession {
   readonly id: string;
   documentId(): string;
@@ -42,6 +43,10 @@ export interface AiSuggestionsEnvironment {
   readonly languageModel: LanguageModelSuggestions;
   setupCompleted(): boolean;
   markSetupCompleted(): Promise<void>;
+  onboardingCompleted(): boolean;
+  markOnboardingCompleted(): Promise<void>;
+  explicitAutoTriggerPreference(): boolean | undefined;
+  promptFirstRun(): Promise<AiSuggestionsOnboardingChoice>;
   supported(): boolean;
   trusted(): boolean;
   settings(): AiSettings;
@@ -90,7 +95,8 @@ const statusText: Record<AiAvailability, string> = {
     "Click the Copilot toolbar button to authorize VS Code model access. This can use Copilot usage.",
   ready: "Copilot language model is available.",
   untrusted: "AI suggestions are disabled in an untrusted workspace.",
-  "no-model": "No Copilot language model is currently available.",
+  "no-model":
+    "No Copilot language model is available. Sign in to GitHub and make sure GitHub Copilot is enabled in VS Code, then try again.",
   unavailable:
     "The VS Code Language Model API is unavailable in this extension host.",
   "temporarily-unavailable":
@@ -112,6 +118,7 @@ function autoRestoreBlockReason(
 const transientBackoffBaseMs = 1_000;
 const transientBackoffMaxMs = 30_000;
 const transientBackoffMaxAttempts = 6;
+const onboardingCompletedKey = "markdownMint.aiSuggestions.onboardingCompleted";
 
 export function transientFailureBackoffMs(attempt: number): number {
   const boundedAttempt = Math.max(
@@ -145,6 +152,7 @@ export class AiSuggestionsHost implements vscode.Disposable {
   private autoRestoreBlocked = false;
   private autoRestoreBlockReason: AutoRestoreBlockReason | undefined;
   private manualSelectionCount = 0;
+  private onboardingPromise: Promise<void> | undefined;
   private modelAvailability: Exclude<AiAvailability, "disabled" | "untrusted"> =
     "needs-authorization";
   private modelMessage = statusText["needs-authorization"];
@@ -317,6 +325,8 @@ export class AiSuggestionsHost implements vscode.Disposable {
     this.settingsGeneration += 1;
     this.cancelActive("untrusted");
     this.publishAll();
+    const session = this.activeSession();
+    if (session) void this.maybeShowFirstRunOnboarding(session.panel.id);
   }
 
   public documentChanged(documentUri: string): void {
@@ -353,10 +363,6 @@ export class AiSuggestionsHost implements vscode.Disposable {
     }
     if (!this.environment.trusted()) {
       this.environment.notify(statusText.untrusted);
-      return undefined;
-    }
-    if (this.modelAvailability === "blocked") {
-      this.environment.notify(statusText.blocked);
       return undefined;
     }
     if (this.transientRetryAt && Date.now() < this.transientRetryAt) {
@@ -460,17 +466,15 @@ export class AiSuggestionsHost implements vscode.Disposable {
       this.environment.notify(statusText.untrusted);
       return;
     }
-    if (this.modelAvailability === "blocked") {
-      this.environment.notify(statusText.blocked);
-      return;
-    }
     if (
       !this.environment.setupCompleted() ||
       this.modelAvailability === "needs-authorization"
     ) {
-      const selected = await this.selectModelFromUserAction(id, false, "setup");
-      if (!selected) return;
-      await this.updateAutoTrigger(true);
+      await this.enableAutomaticSuggestionsFromUserAction(id);
+      return;
+    }
+    if (this.modelAvailability === "blocked") {
+      await this.selectModelFromUserAction(id, false, "setup");
       return;
     }
     if (this.modelAvailability !== "ready") {
@@ -478,6 +482,14 @@ export class AiSuggestionsHost implements vscode.Disposable {
       return;
     }
     await this.updateAutoTrigger(!this.settings.autoTrigger);
+  }
+
+  private async enableAutomaticSuggestionsFromUserAction(
+    id: string,
+  ): Promise<void> {
+    const selected = await this.selectModelFromUserAction(id, false, "setup");
+    if (!selected) return;
+    await this.updateAutoTrigger(true);
   }
 
   private async updateAutoTrigger(enabled: boolean): Promise<void> {
@@ -495,7 +507,96 @@ export class AiSuggestionsHost implements vscode.Disposable {
     if (!session || !session.panel.isReady() || !session.panel.isActive())
       return;
     const target = this.beginActivation(session);
-    if (this.activationCurrent(target)) this.publishState(id);
+    if (!this.activationCurrent(target)) return;
+    this.publishState(id);
+    await this.maybeShowFirstRunOnboarding(id);
+  }
+
+  private async maybeShowFirstRunOnboarding(id: string): Promise<void> {
+    if (this.onboardingPromise) {
+      await this.onboardingPromise;
+      return;
+    }
+    const session = this.sessions.get(id);
+    if (
+      this.disposed ||
+      !session ||
+      !session.panel.isReady() ||
+      !session.panel.isActive() ||
+      !this.environment.supported() ||
+      !this.environment.trusted()
+    )
+      return;
+
+    const onboarding = this.processFirstRunOnboarding(id).catch(() => {
+      this.environment.notify(
+        "Could not save the Copilot suggestions onboarding choice.",
+      );
+    });
+    this.onboardingPromise = onboarding;
+    try {
+      await onboarding;
+    } finally {
+      if (this.onboardingPromise === onboarding)
+        this.onboardingPromise = undefined;
+    }
+  }
+
+  private async processFirstRunOnboarding(id: string): Promise<void> {
+    if (this.environment.onboardingCompleted()) return;
+    if (
+      this.environment.setupCompleted() ||
+      this.environment.explicitAutoTriggerPreference() === false
+    ) {
+      await this.markOnboardingCompleted();
+      return;
+    }
+
+    const preferenceBeforePrompt =
+      this.environment.explicitAutoTriggerPreference();
+    const choice = await this.environment.promptFirstRun();
+    if (this.disposed || this.environment.onboardingCompleted()) return;
+    const preferenceAfterPrompt =
+      this.environment.explicitAutoTriggerPreference();
+    if (preferenceAfterPrompt !== preferenceBeforePrompt) {
+      await this.markOnboardingCompleted();
+      return;
+    }
+
+    if (choice === "enable") {
+      const promptedSession = this.sessions.get(id);
+      const target =
+        promptedSession?.panel.isReady() && promptedSession.panel.isActive()
+          ? promptedSession
+          : this.activeSession();
+      if (!target) return;
+
+      if (this.environment.setupCompleted()) {
+        await this.updateAutoTrigger(true);
+        await this.markOnboardingCompleted();
+        return;
+      }
+
+      const setupAttempt = this.enableAutomaticSuggestionsFromUserAction(
+        target.panel.id,
+      );
+      await this.markOnboardingCompleted();
+      await setupAttempt;
+      return;
+    }
+
+    await this.updateAutoTrigger(false);
+    await this.markOnboardingCompleted();
+  }
+
+  private async markOnboardingCompleted(): Promise<void> {
+    try {
+      await this.environment.markOnboardingCompleted();
+    } catch {
+      this.environment.notify(
+        "Could not save the Copilot suggestions onboarding choice.",
+      );
+    }
   }
 
   public async sessionDeactivated(id: string): Promise<void> {
@@ -1184,6 +1285,25 @@ export function createAiSuggestionsEnvironment(
       context.globalState.get<boolean>(
         "markdownMint.aiSuggestions.setupCompleted",
       ) === true,
+    onboardingCompleted: () =>
+      context.globalState.get<boolean>(onboardingCompletedKey) === true,
+    markOnboardingCompleted: async () => {
+      await context.globalState.update(onboardingCompletedKey, true);
+    },
+    explicitAutoTriggerPreference: () =>
+      vscode.workspace
+        .getConfiguration("markdownMint.aiSuggestions")
+        .inspect<boolean>("autoTrigger")?.globalValue,
+    promptFirstRun: async () => {
+      const choice = await vscode.window.showInformationMessage(
+        "Enable Copilot suggestions?\nGet inline suggestions as you type in Markdown Mint. This may use your GitHub Copilot quota.",
+        "Enable",
+        "Not Now",
+      );
+      if (choice === "Enable") return "enable";
+      if (choice === "Not Now") return "not-now";
+      return undefined;
+    },
     markSetupCompleted: async () => {
       const selection = languageModel.currentSelection;
       if (selection)

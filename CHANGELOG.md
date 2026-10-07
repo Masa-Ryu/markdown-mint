@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.9.1
+
+- Allow Copilot suggestions to be retried from an explicit toolbar/user action after the VS Code Language Model API reports a blocked state.
+- Keep first-run Copilot setup lazy and preserve the user's automatic-suggestion preference while recovering provider access.
+- Show a one-time first-run prompt to enable Copilot suggestions, while keeping setup lazy until the user explicitly opts in.
+
 ## 0.9.0
 
 - Use VS Code's public Language Model API for optional Copilot continuations
