@@ -502,6 +502,10 @@ and the separate no-model recovery reason. A model-list event can clear the
 latter so a subsequent user input can retry; only a confirmed access grant or
 an explicit command clears an access-denial block. Adoption replies carry a
 separate attempt ID so delayed confirmations cannot accept a later Tab attempt.
+If Copilot model selection returns no model, Mint guides the user to sign in to
+GitHub, confirm GitHub Copilot is enabled in VS Code, and try again. This advice
+does not assume that missing sign-in is always the cause; retry remains an
+explicit Copilot toolbar or Suggest Continuation action.
 
 A prose or code request is based on the host-owned current unsaved Markdown
 snapshot and a UTF-16 cursor offset checked against the active panel, document

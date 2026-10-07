@@ -135,6 +135,7 @@ function fixture(
     automatic = enabled;
     explicitAutoTriggerPreference = enabled;
   });
+  const notify = vi.fn();
   const environment: AiSuggestionsEnvironment = {
     languageModel,
     setupCompleted: () => setupCompleted,
@@ -152,7 +153,7 @@ function fixture(
     trusted: () => trusted,
     settings: () => ({ autoTrigger: automatic }),
     updateAutoTrigger,
-    notify: vi.fn(),
+    notify,
     tokenSource: cancellationSource,
   };
   const host = new AiSuggestionsHost(environment);
@@ -226,6 +227,7 @@ function fixture(
     savedModelIdentity: () => savedModelIdentity,
     promptFirstRun,
     updateAutoTrigger,
+    notify,
     setSetupCompleted: (value: boolean) => {
       setupCompleted = value;
       savedModelIdentity = value
@@ -413,6 +415,29 @@ describe("AI suggestion lifecycle with the public Language Model API", () => {
       autoTrigger: true,
       availability: "ready",
     });
+    f.dispose();
+  });
+
+  it("guides users when no Copilot model is available during setup", async () => {
+    const f = fixture(true);
+    vi.mocked(f.api.selectChatModels).mockResolvedValueOnce([]);
+
+    await f.host.handleToolbarAction("s1");
+
+    expect(f.notify).toHaveBeenCalledWith(
+      "No Copilot language model is available. Sign in to GitHub and make sure GitHub Copilot is enabled in VS Code, then try again.",
+    );
+    expect(f.messages.at(-1)).toMatchObject({
+      type: "ai-suggestion-state",
+      availability: "no-model",
+      autoTrigger: true,
+      statusText:
+        "No Copilot language model is available. Sign in to GitHub and make sure GitHub Copilot is enabled in VS Code, then try again.",
+    });
+    expect(f.setupCompleted()).toBe(false);
+    expect(f.savedModelIdentity()).toBeUndefined();
+    expect(f.api.selectChatModels).toHaveBeenCalledTimes(1);
+    expect(f.send).not.toHaveBeenCalled();
     f.dispose();
   });
 

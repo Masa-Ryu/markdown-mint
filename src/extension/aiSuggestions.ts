@@ -95,7 +95,8 @@ const statusText: Record<AiAvailability, string> = {
     "Click the Copilot toolbar button to authorize VS Code model access. This can use Copilot usage.",
   ready: "Copilot language model is available.",
   untrusted: "AI suggestions are disabled in an untrusted workspace.",
-  "no-model": "No Copilot language model is currently available.",
+  "no-model":
+    "No Copilot language model is available. Sign in to GitHub and make sure GitHub Copilot is enabled in VS Code, then try again.",
   unavailable:
     "The VS Code Language Model API is unavailable in this extension host.",
   "temporarily-unavailable":
