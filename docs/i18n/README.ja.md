@@ -10,7 +10,15 @@ VS Code 向けのビジュアル WYSIWYG Markdown エディターです。
 
 移行は不要です。お使いの Markdown ファイルを開くだけで、すぐに書き始められます。
 
-![概要](../media/overview.gif)
+![Markdown Mint の表編集デモ](../media/overview.gif)
+
+### VS Code 向け Markdown Mint
+
+**表を貼り付け、列を並べ替えても、Markdown はそのまま。**
+
+[VS Code Marketplace から Markdown Mint をインストール](https://marketplace.visualstudio.com/items?itemName=masa-ryu.markdown-mint)
+
+この短いデモはブラウザ用ハーネスで実行しています。固定TSV見本をMarkdown Mint本来の貼り付け処理へ渡し、Source欄にはハーネス用の表示を使っています。VS Codeでは **Source** を選ぶと標準のMarkdownエディターが開きます。
 
 ## 書くことに集中
 

@@ -1,0 +1,3 @@
+{
+  "markdown": "# Weekly Release Status\n\nPaste the tab-separated rows here.\n\n| Workstream | Owner | Status |\n| --- | --- | --- |\n| Search and navigation | Alice Johnson | Ready |\n| Markdown export | Bob Chen | In review |\n| Mermaid templates | Carol Diaz | Ready |\n\n\n> [!TIP]\n> Edit visually. Keep your Markdown.\n\n\n"
+}

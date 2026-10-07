@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import { readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
+import { inflateRawSync } from "node:zlib";
 
 const packageJson = JSON.parse(await readFile("package.json", "utf8"));
 const extensionIcon = "extension/assets/icon/icon.png";
@@ -35,6 +36,11 @@ for (const entry of requiredEntries) {
     throw new Error(`VSIX is missing required entry: ${entry}`);
   }
 }
+const packagedReadmePath = entries.find(
+  (entry) => entry.toLowerCase() === "extension/readme.md",
+);
+if (!packagedReadmePath)
+  throw new Error("VSIX is missing its packaged README.");
 
 const forbiddenPrefixes = [
   "extension/tests/",
@@ -50,7 +56,8 @@ const forbiddenEntries = entries.filter(
     forbiddenPrefixes.some((prefix) => entry.startsWith(prefix)) ||
     entry.startsWith("extension/dist/test-") ||
     entry.endsWith(".svg") ||
-    entry.endsWith("demo1.gif"),
+    entry.endsWith("demo1.gif") ||
+    /\.(?:gif|webm|mp4)$/i.test(entry),
 );
 const unexpectedAssetEntries = entries.filter(
   (entry) =>
@@ -70,6 +77,11 @@ if (forbiddenEntries.length > 0) {
     `VSIX contains repository-only or build-embedded assets:\n${forbiddenEntries.join("\n")}`,
   );
 }
+
+const packagedReadme = readZipEntry(archive, packagedReadmePath).toString(
+  "utf8",
+);
+verifyPackagedReadmeMedia(packagedReadme);
 
 const packageSize = (await stat(vsixPath)).size;
 const sizeInMiB = (packageSize / 1024 / 1024).toFixed(2);
@@ -104,6 +116,85 @@ function listZipEntries(buffer) {
     throw new Error("Invalid VSIX central directory size");
   }
   return entries;
+}
+
+function readZipEntry(buffer, targetName) {
+  const endOfCentralDirectory = findEndOfCentralDirectory(buffer);
+  const centralDirectorySize = buffer.readUInt32LE(endOfCentralDirectory + 12);
+  const centralDirectoryOffset = buffer.readUInt32LE(
+    endOfCentralDirectory + 16,
+  );
+  const centralDirectoryEnd = centralDirectoryOffset + centralDirectorySize;
+  let offset = centralDirectoryOffset;
+
+  while (offset < centralDirectoryEnd) {
+    if (buffer.readUInt32LE(offset) !== 0x02014b50)
+      throw new Error("Invalid VSIX central directory entry");
+    const method = buffer.readUInt16LE(offset + 10);
+    const compressedSize = buffer.readUInt32LE(offset + 20);
+    const uncompressedSize = buffer.readUInt32LE(offset + 24);
+    const fileNameLength = buffer.readUInt16LE(offset + 28);
+    const extraFieldLength = buffer.readUInt16LE(offset + 30);
+    const commentLength = buffer.readUInt16LE(offset + 32);
+    const localHeaderOffset = buffer.readUInt32LE(offset + 42);
+    const fileName = buffer.toString(
+      "utf8",
+      offset + 46,
+      offset + 46 + fileNameLength,
+    );
+    if (fileName === targetName) {
+      if (buffer.readUInt32LE(localHeaderOffset) !== 0x04034b50)
+        throw new Error(`Invalid VSIX local entry for ${targetName}`);
+      const localNameLength = buffer.readUInt16LE(localHeaderOffset + 26);
+      const localExtraLength = buffer.readUInt16LE(localHeaderOffset + 28);
+      const contentOffset =
+        localHeaderOffset + 30 + localNameLength + localExtraLength;
+      const compressed = buffer.subarray(
+        contentOffset,
+        contentOffset + compressedSize,
+      );
+      const content =
+        method === 0
+          ? compressed
+          : method === 8
+            ? inflateRawSync(compressed)
+            : null;
+      if (!content)
+        throw new Error(`Unsupported VSIX compression method: ${method}`);
+      if (content.length !== uncompressedSize)
+        throw new Error(`Invalid VSIX content size for ${targetName}`);
+      return content;
+    }
+    offset += 46 + fileNameLength + extraFieldLength + commentLength;
+  }
+  throw new Error(`VSIX is missing required entry: ${targetName}`);
+}
+
+function verifyPackagedReadmeMedia(readme) {
+  const images = Array.from(
+    readme.matchAll(/!\[[^\]]*\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g),
+    (match) => match[1],
+  );
+  const mediaImages = images.filter((image) => image.includes("docs/media/"));
+  if (mediaImages.length === 0)
+    throw new Error(
+      "Packaged README has no public docs/media image references.",
+    );
+  const publicPrefix =
+    "https://raw.githubusercontent.com/Masa-Ryu/markdown-mint/main/docs/media/";
+  for (const image of mediaImages) {
+    if (!image.startsWith(publicPrefix))
+      throw new Error(
+        `Packaged README image must use the repository's public media URL: ${image}`,
+      );
+    const relativePath = decodeURIComponent(image.slice(publicPrefix.length));
+    if (
+      relativePath.length === 0 ||
+      relativePath.includes("/") ||
+      !existsSync(join(process.cwd(), "docs", "media", relativePath))
+    )
+      throw new Error(`Packaged README media target is missing: ${image}`);
+  }
 }
 
 function findEndOfCentralDirectory(buffer) {
