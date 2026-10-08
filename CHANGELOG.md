@@ -14,6 +14,9 @@
 - Match `files.exclude` with VS Code-compatible brace and character-class
   patterns, including conditional sibling rules, and skip directory discovery
   for image searches.
+- Refresh workspace search results after external filesystem changes using a
+  five-second cache lifetime while retaining immediate VS Code-operation
+  invalidation.
 
 ## 0.9.1
 

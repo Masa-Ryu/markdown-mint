@@ -58,7 +58,8 @@ export class WorkspaceFileSearchHost implements vscode.Disposable {
     string,
     readonly WorkspaceFileExcludePattern[]
   >();
-  private readonly cacheCreatedAt = new Map<string, number>();
+  private readonly fileCacheCreatedAt = new Map<string, number>();
+  private readonly directoryCacheCreatedAt = new Map<string, number>();
   private readonly warmupCache = new Map<string, Promise<void>>();
   private readonly disposables: vscode.Disposable[];
 
@@ -150,7 +151,8 @@ export class WorkspaceFileSearchHost implements vscode.Disposable {
     this.fileIndexCache.clear();
     this.linkIndexCache.clear();
     this.excludeCache.clear();
-    this.cacheCreatedAt.clear();
+    this.fileCacheCreatedAt.clear();
+    this.directoryCacheCreatedAt.clear();
     this.warmupCache.clear();
   }
 
@@ -172,7 +174,8 @@ export class WorkspaceFileSearchHost implements vscode.Disposable {
         undefined,
       ),
     ).then((result) => {
-      if (this.fileCache.get(key) === files) this.markWorkspaceCacheFresh(key);
+      if (this.fileCache.get(key) === files)
+        this.fileCacheCreatedAt.set(key, Date.now());
       return result;
     });
     this.fileCache.set(key, files);
@@ -197,7 +200,7 @@ export class WorkspaceFileSearchHost implements vscode.Disposable {
     directories = scanWorkspaceDirectories(workspaceFolder, excludes).then(
       (result) => {
         if (this.directoryCache.get(key) === directories)
-          this.markWorkspaceCacheFresh(key);
+          this.directoryCacheCreatedAt.set(key, Date.now());
         return result;
       },
     );
@@ -206,23 +209,23 @@ export class WorkspaceFileSearchHost implements vscode.Disposable {
   }
 
   private refreshWorkspaceCacheIfExpired(workspaceKey: string): void {
-    const createdAt = this.cacheCreatedAt.get(workspaceKey);
-    if (
-      createdAt !== undefined &&
-      Date.now() - createdAt >= WORKSPACE_FILE_SEARCH_CACHE_TTL_MS
-    )
+    const now = Date.now();
+    const fileCacheIsExpired =
+      now - (this.fileCacheCreatedAt.get(workspaceKey) ?? now) >=
+      WORKSPACE_FILE_SEARCH_CACHE_TTL_MS;
+    const directoryCacheIsExpired =
+      now - (this.directoryCacheCreatedAt.get(workspaceKey) ?? now) >=
+      WORKSPACE_FILE_SEARCH_CACHE_TTL_MS;
+    if (fileCacheIsExpired || directoryCacheIsExpired)
       this.clearWorkspaceCache(workspaceKey);
-  }
-
-  private markWorkspaceCacheFresh(workspaceKey: string): void {
-    this.cacheCreatedAt.set(workspaceKey, Date.now());
   }
 
   private clearWorkspaceCache(workspaceKey: string): void {
     this.fileCache.delete(workspaceKey);
     this.directoryCache.delete(workspaceKey);
     this.excludeCache.delete(workspaceKey);
-    this.cacheCreatedAt.delete(workspaceKey);
+    this.fileCacheCreatedAt.delete(workspaceKey);
+    this.directoryCacheCreatedAt.delete(workspaceKey);
     this.deleteIndexesForWorkspace(workspaceKey);
   }
 
