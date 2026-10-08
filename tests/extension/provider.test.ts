@@ -3354,6 +3354,126 @@ describe("MarkdownMintEditorProvider", () => {
     search.dispose();
   });
 
+  it("refreshes cached file and directory candidates after external changes", async () => {
+    vscode.__state.reset();
+    vscode.__state.workspaceFolder = {
+      uri: vscode.Uri.file("/workspace"),
+      name: "workspace",
+      index: 0,
+    };
+    const { WORKSPACE_FILE_SEARCH_CACHE_TTL_MS, WorkspaceFileSearchHost } =
+      await import("../../src/extension/workspaceFileSearch");
+    const workspaceFolder = vscode.__state.workspaceFolder;
+    const documentUri = vscode.__state.document.uri;
+    const search = new WorkspaceFileSearchHost();
+    const searchExternal = (): Promise<unknown[]> =>
+      search.searchFiles(
+        documentUri as never,
+        workspaceFolder as never,
+        "external",
+        "all",
+      );
+    vi.useFakeTimers();
+    const cacheStart = Date.now();
+
+    try {
+      expect(await searchExternal()).toEqual([]);
+      const initialReadCount = vscode.__state.readDirectoryCalls.length;
+      vscode.__state.existingFiles.add("/workspace/docs/external-note.md");
+      vscode.__state.existingDirectories.add("/workspace/docs/external-folder");
+
+      // Changes made outside VS Code remain on the cached results until the
+      // short cache lifetime expires; additional keystrokes do not rescan.
+      expect(await searchExternal()).toEqual([]);
+      expect(vscode.__state.findFilesCalls).toHaveLength(1);
+      expect(vscode.__state.readDirectoryCalls).toHaveLength(initialReadCount);
+
+      vi.setSystemTime(cacheStart + WORKSPACE_FILE_SEARCH_CACHE_TTL_MS);
+      expect(await searchExternal()).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            kind: "file",
+            fileName: "external-note.md",
+          }),
+          expect.objectContaining({
+            kind: "directory",
+            fileName: "external-folder",
+          }),
+        ]),
+      );
+      expect(vscode.__state.findFilesCalls).toHaveLength(2);
+      expect(vscode.__state.readDirectoryCalls.length).toBeGreaterThan(
+        initialReadCount,
+      );
+
+      vscode.__state.existingFiles.delete("/workspace/docs/external-note.md");
+      vscode.__state.existingFiles.add("/workspace/docs/external-renamed.md");
+      vscode.__state.existingDirectories.delete(
+        "/workspace/docs/external-folder",
+      );
+      vscode.__state.existingDirectories.add(
+        "/workspace/docs/external-renamed",
+      );
+      expect(
+        await search.searchFiles(
+          documentUri as never,
+          workspaceFolder as never,
+          "external-renamed",
+          "all",
+        ),
+      ).toEqual([]);
+
+      vi.setSystemTime(Date.now() + WORKSPACE_FILE_SEARCH_CACHE_TTL_MS);
+      expect(
+        await search.searchFiles(
+          documentUri as never,
+          workspaceFolder as never,
+          "external-renamed",
+          "all",
+        ),
+      ).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            kind: "file",
+            fileName: "external-renamed.md",
+          }),
+          expect.objectContaining({
+            kind: "directory",
+            fileName: "external-renamed",
+          }),
+        ]),
+      );
+
+      vscode.__state.existingFiles.delete(
+        "/workspace/docs/external-renamed.md",
+      );
+      vscode.__state.existingDirectories.delete(
+        "/workspace/docs/external-renamed",
+      );
+      expect(
+        await search.searchFiles(
+          documentUri as never,
+          workspaceFolder as never,
+          "external-renamed",
+          "all",
+        ),
+      ).toHaveLength(2);
+
+      vi.setSystemTime(Date.now() + WORKSPACE_FILE_SEARCH_CACHE_TTL_MS);
+      expect(
+        await search.searchFiles(
+          documentUri as never,
+          workspaceFolder as never,
+          "external-renamed",
+          "all",
+        ),
+      ).toEqual([]);
+    } finally {
+      search.dispose();
+      vi.useRealTimers();
+    }
+  });
+
   it("returns no file candidates when the document is outside a workspace", async () => {
     vscode.__state.reset();
     const provider = new MarkdownMintEditorProvider(context() as never);

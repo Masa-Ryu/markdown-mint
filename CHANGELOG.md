@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.10.0
+## 0.9.2
 
 - Add workspace directories to Link dialog and selected-text Link picker
   suggestions, show a folder icon, and insert encoded document-relative paths

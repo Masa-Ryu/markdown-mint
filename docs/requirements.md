@@ -1013,6 +1013,12 @@ conditional sibling clauses, are excluded. Create, delete, rename,
 workspace-folder, and `files.exclude` changes invalidate discovery and its
 indexes.
 
+Cached workspace discovery is reused for 5 seconds. VS Code file operations and
+configuration changes still invalidate it immediately; filesystem changes made
+outside VS Code become visible on the next search after the cache expires. This
+avoids a recursive filesystem scan on each keystroke and works through the
+workspace file provider for local, remote, and virtual workspaces.
+
 The focused unit and Chromium regressions cover state transitions, stale
 responses, active-row DOM reuse, warm-up sharing, flat styling, three entry
 points, and the required fixture display checks. The cache-warm benchmark

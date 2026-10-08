@@ -15,6 +15,8 @@ export const MAX_WORKSPACE_DIRECTORY_SCAN_DEPTH = 12;
 export const MAX_WORKSPACE_DIRECTORY_SCAN_COUNT = 500;
 export const MAX_WORKSPACE_DIRECTORY_SCAN_ENTRIES = 5_000;
 export const MAX_WORKSPACE_DIRECTORY_SCAN_MS = 150;
+/** Refresh discovery on the next search after this cache age. */
+export const WORKSPACE_FILE_SEARCH_CACHE_TTL_MS = 5_000;
 const WORKSPACE_DIRECTORY_SCAN_CONCURRENCY = 8;
 
 interface WorkspaceFileExcludePattern {
@@ -30,8 +32,9 @@ interface WorkspaceDirectoryScanResult {
 /**
  * Host-side adapter for workspace discovery. VS Code owns the filesystem
  * lookup and applies files.exclude when findFiles is called without an
- * explicit exclude glob. Results are cached per workspace folder and scheme
- * so a second keystroke only reranks the already-prepared index.
+ * explicit exclude glob. Results are cached per workspace folder and scheme;
+ * a second keystroke reranks the prepared index, and a five-second refresh
+ * lets later searches observe filesystem changes outside VS Code.
  */
 export class WorkspaceFileSearchHost implements vscode.Disposable {
   private readonly search = new RankedWorkspaceFileSearch();
@@ -55,6 +58,7 @@ export class WorkspaceFileSearchHost implements vscode.Disposable {
     string,
     readonly WorkspaceFileExcludePattern[]
   >();
+  private readonly cacheCreatedAt = new Map<string, number>();
   private readonly warmupCache = new Map<string, Promise<void>>();
   private readonly disposables: vscode.Disposable[];
 
@@ -89,6 +93,7 @@ export class WorkspaceFileSearchHost implements vscode.Disposable {
   ): Promise<WorkspaceFileCandidate[]> {
     if (!workspaceFolder || !isWorkspaceFileSearchQuery(query)) return [];
     const key = workspaceFolder.uri.toString(true);
+    this.refreshWorkspaceCacheIfExpired(key);
     try {
       const index =
         filter === "image"
@@ -106,10 +111,7 @@ export class WorkspaceFileSearchHost implements vscode.Disposable {
       // File providers can disappear while a remote workspace reconnects. An
       // empty result keeps the dialog usable without turning lookup failures
       // into document edits or noisy notifications.
-      this.fileCache.delete(key);
-      this.directoryCache.delete(key);
-      this.excludeCache.delete(key);
-      this.deleteIndexesForWorkspace(key);
+      this.clearWorkspaceCache(key);
       return [];
     }
   }
@@ -124,18 +126,16 @@ export class WorkspaceFileSearchHost implements vscode.Disposable {
     workspaceFolder: vscode.WorkspaceFolder | undefined,
   ): Promise<void> {
     if (!workspaceFolder) return Promise.resolve();
+    const workspaceKey = workspaceFolder.uri.toString(true);
+    this.refreshWorkspaceCacheIfExpired(workspaceKey);
     const indexKey = this.indexKey(documentUri, workspaceFolder);
     const cached = this.warmupCache.get(indexKey);
     if (cached) return cached;
 
-    const workspaceKey = workspaceFolder.uri.toString(true);
     const warmup = this.getOrCreateFileIndex(documentUri, workspaceFolder).then(
       () => undefined,
       () => {
-        this.fileCache.delete(workspaceKey);
-        this.directoryCache.delete(workspaceKey);
-        this.excludeCache.delete(workspaceKey);
-        this.deleteIndexesForWorkspace(workspaceKey);
+        this.clearWorkspaceCache(workspaceKey);
         if (this.warmupCache.get(indexKey) === warmup)
           this.warmupCache.delete(indexKey);
       },
@@ -150,6 +150,7 @@ export class WorkspaceFileSearchHost implements vscode.Disposable {
     this.fileIndexCache.clear();
     this.linkIndexCache.clear();
     this.excludeCache.clear();
+    this.cacheCreatedAt.clear();
     this.warmupCache.clear();
   }
 
@@ -164,12 +165,16 @@ export class WorkspaceFileSearchHost implements vscode.Disposable {
     const key = workspaceFolder.uri.toString(true);
     const cached = this.fileCache.get(key);
     if (cached) return cached;
-    const files = Promise.resolve(
+    let files: Promise<readonly vscode.Uri[]>;
+    files = Promise.resolve(
       vscode.workspace.findFiles(
         new vscode.RelativePattern(workspaceFolder, "**/*"),
         undefined,
       ),
-    );
+    ).then((result) => {
+      if (this.fileCache.get(key) === files) this.markWorkspaceCacheFresh(key);
+      return result;
+    });
     this.fileCache.set(key, files);
     return files;
   }
@@ -188,9 +193,37 @@ export class WorkspaceFileSearchHost implements vscode.Disposable {
     const cached = this.directoryCache.get(key);
     if (cached) return cached;
     const excludes = this.getFileExcludePatterns(workspaceFolder);
-    const directories = scanWorkspaceDirectories(workspaceFolder, excludes);
+    let directories: Promise<WorkspaceDirectoryScanResult>;
+    directories = scanWorkspaceDirectories(workspaceFolder, excludes).then(
+      (result) => {
+        if (this.directoryCache.get(key) === directories)
+          this.markWorkspaceCacheFresh(key);
+        return result;
+      },
+    );
     this.directoryCache.set(key, directories);
     return directories;
+  }
+
+  private refreshWorkspaceCacheIfExpired(workspaceKey: string): void {
+    const createdAt = this.cacheCreatedAt.get(workspaceKey);
+    if (
+      createdAt !== undefined &&
+      Date.now() - createdAt >= WORKSPACE_FILE_SEARCH_CACHE_TTL_MS
+    )
+      this.clearWorkspaceCache(workspaceKey);
+  }
+
+  private markWorkspaceCacheFresh(workspaceKey: string): void {
+    this.cacheCreatedAt.set(workspaceKey, Date.now());
+  }
+
+  private clearWorkspaceCache(workspaceKey: string): void {
+    this.fileCache.delete(workspaceKey);
+    this.directoryCache.delete(workspaceKey);
+    this.excludeCache.delete(workspaceKey);
+    this.cacheCreatedAt.delete(workspaceKey);
+    this.deleteIndexesForWorkspace(workspaceKey);
   }
 
   private getOrCreateIndex(
