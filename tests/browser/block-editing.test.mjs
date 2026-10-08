@@ -2950,6 +2950,29 @@ async function testWorkspaceFileAutocomplete(page) {
   await load(page, "Target");
   await caret(page, `${rich} > p`, 0, -1);
   await page.locator('[data-testid="toolbar-link"]').click();
+  const directoryPicker = page.locator('[data-testid="link-selection-picker"]');
+  const directoryInput = directoryPicker.locator(
+    '[data-testid="link-picker-input"]',
+  );
+  await directoryInput.fill("docs");
+  const directoryOption = directoryPicker
+    .locator('.mm-file-autocomplete-option[data-candidate-kind="directory"]')
+    .first();
+  await directoryOption.waitFor({ state: "visible" });
+  assert.equal(
+    await directoryOption.locator(".mm-file-autocomplete-name").textContent(),
+    "docs",
+  );
+  assert.equal(
+    await directoryOption.locator("svg[data-icon='folder']").count(),
+    1,
+  );
+  await directoryOption.click();
+  await expectSource(page, "[Target](../docs/)");
+
+  await load(page, "Target");
+  await caret(page, `${rich} > p`, 0, -1);
+  await page.locator('[data-testid="toolbar-link"]').click();
   const clickPicker = page.locator('[data-testid="link-selection-picker"]');
   const clickInput = clickPicker.locator('[data-testid="link-picker-input"]');
   await clickInput.fill("ho");
@@ -3045,6 +3068,30 @@ async function testWorkspaceFileAutocomplete(page) {
   await expectSource(page, "Target[Custom label](../specs/hoge.pdf)");
 
   await load(page, "Target");
+  await caret(page, `${rich} > p`, -1);
+  await page.locator('[data-testid="toolbar-link"]').click();
+  const directoryDialog = page.locator(
+    'dialog[aria-labelledby="mm-link-dialog-title"]',
+  );
+  await directoryDialog.waitFor({ state: "visible" });
+  const directoryModalInput = directoryDialog.locator(
+    'input[placeholder="./docs/example.md"]',
+  );
+  const directoryLinkText = directoryDialog.locator(
+    'input[placeholder="Selected text"]',
+  );
+  await directoryModalInput.fill("docs");
+  const directoryModalOption = directoryDialog
+    .locator('.mm-file-autocomplete-option[data-candidate-kind="directory"]')
+    .first();
+  await directoryModalOption.waitFor({ state: "visible" });
+  await directoryModalOption.click();
+  assert.equal(await directoryModalInput.inputValue(), "../docs/");
+  assert.equal(await directoryLinkText.inputValue(), "docs");
+  await directoryDialog.getByRole("button", { name: "Insert link" }).click();
+  await expectSource(page, "Target[docs](../docs/)");
+
+  await load(page, "Target");
   await caret(page, `${rich} > p`, 0, -1);
   const imageBefore = await saved(page);
   await page.locator('[data-testid="toolbar-image"]').click();
@@ -3068,6 +3115,11 @@ async function testWorkspaceFileAutocomplete(page) {
   assert.ok(
     (await imageOptions.count()) > 1,
     "multiple image candidates render",
+  );
+  assert.equal(
+    await imageOptions.locator('[data-candidate-kind="directory"]').count(),
+    0,
+    "directory candidates leaked into image insertion",
   );
   assert.equal(
     await imageDialog

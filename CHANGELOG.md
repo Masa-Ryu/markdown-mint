@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.9.2
+
+- Add workspace directories to Link dialog and selected-text Link picker
+  suggestions, show a folder icon, and insert encoded document-relative paths
+  with a trailing slash. Keep Image suggestions limited to image files and
+  preserve the existing candidate ranking and interaction behavior.
+- Include empty directories through one cached `workspace.fs.readDirectory`
+  scan bounded by depth, directory count, entry count, and elapsed time; keep
+  `.git`, `node_modules`, and enabled `files.exclude` patterns out of results.
+- Use `workspace.fs.stat` to reveal directory links in the VS Code Explorer and
+  continue opening file links with `vscode.open`.
+
 ## 0.9.1
 
 - Allow Copilot suggestions to be retried from an explicit toolbar/user action after the VS Code Language Model API reports a blocked state.

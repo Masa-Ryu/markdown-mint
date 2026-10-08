@@ -962,8 +962,11 @@ the filesystem root. Percent-encoded path components are decoded before they
 are passed to `vscode.Uri.joinPath`; raw query and fragment delimiters retain
 their existing split behavior, and malformed percent escapes are rejected.
 Existing targets are opened with `vscode.open`, preserving VS Code's normal
-editor association. A missing target produces a concise notification only when
-the user invokes the link.
+editor association. Targets are classified with `workspace.fs.stat`; directory
+links use `revealInExplorer`, even when the Markdown destination has no
+trailing slash. Query and fragment components are removed before file-system
+lookup and local file or Explorer navigation. A missing target or an access
+failure produces a concise notification only when the user invokes the link.
 
 Fragment-only links use the existing `id` attributes inside the current Rich
 Editor DOM, including generated heading, TOC, and footnote targets. They do not
@@ -974,33 +977,44 @@ scheme validation rejects `javascript`, `command`, `vscode`,
 `vscode-insiders`, `data`, and every other unapproved scheme; the protocol also
 caps untrusted hrefs with `MAX_RESOURCE_URL_LENGTH`.
 
-## Rich Editor workspace file autocomplete
+## Rich Editor workspace file and directory autocomplete
 
-Link and Image dialogs, together with the selected-text Link picker, share one
-workspace-file autocomplete controller. The candidate list uses a flat normal
-layout with filename-first rendering, an ellipsized directory, an internally
-scrollable list, and one `activeIndex` as the source of truth. Arrow navigation
-and real pointer movement update only the previous and next rows,
-`aria-selected`, `aria-activedescendant`, the path footer, and list scroll
-position; they do not rebuild candidate DOM. Non-active CSS `:hover` does not
-add a selection background, while high-contrast and forced-colors active-row
-outlines remain available.
+Link dialogs and the selected-text Link picker search files and directories;
+Image dialogs remain limited to supported image files. Directory candidates
+show a folder icon, their name, and their containing workspace path separately.
+Selecting one inserts a document-relative destination with a trailing slash.
+Link text defaults to the selected file or directory name only when the Link
+text field is empty; existing or user-entered link text is preserved. The
+candidate list keeps its flat normal layout, internally scrollable list, and
+single `activeIndex` source of truth. Arrow navigation and real pointer
+movement update only the previous and next rows, `aria-selected`,
+`aria-activedescendant`, the path footer, and list scroll position; they do not
+rebuild candidate DOM. Non-active CSS `:hover` does not add a selection
+background, while high-contrast and forced-colors active-row outlines remain
+available.
 
-The Extension Host warms both `findFiles` discovery and the prepared
-scheme/authority-specific search index when the Link or Image UI opens. In
-flight warm-ups for the same workspace, scheme, and authority share one
-Promise. Cache-warm filename queries score prepared metadata first, materialize
-document-relative Markdown paths only for the bounded top ten, and preserve
-the existing deterministic ranking. `.git/**`, `node_modules/**`, and the
-configured VS Code `files.exclude` behavior remain excluded as before.
+The Extension Host warms `findFiles` discovery and the prepared
+scheme/authority-specific search index when the Link or Image UI opens. It
+collects non-empty directories from file parents, then uses one cached,
+breadth-first `workspace.fs.readDirectory` scan to find empty directories. The
+scan is limited to depth 12, 500 directory reads, 5,000 entries, and 150 ms per
+workspace folder. If a limit is reached, unvisited empty directories are not
+offered; the file-parent candidates remain available. The scan runs once per
+cache lifetime instead of on each keystroke. In-flight warm-ups for the same
+workspace, scheme, and authority share one Promise. Cache-warm queries score
+prepared metadata first, materialize document-relative Markdown paths only for
+the bounded top ten, and preserve the existing deterministic ranking.
+`.git/**`, `node_modules/**`, and enabled VS Code `files.exclude` patterns are
+excluded. Create, delete, rename, workspace-folder, and `files.exclude` changes
+invalidate discovery and its index.
 
 The focused unit and Chromium regressions cover state transitions, stale
 responses, active-row DOM reuse, warm-up sharing, flat styling, three entry
 points, and the required fixture display checks. The cache-warm benchmark
 commands are:
 
-- `npm run benchmark:file-search` — shared ranking at 1k, 10k, and 50k
-  synthetic files.
+- `npm run benchmark:file-search` — shared file/directory ranking at 1k, 10k,
+  and 50k synthetic entries.
 - `npm run benchmark:file-search:browser` — Chromium browser harness at the
   same sizes for Link modal, Image modal, and selected-text picker.
 - `npm run benchmark:file-search:extension` — real VS Code Extension Host

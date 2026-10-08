@@ -8,8 +8,10 @@ import type { WorkspaceFileCandidate } from "../../src/shared/workspaceFileSearc
 function candidate(
   fileName: string,
   relativePath = `./${fileName}`,
+  kind: WorkspaceFileCandidate["kind"] = "file",
 ): WorkspaceFileCandidate {
   return {
+    kind,
     fileName,
     directory: "docs/",
     relativePath,
@@ -231,6 +233,34 @@ describe("FileAutocomplete active candidate interaction", () => {
     expect(option).not.toBeNull();
     option!.click();
     expect(selected).toHaveBeenLastCalledWith(candidate("beta.md"));
+    autocomplete.dispose();
+  });
+
+  it("renders and selects a directory with its folder icon and trailing slash", () => {
+    const selected = vi.fn();
+    const { input, autocomplete } = createAutocomplete(selected);
+    const folder = candidate("design", "../design/", "directory");
+    dispatchInput(input, "design");
+    autocomplete.setCandidates([folder]);
+
+    const option = document.querySelector<HTMLButtonElement>(
+      ".mm-file-autocomplete-option",
+    );
+    expect(option?.dataset.candidateKind).toBe("directory");
+    expect(option?.getAttribute("aria-label")).toBe("Folder: design, docs/");
+    expect(option?.querySelector("svg[data-icon='folder']")).not.toBeNull();
+    const enter = dispatchKey(input, "Enter");
+    expect(enter.defaultPrevented).toBe(true);
+    expect(input.value).toBe("../design/");
+    expect(selected).toHaveBeenCalledWith(folder);
+
+    dispatchInput(input, "design");
+    autocomplete.setCandidates([folder]);
+    document
+      .querySelector<HTMLButtonElement>(".mm-file-autocomplete-option")
+      ?.click();
+    expect(input.value).toBe("../design/");
+    expect(selected).toHaveBeenLastCalledWith(folder);
     autocomplete.dispose();
   });
 

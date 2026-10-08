@@ -1498,6 +1498,16 @@ textarea:focus-visible {
   cursor: pointer;
   outline: none;
 }
+.mm-file-autocomplete-main {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 7px;
+}
+.mm-file-autocomplete-icon {
+  flex: 0 0 auto;
+  color: var(--vscode-icon-foreground, currentColor);
+}
 .mm-file-autocomplete-option.is-active {
   color: var(
     --vscode-list-activeSelectionForeground,

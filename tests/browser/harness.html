@@ -175,6 +175,7 @@
             const number = String(index).padStart(5, '0');
             const extension = index % 2 === 0 ? '.png' : '.md';
             return {
+              kind: 'file',
               fileName: `benchmark-${number}${extension}`,
               directory: `docs/benchmark/${group}/`,
               relativePath: `../docs/benchmark/${group}/benchmark-${number}${extension}`
@@ -184,15 +185,18 @@
       const browserWorkspaceFiles = benchmarkWorkspaceFiles.length > 0
         ? benchmarkWorkspaceFiles
         : [
-        { fileName: 'hoge.pdf', directory: 'specs/', relativePath: '../specs/hoge.pdf' },
-        { fileName: 'hoge-design.md', directory: 'docs/', relativePath: '../docs/hoge-design.md' },
-        { fileName: 'how-to-use.md', directory: 'docs/', relativePath: '../docs/how-to-use.md' },
-        { fileName: 'logo.png', directory: 'assets/', relativePath: '../assets/logo.png' },
-        { fileName: 'logo-dark.svg', directory: 'assets/', relativePath: '../assets/logo-dark.svg' },
-        { fileName: 'manual.pdf', directory: 'docs/', relativePath: './manual.pdf' },
-        { fileName: 'guide.md', directory: '.git/', relativePath: '../.git/guide.md' },
-        { fileName: 'guide.md', directory: 'node_modules/pkg/', relativePath: '../node_modules/pkg/guide.md' },
+        { kind: 'file', fileName: 'hoge.pdf', directory: 'specs/', relativePath: '../specs/hoge.pdf' },
+        { kind: 'file', fileName: 'hoge-design.md', directory: 'docs/', relativePath: '../docs/hoge-design.md' },
+        { kind: 'file', fileName: 'how-to-use.md', directory: 'docs/', relativePath: '../docs/how-to-use.md' },
+        { kind: 'file', fileName: 'logo.png', directory: 'assets/', relativePath: '../assets/logo.png' },
+        { kind: 'file', fileName: 'logo-dark.svg', directory: 'assets/', relativePath: '../assets/logo-dark.svg' },
+        { kind: 'file', fileName: 'manual.pdf', directory: 'docs/', relativePath: './manual.pdf' },
+        { kind: 'directory', fileName: 'docs', directory: './', relativePath: '../docs/' },
+        { kind: 'directory', fileName: 'logo', directory: 'assets/', relativePath: '../assets/logo/' },
+        { kind: 'file', fileName: 'guide.md', directory: '.git/', relativePath: '../.git/guide.md' },
+        { kind: 'file', fileName: 'guide.md', directory: 'node_modules/pkg/', relativePath: '../node_modules/pkg/guide.md' },
         ...Array.from({ length: 10 }, (_, index) => ({
+          kind: 'file',
           fileName: `candidate-${String(index + 1).padStart(2, '0')}.md`,
           directory: 'docs/candidates/',
           relativePath: `../docs/candidates/candidate-${String(index + 1).padStart(2, '0')}.md`
@@ -202,7 +206,7 @@
         const lower = query.trim().toLowerCase();
         return browserWorkspaceFiles
           .filter(candidate => !/(?:^|\/)\.(?:git)(?:\/|$)|(?:^|\/)node_modules(?:\/|$)/i.test(candidate.directory))
-          .filter(candidate => filter !== 'image' || /\.(?:png|jpe?g|gif|webp|svg|avif|bmp)$/i.test(candidate.fileName))
+          .filter(candidate => filter !== 'image' || (candidate.kind === 'file' && /\.(?:png|jpe?g|gif|webp|svg|avif|bmp)$/i.test(candidate.fileName)))
           .filter(candidate => `${candidate.fileName} ${candidate.directory}`.toLowerCase().includes(lower))
           .slice(0, 10);
       };

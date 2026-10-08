@@ -21,17 +21,26 @@ const documentPath = "/workspace/docs/search.md";
 const workspaceFolderPath = "/workspace";
 const query = "bmk";
 const scenarios = [
-  { name: "Link modal", filter: "all" },
-  { name: "Image modal", filter: "image" },
-  { name: "selected-text picker", filter: "all" },
+  { name: "Link modal", filter: "all", query },
+  { name: "Directory query", filter: "all", query: "folder" },
+  { name: "Image modal", filter: "image", query },
+  { name: "selected-text picker", filter: "all", query },
 ];
 
 function filesForSize(size) {
   return Array.from({ length: size }, (_, index) => {
     const group = String(Math.floor(index / 100)).padStart(3, "0");
     const number = String(index).padStart(5, "0");
+    if (index % 4 === 3)
+      return {
+        kind: "directory",
+        path: "/workspace/docs/benchmark/" + group + "/benchmark-folder-" + number,
+      };
     const extension = index % 2 === 0 ? ".png" : ".md";
-    return { path: "/workspace/docs/benchmark/" + group + "/benchmark-" + number + extension };
+    return {
+      kind: "file",
+      path: "/workspace/docs/benchmark/" + group + "/benchmark-" + number + extension,
+    };
   });
 }
 
@@ -71,7 +80,7 @@ for (const size of sizes) {
       documentPath,
       workspaceFolderPath,
       files: [],
-      query,
+      query: scenario.query,
       filter: scenario.filter,
       index,
     };
@@ -87,11 +96,11 @@ for (const size of sizes) {
   }
 }
 
-console.log("Workspace file search benchmark (cache-warm shared ranking)");
+console.log("Workspace file and directory search benchmark (cache-warm shared ranking)");
 console.log("The index build is outside the measured query samples.");
-console.log("Samples: " + samples + ", query: " + query + " (filename fuzzy query)");
+console.log("Samples: " + samples + ", mixed files/directories at each index size");
 console.log("");
-console.log("| files | surface | index warm-up ms | p50 ms | p95 ms | p99 ms | max ms | >100ms |");
+console.log("| entries | surface | index warm-up ms | p50 ms | p95 ms | p99 ms | max ms | >100ms |");
 console.log("| ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: |");
 for (const row of rows) {
   console.log(

@@ -1379,20 +1379,28 @@ export class MarkdownMintEditorProvider
       return;
     }
 
-    const fileUri = target.uri.with({ query: "", fragment: "" });
+    const navigationUri = target.uri.with({ query: "", fragment: "" });
+    let targetType: vscode.FileType;
     try {
-      await vscode.workspace.fs.stat(fileUri);
-    } catch {
+      const stat = await vscode.workspace.fs.stat(navigationUri);
+      targetType = stat.type;
+    } catch (error) {
       void vscode.window.showWarningMessage(
-        `Link target was not found: ${message.href}`,
+        isFileSystemNotFoundError(error)
+          ? `Link target was not found: ${message.href}`
+          : `The link target could not be accessed: ${message.href}`,
       );
       return;
     }
     try {
-      await vscode.commands.executeCommand("vscode.open", target.uri);
+      if ((targetType & vscode.FileType.Directory) !== 0)
+        await vscode.commands.executeCommand("revealInExplorer", navigationUri);
+      else await vscode.commands.executeCommand("vscode.open", navigationUri);
     } catch {
       void vscode.window.showWarningMessage(
-        `The link target could not be opened: ${message.href}`,
+        (targetType & vscode.FileType.Directory) !== 0
+          ? `The link target could not be shown in Explorer: ${message.href}`
+          : `The link target could not be opened: ${message.href}`,
       );
     }
   }
@@ -2798,6 +2806,11 @@ function escapeAttribute(value: string): string {
 
 function errorMessage(error: unknown, fallback: string): string {
   return error instanceof Error && error.message ? error.message : fallback;
+}
+
+function isFileSystemNotFoundError(error: unknown): boolean {
+  if (!isRecord(error)) return false;
+  return error.code === "FileNotFound" || error.code === "ENOENT";
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

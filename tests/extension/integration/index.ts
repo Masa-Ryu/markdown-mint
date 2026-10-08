@@ -490,10 +490,16 @@ async function runWorkspaceFileSearchAcceptance(
     path.dirname(documentDirectory),
     "excluded",
   );
+  const emptyDirectory = path.join(documentDirectory, "empty");
+  const emptyLogoDirectory = path.join(assetsDirectory, "logo");
+  const excludedEmptyDirectory = path.join(excludedDirectory, "hidden-empty");
   await mkdir(documentDirectory, { recursive: true });
   await mkdir(specsDirectory, { recursive: true });
   await mkdir(assetsDirectory, { recursive: true });
   await mkdir(excludedDirectory, { recursive: true });
+  await mkdir(emptyDirectory, { recursive: true });
+  await mkdir(emptyLogoDirectory, { recursive: true });
+  await mkdir(excludedEmptyDirectory, { recursive: true });
   await writeFile(documentPath, "# Search acceptance\n");
   await writeFile(path.join(documentDirectory, "hoge manual.pdf"), "pdf\n");
   await writeFile(path.join(specsDirectory, "design spec.pdf"), "pdf\n");
@@ -534,6 +540,7 @@ async function runWorkspaceFileSearchAcceptance(
       "all",
     );
     assert.deepEqual(linkCandidates[0], {
+      kind: "file",
       fileName: "hoge manual.pdf",
       directory: "docs/",
       relativePath: "./hoge%20manual.pdf",
@@ -558,6 +565,40 @@ async function runWorkspaceFileSearchAcceptance(
       "../specs/design%20spec.pdf",
     );
 
+    const emptyDirectoryCandidates = await search.searchFiles(
+      documentUri,
+      workspaceFolder,
+      "empty",
+      "all",
+    );
+    assert.ok(
+      emptyDirectoryCandidates.some(
+        (candidate) =>
+          candidate.kind === "directory" &&
+          candidate.relativePath === "./empty/",
+      ),
+      "empty directories are available as link candidates",
+    );
+    const emptyDirectoryLink = classifyLinkNavigation(
+      "./empty/",
+      documentUri,
+      workspaceFolder,
+    );
+    assert.equal(emptyDirectoryLink.kind, "internal");
+    if (emptyDirectoryLink.kind === "internal") {
+      const emptyDirectoryStat = await vscode.workspace.fs.stat(
+        emptyDirectoryLink.uri,
+      );
+      assert.ok((emptyDirectoryStat.type & vscode.FileType.Directory) !== 0);
+    }
+    const hiddenEmptyDirectoryCandidates = await search.searchFiles(
+      documentUri,
+      workspaceFolder,
+      "hidden-empty",
+      "all",
+    );
+    assert.deepEqual(hiddenEmptyDirectoryCandidates, []);
+
     const imageCandidates = await search.searchFiles(
       documentUri,
       workspaceFolder,
@@ -566,7 +607,10 @@ async function runWorkspaceFileSearchAcceptance(
     );
     assert.equal(imageCandidates.length, 8);
     assert.ok(
-      imageCandidates.every((candidate) => isImageFileName(candidate.fileName)),
+      imageCandidates.every(
+        (candidate) =>
+          candidate.kind === "file" && isImageFileName(candidate.fileName),
+      ),
     );
     assert.equal(
       imageCandidates.some((candidate) => candidate.fileName === "notes.md"),

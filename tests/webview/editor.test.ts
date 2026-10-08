@@ -1668,6 +1668,7 @@ describe("rich editor rendering", () => {
       requestId: request.requestId,
       candidates: [
         {
+          kind: "file",
           fileName: "hoge.pdf",
           directory: "docs/",
           relativePath: "./hoge.pdf",
@@ -1817,11 +1818,13 @@ describe("rich editor rendering", () => {
           requestId: request.requestId,
           candidates: [
             {
+              kind: "file",
               fileName: "hoge manual.pdf",
               directory: "specs/",
               relativePath: "../specs/hoge%20manual.pdf",
             },
             {
+              kind: "file",
               fileName: "hoge-design.md",
               directory: "docs/",
               relativePath: "../docs/hoge-design.md",
@@ -1866,6 +1869,107 @@ describe("rich editor rendering", () => {
     expect(lastEditMarkdown(messages)).toBe(
       "[replace me](../docs/hoge-design.md)",
     );
+    app.destroy();
+  });
+
+  it("applies a directory candidate to existing link text without changing its label", async () => {
+    const label = "Existing label";
+    const { app, root, messages } = makeApp(`[${label}](./old.md)`);
+    app.view.dispatch(
+      app.view.state.tr.setSelection(
+        TextSelection.create(app.view.state.doc, 1, 1 + label.length),
+      ),
+    );
+    const picker = openLinkPicker(root);
+    const input = picker.querySelector<HTMLInputElement>("input")!;
+    input.value = "design";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    await new Promise<void>((resolve) => setTimeout(resolve, 90));
+    const request = messages.filter(isWorkspaceFileSearchMessage).at(-1)!;
+    receiveHostMessage({
+      protocolVersion: PROTOCOL_VERSION,
+      type: "workspace-file-search-result",
+      requestId: request.requestId,
+      candidates: [
+        {
+          kind: "directory",
+          fileName: "design",
+          directory: "./",
+          relativePath: "../design/",
+        },
+      ],
+    });
+
+    input.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "Enter",
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    expect(lastEditMarkdown(messages)).toBe(`[${label}](../design/)`);
+    expect(app.view.state.doc.textContent).toBe(label);
+    app.destroy();
+  });
+
+  it("uses directory names for a blank link label and preserves a typed label", async () => {
+    const { app, root, messages } = makeApp("");
+    app.view.dispatch(
+      app.view.state.tr.setSelection(
+        TextSelection.create(app.view.state.doc, 1),
+      ),
+    );
+    root
+      .querySelector<HTMLButtonElement>('[data-testid="toolbar-link"]')!
+      .click();
+    const dialog = root.querySelector<HTMLDialogElement>(
+      '[aria-labelledby="mm-link-dialog-title"]',
+    )!;
+    const destination = dialog.querySelector<HTMLInputElement>(
+      'input[placeholder="./docs/example.md"]',
+    )!;
+    const label = dialog.querySelector<HTMLInputElement>(
+      'input[placeholder="Selected text"]',
+    )!;
+
+    const chooseDirectory = async (
+      name: string,
+      relativePath: string,
+    ): Promise<void> => {
+      destination.value = name;
+      destination.dispatchEvent(new Event("input", { bubbles: true }));
+      await new Promise<void>((resolve) => setTimeout(resolve, 90));
+      const request = messages.filter(isWorkspaceFileSearchMessage).at(-1)!;
+      receiveHostMessage({
+        protocolVersion: PROTOCOL_VERSION,
+        type: "workspace-file-search-result",
+        requestId: request.requestId,
+        candidates: [
+          {
+            kind: "directory",
+            fileName: name,
+            directory: "./",
+            relativePath,
+          },
+        ],
+      });
+      destination.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "Enter",
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    };
+
+    await chooseDirectory("docs", "./docs/");
+    expect(label.value).toBe("docs");
+    label.value = "Custom label";
+    await chooseDirectory("design", "../design/");
+    expect(label.value).toBe("Custom label");
+    await new Promise<void>((resolve) => setTimeout(resolve, 1));
+    dialog.querySelector<HTMLButtonElement>('button[type="submit"]')!.click();
+    expect(lastEditMarkdown(messages)).toBe("# [Custom label](../design/)");
     app.destroy();
   });
 
@@ -1931,6 +2035,7 @@ describe("rich editor rendering", () => {
           requestId: requests[0]!.requestId,
           candidates: [
             {
+              kind: "file",
               fileName: "stale.md",
               directory: "docs/",
               relativePath: "./stale.md",
@@ -1952,6 +2057,7 @@ describe("rich editor rendering", () => {
           requestId: requests[1]!.requestId,
           candidates: [
             {
+              kind: "file",
               fileName: "fresh.md",
               directory: "docs/",
               relativePath: "./fresh.md",
@@ -1996,6 +2102,7 @@ describe("rich editor rendering", () => {
           requestId: request.requestId,
           candidates: [
             {
+              kind: "file",
               fileName: "logo.png",
               directory: "assets/",
               relativePath: "../assets/logo.png",
@@ -2124,6 +2231,7 @@ describe("rich editor rendering", () => {
           requestId: request.requestId,
           candidates: [
             {
+              kind: "file",
               fileName: "hoge.pdf",
               directory: "docs/",
               relativePath: "./hoge.pdf",
