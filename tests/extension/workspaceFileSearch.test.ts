@@ -3,6 +3,7 @@ import {
   WorkspaceFileSearch,
   createWorkspaceFileSearchIndex,
   encodeMarkdownPath,
+  extendWorkspaceFileSearchIndex,
   isImageFileName,
   isWorkspaceFileSearchQuery,
   relativeMarkdownPath,
@@ -115,6 +116,50 @@ describe("WorkspaceFileSearch", () => {
         directory: "docs/",
         relativePath: "./guide.md",
       },
+    ]);
+  });
+
+  it("extends a cached file index with directories without rebuilding file metadata", () => {
+    const fileIndex = createWorkspaceFileSearchIndex("/project", [
+      file("/project/docs/guide.md"),
+    ]);
+    const combinedIndex = extendWorkspaceFileSearchIndex(fileIndex, [
+      directory("/project/design"),
+    ]);
+
+    expect(combinedIndex.files[0]).toBe(fileIndex.files[0]);
+    expect(
+      search.search({
+        documentPath: "/project/README.md",
+        workspaceFolderPath: "/project",
+        query: "guide",
+        filter: "all",
+        files: [],
+        index: combinedIndex,
+      }),
+    ).toEqual([
+      expect.objectContaining({ kind: "file", fileName: "guide.md" }),
+    ]);
+    expect(
+      search.search({
+        documentPath: "/project/README.md",
+        workspaceFolderPath: "/project",
+        query: "design",
+        filter: "all",
+        files: [],
+        index: combinedIndex,
+      }),
+    ).toEqual([
+      expect.objectContaining({ kind: "directory", fileName: "design" }),
+    ]);
+
+    const caseSensitiveIndex = extendWorkspaceFileSearchIndex(
+      createWorkspaceFileSearchIndex("/project", []),
+      [directory("/project/Foo"), directory("/project/foo")],
+    );
+    expect(caseSensitiveIndex.files.map((entry) => entry.fileName)).toEqual([
+      "Foo",
+      "foo",
     ]);
   });
 

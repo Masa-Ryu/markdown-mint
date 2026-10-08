@@ -160,6 +160,41 @@ export function createWorkspaceFileSearchIndex(
 }
 
 /**
+ * Extend a cached file-only index with additional entries without rebuilding
+ * its file metadata. Link searches use this after directory discovery while
+ * Image searches keep using the original file-only index.
+ */
+export function extendWorkspaceFileSearchIndex(
+  index: WorkspaceFileSearchIndex,
+  entries: readonly WorkspaceFileEntry[],
+): WorkspaceFileSearchIndex {
+  const additions = createWorkspaceFileSearchIndex(
+    index.workspaceFolderPath,
+    entries,
+  );
+  const workspace = parsePath(index.workspaceFolderPath);
+  const keyFor = (entry: PreparedWorkspaceFile): string =>
+    `${entry.kind}:${
+      workspace.windows || entry.parsedPath.windows
+        ? entry.lowerWorkspaceRelativePath
+        : entry.workspaceRelativePath
+    }`;
+  const seen = new Set(index.files.map(keyFor));
+  return {
+    workspaceFolderPath: index.workspaceFolderPath,
+    files: [
+      ...index.files,
+      ...additions.files.filter((entry) => {
+        const key = keyFor(entry);
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      }),
+    ],
+  };
+}
+
+/**
  * Search and rank a bounded list of files. The class has no VS Code or Node
  * dependency so its path semantics can be tested independently of a host.
  */

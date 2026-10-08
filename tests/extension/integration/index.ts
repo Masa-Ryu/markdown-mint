@@ -3,7 +3,10 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import * as path from "node:path";
 import * as vscode from "vscode";
 import { classifyLinkNavigation } from "../../../src/extension/linkNavigation";
-import { WorkspaceFileSearchHost } from "../../../src/extension/workspaceFileSearch";
+import {
+  scanWorkspaceDirectories,
+  WorkspaceFileSearchHost,
+} from "../../../src/extension/workspaceFileSearch";
 import { isImageFileName } from "../../../src/shared/workspaceFileSearch";
 import { runAiSuggestionAcceptance } from "./ai-suggestions";
 
@@ -31,6 +34,12 @@ export async function run(): Promise<void> {
   const fileUri = vscode.Uri.file(filePath);
   const extension = vscode.extensions.getExtension("masa-ryu.markdown-mint");
   assert.ok(extension, "Markdown Mint is available in the development host");
+  if (process.env.MM_WORKSPACE_FILE_SEARCH_ONLY === "1") {
+    await runWorkspaceFileSearchAcceptance(filePath);
+    if (process.env.MM_FILE_SEARCH_HOST_BENCHMARK === "1")
+      await runWorkspaceFileSearchHostBenchmark(filePath);
+    return;
+  }
   await runCodeLensAcceptance(filePath, fileUri, extension);
   const api = await extension.activate();
   assert.equal(typeof api.extendMarkdownIt, "function");
@@ -679,69 +688,122 @@ async function runWorkspaceFileSearchHostBenchmark(
     20,
     Number.parseInt(process.env.MM_FILE_SEARCH_BENCHMARK_SAMPLES ?? "100", 10),
   );
-  const search = new WorkspaceFileSearchHost();
-  const warmupStart = performance.now();
-  await search.warmup(documentUri, workspaceFolder);
-  const warmupMilliseconds = performance.now() - warmupStart;
-  const discovered = await vscode.workspace.findFiles(
-    new vscode.RelativePattern(workspaceFolder, "**/*"),
-    undefined,
-  );
-  const cases = [
-    ["Link modal", "hoge", "all"],
-    ["Image modal", "logo", "image"],
-    ["selected-text picker", "hoge", "all"],
-  ] as const;
-  const rows: Array<{
-    readonly surface: string;
-    readonly p50: number;
-    readonly p95: number;
-    readonly p99: number;
-    readonly max: number;
-    readonly over100: number;
-  }> = [];
+  const timings = new Map<string, number>();
+  const imageSearch = new WorkspaceFileSearchHost();
+  let linkSearch: WorkspaceFileSearchHost | undefined;
+  let start = performance.now();
   try {
-    for (const [surface, query, filter] of cases) {
-      const timings: number[] = [];
-      for (let index = 0; index < 20; index += 1)
-        await search.searchFiles(documentUri, workspaceFolder, query, filter);
-      for (let index = 0; index < samples; index += 1) {
-        const start = performance.now();
-        const candidates = await search.searchFiles(
-          documentUri,
-          workspaceFolder,
-          query,
-          filter,
-        );
-        assert.ok(candidates.length > 0, `${surface} benchmark has candidates`);
-        timings.push(performance.now() - start);
-      }
-      const sorted = timings.slice().sort((left, right) => left - right);
-      rows.push({
-        surface,
-        p50: percentile(sorted, 0.5),
-        p95: percentile(sorted, 0.95),
-        p99: percentile(sorted, 0.99),
-        max: sorted.at(-1) ?? 0,
-        over100: timings.filter((value) => value > 100).length,
-      });
+    start = performance.now();
+    const firstImages = await imageSearch.searchFiles(
+      documentUri,
+      workspaceFolder,
+      "logo",
+      "image",
+    );
+    timings.set("First Image search (cold)", performance.now() - start);
+    assert.ok(firstImages.length > 0, "cold Image search returns image files");
+
+    const imageSamples: number[] = [];
+    for (let index = 0; index < samples; index += 1) {
+      start = performance.now();
+      const candidates = await imageSearch.searchFiles(
+        documentUri,
+        workspaceFolder,
+        "logo",
+        "image",
+      );
+      assert.ok(candidates.length > 0, "cached Image search has candidates");
+      imageSamples.push(performance.now() - start);
     }
+    timings.set(
+      "Cached Image search (p50)",
+      percentile(
+        imageSamples.slice().sort((left, right) => left - right),
+        0.5,
+      ),
+    );
+
+    linkSearch = new WorkspaceFileSearchHost();
+    start = performance.now();
+    const firstLinks = await linkSearch.searchFiles(
+      documentUri,
+      workspaceFolder,
+      "empty",
+      "all",
+    );
+    timings.set("First Link search (cold)", performance.now() - start);
+    assert.ok(
+      firstLinks.some((candidate) => candidate.kind === "directory"),
+      "cold Link search returns directory candidates",
+    );
+
+    const linkSamples: number[] = [];
+    for (let index = 0; index < samples; index += 1) {
+      start = performance.now();
+      const candidates = await linkSearch.searchFiles(
+        documentUri,
+        workspaceFolder,
+        "empty",
+        "all",
+      );
+      assert.ok(candidates.length > 0, "cached Link search has candidates");
+      linkSamples.push(performance.now() - start);
+    }
+    timings.set(
+      "Cached Link search (p50)",
+      percentile(
+        linkSamples.slice().sort((left, right) => left - right),
+        0.5,
+      ),
+    );
   } finally {
-    search.dispose();
+    imageSearch.dispose();
+    linkSearch?.dispose();
   }
 
-  console.log(
-    `Real VS Code Extension Host file search benchmark (cache-warm; ${discovered.length} discovered files; index warm-up ${warmupMilliseconds.toFixed(3)}ms)`,
-  );
-  console.log(
-    "These timings cover the Host searchFiles call only; Webview message transport, DOM mutation, and paint opportunity are measured separately by the browser harness.",
-  );
-  console.log("| surface | p50 ms | p95 ms | p99 ms | max ms | >100ms |");
-  console.log("| --- | ---: | ---: | ---: | ---: | ---: |");
-  for (const row of rows)
-    console.log(
-      `| ${row.surface} | ${row.p50.toFixed(3)} | ${row.p95.toFixed(3)} | ${row.p99.toFixed(3)} | ${row.max.toFixed(3)} | ${row.over100} |`,
+  const scanCapRoot = path.join(path.dirname(filePath), "benchmark-scan-cap");
+  for (let index = 0; index < 600; index += 1)
+    await mkdir(
+      path.join(
+        scanCapRoot,
+        `benchmark-scan-cap-${String(index).padStart(3, "0")}`,
+      ),
+      { recursive: true },
     );
+
+  let delayedDirectoryReads = 0;
+  start = performance.now();
+  const cappedScan = await scanWorkspaceDirectories(
+    workspaceFolder,
+    [],
+    async (uri) => {
+      delayedDirectoryReads += 1;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      return vscode.workspace.fs.readDirectory(uri);
+    },
+  );
+  timings.set("Directory scan (150 ms cap)", performance.now() - start);
+  assert.ok(cappedScan.directories.length > 0, "capped scan finds directories");
+  assert.ok(
+    delayedDirectoryReads >= 8,
+    "the 150 ms scenario starts enough parallel directory reads",
+  );
+
+  console.log(
+    "Real VS Code Extension Host file search timings (searchFiles calls)",
+  );
+  console.log(
+    "Cold rows use new host instances; cached rows are p50 over " +
+      samples +
+      " queries.",
+  );
+  console.log(
+    "The final row adds a 50 ms delay per readDirectory call to exercise the configured 150 ms cap.",
+  );
+  console.log("| scenario | elapsed ms |");
+  console.log("| --- | ---: |");
+  for (const [scenario, milliseconds] of timings)
+    console.log(`| ${scenario} | ${milliseconds.toFixed(3)} |`);
 }
 
 function percentile(sorted: readonly number[], fraction: number): number {

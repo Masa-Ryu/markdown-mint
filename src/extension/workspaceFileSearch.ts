@@ -1,6 +1,9 @@
 import * as vscode from "vscode";
+import { posix } from "node:path";
+import { Minimatch } from "minimatch";
 import {
   createWorkspaceFileSearchIndex,
+  extendWorkspaceFileSearchIndex,
   WorkspaceFileSearch as RankedWorkspaceFileSearch,
   isWorkspaceFileSearchQuery,
   type WorkspaceFileCandidate,
@@ -13,6 +16,16 @@ export const MAX_WORKSPACE_DIRECTORY_SCAN_COUNT = 500;
 export const MAX_WORKSPACE_DIRECTORY_SCAN_ENTRIES = 5_000;
 export const MAX_WORKSPACE_DIRECTORY_SCAN_MS = 150;
 const WORKSPACE_DIRECTORY_SCAN_CONCURRENCY = 8;
+
+interface WorkspaceFileExcludePattern {
+  readonly matcher: Minimatch;
+  readonly when?: string;
+}
+
+interface WorkspaceDirectoryScanResult {
+  readonly directories: readonly vscode.Uri[];
+  readonly siblingNamesByParent: ReadonlyMap<string, ReadonlySet<string>>;
+}
 
 /**
  * Host-side adapter for workspace discovery. VS Code owns the filesystem
@@ -28,11 +41,19 @@ export class WorkspaceFileSearchHost implements vscode.Disposable {
   >();
   private readonly directoryCache = new Map<
     string,
-    Promise<readonly vscode.Uri[]>
+    Promise<WorkspaceDirectoryScanResult>
   >();
-  private readonly indexCache = new Map<
+  private readonly fileIndexCache = new Map<
     string,
     Promise<WorkspaceFileSearchIndex>
+  >();
+  private readonly linkIndexCache = new Map<
+    string,
+    Promise<WorkspaceFileSearchIndex>
+  >();
+  private readonly excludeCache = new Map<
+    string,
+    readonly WorkspaceFileExcludePattern[]
   >();
   private readonly warmupCache = new Map<string, Promise<void>>();
   private readonly disposables: vscode.Disposable[];
@@ -69,7 +90,10 @@ export class WorkspaceFileSearchHost implements vscode.Disposable {
     if (!workspaceFolder || !isWorkspaceFileSearchQuery(query)) return [];
     const key = workspaceFolder.uri.toString(true);
     try {
-      const index = await this.getOrCreateIndex(documentUri, workspaceFolder);
+      const index =
+        filter === "image"
+          ? await this.getOrCreateFileIndex(documentUri, workspaceFolder)
+          : await this.getOrCreateIndex(documentUri, workspaceFolder);
       return this.search.search({
         documentPath: documentUri.path,
         workspaceFolderPath: workspaceFolder.uri.path,
@@ -84,6 +108,7 @@ export class WorkspaceFileSearchHost implements vscode.Disposable {
       // into document edits or noisy notifications.
       this.fileCache.delete(key);
       this.directoryCache.delete(key);
+      this.excludeCache.delete(key);
       this.deleteIndexesForWorkspace(key);
       return [];
     }
@@ -104,11 +129,12 @@ export class WorkspaceFileSearchHost implements vscode.Disposable {
     if (cached) return cached;
 
     const workspaceKey = workspaceFolder.uri.toString(true);
-    const warmup = this.getOrCreateIndex(documentUri, workspaceFolder).then(
+    const warmup = this.getOrCreateFileIndex(documentUri, workspaceFolder).then(
       () => undefined,
       () => {
         this.fileCache.delete(workspaceKey);
         this.directoryCache.delete(workspaceKey);
+        this.excludeCache.delete(workspaceKey);
         this.deleteIndexesForWorkspace(workspaceKey);
         if (this.warmupCache.get(indexKey) === warmup)
           this.warmupCache.delete(indexKey);
@@ -121,7 +147,9 @@ export class WorkspaceFileSearchHost implements vscode.Disposable {
   public clear(): void {
     this.fileCache.clear();
     this.directoryCache.clear();
-    this.indexCache.clear();
+    this.fileIndexCache.clear();
+    this.linkIndexCache.clear();
+    this.excludeCache.clear();
     this.warmupCache.clear();
   }
 
@@ -155,11 +183,11 @@ export class WorkspaceFileSearchHost implements vscode.Disposable {
    */
   private discoverDirectories(
     workspaceFolder: vscode.WorkspaceFolder,
-  ): Promise<readonly vscode.Uri[]> {
+  ): Promise<WorkspaceDirectoryScanResult> {
     const key = workspaceFolder.uri.toString(true);
     const cached = this.directoryCache.get(key);
     if (cached) return cached;
-    const excludes = readFileExcludePatterns(workspaceFolder);
+    const excludes = this.getFileExcludePatterns(workspaceFolder);
     const directories = scanWorkspaceDirectories(workspaceFolder, excludes);
     this.directoryCache.set(key, directories);
     return directories;
@@ -170,39 +198,92 @@ export class WorkspaceFileSearchHost implements vscode.Disposable {
     workspaceFolder: vscode.WorkspaceFolder,
   ): Promise<WorkspaceFileSearchIndex> {
     const indexKey = this.indexKey(documentUri, workspaceFolder);
-    const cached = this.indexCache.get(indexKey);
+    const cached = this.linkIndexCache.get(indexKey);
     if (cached) return cached;
 
     const index = Promise.all([
+      this.getOrCreateFileIndex(documentUri, workspaceFolder),
       this.discoverFiles(workspaceFolder),
       this.discoverDirectories(workspaceFolder),
-    ]).then(([discoveredFiles, discoveredDirectories]) => {
+    ]).then(([fileIndex, discoveredFiles, directoryScan]) => {
       const files = discoveredFiles.filter((uri) =>
         isSameFileSystem(uri, documentUri),
       );
-      const excludes = readFileExcludePatterns(workspaceFolder);
+      const excludes = this.getFileExcludePatterns(workspaceFolder);
+      const relativeFilePaths = new Set(
+        files
+          .map((file) => workspaceRelativeUriPath(workspaceFolder.uri, file))
+          .filter((filePath): filePath is string => filePath !== undefined),
+      );
       const directories = new Map<string, vscode.Uri>();
-      for (const uri of discoveredDirectories) {
-        if (isSameFileSystem(uri, documentUri))
+      for (const uri of directoryScan.directories) {
+        if (
+          isSameFileSystem(uri, documentUri) &&
+          !isExcludedDirectory(
+            workspaceFolder.uri,
+            uri,
+            excludes,
+            directoryScan.siblingNamesByParent,
+            relativeFilePaths,
+          )
+        )
           directories.set(uri.toString(true), uri);
       }
       for (const file of files) {
         for (const parent of parentDirectories(file, workspaceFolder.uri)) {
-          if (isExcludedDirectory(workspaceFolder.uri, parent, excludes))
+          if (
+            isExcludedDirectory(
+              workspaceFolder.uri,
+              parent,
+              excludes,
+              directoryScan.siblingNamesByParent,
+              relativeFilePaths,
+            )
+          )
             continue;
           directories.set(parent.toString(true), parent);
         }
       }
-      return createWorkspaceFileSearchIndex(workspaceFolder.uri.path, [
-        ...files.map((uri) => ({ path: uri.path, kind: "file" as const })),
-        ...[...directories.values()].map((uri) => ({
+      return extendWorkspaceFileSearchIndex(
+        fileIndex,
+        [...directories.values()].map((uri) => ({
           path: uri.path,
           kind: "directory" as const,
         })),
-      ]);
+      );
     });
-    this.indexCache.set(indexKey, index);
+    this.linkIndexCache.set(indexKey, index);
     return index;
+  }
+
+  private getOrCreateFileIndex(
+    documentUri: vscode.Uri,
+    workspaceFolder: vscode.WorkspaceFolder,
+  ): Promise<WorkspaceFileSearchIndex> {
+    const indexKey = this.indexKey(documentUri, workspaceFolder);
+    const cached = this.fileIndexCache.get(indexKey);
+    if (cached) return cached;
+    const index = this.discoverFiles(workspaceFolder).then((discoveredFiles) =>
+      createWorkspaceFileSearchIndex(
+        workspaceFolder.uri.path,
+        discoveredFiles
+          .filter((uri) => isSameFileSystem(uri, documentUri))
+          .map((uri) => ({ path: uri.path, kind: "file" as const })),
+      ),
+    );
+    this.fileIndexCache.set(indexKey, index);
+    return index;
+  }
+
+  private getFileExcludePatterns(
+    workspaceFolder: vscode.WorkspaceFolder,
+  ): readonly WorkspaceFileExcludePattern[] {
+    const key = workspaceFolder.uri.toString(true);
+    const cached = this.excludeCache.get(key);
+    if (cached) return cached;
+    const excludes = readFileExcludePatterns(workspaceFolder);
+    this.excludeCache.set(key, excludes);
+    return excludes;
   }
 
   private indexKey(
@@ -213,8 +294,11 @@ export class WorkspaceFileSearchHost implements vscode.Disposable {
   }
 
   private deleteIndexesForWorkspace(key: string): void {
-    for (const indexKey of this.indexCache.keys()) {
-      if (indexKey.startsWith(`${key}|`)) this.indexCache.delete(indexKey);
+    for (const indexKey of this.fileIndexCache.keys()) {
+      if (indexKey.startsWith(`${key}|`)) this.fileIndexCache.delete(indexKey);
+    }
+    for (const indexKey of this.linkIndexCache.keys()) {
+      if (indexKey.startsWith(`${key}|`)) this.linkIndexCache.delete(indexKey);
     }
     for (const warmupKey of this.warmupCache.keys()) {
       if (warmupKey.startsWith(`${key}|`)) this.warmupCache.delete(warmupKey);
@@ -227,12 +311,15 @@ interface DirectoryScanItem {
   readonly depth: number;
 }
 
-async function scanWorkspaceDirectories(
+export async function scanWorkspaceDirectories(
   workspaceFolder: vscode.WorkspaceFolder,
-  excludes: readonly RegExp[],
-): Promise<readonly vscode.Uri[]> {
+  excludes: readonly WorkspaceFileExcludePattern[],
+  readDirectory: typeof vscode.workspace.fs.readDirectory = (uri) =>
+    vscode.workspace.fs.readDirectory(uri),
+): Promise<WorkspaceDirectoryScanResult> {
   const root = workspaceFolder.uri;
   const found = new Map<string, vscode.Uri>();
+  const siblingNamesByParent = new Map<string, ReadonlySet<string>>();
   const queued = new Set([root.toString(true)]);
   let pending: DirectoryScanItem[] = [{ uri: root, depth: 0 }];
   let readCount = 0;
@@ -258,11 +345,17 @@ async function scanWorkspaceDirectories(
       Promise.all(
         batch.map(async ({ uri }) => {
           try {
-            return await vscode.workspace.fs.readDirectory(uri);
+            return {
+              entries: await readDirectory(uri),
+              succeeded: true,
+            };
           } catch {
             // Virtual providers may not support directory enumeration for
             // every path. File and parent-directory candidates still work.
-            return [] as readonly [string, vscode.FileType][];
+            return {
+              entries: [] as readonly [string, vscode.FileType][],
+              succeeded: false,
+            };
           }
         }),
       ),
@@ -273,9 +366,16 @@ async function scanWorkspaceDirectories(
 
     for (let batchIndex = 0; batchIndex < batch.length; batchIndex += 1) {
       const parent = batch[batchIndex]!;
-      const children = results[batchIndex]!.slice().sort(([left], [right]) =>
-        left.localeCompare(right),
-      );
+      const result = results[batchIndex]!;
+      const children = result.entries
+        .slice()
+        .sort(([left], [right]) => left.localeCompare(right));
+      const parentRelativePath = workspaceRelativeUriPath(root, parent.uri);
+      if (result.succeeded && parentRelativePath !== undefined)
+        siblingNamesByParent.set(
+          parentRelativePath,
+          new Set(children.map(([name]) => name)),
+        );
       for (const [name, type] of children) {
         entryCount += 1;
         if (entryCount > MAX_WORKSPACE_DIRECTORY_SCAN_ENTRIES) break;
@@ -289,106 +389,123 @@ async function scanWorkspaceDirectories(
         )
           continue;
         if ((type & vscode.FileType.Directory) === 0) continue;
+        const childDepth = parent.depth + 1;
+        if (childDepth > MAX_WORKSPACE_DIRECTORY_SCAN_DEPTH) continue;
         const child = vscode.Uri.joinPath(parent.uri, name);
         const relativePath = workspaceRelativeUriPath(root, child);
-        if (!relativePath || isExcludedDirectoryPath(relativePath, excludes))
+        if (
+          !relativePath ||
+          isExcludedDirectoryPath(relativePath, excludes, siblingNamesByParent)
+        )
           continue;
         const childKey = child.toString(true);
         found.set(childKey, child);
-        if (
-          parent.depth < MAX_WORKSPACE_DIRECTORY_SCAN_DEPTH &&
-          !queued.has(childKey)
-        ) {
+        if (!queued.has(childKey)) {
           queued.add(childKey);
-          pending.push({ uri: child, depth: parent.depth + 1 });
+          pending.push({ uri: child, depth: childDepth });
         }
       }
       if (entryCount >= MAX_WORKSPACE_DIRECTORY_SCAN_ENTRIES) break;
     }
   }
 
-  return [...found.values()];
+  return {
+    directories: [...found.values()],
+    siblingNamesByParent,
+  };
 }
 
 function readFileExcludePatterns(
   workspaceFolder: vscode.WorkspaceFolder,
-): RegExp[] {
+): WorkspaceFileExcludePattern[] {
   try {
     const patterns = vscode.workspace
       .getConfiguration("files", workspaceFolder.uri)
-      .get<Record<string, boolean>>("exclude", {});
+      .get<Record<string, boolean | { readonly when?: unknown }>>(
+        "exclude",
+        {},
+      );
     return Object.entries(patterns ?? {})
-      .filter(([, excluded]) => excluded)
-      .flatMap(([pattern]) => {
-        const matcher = globPatternToRegExp(pattern);
-        return matcher ? [matcher] : [];
+      .filter(([, excluded]) => excluded === true || Boolean(excluded))
+      .flatMap(([pattern, excluded]) => {
+        const matcher = globPatternToMatcher(pattern);
+        if (!matcher) return [];
+        const when =
+          typeof excluded === "object" &&
+          excluded !== null &&
+          typeof excluded.when === "string"
+            ? excluded.when
+            : undefined;
+        return [{ matcher, ...(when === undefined ? {} : { when }) }];
       });
   } catch {
     return [];
   }
 }
 
-function globPatternToRegExp(pattern: string): RegExp | undefined {
-  const normalized = pattern.replaceAll("\\", "/").replace(/^\.\//, "");
+function globPatternToMatcher(pattern: string): Minimatch | undefined {
+  const normalized = pattern.replace(/^\.\//, "");
   if (!normalized || hasControlCharacter(normalized)) return undefined;
-  let expression = "^";
-  for (let index = 0; index < normalized.length;) {
-    const character = normalized[index]!;
-    if (character === "*" && normalized[index + 1] === "*") {
-      index += 2;
-      if (normalized[index] === "/") {
-        expression += "(?:.*/)?";
-        index += 1;
-      } else {
-        expression += ".*";
-      }
-      continue;
-    }
-    if (character === "*") {
-      expression += "[^/]*";
-      index += 1;
-      continue;
-    }
-    if (character === "?") {
-      expression += "[^/]";
-      index += 1;
-      continue;
-    }
-    if (character === "[") {
-      const closing = normalized.indexOf("]", index + 1);
-      if (closing > index + 1) {
-        expression += normalized.slice(index, closing + 1);
-        index = closing + 1;
-        continue;
-      }
-    }
-    expression += character.replace(/[|\\{}()[\]^$+?.]/g, "\\$&");
-    index += 1;
-  }
   try {
-    return new RegExp(`${expression}$`);
+    return new Minimatch(normalized, {
+      dot: true,
+      noext: true,
+      nocase: isWorkspaceGlobCaseInsensitive(),
+      nocomment: true,
+      nonegate: true,
+    });
   } catch {
     return undefined;
   }
 }
 
+export function isWorkspaceGlobCaseInsensitive(
+  platform: NodeJS.Platform = process.platform,
+): boolean {
+  // Remote extension hosts run this code on the remote OS, matching VS Code's
+  // files.exclude behavior for SSH, WSL, and dev-container workspaces.
+  return platform === "win32" || platform === "darwin";
+}
+
 function isExcludedDirectoryPath(
   relativePath: string,
-  excludes: readonly RegExp[],
+  excludes: readonly WorkspaceFileExcludePattern[],
+  siblingNamesByParent: ReadonlyMap<string, ReadonlySet<string>> = new Map(),
+  relativeFilePaths: ReadonlySet<string> = new Set(),
 ): boolean {
-  return (
-    relativePath
-      .split("/")
-      .some(
-        (segment) =>
-          segment.toLowerCase() === ".git" ||
-          segment.toLowerCase() === "node_modules",
-      ) ||
-    excludes.some(
-      (pattern) =>
-        pattern.test(relativePath) || pattern.test(`${relativePath}/`),
+  const segments = relativePath.split("/").filter(Boolean);
+  if (
+    segments.some(
+      (segment) =>
+        segment.toLowerCase() === ".git" ||
+        segment.toLowerCase() === "node_modules",
     )
-  );
+  )
+    return true;
+
+  let candidatePath = "";
+  for (let index = 0; index < segments.length; index += 1) {
+    candidatePath = candidatePath
+      ? `${candidatePath}/${segments[index]}`
+      : segments[index]!;
+    for (const exclude of excludes) {
+      if (
+        !exclude.matcher.match(candidatePath) &&
+        !exclude.matcher.match(`${candidatePath}/`)
+      )
+        continue;
+      if (exclude.when === undefined) return true;
+      const basename = posix.parse(segments[index]!).name;
+      const siblingName = exclude.when.replace("$(basename)", basename);
+      const parentPath = segments.slice(0, index).join("/");
+      if (
+        siblingNamesByParent.get(parentPath)?.has(siblingName) ||
+        relativeFilePaths.has(posix.join(parentPath, siblingName))
+      )
+        return true;
+    }
+  }
+  return false;
 }
 
 function hasControlCharacter(value: string): boolean {
@@ -402,10 +519,20 @@ function hasControlCharacter(value: string): boolean {
 function isExcludedDirectory(
   workspaceFolder: vscode.Uri,
   directory: vscode.Uri,
-  excludes: readonly RegExp[],
+  excludes: readonly WorkspaceFileExcludePattern[],
+  siblingNamesByParent: ReadonlyMap<string, ReadonlySet<string>>,
+  relativeFilePaths: ReadonlySet<string>,
 ): boolean {
   const relativePath = workspaceRelativeUriPath(workspaceFolder, directory);
-  return !relativePath || isExcludedDirectoryPath(relativePath, excludes);
+  return (
+    relativePath === undefined ||
+    isExcludedDirectoryPath(
+      relativePath,
+      excludes,
+      siblingNamesByParent,
+      relativeFilePaths,
+    )
+  );
 }
 
 function workspaceRelativeUriPath(

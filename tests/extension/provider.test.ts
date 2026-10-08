@@ -331,6 +331,7 @@ const vscode = vi.hoisted(() => {
     "/workspace/node_modules/ignored.md",
     "/workspace/docs/theme",
   ]);
+  const initialFiles = [...existingFiles];
   const initialDirectories = [
     "/workspace/docs",
     "/workspace/docs/empty",
@@ -344,10 +345,11 @@ const vscode = vi.hoisted(() => {
     "/remote/workspace/docs/folder",
   ];
   const existingDirectories = new Set(initialDirectories);
-  const fileExcludes: Record<string, boolean> = {};
+  const fileExcludes: Record<string, boolean | { when?: string }> = {};
   const statErrors = new Map<string, string>();
   const findFilesCalls: Array<{ include: unknown; exclude: unknown }> = [];
   const readDirectoryCalls: string[] = [];
+  let readDirectoryDelayMs = 0;
   const openExternalCalls: Uri[] = [];
   let openExternalResult = true;
   let openExternalError: Error | undefined;
@@ -497,6 +499,10 @@ const vscode = vi.hoisted(() => {
       },
       async readDirectory(uri: Uri): Promise<[string, number][]> {
         readDirectoryCalls.push(uri.fsPath);
+        if (readDirectoryDelayMs > 0)
+          await new Promise((resolve) =>
+            setTimeout(resolve, readDirectoryDelayMs),
+          );
         const parent = uri.fsPath.replace(/\/$/, "");
         const children = new Map<string, number>();
         for (const path of [...existingFiles, ...existingDirectories]) {
@@ -665,7 +671,17 @@ const vscode = vi.hoisted(() => {
     findFiles(include: unknown, exclude?: unknown): Promise<Uri[]> {
       findFilesCalls.push({ include, exclude });
       return Promise.resolve(
-        [...existingFiles].map((filePath) => Uri.file(filePath)),
+        [...existingFiles].map((filePath) =>
+          workspaceFolder && workspaceFolder.uri.scheme !== "file"
+            ? Uri.fromComponents(
+                workspaceFolder.uri.scheme,
+                workspaceFolder.uri.authority,
+                filePath,
+                "",
+                "",
+              )
+            : Uri.file(filePath),
+        ),
       );
     },
   };
@@ -843,6 +859,9 @@ const vscode = vi.hoisted(() => {
     showErrorAction = undefined;
     findFilesCalls.length = 0;
     readDirectoryCalls.length = 0;
+    readDirectoryDelayMs = 0;
+    existingFiles.clear();
+    initialFiles.forEach((path) => existingFiles.add(path));
     existingDirectories.clear();
     initialDirectories.forEach((path) => existingDirectories.add(path));
     Object.keys(fileExcludes).forEach((key) => delete fileExcludes[key]);
@@ -912,7 +931,11 @@ const vscode = vi.hoisted(() => {
       readDirectoryCalls,
       fileExcludes,
       statErrors,
+      existingFiles,
       existingDirectories,
+      setReadDirectoryDelay(delayMs: number): void {
+        readDirectoryDelayMs = delayMs;
+      },
       blockApplyEdit(): void {
         applyEditGate = new Promise<void>((resolve) => {
           releaseApplyEditGate = resolve;
@@ -2703,6 +2726,7 @@ describe("MarkdownMintEditorProvider", () => {
 
     expect(secondWarmup).toBe(firstWarmup);
     await firstWarmup;
+    expect(vscode.__state.readDirectoryCalls).toHaveLength(0);
     const candidates = await search.searchFiles(
       documentUri as never,
       workspaceFolder as never,
@@ -2712,6 +2736,7 @@ describe("MarkdownMintEditorProvider", () => {
 
     expect(candidates[0]?.relativePath).toBe("./hoge%20manual.pdf");
     expect(vscode.__state.findFilesCalls).toHaveLength(1);
+    expect(vscode.__state.readDirectoryCalls.length).toBeGreaterThan(0);
     search.dispose();
   });
 
@@ -2841,6 +2866,395 @@ describe("MarkdownMintEditorProvider", () => {
     );
     expect(hiddenDirectories).toEqual([]);
     expect(vscode.__state.readDirectoryCalls).toHaveLength(readCount);
+    search.dispose();
+  });
+
+  it("matches files.exclude braces and character classes and prunes descendants", async () => {
+    vscode.__state.reset();
+    vscode.__state.workspaceFolder = {
+      uri: vscode.Uri.file("/workspace"),
+      name: "workspace",
+      index: 0,
+    };
+    vscode.__state.fileExcludes["**/{build,dist}"] = true;
+    vscode.__state.fileExcludes["**/Generated"] = true;
+    vscode.__state.fileExcludes["**/draft-[!0-9]"] = true;
+    vscode.__state.fileExcludes["**/FolderCase"] = true;
+    for (const path of [
+      "/workspace/feature",
+      "/workspace/feature/build",
+      "/workspace/feature/build/child",
+      "/workspace/feature/dist",
+      "/workspace/feature/Generated",
+      "/workspace/feature/Generated/nested",
+      "/workspace/draft-a",
+      "/workspace/draft-1",
+      "/workspace/FolderCase",
+      "/workspace/foldercase",
+      "/workspace/ordinary",
+    ])
+      vscode.__state.existingDirectories.add(path);
+    vscode.__state.existingFiles.add(
+      "/workspace/feature/build/child/visible.md",
+    );
+
+    const { WorkspaceFileSearchHost, isWorkspaceGlobCaseInsensitive } =
+      await import("../../src/extension/workspaceFileSearch");
+    expect(isWorkspaceGlobCaseInsensitive("win32")).toBe(true);
+    expect(isWorkspaceGlobCaseInsensitive("darwin")).toBe(true);
+    expect(isWorkspaceGlobCaseInsensitive("linux")).toBe(false);
+    const search = new WorkspaceFileSearchHost();
+    const documentUri = vscode.__state.document.uri;
+    const workspaceFolder = vscode.__state.workspaceFolder;
+
+    expect(
+      await search.searchFiles(
+        documentUri as never,
+        workspaceFolder as never,
+        "build",
+        "all",
+      ),
+    ).toEqual([]);
+    expect(
+      await search.searchFiles(
+        documentUri as never,
+        workspaceFolder as never,
+        "dist",
+        "all",
+      ),
+    ).toEqual([]);
+    expect(
+      await search.searchFiles(
+        documentUri as never,
+        workspaceFolder as never,
+        "Generated",
+        "all",
+      ),
+    ).toEqual([]);
+    expect(
+      await search.searchFiles(
+        documentUri as never,
+        workspaceFolder as never,
+        "draft-a",
+        "all",
+      ),
+    ).toEqual([]);
+    expect(
+      await search.searchFiles(
+        documentUri as never,
+        workspaceFolder as never,
+        "draft-1",
+        "all",
+      ),
+    ).toEqual([
+      expect.objectContaining({
+        kind: "directory",
+        fileName: "draft-1",
+        relativePath: "../draft-1/",
+      }),
+    ]);
+    expect(
+      await search.searchFiles(
+        documentUri as never,
+        workspaceFolder as never,
+        "ordinary",
+        "all",
+      ),
+    ).toEqual([
+      expect.objectContaining({
+        kind: "directory",
+        fileName: "ordinary",
+      }),
+    ]);
+    const caseCandidates = await search.searchFiles(
+      documentUri as never,
+      workspaceFolder as never,
+      "foldercase",
+      "all",
+    );
+    expect(
+      caseCandidates.some((candidate) => candidate.fileName === "foldercase"),
+    ).toBe(!isWorkspaceGlobCaseInsensitive(process.platform));
+
+    const childCandidates = await search.searchFiles(
+      documentUri as never,
+      workspaceFolder as never,
+      "child",
+      "all",
+    );
+    expect(childCandidates).toEqual([]);
+    search.dispose();
+  });
+
+  it("evaluates conditional files.exclude sibling rules only when the sibling exists", async () => {
+    vscode.__state.reset();
+    vscode.__state.workspaceFolder = {
+      uri: vscode.Uri.file("/workspace"),
+      name: "workspace",
+      index: 0,
+    };
+    vscode.__state.fileExcludes["**/{Derived,Loose}"] = {
+      when: "$(basename).ts",
+    };
+    vscode.__state.existingDirectories.add("/workspace/Derived");
+    vscode.__state.existingDirectories.add("/workspace/Loose");
+    vscode.__state.existingFiles.add("/workspace/Derived.ts");
+
+    const { WorkspaceFileSearchHost } =
+      await import("../../src/extension/workspaceFileSearch");
+    const search = new WorkspaceFileSearchHost();
+    const documentUri = vscode.__state.document.uri;
+    const workspaceFolder = vscode.__state.workspaceFolder;
+
+    const derivedCandidates = await search.searchFiles(
+      documentUri as never,
+      workspaceFolder as never,
+      "Derived",
+      "all",
+    );
+    expect(
+      derivedCandidates.some(
+        (candidate) =>
+          candidate.kind === "directory" && candidate.fileName === "Derived",
+      ),
+    ).toBe(false);
+    expect(
+      await search.searchFiles(
+        documentUri as never,
+        workspaceFolder as never,
+        "Loose",
+        "all",
+      ),
+    ).toEqual([
+      expect.objectContaining({
+        kind: "directory",
+        fileName: "Loose",
+        relativePath: "../Loose/",
+      }),
+    ]);
+    search.dispose();
+  });
+
+  it("keeps Image search file-only and shares cached discovery with Link search", async () => {
+    vscode.__state.reset();
+    vscode.__state.workspaceFolder = {
+      uri: vscode.Uri.file("/workspace"),
+      name: "workspace",
+      index: 0,
+    };
+    vscode.__state.existingFiles.add("/workspace/docs/logo.png");
+    const { WorkspaceFileSearchHost } =
+      await import("../../src/extension/workspaceFileSearch");
+    const workspaceFolder = vscode.__state.workspaceFolder;
+    const documentUri = vscode.__state.document.uri;
+    const search = new WorkspaceFileSearchHost();
+
+    expect(
+      await search.searchFiles(
+        documentUri as never,
+        workspaceFolder as never,
+        "logo",
+        "image",
+      ),
+    ).toEqual([
+      expect.objectContaining({
+        kind: "file",
+        fileName: "logo.png",
+        relativePath: "./logo.png",
+      }),
+    ]);
+    expect(vscode.__state.findFilesCalls).toHaveLength(1);
+    expect(vscode.__state.readDirectoryCalls).toHaveLength(0);
+
+    await search.searchFiles(
+      documentUri as never,
+      workspaceFolder as never,
+      "empty",
+      "all",
+    );
+    const directoryReadCount = vscode.__state.readDirectoryCalls.length;
+    expect(directoryReadCount).toBeGreaterThan(0);
+    await search.searchFiles(
+      documentUri as never,
+      workspaceFolder as never,
+      "logo",
+      "image",
+    );
+    await search.searchFiles(
+      documentUri as never,
+      workspaceFolder as never,
+      "empty",
+      "all",
+    );
+    expect(vscode.__state.findFilesCalls).toHaveLength(1);
+    expect(vscode.__state.readDirectoryCalls).toHaveLength(directoryReadCount);
+
+    vscode.__state.fileExcludes["**/docs"] = true;
+    vscode.__state.emitConfiguration("files.exclude");
+    await search.searchFiles(
+      documentUri as never,
+      workspaceFolder as never,
+      "logo",
+      "image",
+    );
+    expect(vscode.__state.findFilesCalls).toHaveLength(2);
+    expect(vscode.__state.readDirectoryCalls).toHaveLength(directoryReadCount);
+    expect(
+      await search.searchFiles(
+        documentUri as never,
+        workspaceFolder as never,
+        "empty",
+        "all",
+      ),
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "directory",
+          fileName: "empty",
+          relativePath: "../empty/",
+        }),
+      ]),
+    );
+    expect(vscode.__state.readDirectoryCalls.length).toBeGreaterThan(
+      directoryReadCount,
+    );
+    search.dispose();
+  });
+
+  it("limits directory candidates to depth 12 with the workspace root at depth zero", async () => {
+    vscode.__state.reset();
+    vscode.__state.workspaceFolder = {
+      uri: vscode.Uri.file("/workspace"),
+      name: "workspace",
+      index: 0,
+    };
+    for (let depth = 1; depth <= 13; depth += 1) {
+      const path = Array.from(
+        { length: depth },
+        (_, index) => `level-${String(index + 1).padStart(2, "0")}`,
+      ).join("/");
+      vscode.__state.existingDirectories.add(`/workspace/${path}`);
+    }
+    const { MAX_WORKSPACE_DIRECTORY_SCAN_DEPTH, WorkspaceFileSearchHost } =
+      await import("../../src/extension/workspaceFileSearch");
+    expect(MAX_WORKSPACE_DIRECTORY_SCAN_DEPTH).toBe(12);
+    const workspaceFolder = vscode.__state.workspaceFolder;
+    const search = new WorkspaceFileSearchHost();
+
+    const depth11 = await search.searchFiles(
+      vscode.__state.document.uri as never,
+      workspaceFolder as never,
+      "level-11",
+      "all",
+    );
+    const depth12 = await search.searchFiles(
+      vscode.__state.document.uri as never,
+      workspaceFolder as never,
+      "level-12",
+      "all",
+    );
+    const depth13 = await search.searchFiles(
+      vscode.__state.document.uri as never,
+      workspaceFolder as never,
+      "level-13",
+      "all",
+    );
+    expect(depth11).toEqual([
+      expect.objectContaining({ kind: "directory", fileName: "level-11" }),
+    ]);
+    expect(depth12).toEqual([
+      expect.objectContaining({ kind: "directory", fileName: "level-12" }),
+    ]);
+    expect(depth13).toEqual([]);
+    expect(
+      vscode.__state.readDirectoryCalls.some((path) =>
+        path.endsWith("/level-13"),
+      ),
+    ).toBe(false);
+    search.dispose();
+  });
+
+  it("stops a delayed directory scan at the 150 ms time budget", async () => {
+    vscode.__state.reset();
+    vscode.__state.workspaceFolder = {
+      uri: vscode.Uri.file("/workspace"),
+      name: "workspace",
+      index: 0,
+    };
+    for (let index = 0; index < 100; index += 1)
+      vscode.__state.existingDirectories.add(
+        `/workspace/time-budget-${String(index).padStart(3, "0")}`,
+      );
+    vscode.__state.setReadDirectoryDelay(30);
+    const { MAX_WORKSPACE_DIRECTORY_SCAN_MS, WorkspaceFileSearchHost } =
+      await import("../../src/extension/workspaceFileSearch");
+    const search = new WorkspaceFileSearchHost();
+    const workspaceFolder = vscode.__state.workspaceFolder;
+    vi.useFakeTimers();
+    const startedAt = Date.now();
+    try {
+      const pendingSearch = search.searchFiles(
+        vscode.__state.document.uri as never,
+        workspaceFolder as never,
+        "time-budget-",
+        "all",
+      );
+      await vi.advanceTimersByTimeAsync(MAX_WORKSPACE_DIRECTORY_SCAN_MS);
+      const candidates = await pendingSearch;
+      expect(Date.now() - startedAt).toBeLessThanOrEqual(
+        MAX_WORKSPACE_DIRECTORY_SCAN_MS,
+      );
+      expect(candidates).toHaveLength(10);
+      expect(vscode.__state.readDirectoryCalls.length).toBeGreaterThan(1);
+    } finally {
+      search.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it("searches remote workspace file and directory URIs without losing authority", async () => {
+    vscode.__state.reset();
+    const workspaceUri = vscode.Uri.parse(
+      "vscode-remote://ssh-remote+dev/remote/workspace",
+    );
+    const documentUri = vscode.Uri.parse(
+      "vscode-remote://ssh-remote+dev/remote/workspace/docs/manual.md",
+    );
+    const workspaceFolder = {
+      uri: workspaceUri,
+      name: "remote",
+      index: 0,
+    };
+    vscode.__state.workspaceFolder = workspaceFolder;
+    vscode.__state.existingFiles.add("/remote/workspace/docs/remote guide.md");
+    vscode.__state.existingDirectories.add("/remote/workspace/docs");
+    vscode.__state.existingDirectories.add(
+      "/remote/workspace/docs/remote-empty",
+    );
+    const { WorkspaceFileSearchHost } =
+      await import("../../src/extension/workspaceFileSearch");
+    const search = new WorkspaceFileSearchHost();
+
+    const candidates = await search.searchFiles(
+      documentUri as never,
+      workspaceFolder as never,
+      "remote",
+      "all",
+    );
+    expect(candidates).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "file",
+          fileName: "remote guide.md",
+          relativePath: "./remote%20guide.md",
+        }),
+        expect.objectContaining({
+          kind: "directory",
+          fileName: "remote-empty",
+          relativePath: "./remote-empty/",
+        }),
+      ]),
+    );
     search.dispose();
   });
 

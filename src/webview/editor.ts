@@ -9219,6 +9219,8 @@ export class MarkdownEditorApp {
 
   private warmupWorkspaceFileSearch(): void {
     if (!this.vscode || !this.initialized || this.previewOnly) return;
+    // The host warms only file metadata here. Directory enumeration starts on
+    // the first Link query and is unnecessary for Image insertion.
     this.vscode.postMessage({
       protocolVersion: PROTOCOL_VERSION,
       type: "workspace-file-search-warmup",

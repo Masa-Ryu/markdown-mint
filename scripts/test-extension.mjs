@@ -54,6 +54,9 @@ try {
       ...(process.env.MM_FILE_SEARCH_HOST_BENCHMARK === "1"
         ? { MM_FILE_SEARCH_HOST_BENCHMARK: "1" }
         : {}),
+      ...(process.env.MM_WORKSPACE_FILE_SEARCH_ONLY === "1"
+        ? { MM_WORKSPACE_FILE_SEARCH_ONLY: "1" }
+        : {}),
       ...(process.env.MM_FILE_SEARCH_BENCHMARK_SAMPLES
         ? {
             MM_FILE_SEARCH_BENCHMARK_SAMPLES:

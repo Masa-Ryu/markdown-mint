@@ -993,20 +993,25 @@ rebuild candidate DOM. Non-active CSS `:hover` does not add a selection
 background, while high-contrast and forced-colors active-row outlines remain
 available.
 
-The Extension Host warms `findFiles` discovery and the prepared
-scheme/authority-specific search index when the Link or Image UI opens. It
-collects non-empty directories from file parents, then uses one cached,
-breadth-first `workspace.fs.readDirectory` scan to find empty directories. The
-scan is limited to depth 12, 500 directory reads, 5,000 entries, and 150 ms per
-workspace folder. If a limit is reached, unvisited empty directories are not
-offered; the file-parent candidates remain available. The scan runs once per
-cache lifetime instead of on each keystroke. In-flight warm-ups for the same
-workspace, scheme, and authority share one Promise. Cache-warm queries score
-prepared metadata first, materialize document-relative Markdown paths only for
-the bounded top ten, and preserve the existing deterministic ranking.
-`.git/**`, `node_modules/**`, and enabled VS Code `files.exclude` patterns are
-excluded. Create, delete, rename, workspace-folder, and `files.exclude` changes
-invalidate discovery and its index.
+The Extension Host warms `findFiles` discovery and the prepared file index when
+the Link or Image UI opens. Image searches use that file-only index and do not
+wait for directory enumeration. The first Link query extends the shared file
+index with directories collected from file parents and one cached,
+breadth-first `workspace.fs.readDirectory` scan for empty directories. The
+workspace root is depth zero; the scan offers and reads directories through
+depth 12, with limits of 500 directory reads, 5,000 entries, and 150 ms per
+workspace folder. A child beyond depth 12 is not offered or queued. If a limit
+is reached, unvisited empty directories are not offered; file-parent candidates
+remain available. The scan runs once per cache lifetime instead of on each
+keystroke. In-flight file-index warm-ups and directory scans for the same
+workspace, scheme, and authority share cached promises. Cache-warm queries
+score prepared metadata first, materialize document-relative Markdown paths
+only for the bounded top ten, and preserve the existing deterministic ranking.
+`.git/**`, `node_modules/**`, and enabled VS Code `files.exclude` patterns,
+including brace alternatives, character classes, platform case rules, and
+conditional sibling clauses, are excluded. Create, delete, rename,
+workspace-folder, and `files.exclude` changes invalidate discovery and its
+indexes.
 
 The focused unit and Chromium regressions cover state transitions, stale
 responses, active-row DOM reuse, warm-up sharing, flat styling, three entry
@@ -1014,11 +1019,15 @@ points, and the required fixture display checks. The cache-warm benchmark
 commands are:
 
 - `npm run benchmark:file-search` — shared file/directory ranking at 1k, 10k,
-  and 50k synthetic entries.
+  and 50k synthetic entries, plus cold and cached Host searches and a delayed
+  directory scan that exercises the 150 ms limit.
 - `npm run benchmark:file-search:browser` — Chromium browser harness at the
   same sizes for Link modal, Image modal, and selected-text picker.
 - `npm run benchmark:file-search:extension` — real VS Code Extension Host
-  `WorkspaceFileSearchHost.searchFiles` on the acceptance workspace.
+  `WorkspaceFileSearchHost.searchFiles` on the acceptance workspace, including
+  cold/cached Image and Link queries and the directory scan time limit.
+- `npm run test:extension:file-search` — run workspace-file-search acceptance
+  independently of the broader CodeLens acceptance path.
 
 Benchmark reports keep Host/harness message handling, Webview DOM mutation,
 and `requestAnimationFrame` paint opportunity separate. `dom-update` means

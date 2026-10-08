@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.9.2
+## 0.10.0
 
 - Add workspace directories to Link dialog and selected-text Link picker
   suggestions, show a folder icon, and insert encoded document-relative paths
@@ -11,6 +11,9 @@
   `.git`, `node_modules`, and enabled `files.exclude` patterns out of results.
 - Use `workspace.fs.stat` to reveal directory links in the VS Code Explorer and
   continue opening file links with `vscode.open`.
+- Match `files.exclude` with VS Code-compatible brace and character-class
+  patterns, including conditional sibling rules, and skip directory discovery
+  for image searches.
 
 ## 0.9.1
 
