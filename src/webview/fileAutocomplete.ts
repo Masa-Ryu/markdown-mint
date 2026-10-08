@@ -2,6 +2,7 @@ import {
   MAX_WORKSPACE_FILE_SEARCH_RESULTS,
   isWorkspaceFileSearchQuery,
   type WorkspaceFileCandidate,
+  type WorkspaceFileSearchFilter,
 } from "../shared/workspaceFileSearch";
 import { createToolbarIcon } from "./icons";
 
@@ -23,6 +24,7 @@ export interface FileAutocompleteOptions {
   readonly onSelect?: (candidate: WorkspaceFileCandidate) => void;
   readonly onEnter?: () => void;
   readonly onEscape?: () => void;
+  readonly searchFilter?: WorkspaceFileSearchFilter;
   readonly debounceMs?: number;
   readonly onSearchTiming?: (
     phase: FileAutocompleteTimingPhase,
@@ -44,6 +46,7 @@ export class FileAutocomplete {
     ((candidate: WorkspaceFileCandidate) => void) | undefined;
   private readonly onEnter: (() => void) | undefined;
   private readonly onEscape: (() => void) | undefined;
+  private readonly searchFilter: WorkspaceFileSearchFilter;
   private readonly onSearchTiming:
     ((phase: FileAutocompleteTimingPhase, query: string) => void) | undefined;
   private readonly debounceMs: number;
@@ -70,6 +73,7 @@ export class FileAutocomplete {
     this.onSelect = options.onSelect;
     this.onEnter = options.onEnter;
     this.onEscape = options.onEscape;
+    this.searchFilter = options.searchFilter ?? "all";
     this.onSearchTiming = options.onSearchTiming;
     this.debounceMs = Math.max(
       0,
@@ -81,7 +85,12 @@ export class FileAutocomplete {
     this.popup.id = `mm-file-autocomplete-${++nextAutocompleteId}`;
     this.popup.hidden = true;
     this.popup.setAttribute("role", "listbox");
-    this.popup.setAttribute("aria-label", "Workspace files and folders");
+    this.popup.setAttribute(
+      "aria-label",
+      this.searchFilter === "image"
+        ? "Workspace images"
+        : "Workspace files and folders",
+    );
     this.footer = ownerDocument.createElement("div");
     this.footer.className = "mm-file-autocomplete-footer";
     this.footer.setAttribute("role", "status");
@@ -361,16 +370,22 @@ export class FileAutocomplete {
       const loading = this.input.ownerDocument.createElement("div");
       loading.className = "mm-file-autocomplete-loading";
       loading.setAttribute("role", "status");
-      loading.textContent = "Searching workspace files and folders…";
+      loading.textContent =
+        this.searchFilter === "image"
+          ? "Searching workspace images…"
+          : "Searching workspace files and folders…";
       this.popup.append(loading);
-      this.footer.textContent = "Searching workspace files and folders…";
+      this.footer.textContent = loading.textContent;
       return;
     }
 
     if (this.searchState === "empty") {
       const empty = this.input.ownerDocument.createElement("div");
       empty.className = "mm-file-autocomplete-empty";
-      empty.textContent = "No matching workspace files or folders.";
+      empty.textContent =
+        this.searchFilter === "image"
+          ? "No matching workspace images."
+          : "No matching workspace files or folders.";
       this.popup.append(empty);
       this.footer.textContent = "Enter a path or URL manually.";
       return;

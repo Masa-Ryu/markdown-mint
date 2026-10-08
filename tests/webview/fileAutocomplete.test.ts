@@ -87,6 +87,12 @@ describe("FileAutocomplete active candidate interaction", () => {
     dispatchInput(input, "h");
     const popup = document.querySelector<HTMLElement>(".mm-file-autocomplete")!;
 
+    expect(popup.getAttribute("aria-label")).toBe(
+      "Workspace files and folders",
+    );
+    expect(
+      popup.querySelector(".mm-file-autocomplete-loading")?.textContent,
+    ).toBe("Searching workspace files and folders…");
     expect(popup.dataset.searchState).toBe("loading");
     expect(popup.querySelector(".mm-file-autocomplete-loading")).not.toBeNull();
     expect(popup.querySelector(".mm-file-autocomplete-empty")).toBeNull();
@@ -105,6 +111,30 @@ describe("FileAutocomplete active candidate interaction", () => {
         ".mm-file-autocomplete-footer",
       )?.textContent,
     ).toBe("Enter a path or URL manually.");
+    autocomplete.dispose();
+  });
+
+  it("uses image-specific loading, empty, and accessible labels", () => {
+    const input = document.createElement("input");
+    document.body.append(input);
+    const autocomplete = new FileAutocomplete({
+      input,
+      onQuery: () => undefined,
+      searchFilter: "image",
+    });
+    autocomplete.open();
+    dispatchInput(input, "photo");
+
+    const popup = document.querySelector<HTMLElement>(".mm-file-autocomplete")!;
+    expect(popup.getAttribute("aria-label")).toBe("Workspace images");
+    expect(
+      popup.querySelector(".mm-file-autocomplete-loading")?.textContent,
+    ).toBe("Searching workspace images…");
+
+    autocomplete.setCandidates([]);
+    expect(
+      popup.querySelector(".mm-file-autocomplete-empty")?.textContent,
+    ).toBe("No matching workspace images.");
     autocomplete.dispose();
   });
 

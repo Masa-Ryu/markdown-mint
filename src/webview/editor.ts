@@ -5676,6 +5676,7 @@ export class MarkdownEditorApp {
     );
     this.imageAutocomplete = new FileAutocomplete({
       input: this.imageUrlInput,
+      searchFilter: "image",
       onQuery: (query) => this.requestWorkspaceFileSearch("image-modal", query),
       onEscape: () => this.requestDialogCancel(image, "escape"),
     });
