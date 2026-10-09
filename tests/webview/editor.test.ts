@@ -1900,6 +1900,19 @@ describe("rich editor rendering", () => {
       ],
     });
 
+    const option = picker.querySelector<HTMLButtonElement>(
+      ".mm-file-autocomplete-option",
+    );
+    expect(
+      option?.querySelector(".mm-file-autocomplete-name")?.textContent,
+    ).toBe("design");
+    expect(
+      option?.querySelector(".mm-file-autocomplete-directory")?.textContent,
+    ).toBe("../design/");
+    expect(option?.getAttribute("aria-label")).toBe(
+      "Folder: design, ../design/",
+    );
+
     input.dispatchEvent(
       new KeyboardEvent("keydown", {
         key: "Enter",
@@ -1911,6 +1924,65 @@ describe("rich editor rendering", () => {
     expect(app.view.state.doc.textContent).toBe(label);
     app.destroy();
   });
+
+  it.each([
+    ["assets", "./", "./assets/"],
+    ["assets", "./", "../assets/"],
+    ["docs", "./", "./"],
+    ["docs", "./", "./docs/"],
+  ])(
+    "keeps the displayed directory destination equal to its inserted href: %s",
+    async (name, directory, relativePath) => {
+      const labelText = "Directory link";
+      const { app, root, messages } = makeApp(labelText);
+      app.view.dispatch(
+        app.view.state.tr.setSelection(
+          TextSelection.create(app.view.state.doc, 1, 1 + labelText.length),
+        ),
+      );
+      const picker = openLinkPicker(root);
+      const input = picker.querySelector<HTMLInputElement>("input")!;
+      input.value = name;
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      await new Promise<void>((resolve) => setTimeout(resolve, 90));
+      const request = messages.filter(isWorkspaceFileSearchMessage).at(-1)!;
+      receiveHostMessage({
+        protocolVersion: PROTOCOL_VERSION,
+        type: "workspace-file-search-result",
+        requestId: request.requestId,
+        candidates: [
+          {
+            kind: "directory",
+            fileName: name,
+            directory,
+            relativePath,
+          },
+        ],
+      });
+
+      const option = picker.querySelector<HTMLButtonElement>(
+        ".mm-file-autocomplete-option",
+      );
+      expect(
+        option?.querySelector(".mm-file-autocomplete-directory")?.textContent,
+      ).toBe(relativePath);
+      expect(option?.getAttribute("aria-label")).toBe(
+        "Folder: " + name + ", " + relativePath,
+      );
+
+      input.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "Enter",
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+      expect(lastEditMarkdown(messages)).toBe(
+        "[" + labelText + "](" + relativePath + ")",
+      );
+      app.destroy();
+    },
+  );
 
   it("uses directory names for a blank link label and preserves a typed label", async () => {
     const { app, root, messages } = makeApp("");

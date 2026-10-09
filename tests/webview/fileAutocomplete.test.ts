@@ -277,7 +277,12 @@ describe("FileAutocomplete active candidate interaction", () => {
       ".mm-file-autocomplete-option",
     );
     expect(option?.dataset.candidateKind).toBe("directory");
-    expect(option?.getAttribute("aria-label")).toBe("Folder: design, docs/");
+    expect(option?.getAttribute("aria-label")).toBe(
+      "Folder: design, ../design/",
+    );
+    expect(
+      option?.querySelector(".mm-file-autocomplete-directory")?.textContent,
+    ).toBe("../design/");
     expect(option?.querySelector("svg[data-icon='folder']")).not.toBeNull();
     const enter = dispatchKey(input, "Enter");
     expect(enter.defaultPrevented).toBe(true);
@@ -293,6 +298,45 @@ describe("FileAutocomplete active candidate interaction", () => {
     expect(selected).toHaveBeenLastCalledWith(folder);
     autocomplete.dispose();
   });
+
+  it.each([
+    ["assets", "./", "./assets/"],
+    ["assets", "./", "../assets/"],
+    ["docs", "./", "./"],
+    ["docs", "./", "./docs/"],
+  ])(
+    "shows and selects the actual directory destination %s as %s",
+    (name, directory, relativePath) => {
+      const selected = vi.fn();
+      const { input, autocomplete } = createAutocomplete(selected);
+      const folder = {
+        kind: "directory" as const,
+        fileName: name,
+        directory,
+        relativePath,
+      };
+      dispatchInput(input, name);
+      autocomplete.setCandidates([folder]);
+
+      const option = document.querySelector<HTMLButtonElement>(
+        ".mm-file-autocomplete-option",
+      );
+      expect(
+        option?.querySelector(".mm-file-autocomplete-name")?.textContent,
+      ).toBe(name);
+      expect(
+        option?.querySelector(".mm-file-autocomplete-directory")?.textContent,
+      ).toBe(relativePath);
+      expect(option?.getAttribute("aria-label")).toBe(
+        "Folder: " + name + ", " + relativePath,
+      );
+
+      dispatchKey(input, "Enter");
+      expect(input.value).toBe(relativePath);
+      expect(selected).toHaveBeenCalledWith(folder);
+      autocomplete.dispose();
+    },
+  );
 
   it("blocks Enter while loading and allows manual Enter after an empty result", () => {
     const selected = vi.fn();

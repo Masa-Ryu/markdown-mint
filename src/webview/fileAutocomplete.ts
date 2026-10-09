@@ -403,7 +403,7 @@ export class FileAutocomplete {
       option.setAttribute("aria-selected", String(index === this.activeIndex));
       option.setAttribute(
         "aria-label",
-        `${candidate.kind === "directory" ? "Folder" : "File"}: ${candidate.fileName}, ${candidate.directory}`,
+        `${candidate.kind === "directory" ? "Folder" : "File"}: ${candidate.fileName}, ${candidate.relativePath}`,
       );
       const main = this.input.ownerDocument.createElement("span");
       main.className = "mm-file-autocomplete-main";
@@ -419,7 +419,7 @@ export class FileAutocomplete {
       name.textContent = candidate.fileName;
       const directory = this.input.ownerDocument.createElement("span");
       directory.className = "mm-file-autocomplete-directory";
-      directory.textContent = candidate.directory;
+      directory.textContent = candidate.relativePath;
       option.title = candidate.relativePath;
       main.append(name);
       option.append(main, directory);

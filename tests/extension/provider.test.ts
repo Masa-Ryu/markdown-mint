@@ -2675,6 +2675,25 @@ describe("MarkdownMintEditorProvider", () => {
     });
   });
 
+  it("resolves a ./ directory link to the Markdown file's parent directory", async () => {
+    const { classifyLinkNavigation } =
+      await import("../../src/extension/linkNavigation");
+    const target = classifyLinkNavigation(
+      "./",
+      vscode.Uri.file("/workspace/docs/manual.md") as never,
+      {
+        uri: vscode.Uri.file("/workspace"),
+        name: "workspace",
+        index: 0,
+      } as never,
+    );
+
+    expect(target).toMatchObject({
+      kind: "internal",
+      uri: { fsPath: "/workspace/docs" },
+    });
+  });
+
   it("rejects malformed percent escapes before opening a local link", async () => {
     vscode.__state.reset();
     const provider = new MarkdownMintEditorProvider(context() as never);

@@ -255,6 +255,39 @@ describe("WorkspaceFileSearch", () => {
     ).toBe("../assets/c%23-guide.md");
   });
 
+  it.each([
+    ["/project/README.md", "assets", "./assets/"],
+    ["/project/docs/manual.md", "assets", "../assets/"],
+    ["/project/docs/manual.md", "docs", "./"],
+    ["/project/README.md", "docs", "./docs/"],
+  ])(
+    "uses the Markdown file location for %s -> %s",
+    (documentPath, directoryName, expectedRelativePath) => {
+      const index = createWorkspaceFileSearchIndex("/project", [
+        file("/project/README.md"),
+        directory("/project/assets"),
+        directory("/project/docs"),
+        file("/project/docs/manual.md"),
+      ]);
+      const [candidate] = search.search({
+        documentPath,
+        workspaceFolderPath: "/project",
+        query: directoryName,
+        filter: "all",
+        files: [],
+        index,
+      });
+
+      expect(candidate).toMatchObject({
+        kind: "directory",
+        fileName: directoryName,
+        directory: "./",
+        relativePath: expectedRelativePath,
+      });
+      expect(candidate?.relativePath).toBe(expectedRelativePath);
+    },
+  );
+
   it("only returns the supported image extensions for image searches", () => {
     const imageNames = [
       "a.png",
