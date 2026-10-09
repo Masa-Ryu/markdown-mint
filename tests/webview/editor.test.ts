@@ -3364,6 +3364,90 @@ describe("Rich Editor link navigation", () => {
         new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
       );
       expect(tooltip.hidden).toBe(true);
+      anchor.dispatchEvent(new Event("pointerover", { bubbles: true }));
+      expect(tooltip.hidden).toBe(true);
+
+      const pointerOutAfterEscape = new Event("pointerout", {
+        bubbles: true,
+      });
+      Object.defineProperty(pointerOutAfterEscape, "relatedTarget", {
+        value: document.body,
+      });
+      anchor.dispatchEvent(pointerOutAfterEscape);
+      anchor.dispatchEvent(new Event("pointerover", { bubbles: true }));
+      expect(tooltip.hidden).toBe(false);
+
+      document.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+      );
+      expect(tooltip.hidden).toBe(true);
+      expect(messages.filter(isEditMessage)).toHaveLength(0);
+      expect(hasMessageType(messages, "open-link")).toBe(false);
+    } finally {
+      app.destroy();
+    }
+  });
+
+  it("keeps a scrollable link tooltip open while the pointer enters it", () => {
+    const { app, root, messages } = makeApp("[open](../docs/design/)");
+    try {
+      const anchor = app.view.dom.querySelector<HTMLAnchorElement>("a[href]");
+      const tooltip = root.querySelector<HTMLElement>(".mm-tooltip")!;
+      if (!anchor) throw new Error("link is not rendered");
+      Object.defineProperty(tooltip, "scrollHeight", {
+        configurable: true,
+        value: 240,
+      });
+      Object.defineProperty(tooltip, "clientHeight", {
+        configurable: true,
+        value: 80,
+      });
+
+      anchor.dispatchEvent(new Event("pointerover", { bubbles: true }));
+      expect(tooltip.classList.contains("mm-tooltip-scrollable")).toBe(true);
+
+      const pointerOut = new Event("pointerout", { bubbles: true });
+      Object.defineProperty(pointerOut, "relatedTarget", {
+        value: document.body,
+      });
+      anchor.dispatchEvent(pointerOut);
+      expect(tooltip.hidden).toBe(false);
+
+      const destination = tooltip.querySelector<HTMLElement>(
+        ".mm-tooltip-link-destination",
+      )!;
+      const instruction = tooltip.querySelector<HTMLElement>(
+        ".mm-tooltip-link-instruction",
+      )!;
+      const pointerWithinTooltip = new Event("pointerout", {
+        bubbles: true,
+      });
+      Object.defineProperty(pointerWithinTooltip, "relatedTarget", {
+        value: instruction,
+      });
+      destination.dispatchEvent(pointerWithinTooltip);
+      expect(tooltip.hidden).toBe(false);
+
+      tooltip.dispatchEvent(new Event("pointerover", { bubbles: true }));
+      tooltip.dispatchEvent(new Event("scroll", { bubbles: true }));
+      expect(tooltip.hidden).toBe(false);
+
+      const pointerOutFromTooltip = new Event("pointerout", {
+        bubbles: true,
+      });
+      Object.defineProperty(pointerOutFromTooltip, "relatedTarget", {
+        value: document.body,
+      });
+      instruction.dispatchEvent(pointerOutFromTooltip);
+      expect(tooltip.hidden).toBe(true);
+
+      anchor.dispatchEvent(new Event("pointerover", { bubbles: true }));
+      expect(tooltip.hidden).toBe(false);
+
+      document.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+      );
+      expect(tooltip.hidden).toBe(true);
       expect(messages.filter(isEditMessage)).toHaveLength(0);
       expect(hasMessageType(messages, "open-link")).toBe(false);
     } finally {

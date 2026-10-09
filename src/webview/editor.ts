@@ -519,6 +519,7 @@ function compatibilityStateKey(
 
 const COMPATIBILITY_DEBOUNCE_MS = 250;
 const COMPATIBILITY_MAX_WAIT_MS = 1000;
+const LINK_TOOLTIP_HIDE_DELAY_MS = 180;
 
 function getCellSelection(selection: Selection): CellSelection | null {
   return selection instanceof CellSelection ? selection : null;
@@ -2777,7 +2778,9 @@ export class MarkdownEditorApp {
   private destroyed = false;
   private tooltip!: HTMLElement;
   private tooltipTarget: HTMLElement | null = null;
+  private tooltipDismissedTarget: HTMLElement | null = null;
   private tooltipPreviousDescribedBy: string | null = null;
+  private tooltipHideTimer: number | undefined;
   private readonly richLinkMouseDownHandler = (event: MouseEvent): void => {
     const anchor = this.richLinkFor(event.target);
     if (!anchor || event.button !== 0 || !this.linkModifierPressed(event))
@@ -2797,39 +2800,91 @@ export class MarkdownEditorApp {
     this.followRichLink(anchor);
   };
   private readonly tooltipPointerOverHandler = (event: PointerEvent): void => {
+    if (this.isTooltipNode(event.target)) {
+      this.clearTooltipHideTimer();
+      return;
+    }
     const target = this.tooltipTargetFor(event.target);
-    if (target) this.showTooltip(target);
-    else this.hideTooltip();
+    if (target) {
+      if (target === this.tooltipDismissedTarget) return;
+      this.tooltipDismissedTarget = null;
+      this.clearTooltipHideTimer();
+      this.showTooltip(target);
+    } else if (this.tooltipHideTimer === undefined) {
+      this.hideTooltip();
+    }
   };
   private readonly tooltipPointerOutHandler = (event: PointerEvent): void => {
     const target = this.tooltipTargetFor(event.target);
     const next = this.tooltipTargetFor(event.relatedTarget);
+    if (this.tooltipDismissedTarget) {
+      const dismissedTarget = this.tooltipDismissedTarget;
+      const leavesDismissedTarget =
+        (target === dismissedTarget && next !== dismissedTarget) ||
+        (this.isTooltipNode(event.target) &&
+          !this.isTooltipNode(event.relatedTarget) &&
+          next !== dismissedTarget);
+      if (leavesDismissedTarget || (next && next !== dismissedTarget))
+        this.tooltipDismissedTarget = null;
+    }
     if (next) {
+      if (next === this.tooltipDismissedTarget) return;
+      this.tooltipDismissedTarget = null;
+      this.clearTooltipHideTimer();
       this.showTooltip(next);
+      return;
+    }
+    if (this.isTooltipNode(event.target)) {
+      if (this.isTooltipNode(event.relatedTarget)) return;
+      this.hideTooltip();
+      return;
+    }
+    if (
+      target === this.tooltipTarget &&
+      this.isTooltipNode(event.relatedTarget)
+    ) {
+      this.clearTooltipHideTimer();
+      return;
+    }
+    if (
+      target === this.tooltipTarget &&
+      this.tooltip.classList.contains("mm-tooltip-scrollable")
+    ) {
+      this.scheduleTooltipHide();
       return;
     }
     if (!target || target === this.tooltipTarget) this.hideTooltip();
   };
   private readonly tooltipFocusInHandler = (event: FocusEvent): void => {
     const target = this.tooltipTargetFor(event.target);
-    if (target) this.showTooltip(target);
+    if (!target || target === this.tooltipDismissedTarget) return;
+    this.tooltipDismissedTarget = null;
+    this.showTooltip(target);
   };
   private readonly tooltipFocusOutHandler = (event: FocusEvent): void => {
+    const target = this.tooltipTargetFor(event.target);
     const next = this.tooltipTargetFor(event.relatedTarget);
-    if (next) this.showTooltip(next);
-    else this.hideTooltip();
+    if (target === this.tooltipDismissedTarget && next !== target)
+      this.tooltipDismissedTarget = null;
+    if (next && next !== this.tooltipDismissedTarget) {
+      this.tooltipDismissedTarget = null;
+      this.showTooltip(next);
+    } else this.hideTooltip();
   };
-  private readonly tooltipPointerDownHandler = (): void => {
-    this.hideTooltip();
+  private readonly tooltipPointerDownHandler = (event: PointerEvent): void => {
+    if (!this.isTooltipNode(event.target)) this.hideTooltip();
   };
-  private readonly tooltipClickHandler = (): void => {
-    this.hideTooltip();
+  private readonly tooltipClickHandler = (event: MouseEvent): void => {
+    if (!this.isTooltipNode(event.target)) this.hideTooltip();
   };
   private readonly tooltipKeyDownHandler = (event: KeyboardEvent): void => {
-    if (event.key === "Escape") this.hideTooltip();
+    if (event.key === "Escape" && this.tooltipTarget) {
+      this.tooltipDismissedTarget = this.tooltipTarget;
+      this.hideTooltip();
+    }
   };
-  private readonly tooltipScrollHandler = (): void => {
-    this.hideTooltip();
+  private readonly tooltipScrollHandler = (event: Event): void => {
+    if (!this.isTooltipNode(event.target)) this.hideTooltip();
   };
   private readonly tableSelectionChangeHandler = (): void =>
     this.scheduleWritingToolbarUpdate();
@@ -3347,6 +3402,7 @@ export class MarkdownEditorApp {
     this.pendingRecoveryOperationId = undefined;
     this.pendingRecoveryOperationIdentity = undefined;
     this.pendingRecoveryInvokingButton = null;
+    this.hideTooltip();
     this.clearTableDeletePreview();
     this.clearTableStructureSelection(false);
     this.tableControls?.destroy();
@@ -5084,6 +5140,7 @@ export class MarkdownEditorApp {
   }
 
   private showTooltip(target: HTMLElement): void {
+    this.clearTooltipHideTimer();
     const anchor = this.richLinkFor(target);
     const href = anchor?.getAttribute("href") ?? null;
     const isRichLink = anchor !== null && href !== null;
@@ -5118,8 +5175,30 @@ export class MarkdownEditorApp {
       this.tooltip.textContent = configuredLabel;
     }
     this.tooltip.hidden = false;
+    this.tooltip.classList.toggle(
+      "mm-tooltip-scrollable",
+      isRichLink && this.tooltip.scrollHeight > this.tooltip.clientHeight,
+    );
     this.tooltip.setAttribute("aria-hidden", "false");
     this.positionTooltip(target);
+  }
+
+  private isTooltipNode(target: EventTarget | null): boolean {
+    return target instanceof Node && this.tooltip.contains(target);
+  }
+
+  private scheduleTooltipHide(): void {
+    if (this.tooltipHideTimer !== undefined) return;
+    this.tooltipHideTimer = window.setTimeout(() => {
+      this.tooltipHideTimer = undefined;
+      this.hideTooltip();
+    }, LINK_TOOLTIP_HIDE_DELAY_MS);
+  }
+
+  private clearTooltipHideTimer(): void {
+    if (this.tooltipHideTimer === undefined) return;
+    window.clearTimeout(this.tooltipHideTimer);
+    this.tooltipHideTimer = undefined;
   }
 
   private richLinkFor(target: EventTarget | null): HTMLAnchorElement | null {
@@ -5167,6 +5246,7 @@ export class MarkdownEditorApp {
   }
 
   private hideTooltip(): void {
+    this.clearTooltipHideTimer();
     if (!this.tooltip) return;
     if (this.tooltipTarget) {
       if (this.tooltipPreviousDescribedBy === null)
@@ -5180,6 +5260,7 @@ export class MarkdownEditorApp {
     this.tooltipTarget = null;
     this.tooltipPreviousDescribedBy = null;
     this.tooltip.hidden = true;
+    this.tooltip.classList.remove("mm-tooltip-scrollable");
     this.tooltip.setAttribute("aria-hidden", "true");
     this.tooltip.textContent = "";
   }

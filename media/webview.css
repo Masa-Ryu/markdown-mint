@@ -391,6 +391,10 @@ textarea:focus-visible {
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.28);
 }
 
+.mm-tooltip.mm-tooltip-scrollable {
+  pointer-events: auto;
+}
+
 .mm-tooltip-link-destination {
   display: block;
   overflow-wrap: anywhere;

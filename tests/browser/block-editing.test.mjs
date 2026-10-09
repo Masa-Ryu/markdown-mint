@@ -2431,6 +2431,94 @@ async function testRichEditorLinks(page) {
   await noEdits(page, tocBefore, "TOC fragment navigation");
 }
 
+async function testLongRichLinkTooltip(page) {
+  const href =
+    "https://example.com/" +
+    "long-segment-123456789/".repeat(320) +
+    "?q=%2F#end";
+  await page.mouse.move(0, 0);
+  await load(page, `[Long link](${href})`);
+  const before = await saved(page);
+  const link = page.locator(`${rich} a[href]`);
+  const tooltip = page.locator(".mm-tooltip");
+  const linkBox = await link.boundingBox();
+  assert.ok(linkBox, "long link is not visible");
+
+  await page.mouse.move(
+    linkBox.x + linkBox.width / 2,
+    linkBox.y + linkBox.height / 2,
+    { steps: 5 },
+  );
+  await page.waitForFunction(() => {
+    const current = document.querySelector(".mm-tooltip");
+    return (
+      current &&
+      !current.hidden &&
+      current.classList.contains("mm-tooltip-scrollable") &&
+      current.scrollHeight > current.clientHeight &&
+      getComputedStyle(current).pointerEvents === "auto"
+    );
+  });
+  assert.equal(
+    await tooltip.locator(".mm-tooltip-link-destination").textContent(),
+    href,
+    "tooltip did not show the raw complete href",
+  );
+
+  const tooltipBox = await tooltip.boundingBox();
+  assert.ok(tooltipBox, "long link tooltip is not visible");
+  await page.mouse.move(tooltipBox.x + 18, tooltipBox.y + 18, { steps: 8 });
+  await page.waitForFunction(
+    () => !document.querySelector(".mm-tooltip")?.hidden,
+    undefined,
+    { timeout: 1000 },
+  );
+  await page.mouse.wheel(0, 10000);
+  await page.waitForFunction(() => {
+    const current = document.querySelector(".mm-tooltip");
+    return current && current.scrollTop > 0;
+  });
+  const scrollState = await tooltip.evaluate((element) => ({
+    scrollTop: element.scrollTop,
+    maxScrollTop: element.scrollHeight - element.clientHeight,
+    pointerEvents: getComputedStyle(element).pointerEvents,
+  }));
+  assert.ok(scrollState.scrollTop > 0, "tooltip did not scroll");
+  assert.ok(
+    scrollState.scrollTop >= scrollState.maxScrollTop - 2,
+    "mouse wheel could not reveal the end of the long href",
+  );
+  assert.equal(scrollState.pointerEvents, "auto");
+  await page.mouse.move(0, 0, { steps: 5 });
+  await page.waitForFunction(
+    () => document.querySelector(".mm-tooltip")?.hidden,
+  );
+
+  await page.mouse.move(
+    linkBox.x + linkBox.width / 2,
+    linkBox.y + linkBox.height / 2,
+    { steps: 5 },
+  );
+  await page.waitForFunction(
+    () => !document.querySelector(".mm-tooltip")?.hidden,
+  );
+  await page.keyboard.press("Escape");
+  await page.waitForFunction(
+    () => document.querySelector(".mm-tooltip")?.hidden,
+  );
+  await noEdits(page, before, "long Rich Editor link tooltip hover and scroll");
+  assert.equal(
+    await page.evaluate(
+      () =>
+        window.__markdownMintHarness.messages.filter(
+          (message) => message.type === "open-link",
+        ).length,
+    ),
+    0,
+    "hovering or scrolling the tooltip opened the link",
+  );
+}
+
 async function testModalEscapeCancellation(page) {
   const discardChanges = async () => {
     const confirmation = page.locator(".mm-discard-changes-dialog[open]");
@@ -4600,6 +4688,7 @@ async function main() {
       testExpandedCodeVerticalNavigation,
       testSelectionAndModifiers,
       testRichEditorLinks,
+      testLongRichLinkTooltip,
       testModalEscapeCancellation,
       testModalBackdropCancellation,
       testModalKeyboardActivation,
