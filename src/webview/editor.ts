@@ -3320,14 +3320,12 @@ export class MarkdownEditorApp {
     if (this.parseError || !this.initialized) {
       this.view.setProps({ editable: () => false });
     }
-    if (this.mode === "rich") {
-      this.view.dom.addEventListener(
-        "mousedown",
-        this.richLinkMouseDownHandler,
-        true,
-      );
-      this.view.dom.addEventListener("click", this.richLinkClickHandler, true);
-    }
+    this.view.dom.addEventListener(
+      "mousedown",
+      this.richLinkMouseDownHandler,
+      true,
+    );
+    this.view.dom.addEventListener("click", this.richLinkClickHandler, true);
     this.sync = new SyncController(this.version, this.vscode, initial.markdown);
     this.aiSuggestions.attach(this.root);
     this.messageHandler = (event) => this.handleMessage(event.data);
@@ -3388,6 +3386,12 @@ export class MarkdownEditorApp {
   }
 
   destroy(): void {
+    this.view.dom.removeEventListener(
+      "mousedown",
+      this.richLinkMouseDownHandler,
+      true,
+    );
+    this.view.dom.removeEventListener("click", this.richLinkClickHandler, true);
     this.aiSuggestions.dispose();
     this.mermaidAiSuggestions?.dispose();
     this.mermaidAiSuggestions = undefined;
@@ -3425,12 +3429,6 @@ export class MarkdownEditorApp {
     }
     this.pendingClipboard.clear();
     window.removeEventListener("message", this.messageHandler);
-    this.view.dom.removeEventListener(
-      "mousedown",
-      this.richLinkMouseDownHandler,
-      true,
-    );
-    this.view.dom.removeEventListener("click", this.richLinkClickHandler, true);
     window.removeEventListener("resize", this.writingToolbarResizeHandler);
     window.removeEventListener("resize", this.tableDeletePreviewResizeHandler);
     this.stage.removeEventListener("scroll", this.writingToolbarScrollHandler);
@@ -10765,6 +10763,8 @@ export class MarkdownEditorApp {
       this.cancelPreviewFrame();
     }
     if (this.tableDialogOpen && mode !== "rich") this.closeTableDialog();
+    // The ProseMirror DOM persists across modes. Keep its link handlers
+    // registered once; richLinkFor() gates their behavior to Rich mode.
     this.mode = mode;
     if (mode !== "preview") {
       this.previewEnhancer?.dispose();

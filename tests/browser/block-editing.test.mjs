@@ -2431,6 +2431,131 @@ async function testRichEditorLinks(page) {
   await noEdits(page, tocBefore, "TOC fragment navigation");
 }
 
+async function testMacCmdClickLinks(page) {
+  const destinations = [
+    "../README.md",
+    "./",
+    "../assets/",
+    "https://example.com/a%20b?q=%2F#part",
+    "#section",
+  ];
+  const source = [
+    `[File](${destinations[0]})`,
+    `[Workspace directory](${destinations[1]})`,
+    `[Assets directory](${destinations[2]})`,
+    `[External](${destinations[3]})`,
+    `[Heading](${destinations[4]})`,
+    "",
+    "# Section",
+  ].join("\n\n");
+  await load(page, source, "github", "preview");
+  await page.evaluate(() => {
+    window.__mmSavedNavigatorPlatform = Object.getOwnPropertyDescriptor(
+      navigator,
+      "platform",
+    );
+    Object.defineProperty(navigator, "platform", {
+      configurable: true,
+      value: "MacIntel",
+    });
+  });
+  try {
+    assert.equal(
+      await page
+        .locator('[data-panel="rich"]')
+        .evaluate((panel) => panel.hidden),
+      true,
+      "browser did not start in Preview mode",
+    );
+    await page.evaluate(() => {
+      const app = window.markdownMint;
+      app.setMode("rich", false);
+      app.setMode("preview", false);
+      app.setMode("rich", false);
+    });
+    assert.equal(
+      await page
+        .locator('[data-panel="rich"]')
+        .evaluate((panel) => panel.hidden),
+      false,
+      "Preview-to-Rich switch did not show the Rich editor",
+    );
+
+    const before = await saved(page);
+    const fileLink = page.locator(`${rich} a[href="${destinations[0]}"]`);
+    await fileLink.click();
+    await noEdits(page, before, "ordinary click on a file link");
+    assert.deepEqual(
+      await page.evaluate(() =>
+        window.__markdownMintHarness.messages
+          .filter((message) => message.type === "open-link")
+          .map((message) => message.href),
+      ),
+      [],
+      "ordinary click opened a link",
+    );
+
+    await page.evaluate(() => {
+      const target = document.querySelector("#section");
+      if (!target) throw new Error("heading fragment target is not rendered");
+      window.__markdownMintFragmentScrolls = 0;
+      target.scrollIntoView = () => {
+        window.__markdownMintFragmentScrolls += 1;
+      };
+    });
+    const opened = [];
+    for (const href of destinations.slice(0, 4)) {
+      await page
+        .locator(`${rich} a[href="${href}"]`)
+        .click({ modifiers: ["Meta"] });
+      opened.push(href);
+      await page.waitForFunction(
+        (expectedCount) =>
+          window.__markdownMintHarness.messages.filter(
+            (message) => message.type === "open-link",
+          ).length >= expectedCount,
+        opened.length,
+      );
+      assert.deepEqual(
+        await page.evaluate(() =>
+          window.__markdownMintHarness.messages
+            .filter((message) => message.type === "open-link")
+            .map((message) => message.href),
+        ),
+        opened,
+        `Cmd+Click did not open ${href} exactly once`,
+      );
+    }
+    await page
+      .locator(`${rich} a[href="${destinations[4]}"]`)
+      .click({ modifiers: ["Meta"] });
+    await page.waitForFunction(
+      () => window.__markdownMintFragmentScrolls === 1,
+    );
+    assert.deepEqual(
+      await page.evaluate(() =>
+        window.__markdownMintHarness.messages
+          .filter((message) => message.type === "open-link")
+          .map((message) => message.href),
+      ),
+      opened,
+      "Cmd+Click on #section should scroll locally without opening a link",
+    );
+    await noEdits(page, before, "Mac Cmd+Click across link destinations");
+  } finally {
+    await page.evaluate(() => {
+      delete navigator.platform;
+      if (window.__mmSavedNavigatorPlatform)
+        Object.defineProperty(
+          navigator,
+          "platform",
+          window.__mmSavedNavigatorPlatform,
+        );
+      delete window.__mmSavedNavigatorPlatform;
+    });
+  }
+}
+
 async function testLongRichLinkTooltip(page) {
   const href =
     "https://example.com/" +
@@ -4688,6 +4813,7 @@ async function main() {
       testExpandedCodeVerticalNavigation,
       testSelectionAndModifiers,
       testRichEditorLinks,
+      testMacCmdClickLinks,
       testLongRichLinkTooltip,
       testModalEscapeCancellation,
       testModalBackdropCancellation,

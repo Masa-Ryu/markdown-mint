@@ -77,6 +77,16 @@ function hasMessageType(messages: unknown[], type: string): boolean {
   );
 }
 
+function openLinkHrefs(messages: unknown[]): string[] {
+  return messages.flatMap((message) => {
+    if (typeof message !== "object" || message === null) return [];
+    const candidate = message as { type?: unknown; href?: unknown };
+    return candidate.type === "open-link" && typeof candidate.href === "string"
+      ? [candidate.href]
+      : [];
+  });
+}
+
 function dispatchPaste(
   app: ReturnType<typeof makeApp>["app"],
   data: Record<string, string>,
@@ -236,6 +246,7 @@ function makeApp(
   documentId?: string,
   profile: EditorInitialDocument["profile"] = "github",
   version = 1,
+  initialMode?: "rich" | "preview" | "source",
 ) {
   const root = document.createElement("div");
   document.body.append(root);
@@ -254,6 +265,7 @@ function makeApp(
       version,
       ...(documentId === undefined ? {} : { documentId }),
     },
+    ...(initialMode === undefined ? {} : { initialMode }),
   });
   return { app, root, messages, vscode };
 }
@@ -3544,6 +3556,9 @@ describe("Rich Editor link navigation", () => {
           type: "open-link",
           href: "https://example.com/a%20b?q=1#section",
         });
+        expect(openLinkHrefs(messages)).toEqual([
+          "https://example.com/a%20b?q=1#section",
+        ]);
         expect(hasMessageType(messages, "edit")).toBe(false);
         app.destroy();
       } finally {
@@ -3551,6 +3566,72 @@ describe("Rich Editor link navigation", () => {
       }
     },
   );
+
+  it.each(["./", "../assets/"])(
+    "opens directory link %s exactly once with Mac Cmd+Click",
+    (href) => {
+      const restorePlatform = setPlatform("MacIntel");
+      try {
+        const { app, messages } = makeApp(`[directory](${href})`);
+        const anchor = app.view.dom.querySelector<HTMLAnchorElement>("a[href]");
+        if (!anchor) throw new Error("directory link is not rendered");
+
+        const { click } = dispatchPrimaryClick(anchor, { metaKey: true });
+
+        expect(click.defaultPrevented).toBe(true);
+        expect(openLinkHrefs(messages)).toEqual([href]);
+        expect(hasMessageType(messages, "edit")).toBe(false);
+        app.destroy();
+      } finally {
+        restorePlatform();
+      }
+    },
+  );
+
+  it("registers link handlers once when switching from initial Preview to Rich", () => {
+    const restorePlatform = setPlatform("MacIntel");
+    const { app, messages } = makeApp(
+      "[open](../assets/)",
+      undefined,
+      false,
+      undefined,
+      "github",
+      1,
+      "preview",
+    );
+    let destroyed = false;
+    try {
+      const richPanel = app.root.querySelector<HTMLElement>(
+        '[data-panel="rich"]',
+      );
+      if (!richPanel) throw new Error("Rich panel is not rendered");
+      expect(richPanel.hidden).toBe(true);
+
+      const modeController = app as unknown as {
+        setMode(mode: "rich" | "preview", requestHost: boolean): void;
+      };
+      modeController.setMode("rich", false);
+      modeController.setMode("preview", false);
+      modeController.setMode("rich", false);
+      expect(richPanel.hidden).toBe(false);
+
+      const anchor = app.view.dom.querySelector<HTMLAnchorElement>("a[href]");
+      if (!anchor) throw new Error("link is not rendered");
+      dispatchPrimaryClick(anchor, { metaKey: true });
+      expect(openLinkHrefs(messages)).toEqual(["../assets/"]);
+
+      app.destroy();
+      destroyed = true;
+      anchor.addEventListener("click", (event) => event.preventDefault(), {
+        once: true,
+      });
+      dispatchPrimaryClick(anchor, { metaKey: true });
+      expect(openLinkHrefs(messages)).toEqual(["../assets/"]);
+    } finally {
+      if (!destroyed) app.destroy();
+      restorePlatform();
+    }
+  });
 
   it.each([
     ["MacIntel", "metaKey"],
@@ -3571,6 +3652,7 @@ describe("Rich Editor link navigation", () => {
           type: "open-link",
           href: "../README.md",
         });
+        expect(openLinkHrefs(messages)).toEqual(["../README.md"]);
         expect(hasMessageType(messages, "edit")).toBe(false);
         app.destroy();
       } finally {
@@ -3604,7 +3686,7 @@ describe("Rich Editor link navigation", () => {
   });
 
   it("scrolls to an existing heading id without changing source state", () => {
-    const restorePlatform = setPlatform("Linux x86_64");
+    const restorePlatform = setPlatform("MacIntel");
     try {
       const { app, messages } = makeApp("[jump](#target)\n\n# Target");
       const anchor = app.view.dom.querySelector<HTMLAnchorElement>("a[href]");
@@ -3617,7 +3699,7 @@ describe("Rich Editor link navigation", () => {
         value: scrollIntoView,
       });
 
-      dispatchPrimaryClick(anchor, { ctrlKey: true });
+      dispatchPrimaryClick(anchor, { metaKey: true });
 
       expect(scrollIntoView).toHaveBeenCalledWith({ block: "start" });
       expect(hasMessageType(messages, "open-link")).toBe(false);
