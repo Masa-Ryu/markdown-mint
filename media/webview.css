@@ -385,8 +385,22 @@ textarea:focus-visible {
   font-size: 12px;
   line-height: 1.3;
   white-space: normal;
+  max-height: calc(100vh - 12px);
+  overflow-y: auto;
   pointer-events: none;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.28);
+}
+
+.mm-tooltip-link-destination {
+  display: block;
+  overflow-wrap: anywhere;
+}
+.mm-tooltip-link-instruction {
+  display: block;
+  margin-top: 4px;
+  padding-top: 3px;
+  border-top: 1px solid var(--vscode-contrastBorder, var(--mm-control-border));
+  font-size: 11px;
 }
 
 .mm-toolbar-primary > .mm-tool-button {

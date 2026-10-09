@@ -3249,6 +3249,193 @@ describe("Rich Editor link navigation", () => {
   }
 
   it.each([
+    ["https://example.com/a%20b?q=%2F&mode=1#part%20one"],
+    ["../docs/design/"],
+    ["./assets/"],
+    ["./"],
+    ["#heading"],
+  ])("shows the configured link destination literally: %s", (href) => {
+    const restorePlatform = setPlatform("Linux x86_64");
+    const source = "[open](" + href + ")";
+    const { app, root, messages } = makeApp(source);
+    try {
+      const anchor = app.view.dom.querySelector<HTMLAnchorElement>("a[href]");
+      const tooltip = root.querySelector<HTMLElement>(".mm-tooltip")!;
+      if (!anchor) throw new Error("link is not rendered");
+      expect(anchor.getAttribute("href")).toBe(href);
+
+      const originalDoc = app.view.state.doc;
+      anchor.dispatchEvent(new Event("pointerover", { bubbles: true }));
+
+      expect(tooltip.hidden).toBe(false);
+      expect(
+        tooltip.querySelector(".mm-tooltip-link-destination")?.textContent,
+      ).toBe(href);
+      expect(
+        tooltip.querySelector(".mm-tooltip-link-instruction")?.textContent,
+      ).toBe("Ctrl+Click to follow link");
+      expect(app.view.state.doc).toBe(originalDoc);
+      expect(messages.filter(isEditMessage)).toHaveLength(0);
+      expect(hasMessageType(messages, "open-link")).toBe(false);
+    } finally {
+      app.destroy();
+      restorePlatform();
+    }
+  });
+
+  it.each([
+    ["MacIntel", "Cmd+Click to follow link"],
+    ["Linux x86_64", "Ctrl+Click to follow link"],
+  ])("retains the platform link instruction on %s focus", (platform, hint) => {
+    const restorePlatform = setPlatform(platform);
+    const { app, root } = makeApp("[open](../docs/design/)");
+    try {
+      const anchor = app.view.dom.querySelector<HTMLAnchorElement>("a[href]");
+      const tooltip = root.querySelector<HTMLElement>(".mm-tooltip")!;
+      if (!anchor) throw new Error("link is not rendered");
+
+      anchor.dispatchEvent(new FocusEvent("focusin", { bubbles: true }));
+
+      expect(tooltip.hidden).toBe(false);
+      expect(
+        tooltip.querySelector(".mm-tooltip-link-destination")?.textContent,
+      ).toBe("../docs/design/");
+      expect(
+        tooltip.querySelector(".mm-tooltip-link-instruction")?.textContent,
+      ).toBe(hint);
+
+      anchor.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
+      expect(tooltip.hidden).toBe(true);
+    } finally {
+      app.destroy();
+      restorePlatform();
+    }
+  });
+
+  it("shows the latest href after editing an existing rich link", () => {
+    const { app, root } = makeApp("[open](../docs/old/)");
+    try {
+      app.view.dispatch(
+        app.view.state.tr.setSelection(
+          TextSelection.create(app.view.state.doc, 1, 1 + "open".length),
+        ),
+      );
+      const picker = openLinkPicker(root);
+      const input = picker.querySelector<HTMLInputElement>("input")!;
+      expect(input.value).toBe("../docs/old/");
+      input.value = "../docs/design/";
+      input.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "Enter",
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+
+      const updatedAnchor =
+        app.view.dom.querySelector<HTMLAnchorElement>("a[href]");
+      const tooltip = root.querySelector<HTMLElement>(".mm-tooltip")!;
+      if (!updatedAnchor) throw new Error("updated link is not rendered");
+      expect(updatedAnchor.getAttribute("href")).toBe("../docs/design/");
+      updatedAnchor.dispatchEvent(new Event("pointerover", { bubbles: true }));
+      expect(
+        tooltip.querySelector(".mm-tooltip-link-destination")?.textContent,
+      ).toBe("../docs/design/");
+    } finally {
+      app.destroy();
+    }
+  });
+
+  it("closes the link tooltip on pointer out and Escape", () => {
+    const { app, root, messages } = makeApp("[open](./)");
+    try {
+      const anchor = app.view.dom.querySelector<HTMLAnchorElement>("a[href]");
+      const tooltip = root.querySelector<HTMLElement>(".mm-tooltip")!;
+      if (!anchor) throw new Error("link is not rendered");
+
+      anchor.dispatchEvent(new Event("pointerover", { bubbles: true }));
+      expect(tooltip.hidden).toBe(false);
+      anchor.dispatchEvent(new Event("pointerout", { bubbles: true }));
+      expect(tooltip.hidden).toBe(true);
+
+      anchor.dispatchEvent(new Event("pointerover", { bubbles: true }));
+      expect(tooltip.hidden).toBe(false);
+      document.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+      );
+      expect(tooltip.hidden).toBe(true);
+      expect(messages.filter(isEditMessage)).toHaveLength(0);
+      expect(hasMessageType(messages, "open-link")).toBe(false);
+    } finally {
+      app.destroy();
+    }
+  });
+
+  it("renders link destinations as text instead of interpreting href markup", () => {
+    const { app, root } = makeApp("[open](https://example.com)");
+    try {
+      const anchor = app.view.dom.querySelector<HTMLAnchorElement>("a[href]");
+      const tooltip = root.querySelector<HTMLElement>(".mm-tooltip")!;
+      if (!anchor) throw new Error("link is not rendered");
+      const href = '<img src=x onerror="alert(1)">';
+      anchor.setAttribute("href", href);
+
+      anchor.dispatchEvent(new Event("pointerover", { bubbles: true }));
+
+      expect(
+        tooltip.querySelector(".mm-tooltip-link-destination")?.textContent,
+      ).toBe(href);
+      expect(tooltip.querySelector("img")).toBeNull();
+    } finally {
+      app.destroy();
+    }
+  });
+
+  it("keeps a long link tooltip inside viewport bounds", () => {
+    const href =
+      "https://example.com/" + "long-segment-".repeat(40) + "?query=value#part";
+    const { app, root } = makeApp("[open](" + href + ")");
+    try {
+      const anchor = app.view.dom.querySelector<HTMLAnchorElement>("a[href]");
+      const tooltip = root.querySelector<HTMLElement>(".mm-tooltip")!;
+      if (!anchor) throw new Error("link is not rendered");
+      vi.spyOn(anchor, "getBoundingClientRect").mockReturnValue({
+        left: window.innerWidth - 20,
+        right: window.innerWidth,
+        top: window.innerHeight - 30,
+        bottom: window.innerHeight - 10,
+        width: 20,
+        height: 20,
+        x: window.innerWidth - 20,
+        y: window.innerHeight - 30,
+        toJSON: () => ({}),
+      });
+      vi.spyOn(tooltip, "getBoundingClientRect").mockReturnValue({
+        left: 0,
+        right: 320,
+        top: 0,
+        bottom: 50,
+        width: 320,
+        height: 50,
+        x: 0,
+        y: 0,
+        toJSON: () => ({}),
+      });
+
+      anchor.dispatchEvent(new Event("pointerover", { bubbles: true }));
+
+      const left = Number.parseFloat(tooltip.style.left);
+      const top = Number.parseFloat(tooltip.style.top);
+      expect(left).toBeGreaterThanOrEqual(6);
+      expect(left + 320).toBeLessThanOrEqual(window.innerWidth - 6);
+      expect(top).toBeGreaterThanOrEqual(6);
+      expect(top + 50).toBeLessThanOrEqual(window.innerHeight - 6);
+    } finally {
+      app.destroy();
+    }
+  });
+
+  it.each([
     ["MacIntel", "metaKey"],
     ["Linux x86_64", "ctrlKey"],
   ] as const)(

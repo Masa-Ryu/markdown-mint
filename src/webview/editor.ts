@@ -5084,15 +5084,13 @@ export class MarkdownEditorApp {
   }
 
   private showTooltip(target: HTMLElement): void {
-    const configuredLabel = target.dataset.tooltip?.trim();
-    const label =
-      configuredLabel ||
-      (this.richLinkFor(target)
-        ? isMac()
-          ? "Cmd+Click to follow link"
-          : "Ctrl+Click to follow link"
-        : "");
-    if (!label || this.destroyed) return;
+    const anchor = this.richLinkFor(target);
+    const href = anchor?.getAttribute("href") ?? null;
+    const isRichLink = anchor !== null && href !== null;
+    const configuredLabel = isRichLink
+      ? ""
+      : (target.dataset.tooltip?.trim() ?? "");
+    if ((!isRichLink && !configuredLabel) || this.destroyed) return;
     if (this.tooltipTarget !== target) {
       this.hideTooltip();
       this.tooltipTarget = target;
@@ -5106,7 +5104,19 @@ export class MarkdownEditorApp {
           [...describedBy, this.tooltip.id].join(" "),
         );
     }
-    this.tooltip.textContent = label;
+    if (isRichLink) {
+      const destination = this.root.ownerDocument.createElement("span");
+      destination.className = "mm-tooltip-link-destination";
+      destination.textContent = href;
+      const instruction = this.root.ownerDocument.createElement("span");
+      instruction.className = "mm-tooltip-link-instruction";
+      instruction.textContent = isMac()
+        ? "Cmd+Click to follow link"
+        : "Ctrl+Click to follow link";
+      this.tooltip.replaceChildren(destination, instruction);
+    } else {
+      this.tooltip.textContent = configuredLabel;
+    }
     this.tooltip.hidden = false;
     this.tooltip.setAttribute("aria-hidden", "false");
     this.positionTooltip(target);
@@ -5183,8 +5193,9 @@ export class MarkdownEditorApp {
       window.innerHeight || document.documentElement.clientHeight;
     const width =
       tooltipRect.width ||
-      Math.min(320, Math.max(72, target.dataset.tooltip?.length ?? 72));
-    const height = tooltipRect.height || 28;
+      Math.min(320, Math.max(72, this.tooltip.textContent?.length ?? 72));
+    const height =
+      tooltipRect.height || (this.tooltip.childElementCount > 0 ? 40 : 28);
     let left = targetRect.left + targetRect.width / 2 - width / 2;
     let top = targetRect.bottom + 6;
     if (viewportHeight > 0 && top + height > viewportHeight - 6)
