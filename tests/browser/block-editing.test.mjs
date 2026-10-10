@@ -2431,6 +2431,219 @@ async function testRichEditorLinks(page) {
   await noEdits(page, tocBefore, "TOC fragment navigation");
 }
 
+async function testMacCmdClickLinks(page) {
+  const destinations = [
+    "../README.md",
+    "./",
+    "../assets/",
+    "https://example.com/a%20b?q=%2F#part",
+    "#section",
+  ];
+  const source = [
+    `[File](${destinations[0]})`,
+    `[Workspace directory](${destinations[1]})`,
+    `[Assets directory](${destinations[2]})`,
+    `[External](${destinations[3]})`,
+    `[Heading](${destinations[4]})`,
+    "",
+    "# Section",
+  ].join("\n\n");
+  await load(page, source, "github", "preview");
+  await page.evaluate(() => {
+    window.__mmSavedNavigatorPlatform = Object.getOwnPropertyDescriptor(
+      navigator,
+      "platform",
+    );
+    Object.defineProperty(navigator, "platform", {
+      configurable: true,
+      value: "MacIntel",
+    });
+  });
+  try {
+    assert.equal(
+      await page
+        .locator('[data-panel="rich"]')
+        .evaluate((panel) => panel.hidden),
+      true,
+      "browser did not start in Preview mode",
+    );
+    await page.evaluate(() => {
+      const app = window.markdownMint;
+      app.setMode("rich", false);
+      app.setMode("preview", false);
+      app.setMode("rich", false);
+    });
+    assert.equal(
+      await page
+        .locator('[data-panel="rich"]')
+        .evaluate((panel) => panel.hidden),
+      false,
+      "Preview-to-Rich switch did not show the Rich editor",
+    );
+
+    const before = await saved(page);
+    const fileLink = page.locator(`${rich} a[href="${destinations[0]}"]`);
+    await fileLink.click();
+    await noEdits(page, before, "ordinary click on a file link");
+    assert.deepEqual(
+      await page.evaluate(() =>
+        window.__markdownMintHarness.messages
+          .filter((message) => message.type === "open-link")
+          .map((message) => message.href),
+      ),
+      [],
+      "ordinary click opened a link",
+    );
+
+    await page.evaluate(() => {
+      const target = document.querySelector("#section");
+      if (!target) throw new Error("heading fragment target is not rendered");
+      window.__markdownMintFragmentScrolls = 0;
+      target.scrollIntoView = () => {
+        window.__markdownMintFragmentScrolls += 1;
+      };
+    });
+    const opened = [];
+    for (const href of destinations.slice(0, 4)) {
+      await page
+        .locator(`${rich} a[href="${href}"]`)
+        .click({ modifiers: ["Meta"] });
+      opened.push(href);
+      await page.waitForFunction(
+        (expectedCount) =>
+          window.__markdownMintHarness.messages.filter(
+            (message) => message.type === "open-link",
+          ).length >= expectedCount,
+        opened.length,
+      );
+      assert.deepEqual(
+        await page.evaluate(() =>
+          window.__markdownMintHarness.messages
+            .filter((message) => message.type === "open-link")
+            .map((message) => message.href),
+        ),
+        opened,
+        `Cmd+Click did not open ${href} exactly once`,
+      );
+    }
+    await page
+      .locator(`${rich} a[href="${destinations[4]}"]`)
+      .click({ modifiers: ["Meta"] });
+    await page.waitForFunction(
+      () => window.__markdownMintFragmentScrolls === 1,
+    );
+    assert.deepEqual(
+      await page.evaluate(() =>
+        window.__markdownMintHarness.messages
+          .filter((message) => message.type === "open-link")
+          .map((message) => message.href),
+      ),
+      opened,
+      "Cmd+Click on #section should scroll locally without opening a link",
+    );
+    await noEdits(page, before, "Mac Cmd+Click across link destinations");
+  } finally {
+    await page.evaluate(() => {
+      delete navigator.platform;
+      if (window.__mmSavedNavigatorPlatform)
+        Object.defineProperty(
+          navigator,
+          "platform",
+          window.__mmSavedNavigatorPlatform,
+        );
+      delete window.__mmSavedNavigatorPlatform;
+    });
+  }
+}
+
+async function testLongRichLinkTooltip(page) {
+  const href =
+    "https://example.com/" +
+    "long-segment-123456789/".repeat(320) +
+    "?q=%2F#end";
+  await page.mouse.move(0, 0);
+  await load(page, `[Long link](${href})`);
+  const before = await saved(page);
+  const link = page.locator(`${rich} a[href]`);
+  const tooltip = page.locator(".mm-tooltip");
+  const linkBox = await link.boundingBox();
+  assert.ok(linkBox, "long link is not visible");
+
+  await page.mouse.move(
+    linkBox.x + linkBox.width / 2,
+    linkBox.y + linkBox.height / 2,
+    { steps: 5 },
+  );
+  await page.waitForFunction(() => {
+    const current = document.querySelector(".mm-tooltip");
+    return (
+      current &&
+      !current.hidden &&
+      current.classList.contains("mm-tooltip-scrollable") &&
+      current.scrollHeight > current.clientHeight &&
+      getComputedStyle(current).pointerEvents === "auto"
+    );
+  });
+  assert.equal(
+    await tooltip.locator(".mm-tooltip-link-destination").textContent(),
+    href,
+    "tooltip did not show the raw complete href",
+  );
+
+  const tooltipBox = await tooltip.boundingBox();
+  assert.ok(tooltipBox, "long link tooltip is not visible");
+  await page.mouse.move(tooltipBox.x + 18, tooltipBox.y + 18, { steps: 8 });
+  await page.waitForFunction(
+    () => !document.querySelector(".mm-tooltip")?.hidden,
+    undefined,
+    { timeout: 1000 },
+  );
+  await page.mouse.wheel(0, 10000);
+  await page.waitForFunction(() => {
+    const current = document.querySelector(".mm-tooltip");
+    return current && current.scrollTop > 0;
+  });
+  const scrollState = await tooltip.evaluate((element) => ({
+    scrollTop: element.scrollTop,
+    maxScrollTop: element.scrollHeight - element.clientHeight,
+    pointerEvents: getComputedStyle(element).pointerEvents,
+  }));
+  assert.ok(scrollState.scrollTop > 0, "tooltip did not scroll");
+  assert.ok(
+    scrollState.scrollTop >= scrollState.maxScrollTop - 2,
+    "mouse wheel could not reveal the end of the long href",
+  );
+  assert.equal(scrollState.pointerEvents, "auto");
+  await page.mouse.move(0, 0, { steps: 5 });
+  await page.waitForFunction(
+    () => document.querySelector(".mm-tooltip")?.hidden,
+  );
+
+  await page.mouse.move(
+    linkBox.x + linkBox.width / 2,
+    linkBox.y + linkBox.height / 2,
+    { steps: 5 },
+  );
+  await page.waitForFunction(
+    () => !document.querySelector(".mm-tooltip")?.hidden,
+  );
+  await page.keyboard.press("Escape");
+  await page.waitForFunction(
+    () => document.querySelector(".mm-tooltip")?.hidden,
+  );
+  await noEdits(page, before, "long Rich Editor link tooltip hover and scroll");
+  assert.equal(
+    await page.evaluate(
+      () =>
+        window.__markdownMintHarness.messages.filter(
+          (message) => message.type === "open-link",
+        ).length,
+    ),
+    0,
+    "hovering or scrolling the tooltip opened the link",
+  );
+}
+
 async function testModalEscapeCancellation(page) {
   const discardChanges = async () => {
     const confirmation = page.locator(".mm-discard-changes-dialog[open]");
@@ -2950,6 +3163,29 @@ async function testWorkspaceFileAutocomplete(page) {
   await load(page, "Target");
   await caret(page, `${rich} > p`, 0, -1);
   await page.locator('[data-testid="toolbar-link"]').click();
+  const directoryPicker = page.locator('[data-testid="link-selection-picker"]');
+  const directoryInput = directoryPicker.locator(
+    '[data-testid="link-picker-input"]',
+  );
+  await directoryInput.fill("docs");
+  const directoryOption = directoryPicker
+    .locator('.mm-file-autocomplete-option[data-candidate-kind="directory"]')
+    .first();
+  await directoryOption.waitFor({ state: "visible" });
+  assert.equal(
+    await directoryOption.locator(".mm-file-autocomplete-name").textContent(),
+    "docs",
+  );
+  assert.equal(
+    await directoryOption.locator("svg[data-icon='folder']").count(),
+    1,
+  );
+  await directoryOption.click();
+  await expectSource(page, "[Target](../docs/)");
+
+  await load(page, "Target");
+  await caret(page, `${rich} > p`, 0, -1);
+  await page.locator('[data-testid="toolbar-link"]').click();
   const clickPicker = page.locator('[data-testid="link-selection-picker"]');
   const clickInput = clickPicker.locator('[data-testid="link-picker-input"]');
   await clickInput.fill("ho");
@@ -3045,6 +3281,30 @@ async function testWorkspaceFileAutocomplete(page) {
   await expectSource(page, "Target[Custom label](../specs/hoge.pdf)");
 
   await load(page, "Target");
+  await caret(page, `${rich} > p`, -1);
+  await page.locator('[data-testid="toolbar-link"]').click();
+  const directoryDialog = page.locator(
+    'dialog[aria-labelledby="mm-link-dialog-title"]',
+  );
+  await directoryDialog.waitFor({ state: "visible" });
+  const directoryModalInput = directoryDialog.locator(
+    'input[placeholder="./docs/example.md"]',
+  );
+  const directoryLinkText = directoryDialog.locator(
+    'input[placeholder="Selected text"]',
+  );
+  await directoryModalInput.fill("docs");
+  const directoryModalOption = directoryDialog
+    .locator('.mm-file-autocomplete-option[data-candidate-kind="directory"]')
+    .first();
+  await directoryModalOption.waitFor({ state: "visible" });
+  await directoryModalOption.click();
+  assert.equal(await directoryModalInput.inputValue(), "../docs/");
+  assert.equal(await directoryLinkText.inputValue(), "docs");
+  await directoryDialog.getByRole("button", { name: "Insert link" }).click();
+  await expectSource(page, "Target[docs](../docs/)");
+
+  await load(page, "Target");
   await caret(page, `${rich} > p`, 0, -1);
   const imageBefore = await saved(page);
   await page.locator('[data-testid="toolbar-image"]').click();
@@ -3068,6 +3328,11 @@ async function testWorkspaceFileAutocomplete(page) {
   assert.ok(
     (await imageOptions.count()) > 1,
     "multiple image candidates render",
+  );
+  assert.equal(
+    await imageOptions.locator('[data-candidate-kind="directory"]').count(),
+    0,
+    "directory candidates leaked into image insertion",
   );
   assert.equal(
     await imageDialog
@@ -4548,6 +4813,8 @@ async function main() {
       testExpandedCodeVerticalNavigation,
       testSelectionAndModifiers,
       testRichEditorLinks,
+      testMacCmdClickLinks,
+      testLongRichLinkTooltip,
       testModalEscapeCancellation,
       testModalBackdropCancellation,
       testModalKeyboardActivation,

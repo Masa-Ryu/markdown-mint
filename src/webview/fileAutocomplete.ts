@@ -2,7 +2,9 @@ import {
   MAX_WORKSPACE_FILE_SEARCH_RESULTS,
   isWorkspaceFileSearchQuery,
   type WorkspaceFileCandidate,
+  type WorkspaceFileSearchFilter,
 } from "../shared/workspaceFileSearch";
+import { createToolbarIcon } from "./icons";
 
 export const DEFAULT_FILE_AUTOCOMPLETE_DEBOUNCE_MS = 0;
 
@@ -22,6 +24,7 @@ export interface FileAutocompleteOptions {
   readonly onSelect?: (candidate: WorkspaceFileCandidate) => void;
   readonly onEnter?: () => void;
   readonly onEscape?: () => void;
+  readonly searchFilter?: WorkspaceFileSearchFilter;
   readonly debounceMs?: number;
   readonly onSearchTiming?: (
     phase: FileAutocompleteTimingPhase,
@@ -43,6 +46,7 @@ export class FileAutocomplete {
     ((candidate: WorkspaceFileCandidate) => void) | undefined;
   private readonly onEnter: (() => void) | undefined;
   private readonly onEscape: (() => void) | undefined;
+  private readonly searchFilter: WorkspaceFileSearchFilter;
   private readonly onSearchTiming:
     ((phase: FileAutocompleteTimingPhase, query: string) => void) | undefined;
   private readonly debounceMs: number;
@@ -69,6 +73,7 @@ export class FileAutocomplete {
     this.onSelect = options.onSelect;
     this.onEnter = options.onEnter;
     this.onEscape = options.onEscape;
+    this.searchFilter = options.searchFilter ?? "all";
     this.onSearchTiming = options.onSearchTiming;
     this.debounceMs = Math.max(
       0,
@@ -80,7 +85,12 @@ export class FileAutocomplete {
     this.popup.id = `mm-file-autocomplete-${++nextAutocompleteId}`;
     this.popup.hidden = true;
     this.popup.setAttribute("role", "listbox");
-    this.popup.setAttribute("aria-label", "Workspace files");
+    this.popup.setAttribute(
+      "aria-label",
+      this.searchFilter === "image"
+        ? "Workspace images"
+        : "Workspace files and folders",
+    );
     this.footer = ownerDocument.createElement("div");
     this.footer.className = "mm-file-autocomplete-footer";
     this.footer.setAttribute("role", "status");
@@ -360,16 +370,22 @@ export class FileAutocomplete {
       const loading = this.input.ownerDocument.createElement("div");
       loading.className = "mm-file-autocomplete-loading";
       loading.setAttribute("role", "status");
-      loading.textContent = "Searching workspace files…";
+      loading.textContent =
+        this.searchFilter === "image"
+          ? "Searching workspace images…"
+          : "Searching workspace files and folders…";
       this.popup.append(loading);
-      this.footer.textContent = "Searching workspace files…";
+      this.footer.textContent = loading.textContent;
       return;
     }
 
     if (this.searchState === "empty") {
       const empty = this.input.ownerDocument.createElement("div");
       empty.className = "mm-file-autocomplete-empty";
-      empty.textContent = "No matching workspace files.";
+      empty.textContent =
+        this.searchFilter === "image"
+          ? "No matching workspace images."
+          : "No matching workspace files or folders.";
       this.popup.append(empty);
       this.footer.textContent = "Enter a path or URL manually.";
       return;
@@ -381,17 +397,32 @@ export class FileAutocomplete {
       option.className = "mm-file-autocomplete-option";
       option.tabIndex = -1;
       option.dataset.mmFileAutocompleteOption = String(index);
+      option.dataset.candidateKind = candidate.kind;
       option.id = `${this.popup.id}-option-${index}`;
       option.setAttribute("role", "option");
       option.setAttribute("aria-selected", String(index === this.activeIndex));
+      option.setAttribute(
+        "aria-label",
+        `${candidate.kind === "directory" ? "Folder" : "File"}: ${candidate.fileName}, ${candidate.relativePath}`,
+      );
+      const main = this.input.ownerDocument.createElement("span");
+      main.className = "mm-file-autocomplete-main";
+      if (candidate.kind === "directory")
+        main.append(
+          createToolbarIcon("folder", {
+            className: "mm-file-autocomplete-icon",
+            size: 16,
+          }),
+        );
       const name = this.input.ownerDocument.createElement("span");
       name.className = "mm-file-autocomplete-name";
       name.textContent = candidate.fileName;
       const directory = this.input.ownerDocument.createElement("span");
       directory.className = "mm-file-autocomplete-directory";
-      directory.textContent = candidate.directory;
+      directory.textContent = candidate.relativePath;
       option.title = candidate.relativePath;
-      option.append(name, directory);
+      main.append(name);
+      option.append(main, directory);
       this.popup.append(option);
     });
     this.updateActivePresentation(-1, this.activeIndex);
@@ -484,11 +515,24 @@ export class FileAutocomplete {
 function isSafeCandidate(
   candidate: WorkspaceFileCandidate,
 ): candidate is WorkspaceFileCandidate {
+  const isDirectory = candidate.kind === "directory";
+  const validKind = isDirectory || candidate.kind === "file";
+  const relativePathIsDirectory = candidate.relativePath.endsWith("/");
   return (
+    validKind &&
+    isDirectory === relativePathIsDirectory &&
     candidate.fileName.length > 0 &&
     candidate.fileName.length <= 1_024 &&
+    !candidate.fileName.includes("/") &&
+    !candidate.fileName.includes("\\") &&
     candidate.directory.length > 0 &&
     candidate.directory.length <= 8_192 &&
+    (candidate.directory === "./" ||
+      (/^(?:[^/]+\/)+$/.test(candidate.directory) &&
+        !candidate.directory
+          .slice(0, -1)
+          .split("/")
+          .some((segment) => segment === "." || segment === ".."))) &&
     candidate.relativePath.length > 0 &&
     candidate.relativePath.length <= 8_192 &&
     /^(?:\.\/|\.\.\/)/.test(candidate.relativePath) &&
@@ -498,8 +542,38 @@ function isSafeCandidate(
     !candidate.fileName.includes("\\") &&
     !candidate.directory.includes("\\") &&
     !candidate.relativePath.includes("\\") &&
-    !/[?#]/.test(candidate.relativePath)
+    !/[?#]/.test(candidate.relativePath) &&
+    isSafeRelativePath(candidate.relativePath, candidate.kind)
   );
+}
+
+function isSafeRelativePath(
+  path: string,
+  kind: WorkspaceFileCandidate["kind"],
+): boolean {
+  let relative = path;
+  if (relative.startsWith("./")) relative = relative.slice(2);
+  else {
+    while (relative.startsWith("../")) relative = relative.slice(3);
+  }
+  if (kind === "directory" && relative.endsWith("/"))
+    relative = relative.slice(0, -1);
+  if (!relative) return kind === "directory";
+  return relative.split("/").every((segment) => {
+    if (!segment || segment === "." || segment === "..") return false;
+    try {
+      const decoded = decodeURIComponent(segment);
+      return (
+        decoded !== "." &&
+        decoded !== ".." &&
+        !decoded.includes("/") &&
+        !decoded.includes("\\") &&
+        !hasControlCharacter(decoded)
+      );
+    } catch {
+      return false;
+    }
+  });
 }
 
 function hasControlCharacter(value: string): boolean {

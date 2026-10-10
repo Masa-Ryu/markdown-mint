@@ -2,6 +2,19 @@ import { describe, expect, it, vi } from "vitest";
 import { createToolbarIcon } from "../../src/webview/icons";
 
 describe("toolbar icons", () => {
+  it("provides a theme-aware folder icon for directory autocomplete rows", () => {
+    const icon = createToolbarIcon("folder", {
+      className: "mm-file-autocomplete-icon",
+      size: 16,
+    });
+
+    expect(icon.dataset.icon).toBe("folder");
+    expect(icon.getAttribute("class")).toBe("mm-file-autocomplete-icon");
+    expect(icon.getAttribute("width")).toBe("16");
+    expect(icon.getAttribute("aria-hidden")).toBe("true");
+    expect(icon.outerHTML).toContain("currentColor");
+  });
+
   it("parses each icon source once before cloning its template", () => {
     const parseFromString = vi.spyOn(DOMParser.prototype, "parseFromString");
 

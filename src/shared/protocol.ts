@@ -168,6 +168,7 @@ export interface WorkspaceFileSearchWarmupMessage {
 }
 
 export interface WorkspaceFileSearchCandidateMessage {
+  readonly kind: "file" | "directory";
   readonly fileName: string;
   readonly directory: string;
   readonly relativePath: string;
@@ -819,9 +820,10 @@ function isWorkspaceFileSearchCandidate(
 ): value is WorkspaceFileSearchCandidateMessage {
   if (!isRecord(value)) return false;
   return (
+    (value.kind === "file" || value.kind === "directory") &&
     isSafeFileSearchName(value.fileName) &&
     isSafeFileSearchDirectory(value.directory) &&
-    isSafeFileSearchPath(value.relativePath)
+    isSafeFileSearchPath(value.relativePath, value.kind)
   );
 }
 
@@ -830,6 +832,8 @@ function isSafeFileSearchName(value: unknown): value is string {
     typeof value === "string" &&
     value.length > 0 &&
     value.length <= MAX_FILE_SEARCH_NAME_LENGTH &&
+    !value.includes("/") &&
+    !value.includes("\\") &&
     !hasControlCharacter(value)
   );
 }
@@ -840,21 +844,60 @@ function isSafeFileSearchDirectory(value: unknown): value is string {
     value.length > 0 &&
     value.length <= MAX_FILE_SEARCH_PATH_LENGTH &&
     !hasControlCharacter(value) &&
-    !value.includes("\\")
+    !value.includes("\\") &&
+    (value === "./" ||
+      (/^(?:[^/]+\/)+$/.test(value) &&
+        !value
+          .slice(0, -1)
+          .split("/")
+          .some((segment) => segment === "." || segment === "..")))
   );
 }
 
-function isSafeFileSearchPath(value: unknown): value is string {
-  return (
-    typeof value === "string" &&
-    value.length > 0 &&
-    value.length <= MAX_FILE_SEARCH_PATH_LENGTH &&
-    /^(?:\.\/|\.\.\/)/.test(value) &&
-    !hasControlCharacter(value) &&
-    !value.includes("\\") &&
-    !value.includes("?") &&
-    !value.includes("#")
-  );
+function isSafeFileSearchPath(
+  value: unknown,
+  kind: "file" | "directory",
+): value is string {
+  if (
+    typeof value !== "string" ||
+    value.length === 0 ||
+    value.length > MAX_FILE_SEARCH_PATH_LENGTH ||
+    !/^(?:\.\/|\.\.\/)/.test(value) ||
+    hasControlCharacter(value) ||
+    value.includes("\\") ||
+    value.includes("?") ||
+    value.includes("#") ||
+    (kind === "directory" && !value.endsWith("/")) ||
+    (kind === "file" && value.endsWith("/"))
+  )
+    return false;
+
+  let relative = value;
+  if (relative.startsWith("./")) relative = relative.slice(2);
+  else {
+    while (relative.startsWith("../")) relative = relative.slice(3);
+  }
+  if (kind === "directory" && relative.endsWith("/"))
+    relative = relative.slice(0, -1);
+  if (!relative) return kind === "directory";
+
+  for (const segment of relative.split("/")) {
+    if (!segment || segment === "." || segment === "..") return false;
+    try {
+      const decoded = decodeURIComponent(segment);
+      if (
+        decoded === "." ||
+        decoded === ".." ||
+        decoded.includes("/") ||
+        decoded.includes("\\") ||
+        hasControlCharacter(decoded)
+      )
+        return false;
+    } catch {
+      return false;
+    }
+  }
+  return true;
 }
 
 function hasControlCharacter(value: string): boolean {

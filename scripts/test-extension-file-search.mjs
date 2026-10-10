@@ -1,3 +1,2 @@
-process.env.MM_FILE_SEARCH_HOST_BENCHMARK = "1";
 process.env.MM_WORKSPACE_FILE_SEARCH_ONLY = "1";
 await import("./test-extension.mjs");

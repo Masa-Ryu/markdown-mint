@@ -8,8 +8,10 @@ import type { WorkspaceFileCandidate } from "../../src/shared/workspaceFileSearc
 function candidate(
   fileName: string,
   relativePath = `./${fileName}`,
+  kind: WorkspaceFileCandidate["kind"] = "file",
 ): WorkspaceFileCandidate {
   return {
+    kind,
     fileName,
     directory: "docs/",
     relativePath,
@@ -85,6 +87,12 @@ describe("FileAutocomplete active candidate interaction", () => {
     dispatchInput(input, "h");
     const popup = document.querySelector<HTMLElement>(".mm-file-autocomplete")!;
 
+    expect(popup.getAttribute("aria-label")).toBe(
+      "Workspace files and folders",
+    );
+    expect(
+      popup.querySelector(".mm-file-autocomplete-loading")?.textContent,
+    ).toBe("Searching workspace files and folders…");
     expect(popup.dataset.searchState).toBe("loading");
     expect(popup.querySelector(".mm-file-autocomplete-loading")).not.toBeNull();
     expect(popup.querySelector(".mm-file-autocomplete-empty")).toBeNull();
@@ -103,6 +111,30 @@ describe("FileAutocomplete active candidate interaction", () => {
         ".mm-file-autocomplete-footer",
       )?.textContent,
     ).toBe("Enter a path or URL manually.");
+    autocomplete.dispose();
+  });
+
+  it("uses image-specific loading, empty, and accessible labels", () => {
+    const input = document.createElement("input");
+    document.body.append(input);
+    const autocomplete = new FileAutocomplete({
+      input,
+      onQuery: () => undefined,
+      searchFilter: "image",
+    });
+    autocomplete.open();
+    dispatchInput(input, "photo");
+
+    const popup = document.querySelector<HTMLElement>(".mm-file-autocomplete")!;
+    expect(popup.getAttribute("aria-label")).toBe("Workspace images");
+    expect(
+      popup.querySelector(".mm-file-autocomplete-loading")?.textContent,
+    ).toBe("Searching workspace images…");
+
+    autocomplete.setCandidates([]);
+    expect(
+      popup.querySelector(".mm-file-autocomplete-empty")?.textContent,
+    ).toBe("No matching workspace images.");
     autocomplete.dispose();
   });
 
@@ -233,6 +265,78 @@ describe("FileAutocomplete active candidate interaction", () => {
     expect(selected).toHaveBeenLastCalledWith(candidate("beta.md"));
     autocomplete.dispose();
   });
+
+  it("renders and selects a directory with its folder icon and trailing slash", () => {
+    const selected = vi.fn();
+    const { input, autocomplete } = createAutocomplete(selected);
+    const folder = candidate("design", "../design/", "directory");
+    dispatchInput(input, "design");
+    autocomplete.setCandidates([folder]);
+
+    const option = document.querySelector<HTMLButtonElement>(
+      ".mm-file-autocomplete-option",
+    );
+    expect(option?.dataset.candidateKind).toBe("directory");
+    expect(option?.getAttribute("aria-label")).toBe(
+      "Folder: design, ../design/",
+    );
+    expect(
+      option?.querySelector(".mm-file-autocomplete-directory")?.textContent,
+    ).toBe("../design/");
+    expect(option?.querySelector("svg[data-icon='folder']")).not.toBeNull();
+    const enter = dispatchKey(input, "Enter");
+    expect(enter.defaultPrevented).toBe(true);
+    expect(input.value).toBe("../design/");
+    expect(selected).toHaveBeenCalledWith(folder);
+
+    dispatchInput(input, "design");
+    autocomplete.setCandidates([folder]);
+    document
+      .querySelector<HTMLButtonElement>(".mm-file-autocomplete-option")
+      ?.click();
+    expect(input.value).toBe("../design/");
+    expect(selected).toHaveBeenLastCalledWith(folder);
+    autocomplete.dispose();
+  });
+
+  it.each([
+    ["assets", "./", "./assets/"],
+    ["assets", "./", "../assets/"],
+    ["docs", "./", "./"],
+    ["docs", "./", "./docs/"],
+  ])(
+    "shows and selects the actual directory destination %s as %s",
+    (name, directory, relativePath) => {
+      const selected = vi.fn();
+      const { input, autocomplete } = createAutocomplete(selected);
+      const folder = {
+        kind: "directory" as const,
+        fileName: name,
+        directory,
+        relativePath,
+      };
+      dispatchInput(input, name);
+      autocomplete.setCandidates([folder]);
+
+      const option = document.querySelector<HTMLButtonElement>(
+        ".mm-file-autocomplete-option",
+      );
+      expect(
+        option?.querySelector(".mm-file-autocomplete-name")?.textContent,
+      ).toBe(name);
+      expect(
+        option?.querySelector(".mm-file-autocomplete-directory")?.textContent,
+      ).toBe(relativePath);
+      expect(option?.getAttribute("aria-label")).toBe(
+        "Folder: " + name + ", " + relativePath,
+      );
+
+      dispatchKey(input, "Enter");
+      expect(input.value).toBe(relativePath);
+      expect(selected).toHaveBeenCalledWith(folder);
+      autocomplete.dispose();
+    },
+  );
 
   it("blocks Enter while loading and allows manual Enter after an empty result", () => {
     const selected = vi.fn();

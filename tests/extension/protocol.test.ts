@@ -426,6 +426,7 @@ describe("Markdown Mint wire protocol", () => {
         requestId: "file-search:1",
         candidates: [
           {
+            kind: "file",
             fileName: "hoge manual.pdf",
             directory: "specs/",
             relativePath: "../specs/hoge%20manual.pdf",
@@ -449,6 +450,7 @@ describe("Markdown Mint wire protocol", () => {
         requestId: "file-search:1",
         candidates: [
           {
+            kind: "file",
             fileName: "unsafe.md",
             directory: "docs/",
             relativePath: "./unsafe#fragment.md",
@@ -456,6 +458,41 @@ describe("Markdown Mint wire protocol", () => {
         ],
       }),
     ).toBe(false);
+
+    const directoryCandidate = {
+      kind: "directory",
+      fileName: "design",
+      directory: "docs/",
+      relativePath: "../design/",
+    };
+    expect(
+      isHostMessage({
+        protocolVersion: PROTOCOL_VERSION,
+        type: "workspace-file-search-result",
+        requestId: "file-search:2",
+        candidates: [directoryCandidate],
+      }),
+    ).toBe(true);
+    for (const candidate of [
+      { ...directoryCandidate, kind: "unknown" },
+      { ...directoryCandidate, relativePath: "../design" },
+      {
+        ...directoryCandidate,
+        relativePath: `../design/${String.fromCharCode(1)}`,
+      },
+      { ...directoryCandidate, relativePath: "../design//" },
+      { ...directoryCandidate, relativePath: "../design/%2F/" },
+      { ...directoryCandidate, relativePath: "../%2e%2e/design/" },
+    ]) {
+      expect(
+        isHostMessage({
+          protocolVersion: PROTOCOL_VERSION,
+          type: "workspace-file-search-result",
+          requestId: "file-search:3",
+          candidates: [candidate],
+        }),
+      ).toBe(false);
+    }
   });
 
   it("validates image import requests and correlated results", () => {

@@ -77,6 +77,16 @@ function hasMessageType(messages: unknown[], type: string): boolean {
   );
 }
 
+function openLinkHrefs(messages: unknown[]): string[] {
+  return messages.flatMap((message) => {
+    if (typeof message !== "object" || message === null) return [];
+    const candidate = message as { type?: unknown; href?: unknown };
+    return candidate.type === "open-link" && typeof candidate.href === "string"
+      ? [candidate.href]
+      : [];
+  });
+}
+
 function dispatchPaste(
   app: ReturnType<typeof makeApp>["app"],
   data: Record<string, string>,
@@ -236,6 +246,7 @@ function makeApp(
   documentId?: string,
   profile: EditorInitialDocument["profile"] = "github",
   version = 1,
+  initialMode?: "rich" | "preview" | "source",
 ) {
   const root = document.createElement("div");
   document.body.append(root);
@@ -254,6 +265,7 @@ function makeApp(
       version,
       ...(documentId === undefined ? {} : { documentId }),
     },
+    ...(initialMode === undefined ? {} : { initialMode }),
   });
   return { app, root, messages, vscode };
 }
@@ -1668,6 +1680,7 @@ describe("rich editor rendering", () => {
       requestId: request.requestId,
       candidates: [
         {
+          kind: "file",
           fileName: "hoge.pdf",
           directory: "docs/",
           relativePath: "./hoge.pdf",
@@ -1817,11 +1830,13 @@ describe("rich editor rendering", () => {
           requestId: request.requestId,
           candidates: [
             {
+              kind: "file",
               fileName: "hoge manual.pdf",
               directory: "specs/",
               relativePath: "../specs/hoge%20manual.pdf",
             },
             {
+              kind: "file",
               fileName: "hoge-design.md",
               directory: "docs/",
               relativePath: "../docs/hoge-design.md",
@@ -1866,6 +1881,179 @@ describe("rich editor rendering", () => {
     expect(lastEditMarkdown(messages)).toBe(
       "[replace me](../docs/hoge-design.md)",
     );
+    app.destroy();
+  });
+
+  it("applies a directory candidate to existing link text without changing its label", async () => {
+    const label = "Existing label";
+    const { app, root, messages } = makeApp(`[${label}](./old.md)`);
+    app.view.dispatch(
+      app.view.state.tr.setSelection(
+        TextSelection.create(app.view.state.doc, 1, 1 + label.length),
+      ),
+    );
+    const picker = openLinkPicker(root);
+    const input = picker.querySelector<HTMLInputElement>("input")!;
+    input.value = "design";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    await new Promise<void>((resolve) => setTimeout(resolve, 90));
+    const request = messages.filter(isWorkspaceFileSearchMessage).at(-1)!;
+    receiveHostMessage({
+      protocolVersion: PROTOCOL_VERSION,
+      type: "workspace-file-search-result",
+      requestId: request.requestId,
+      candidates: [
+        {
+          kind: "directory",
+          fileName: "design",
+          directory: "./",
+          relativePath: "../design/",
+        },
+      ],
+    });
+
+    const option = picker.querySelector<HTMLButtonElement>(
+      ".mm-file-autocomplete-option",
+    );
+    expect(
+      option?.querySelector(".mm-file-autocomplete-name")?.textContent,
+    ).toBe("design");
+    expect(
+      option?.querySelector(".mm-file-autocomplete-directory")?.textContent,
+    ).toBe("../design/");
+    expect(option?.getAttribute("aria-label")).toBe(
+      "Folder: design, ../design/",
+    );
+
+    input.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "Enter",
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    expect(lastEditMarkdown(messages)).toBe(`[${label}](../design/)`);
+    expect(app.view.state.doc.textContent).toBe(label);
+    app.destroy();
+  });
+
+  it.each([
+    ["assets", "./", "./assets/"],
+    ["assets", "./", "../assets/"],
+    ["docs", "./", "./"],
+    ["docs", "./", "./docs/"],
+  ])(
+    "keeps the displayed directory destination equal to its inserted href: %s",
+    async (name, directory, relativePath) => {
+      const labelText = "Directory link";
+      const { app, root, messages } = makeApp(labelText);
+      app.view.dispatch(
+        app.view.state.tr.setSelection(
+          TextSelection.create(app.view.state.doc, 1, 1 + labelText.length),
+        ),
+      );
+      const picker = openLinkPicker(root);
+      const input = picker.querySelector<HTMLInputElement>("input")!;
+      input.value = name;
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      await new Promise<void>((resolve) => setTimeout(resolve, 90));
+      const request = messages.filter(isWorkspaceFileSearchMessage).at(-1)!;
+      receiveHostMessage({
+        protocolVersion: PROTOCOL_VERSION,
+        type: "workspace-file-search-result",
+        requestId: request.requestId,
+        candidates: [
+          {
+            kind: "directory",
+            fileName: name,
+            directory,
+            relativePath,
+          },
+        ],
+      });
+
+      const option = picker.querySelector<HTMLButtonElement>(
+        ".mm-file-autocomplete-option",
+      );
+      expect(
+        option?.querySelector(".mm-file-autocomplete-directory")?.textContent,
+      ).toBe(relativePath);
+      expect(option?.getAttribute("aria-label")).toBe(
+        "Folder: " + name + ", " + relativePath,
+      );
+
+      input.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "Enter",
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+      expect(lastEditMarkdown(messages)).toBe(
+        "[" + labelText + "](" + relativePath + ")",
+      );
+      app.destroy();
+    },
+  );
+
+  it("uses directory names for a blank link label and preserves a typed label", async () => {
+    const { app, root, messages } = makeApp("");
+    app.view.dispatch(
+      app.view.state.tr.setSelection(
+        TextSelection.create(app.view.state.doc, 1),
+      ),
+    );
+    root
+      .querySelector<HTMLButtonElement>('[data-testid="toolbar-link"]')!
+      .click();
+    const dialog = root.querySelector<HTMLDialogElement>(
+      '[aria-labelledby="mm-link-dialog-title"]',
+    )!;
+    const destination = dialog.querySelector<HTMLInputElement>(
+      'input[placeholder="./docs/example.md"]',
+    )!;
+    const label = dialog.querySelector<HTMLInputElement>(
+      'input[placeholder="Selected text"]',
+    )!;
+
+    const chooseDirectory = async (
+      name: string,
+      relativePath: string,
+    ): Promise<void> => {
+      destination.value = name;
+      destination.dispatchEvent(new Event("input", { bubbles: true }));
+      await new Promise<void>((resolve) => setTimeout(resolve, 90));
+      const request = messages.filter(isWorkspaceFileSearchMessage).at(-1)!;
+      receiveHostMessage({
+        protocolVersion: PROTOCOL_VERSION,
+        type: "workspace-file-search-result",
+        requestId: request.requestId,
+        candidates: [
+          {
+            kind: "directory",
+            fileName: name,
+            directory: "./",
+            relativePath,
+          },
+        ],
+      });
+      destination.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "Enter",
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    };
+
+    await chooseDirectory("docs", "./docs/");
+    expect(label.value).toBe("docs");
+    label.value = "Custom label";
+    await chooseDirectory("design", "../design/");
+    expect(label.value).toBe("Custom label");
+    await new Promise<void>((resolve) => setTimeout(resolve, 1));
+    dialog.querySelector<HTMLButtonElement>('button[type="submit"]')!.click();
+    expect(lastEditMarkdown(messages)).toBe("# [Custom label](../design/)");
     app.destroy();
   });
 
@@ -1931,6 +2119,7 @@ describe("rich editor rendering", () => {
           requestId: requests[0]!.requestId,
           candidates: [
             {
+              kind: "file",
               fileName: "stale.md",
               directory: "docs/",
               relativePath: "./stale.md",
@@ -1952,6 +2141,7 @@ describe("rich editor rendering", () => {
           requestId: requests[1]!.requestId,
           candidates: [
             {
+              kind: "file",
               fileName: "fresh.md",
               directory: "docs/",
               relativePath: "./fresh.md",
@@ -1996,6 +2186,7 @@ describe("rich editor rendering", () => {
           requestId: request.requestId,
           candidates: [
             {
+              kind: "file",
               fileName: "logo.png",
               directory: "assets/",
               relativePath: "../assets/logo.png",
@@ -2124,6 +2315,7 @@ describe("rich editor rendering", () => {
           requestId: request.requestId,
           candidates: [
             {
+              kind: "file",
               fileName: "hoge.pdf",
               directory: "docs/",
               relativePath: "./hoge.pdf",
@@ -3069,6 +3261,277 @@ describe("Rich Editor link navigation", () => {
   }
 
   it.each([
+    ["https://example.com/a%20b?q=%2F&mode=1#part%20one"],
+    ["../docs/design/"],
+    ["./assets/"],
+    ["./"],
+    ["#heading"],
+  ])("shows the configured link destination literally: %s", (href) => {
+    const restorePlatform = setPlatform("Linux x86_64");
+    const source = "[open](" + href + ")";
+    const { app, root, messages } = makeApp(source);
+    try {
+      const anchor = app.view.dom.querySelector<HTMLAnchorElement>("a[href]");
+      const tooltip = root.querySelector<HTMLElement>(".mm-tooltip")!;
+      if (!anchor) throw new Error("link is not rendered");
+      expect(anchor.getAttribute("href")).toBe(href);
+
+      const originalDoc = app.view.state.doc;
+      anchor.dispatchEvent(new Event("pointerover", { bubbles: true }));
+
+      expect(tooltip.hidden).toBe(false);
+      expect(
+        tooltip.querySelector(".mm-tooltip-link-destination")?.textContent,
+      ).toBe(href);
+      expect(
+        tooltip.querySelector(".mm-tooltip-link-instruction")?.textContent,
+      ).toBe("Ctrl+Click to follow link");
+      expect(app.view.state.doc).toBe(originalDoc);
+      expect(messages.filter(isEditMessage)).toHaveLength(0);
+      expect(hasMessageType(messages, "open-link")).toBe(false);
+    } finally {
+      app.destroy();
+      restorePlatform();
+    }
+  });
+
+  it.each([
+    ["MacIntel", "Cmd+Click to follow link"],
+    ["Linux x86_64", "Ctrl+Click to follow link"],
+  ])("retains the platform link instruction on %s focus", (platform, hint) => {
+    const restorePlatform = setPlatform(platform);
+    const { app, root } = makeApp("[open](../docs/design/)");
+    try {
+      const anchor = app.view.dom.querySelector<HTMLAnchorElement>("a[href]");
+      const tooltip = root.querySelector<HTMLElement>(".mm-tooltip")!;
+      if (!anchor) throw new Error("link is not rendered");
+
+      anchor.dispatchEvent(new FocusEvent("focusin", { bubbles: true }));
+
+      expect(tooltip.hidden).toBe(false);
+      expect(
+        tooltip.querySelector(".mm-tooltip-link-destination")?.textContent,
+      ).toBe("../docs/design/");
+      expect(
+        tooltip.querySelector(".mm-tooltip-link-instruction")?.textContent,
+      ).toBe(hint);
+
+      anchor.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
+      expect(tooltip.hidden).toBe(true);
+    } finally {
+      app.destroy();
+      restorePlatform();
+    }
+  });
+
+  it("shows the latest href after editing an existing rich link", () => {
+    const { app, root } = makeApp("[open](../docs/old/)");
+    try {
+      app.view.dispatch(
+        app.view.state.tr.setSelection(
+          TextSelection.create(app.view.state.doc, 1, 1 + "open".length),
+        ),
+      );
+      const picker = openLinkPicker(root);
+      const input = picker.querySelector<HTMLInputElement>("input")!;
+      expect(input.value).toBe("../docs/old/");
+      input.value = "../docs/design/";
+      input.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "Enter",
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+
+      const updatedAnchor =
+        app.view.dom.querySelector<HTMLAnchorElement>("a[href]");
+      const tooltip = root.querySelector<HTMLElement>(".mm-tooltip")!;
+      if (!updatedAnchor) throw new Error("updated link is not rendered");
+      expect(updatedAnchor.getAttribute("href")).toBe("../docs/design/");
+      updatedAnchor.dispatchEvent(new Event("pointerover", { bubbles: true }));
+      expect(
+        tooltip.querySelector(".mm-tooltip-link-destination")?.textContent,
+      ).toBe("../docs/design/");
+    } finally {
+      app.destroy();
+    }
+  });
+
+  it("closes the link tooltip on pointer out and Escape", () => {
+    const { app, root, messages } = makeApp("[open](./)");
+    try {
+      const anchor = app.view.dom.querySelector<HTMLAnchorElement>("a[href]");
+      const tooltip = root.querySelector<HTMLElement>(".mm-tooltip")!;
+      if (!anchor) throw new Error("link is not rendered");
+
+      anchor.dispatchEvent(new Event("pointerover", { bubbles: true }));
+      expect(tooltip.hidden).toBe(false);
+      anchor.dispatchEvent(new Event("pointerout", { bubbles: true }));
+      expect(tooltip.hidden).toBe(true);
+
+      anchor.dispatchEvent(new Event("pointerover", { bubbles: true }));
+      expect(tooltip.hidden).toBe(false);
+      document.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+      );
+      expect(tooltip.hidden).toBe(true);
+      anchor.dispatchEvent(new Event("pointerover", { bubbles: true }));
+      expect(tooltip.hidden).toBe(true);
+
+      const pointerOutAfterEscape = new Event("pointerout", {
+        bubbles: true,
+      });
+      Object.defineProperty(pointerOutAfterEscape, "relatedTarget", {
+        value: document.body,
+      });
+      anchor.dispatchEvent(pointerOutAfterEscape);
+      anchor.dispatchEvent(new Event("pointerover", { bubbles: true }));
+      expect(tooltip.hidden).toBe(false);
+
+      document.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+      );
+      expect(tooltip.hidden).toBe(true);
+      expect(messages.filter(isEditMessage)).toHaveLength(0);
+      expect(hasMessageType(messages, "open-link")).toBe(false);
+    } finally {
+      app.destroy();
+    }
+  });
+
+  it("keeps a scrollable link tooltip open while the pointer enters it", () => {
+    const { app, root, messages } = makeApp("[open](../docs/design/)");
+    try {
+      const anchor = app.view.dom.querySelector<HTMLAnchorElement>("a[href]");
+      const tooltip = root.querySelector<HTMLElement>(".mm-tooltip")!;
+      if (!anchor) throw new Error("link is not rendered");
+      Object.defineProperty(tooltip, "scrollHeight", {
+        configurable: true,
+        value: 240,
+      });
+      Object.defineProperty(tooltip, "clientHeight", {
+        configurable: true,
+        value: 80,
+      });
+
+      anchor.dispatchEvent(new Event("pointerover", { bubbles: true }));
+      expect(tooltip.classList.contains("mm-tooltip-scrollable")).toBe(true);
+
+      const pointerOut = new Event("pointerout", { bubbles: true });
+      Object.defineProperty(pointerOut, "relatedTarget", {
+        value: document.body,
+      });
+      anchor.dispatchEvent(pointerOut);
+      expect(tooltip.hidden).toBe(false);
+
+      const destination = tooltip.querySelector<HTMLElement>(
+        ".mm-tooltip-link-destination",
+      )!;
+      const instruction = tooltip.querySelector<HTMLElement>(
+        ".mm-tooltip-link-instruction",
+      )!;
+      const pointerWithinTooltip = new Event("pointerout", {
+        bubbles: true,
+      });
+      Object.defineProperty(pointerWithinTooltip, "relatedTarget", {
+        value: instruction,
+      });
+      destination.dispatchEvent(pointerWithinTooltip);
+      expect(tooltip.hidden).toBe(false);
+
+      tooltip.dispatchEvent(new Event("pointerover", { bubbles: true }));
+      tooltip.dispatchEvent(new Event("scroll", { bubbles: true }));
+      expect(tooltip.hidden).toBe(false);
+
+      const pointerOutFromTooltip = new Event("pointerout", {
+        bubbles: true,
+      });
+      Object.defineProperty(pointerOutFromTooltip, "relatedTarget", {
+        value: document.body,
+      });
+      instruction.dispatchEvent(pointerOutFromTooltip);
+      expect(tooltip.hidden).toBe(true);
+
+      anchor.dispatchEvent(new Event("pointerover", { bubbles: true }));
+      expect(tooltip.hidden).toBe(false);
+
+      document.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+      );
+      expect(tooltip.hidden).toBe(true);
+      expect(messages.filter(isEditMessage)).toHaveLength(0);
+      expect(hasMessageType(messages, "open-link")).toBe(false);
+    } finally {
+      app.destroy();
+    }
+  });
+
+  it("renders link destinations as text instead of interpreting href markup", () => {
+    const { app, root } = makeApp("[open](https://example.com)");
+    try {
+      const anchor = app.view.dom.querySelector<HTMLAnchorElement>("a[href]");
+      const tooltip = root.querySelector<HTMLElement>(".mm-tooltip")!;
+      if (!anchor) throw new Error("link is not rendered");
+      const href = '<img src=x onerror="alert(1)">';
+      anchor.setAttribute("href", href);
+
+      anchor.dispatchEvent(new Event("pointerover", { bubbles: true }));
+
+      expect(
+        tooltip.querySelector(".mm-tooltip-link-destination")?.textContent,
+      ).toBe(href);
+      expect(tooltip.querySelector("img")).toBeNull();
+    } finally {
+      app.destroy();
+    }
+  });
+
+  it("keeps a long link tooltip inside viewport bounds", () => {
+    const href =
+      "https://example.com/" + "long-segment-".repeat(40) + "?query=value#part";
+    const { app, root } = makeApp("[open](" + href + ")");
+    try {
+      const anchor = app.view.dom.querySelector<HTMLAnchorElement>("a[href]");
+      const tooltip = root.querySelector<HTMLElement>(".mm-tooltip")!;
+      if (!anchor) throw new Error("link is not rendered");
+      vi.spyOn(anchor, "getBoundingClientRect").mockReturnValue({
+        left: window.innerWidth - 20,
+        right: window.innerWidth,
+        top: window.innerHeight - 30,
+        bottom: window.innerHeight - 10,
+        width: 20,
+        height: 20,
+        x: window.innerWidth - 20,
+        y: window.innerHeight - 30,
+        toJSON: () => ({}),
+      });
+      vi.spyOn(tooltip, "getBoundingClientRect").mockReturnValue({
+        left: 0,
+        right: 320,
+        top: 0,
+        bottom: 50,
+        width: 320,
+        height: 50,
+        x: 0,
+        y: 0,
+        toJSON: () => ({}),
+      });
+
+      anchor.dispatchEvent(new Event("pointerover", { bubbles: true }));
+
+      const left = Number.parseFloat(tooltip.style.left);
+      const top = Number.parseFloat(tooltip.style.top);
+      expect(left).toBeGreaterThanOrEqual(6);
+      expect(left + 320).toBeLessThanOrEqual(window.innerWidth - 6);
+      expect(top).toBeGreaterThanOrEqual(6);
+      expect(top + 50).toBeLessThanOrEqual(window.innerHeight - 6);
+    } finally {
+      app.destroy();
+    }
+  });
+
+  it.each([
     ["MacIntel", "metaKey"],
     ["Linux x86_64", "ctrlKey"],
   ] as const)(
@@ -3093,6 +3556,9 @@ describe("Rich Editor link navigation", () => {
           type: "open-link",
           href: "https://example.com/a%20b?q=1#section",
         });
+        expect(openLinkHrefs(messages)).toEqual([
+          "https://example.com/a%20b?q=1#section",
+        ]);
         expect(hasMessageType(messages, "edit")).toBe(false);
         app.destroy();
       } finally {
@@ -3100,6 +3566,72 @@ describe("Rich Editor link navigation", () => {
       }
     },
   );
+
+  it.each(["./", "../assets/"])(
+    "opens directory link %s exactly once with Mac Cmd+Click",
+    (href) => {
+      const restorePlatform = setPlatform("MacIntel");
+      try {
+        const { app, messages } = makeApp(`[directory](${href})`);
+        const anchor = app.view.dom.querySelector<HTMLAnchorElement>("a[href]");
+        if (!anchor) throw new Error("directory link is not rendered");
+
+        const { click } = dispatchPrimaryClick(anchor, { metaKey: true });
+
+        expect(click.defaultPrevented).toBe(true);
+        expect(openLinkHrefs(messages)).toEqual([href]);
+        expect(hasMessageType(messages, "edit")).toBe(false);
+        app.destroy();
+      } finally {
+        restorePlatform();
+      }
+    },
+  );
+
+  it("registers link handlers once when switching from initial Preview to Rich", () => {
+    const restorePlatform = setPlatform("MacIntel");
+    const { app, messages } = makeApp(
+      "[open](../assets/)",
+      undefined,
+      false,
+      undefined,
+      "github",
+      1,
+      "preview",
+    );
+    let destroyed = false;
+    try {
+      const richPanel = app.root.querySelector<HTMLElement>(
+        '[data-panel="rich"]',
+      );
+      if (!richPanel) throw new Error("Rich panel is not rendered");
+      expect(richPanel.hidden).toBe(true);
+
+      const modeController = app as unknown as {
+        setMode(mode: "rich" | "preview", requestHost: boolean): void;
+      };
+      modeController.setMode("rich", false);
+      modeController.setMode("preview", false);
+      modeController.setMode("rich", false);
+      expect(richPanel.hidden).toBe(false);
+
+      const anchor = app.view.dom.querySelector<HTMLAnchorElement>("a[href]");
+      if (!anchor) throw new Error("link is not rendered");
+      dispatchPrimaryClick(anchor, { metaKey: true });
+      expect(openLinkHrefs(messages)).toEqual(["../assets/"]);
+
+      app.destroy();
+      destroyed = true;
+      anchor.addEventListener("click", (event) => event.preventDefault(), {
+        once: true,
+      });
+      dispatchPrimaryClick(anchor, { metaKey: true });
+      expect(openLinkHrefs(messages)).toEqual(["../assets/"]);
+    } finally {
+      if (!destroyed) app.destroy();
+      restorePlatform();
+    }
+  });
 
   it.each([
     ["MacIntel", "metaKey"],
@@ -3120,6 +3652,7 @@ describe("Rich Editor link navigation", () => {
           type: "open-link",
           href: "../README.md",
         });
+        expect(openLinkHrefs(messages)).toEqual(["../README.md"]);
         expect(hasMessageType(messages, "edit")).toBe(false);
         app.destroy();
       } finally {
@@ -3153,7 +3686,7 @@ describe("Rich Editor link navigation", () => {
   });
 
   it("scrolls to an existing heading id without changing source state", () => {
-    const restorePlatform = setPlatform("Linux x86_64");
+    const restorePlatform = setPlatform("MacIntel");
     try {
       const { app, messages } = makeApp("[jump](#target)\n\n# Target");
       const anchor = app.view.dom.querySelector<HTMLAnchorElement>("a[href]");
@@ -3166,7 +3699,7 @@ describe("Rich Editor link navigation", () => {
         value: scrollIntoView,
       });
 
-      dispatchPrimaryClick(anchor, { ctrlKey: true });
+      dispatchPrimaryClick(anchor, { metaKey: true });
 
       expect(scrollIntoView).toHaveBeenCalledWith({ block: "start" });
       expect(hasMessageType(messages, "open-link")).toBe(false);

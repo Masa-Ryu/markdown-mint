@@ -21,11 +21,16 @@ export const IMAGE_FILE_EXTENSIONS = new Set([
 
 export type WorkspaceFileSearchFilter = "all" | "image";
 
+export type WorkspaceFileKind = "file" | "directory";
+
 export interface WorkspaceFileEntry {
   readonly path: string;
+  /** Existing callers describe files unless they explicitly provide a kind. */
+  readonly kind?: WorkspaceFileKind;
 }
 
 export interface WorkspaceFileCandidate {
+  readonly kind: WorkspaceFileKind;
   readonly fileName: string;
   /** Workspace-folder-relative directory, with a trailing slash. */
   readonly directory: string;
@@ -65,6 +70,7 @@ interface ScoredCandidate {
 }
 
 interface PreparedWorkspaceFile {
+  readonly kind: WorkspaceFileKind;
   readonly parsedPath: ParsedPath;
   readonly workspaceRelativePath: string;
   readonly lowerFileName: string;
@@ -111,7 +117,10 @@ export function createWorkspaceFileSearchIndex(
   if (!workspace.absolute) return { workspaceFolderPath, files: [] };
 
   const prepared: PreparedWorkspaceFile[] = [];
+  const seen = new Set<string>();
   for (const file of files) {
+    const kind = file.kind ?? "file";
+    if (kind !== "file" && kind !== "directory") continue;
     const parsedFile = parsePath(file.path);
     const workspaceRelative = relativeSegments(workspace, parsedFile);
     if (
@@ -122,21 +131,67 @@ export function createWorkspaceFileSearchIndex(
     )
       continue;
     const fileName = workspaceRelative.at(-1);
-    if (!fileName) continue;
+    if (!fileName || hasControlCharacter(fileName)) continue;
+    const dedupePath = workspaceRelative.join("/");
+    const dedupeKey =
+      `${kind}:` +
+      (workspace.windows || parsedFile.windows
+        ? dedupePath.toLowerCase()
+        : dedupePath);
+    if (seen.has(dedupeKey)) continue;
+    seen.add(dedupeKey);
     const directorySegments = workspaceRelative.slice(0, -1);
+    const workspaceRelativePath =
+      kind === "directory" ? `${dedupePath}/` : dedupePath;
     prepared.push({
+      kind,
       parsedPath: parsedFile,
-      workspaceRelativePath: workspaceRelative.join("/"),
+      workspaceRelativePath,
       lowerFileName: fileName.toLowerCase(),
-      lowerWorkspaceRelativePath: workspaceRelative.join("/").toLowerCase(),
+      lowerWorkspaceRelativePath: workspaceRelativePath.toLowerCase(),
       fileName,
       directory: directorySegments.length
         ? `${directorySegments.join("/")}/`
         : "./",
-      isImage: isImageFileName(fileName),
+      isImage: kind === "file" && isImageFileName(fileName),
     });
   }
   return { workspaceFolderPath, files: prepared };
+}
+
+/**
+ * Extend a cached file-only index with additional entries without rebuilding
+ * its file metadata. Link searches use this after directory discovery while
+ * Image searches keep using the original file-only index.
+ */
+export function extendWorkspaceFileSearchIndex(
+  index: WorkspaceFileSearchIndex,
+  entries: readonly WorkspaceFileEntry[],
+): WorkspaceFileSearchIndex {
+  const additions = createWorkspaceFileSearchIndex(
+    index.workspaceFolderPath,
+    entries,
+  );
+  const workspace = parsePath(index.workspaceFolderPath);
+  const keyFor = (entry: PreparedWorkspaceFile): string =>
+    `${entry.kind}:${
+      workspace.windows || entry.parsedPath.windows
+        ? entry.lowerWorkspaceRelativePath
+        : entry.workspaceRelativePath
+    }`;
+  const seen = new Set(index.files.map(keyFor));
+  return {
+    workspaceFolderPath: index.workspaceFolderPath,
+    files: [
+      ...index.files,
+      ...additions.files.filter((entry) => {
+        const key = keyFor(entry);
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      }),
+    ],
+  };
 }
 
 /**
@@ -180,7 +235,8 @@ export class WorkspaceFileSearch {
     );
 
     for (const file of index.files) {
-      if (options.filter === "image" && !file.isImage) continue;
+      if (options.filter === "image" && (file.kind !== "file" || !file.isImage))
+        continue;
       if (!isRelativePathCompatible(document, file.parsedPath)) continue;
 
       const filenameScore = scoreFilenameCandidate(query, file);
@@ -198,7 +254,10 @@ export class WorkspaceFileSearch {
         file.parsedPath,
       );
       if (!relativeSegmentsFromDocument) continue;
-      const relativePath = encodeMarkdownPath(relativeSegmentsFromDocument);
+      const relativePath = appendDirectorySlash(
+        encodeMarkdownPath(relativeSegmentsFromDocument),
+        file.kind,
+      );
       const pathScore = scorePathCandidate(file, pathQuery, relativePath);
       if (pathScore)
         topK.add({
@@ -211,10 +270,15 @@ export class WorkspaceFileSearch {
     return topK.values().flatMap(({ file, documentRelativePath }) => {
       const relativePath =
         documentRelativePath ??
-        relativeMarkdownPathFromParsedDocument(document, file.parsedPath);
+        relativeMarkdownPathFromParsedDocument(
+          document,
+          file.parsedPath,
+          file.kind,
+        );
       if (!relativePath) return [];
       return [
         {
+          kind: file.kind,
           fileName: file.fileName,
           directory: file.directory,
           relativePath,
@@ -228,21 +292,29 @@ export class WorkspaceFileSearch {
 export function relativeMarkdownPath(
   documentPath: string,
   targetPath: string,
+  kind: WorkspaceFileKind = "file",
 ): string | undefined {
   const document = parsePath(documentPath);
   const target = parsePath(targetPath);
-  return relativeMarkdownPathFromParsedDocument(document, target);
+  return relativeMarkdownPathFromParsedDocument(document, target, kind);
 }
 
 function relativeMarkdownPathFromParsedDocument(
   document: ParsedPath,
   target: ParsedPath,
+  kind: WorkspaceFileKind = "file",
 ): string | undefined {
   const relative = relativeSegments(
     { ...document, segments: document.segments.slice(0, -1) },
     target,
   );
-  return relative ? encodeMarkdownPath(relative) : undefined;
+  return relative
+    ? appendDirectorySlash(encodeMarkdownPath(relative), kind)
+    : undefined;
+}
+
+function appendDirectorySlash(path: string, kind: WorkspaceFileKind): string {
+  return kind === "directory" && !path.endsWith("/") ? `${path}/` : path;
 }
 
 /** Encode each path segment without allowing URI delimiters into a filename. */

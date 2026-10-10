@@ -6,6 +6,7 @@ import strikethroughAsset from "../../assets/menu/common/strikethrough.svg?raw";
 import inlineCodeAsset from "../../assets/menu/common/inline-code.svg?raw";
 import linkAsset from "../../assets/menu/common/link.svg?raw";
 import imageAsset from "../../assets/menu/common/image.svg?raw";
+import folderAsset from "../../assets/menu/common/folder.svg?raw";
 import bulletListAsset from "../../assets/menu/common/bullet-list.svg?raw";
 import orderedListAsset from "../../assets/menu/common/ordered-list.svg?raw";
 import checklistAsset from "../../assets/menu/common/checklist.svg?raw";
@@ -43,6 +44,7 @@ export type ToolbarIconName =
   | "inline-code"
   | "link"
   | "image"
+  | "folder"
   | "bullet-list"
   | "ordered-list"
   | "checklist"
@@ -82,6 +84,7 @@ const ICON_SOURCES: Readonly<Record<ToolbarIconName, string>> = {
   "inline-code": inlineCodeAsset,
   link: linkAsset,
   image: imageAsset,
+  folder: folderAsset,
   "bullet-list": bulletListAsset,
   "ordered-list": orderedListAsset,
   checklist: checklistAsset,
