@@ -13,7 +13,7 @@ concurrency:
 jobs:
   validate:
     name: Validate and package release
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, n100]
     permissions:
       contents: read
     outputs:
@@ -145,7 +145,7 @@ jobs:
   publish_github_release:
     name: Publish GitHub Release
     needs: validate
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, n100]
     permissions:
       contents: write
     steps:
