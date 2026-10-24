@@ -194,7 +194,6 @@ jobs:
       contents: read
     env:
       MARKDOWN_MINT_VSCODE_VERSION: stable
-      MARKDOWN_MINT_TEST_TMP: ${{ runner.temp }}
     steps:
       - name: Start job timer
         id: timer
