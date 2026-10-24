@@ -189,8 +189,9 @@ function parseTsvResult(value: string): ClipboardMatrixParseResult {
   if (quoted) return failure("malformed");
 
   // A final line break already closed the last row. Do not count that
-  // terminator as another empty cell or row.
-  if (!(row.length === 0 && field === "" && values.length > 0)) {
+  // terminator as another empty cell or row. An empty quoted field has
+  // fieldStart=false, so it still needs to be flushed as an explicit cell.
+  if (!(row.length === 0 && field === "" && fieldStart && values.length > 0)) {
     const pushedField = pushField();
     if (pushedField) return pushedField;
     const pushed = pushRow();
