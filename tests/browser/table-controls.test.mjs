@@ -255,6 +255,115 @@ async function dragPresentationGeometry(page, pointerX, pointerY) {
   );
 }
 
+async function tableSnapshot(page) {
+  return page.evaluate(() => {
+    let table;
+    window.markdownMint.view.state.doc.descendants((node) => {
+      if (!table && node.type.name === "table") table = node;
+    });
+    if (!table) throw new Error("table model is missing");
+    return {
+      rows: Array.from({ length: table.childCount }, (_, row) =>
+        Array.from(
+          { length: table.child(row).childCount },
+          (_, column) => table.child(row).child(column).textContent,
+        ),
+      ),
+      markdown: window.__markdownMintHarness.document.markdown,
+    };
+  });
+}
+
+async function dispatchTsvPaste(page) {
+  return page.evaluate(() => {
+    const clipboardData = new DataTransfer();
+    clipboardData.setData("text/plain", 'A\tB\n""');
+    const event = new ClipboardEvent("paste", {
+      bubbles: true,
+      cancelable: true,
+      clipboardData,
+    });
+    window.markdownMint.view.dom.dispatchEvent(event);
+    return event.defaultPrevented;
+  });
+}
+
+async function setTextCaret(page, selector, offset) {
+  await page.locator(selector).evaluate((element, characterOffset) => {
+    const view = window.markdownMint.view;
+    const position = view.posAtDOM(element, 0);
+    const parent = view.state.doc.resolve(position).parent;
+    const anchor =
+      position +
+      (characterOffset < 0
+        ? parent.content.size + characterOffset + 1
+        : characterOffset);
+    const Selection = view.state.selection.constructor;
+    const near = Selection.near(view.state.doc.resolve(anchor));
+    const range = near.constructor.create(view.state.doc, anchor);
+    view.dispatch(view.state.tr.setSelection(range));
+    view.focus();
+  }, offset);
+  await settle(page);
+}
+
+async function testQuotedEmptyFinalRowPaste(page) {
+  await page.goto(baseUrl, { waitUntil: "domcontentloaded" });
+  await page.waitForFunction(() => window.markdownMint?.view);
+  await page.evaluate(() => {
+    window.__markdownMintHarness.deliverExternal("Before", "github");
+  });
+  await page.waitForFunction(
+    () => window.__markdownMintHarness.document.markdown === "Before",
+  );
+  await setTextCaret(page, ".mm-rich-panel .ProseMirror > p", -1);
+  assert.equal(await dispatchTsvPaste(page), true);
+  await page.waitForFunction(() =>
+    window.__markdownMintHarness.document.markdown.includes("|   |   |"),
+  );
+  assert.deepEqual((await tableSnapshot(page)).rows, [
+    ["A", "B"],
+    ["", ""],
+  ]);
+
+  const existingSource = [
+    "| A | B |",
+    "| --- | --- |",
+    "| old A | old B |",
+  ].join("\n");
+  await load(page, existingSource);
+  await setTextCaret(
+    page,
+    ".mm-rich-panel .ProseMirror tbody td:first-child p",
+    -1,
+  );
+  assert.equal(await dispatchTsvPaste(page), true);
+  await page.waitForFunction(() =>
+    window.__markdownMintHarness.document.markdown.includes("|   |   |"),
+  );
+  const pasted = await tableSnapshot(page);
+  assert.deepEqual(pasted.rows, [
+    ["A", "B"],
+    ["A", "B"],
+    ["", ""],
+  ]);
+
+  await page.keyboard.press(undoShortcut);
+  await page.waitForFunction(
+    (expected) => window.__markdownMintHarness.document.markdown === expected,
+    existingSource,
+  );
+  assert.deepEqual((await tableSnapshot(page)).rows, [
+    ["A", "B"],
+    ["old A", "old B"],
+  ]);
+  await page.keyboard.press(redoShortcut);
+  await page.waitForFunction(() =>
+    window.__markdownMintHarness.document.markdown.includes("|   |   |"),
+  );
+  assert.deepEqual((await tableSnapshot(page)).rows, pasted.rows);
+}
+
 async function testCellEditPreservesControlDom(page) {
   await load(page, numberedSource(100, 10));
   const table = await controlTable(page);
@@ -1584,6 +1693,7 @@ async function main() {
       deviceScaleFactor: 1,
     });
     page.setDefaultTimeout(10000);
+    await testQuotedEmptyFinalRowPaste(page);
     await testCellEditPreservesControlDom(page);
     await testTablePresentation(page);
     await testToolbarPresentation(page);
@@ -1594,7 +1704,7 @@ async function main() {
     await testKeyboardHandleNavigation(page);
     await testRailsAndKeyboard(page);
     console.log(
-      "Table controls browser checks passed: real row/column handle click/drag, unselected drag Escape cancellation, keyboard handle navigation, boundary and append rails, 100x10 scrolling, numbering, and host undo/redo.",
+      "Table clipboard and controls browser checks passed: quoted empty final-row paste into new and existing tables, undo/redo, real row/column handle click/drag, unselected drag Escape cancellation, keyboard handle navigation, boundary and append rails, 100x10 scrolling, and numbering.",
     );
   } catch (error) {
     await page

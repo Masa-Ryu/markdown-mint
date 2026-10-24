@@ -43,6 +43,57 @@ describe("table clipboard parsing", () => {
     });
   });
 
+  it("preserves explicitly quoted empty final rows across newline formats", () => {
+    const expected = [
+      ["A", "B"],
+      ["", ""],
+    ];
+
+    for (const newline of ["\n", "\r\n", "\r"]) {
+      for (const finalNewline of ["", newline]) {
+        expect(
+          parseTsvWithStatus(`A\tB${newline}""${finalNewline}`).matrix?.values,
+        ).toEqual(expected);
+      }
+      expect(parseTsv(`A\tB${newline}`)?.values).toEqual([["A", "B"]]);
+    }
+
+    expect(parseTsv('A\tB\n""\n""')?.values).toEqual([
+      ["A", "B"],
+      ["", ""],
+      ["", ""],
+    ]);
+    expect(parseTsv("A\tB\n\t")?.values).toEqual([
+      ["A", "B"],
+      ["", ""],
+    ]);
+    expect(parseTsv('A\tB\nC\t""')?.values).toEqual([
+      ["A", "B"],
+      ["C", ""],
+    ]);
+  });
+
+  it("routes the final quoted empty TSV row through spreadsheet detection", () => {
+    expect(
+      detectSpreadsheetPaste({
+        internal: "",
+        text: 'A\tB\n""',
+        html: "",
+      }),
+    ).toMatchObject({
+      kind: "matrix",
+      source: "tsv",
+      matrix: {
+        values: [
+          ["A", "B"],
+          ["", ""],
+        ],
+        rows: 2,
+        columns: 2,
+      },
+    });
+  });
+
   it("parses the repository spreadsheet clipboard fixture without type inference", () => {
     const matrix = parseTsv(
       readFileSync(
@@ -316,6 +367,25 @@ describe("table clipboard parsing", () => {
       kind: "matrix",
       source: "tsv",
       matrix: { rows: 100, columns: 100 },
+    });
+
+    const exactlyFullWithQuotedEmptyRow = [
+      ...Array.from({ length: 99 }, () => Array(100).fill("cell").join("\t")),
+      '""',
+    ].join("\n");
+    expect(
+      parseTsvWithStatus(exactlyFullWithQuotedEmptyRow).matrix,
+    ).toMatchObject({
+      rows: 100,
+      columns: 100,
+      values: expect.arrayContaining([Array(100).fill("")]),
+    });
+
+    const overLimitWithQuotedEmptyRow =
+      matrixToTsv({ values, rows: 100, columns: 100 }) + '\n""';
+    expect(parseTsvWithStatus(overLimitWithQuotedEmptyRow)).toEqual({
+      matrix: null,
+      failure: "too-large",
     });
 
     const tooWide = Array.from({ length: 100 }, () => "\t".repeat(100)).join(

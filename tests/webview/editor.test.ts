@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { Node as ProseMirrorNode } from "prosemirror-model";
 import { NodeSelection, TextSelection } from "prosemirror-state";
 import { CellSelection } from "prosemirror-tables";
 import {
@@ -5392,6 +5393,62 @@ describe("table clipboard integration", () => {
     expect((edit[0] as any).markdown).toContain("日本語");
     expect((edit[0] as any).markdown).toContain("追加");
     app.destroy();
+  });
+
+  it("keeps a quoted empty final TSV row when creating and expanding tables", () => {
+    const clipboard = { "text/plain": 'A\tB\n""' };
+
+    const created = makeApp("Before");
+    const paragraph =
+      created.root.querySelector<HTMLElement>(".ProseMirror > p")!;
+    selectText(created.app, paragraph, "Before".length);
+    expect(dispatchPaste(created.app, clipboard).defaultPrevented).toBe(true);
+    const createdTable: ProseMirrorNode[] = [];
+    created.app.view.state.doc.descendants((node) => {
+      if (node.type.name === "table") createdTable.push(node);
+    });
+    expect(createdTable).toHaveLength(1);
+    const createdTableNode = createdTable[0];
+    if (!createdTableNode) throw new Error("created table is missing");
+    expect(
+      Array.from({ length: createdTableNode.childCount }, (_, row) =>
+        Array.from(
+          { length: createdTableNode.child(row).childCount },
+          (_, column) => createdTableNode.child(row).child(column).textContent,
+        ),
+      ),
+    ).toEqual([
+      ["A", "B"],
+      ["", ""],
+    ]);
+    created.app.destroy();
+
+    const markdown =
+      "| Header A | Header B |\n| --- | --- |\n| old A | old B |";
+    const existing = makeApp(markdown);
+    const bodyCell = existing.root.querySelector<HTMLElement>("tbody td")!;
+    const cellPos = existing.app.view.posAtDOM(bodyCell, 0);
+    existing.app.view.dispatch(
+      existing.app.view.state.tr.setSelection(
+        TextSelection.near(existing.app.view.state.doc.resolve(cellPos + 1)),
+      ),
+    );
+    expect(dispatchPaste(existing.app, clipboard).defaultPrevented).toBe(true);
+    const table = existing.app.view.state.doc.firstChild!;
+    expect(
+      Array.from({ length: table.childCount }, (_, row) =>
+        Array.from(
+          { length: table.child(row).childCount },
+          (_, column) => table.child(row).child(column).textContent,
+        ),
+      ),
+    ).toEqual([
+      ["Header A", "Header B"],
+      ["A", "B"],
+      ["", ""],
+    ]);
+    expect(lastEditMarkdown(existing.messages)).toContain("|   |   |");
+    existing.app.destroy();
   });
 
   it("keeps CellSelection plain-text paste as whole-cell replacement", () => {
