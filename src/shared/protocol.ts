@@ -395,7 +395,11 @@ export function isOperationId(value: unknown): value is string {
 export function correlatableImageImportRequestId(
   value: unknown,
 ): string | undefined {
-  if (!isRecord(value) || value.type !== "image-import") return undefined;
+  if (
+    !isRecord(value) ||
+    (value.type !== "image-import" && value.type !== "image-import-uri")
+  )
+    return undefined;
   return isOperationId(value.requestId) ? value.requestId : undefined;
 }
 

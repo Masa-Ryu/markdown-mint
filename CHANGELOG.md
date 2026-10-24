@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.9.5
+
+- Validate image-import and workspace-URI payloads without an unbounded Base64
+  regex, and return correlated failure results so rejected imports release
+  pending placeholders.
+
 ## 0.9.4
 
 - Preserve explicitly quoted empty final rows when parsing spreadsheet TSV,

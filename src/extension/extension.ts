@@ -1210,6 +1210,16 @@ export class MarkdownMintEditorProvider
         }
         this.post(session, this.errorMessage(failure, message.operationId));
         return;
+      case "image-import":
+      case "image-import-uri":
+        this.post(session, {
+          protocolVersion: PROTOCOL_VERSION,
+          type: "image-import-result",
+          requestId: message.requestId,
+          success: false,
+          message: failure.slice(0, 1_024),
+        });
+        return;
       case "recoverDraft":
         this.rejectEdit(
           session,
