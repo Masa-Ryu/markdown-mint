@@ -12,6 +12,7 @@ export const PDF_EXPORT_TIMEOUT_MS = 30_000;
 export interface PdfExportOptions {
   readonly executablePath: string;
   readonly timeoutMs?: number;
+  readonly browserLaunchArgs?: readonly string[];
 }
 
 function resourceReadinessExpression(timeoutMs: number): string {
@@ -175,7 +176,14 @@ function waitForEndpoint(
       finish(() =>
         reject(
           new Error(
-            `Browser exited before DevTools was ready (${code ?? signal ?? "unknown"}).`,
+            [
+              `Browser exited before DevTools was ready (${code ?? signal ?? "unknown"}).`,
+              output.trim()
+                ? `Browser output:\n${output.trim().slice(-4_000)}`
+                : "",
+            ]
+              .filter(Boolean)
+              .join("\n"),
           ),
         ),
       ),
@@ -344,6 +352,7 @@ export async function renderPdfWithChrome(
         `--user-data-dir=${profileDirectory}`,
         "--no-first-run",
         "--no-default-browser-check",
+        ...(options.browserLaunchArgs ?? []),
         "about:blank",
       ],
       { stdio: ["ignore", "pipe", "pipe"] },

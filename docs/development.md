@@ -66,6 +66,8 @@ in the Playwright cache. HTML/PDF use the same Chromium installation as the
 block/table tests and do not need VS Code or a separate native UI setup. The
 local measurements include each build and test command but not a fresh browser
 download; CI measures clean-runner setup and job duration separately.
+The Linux PDF browser fixture passes `--no-sandbox` to its direct Chromium
+launch for the hosted runner; extension runtime launch defaults are unchanged.
 
 The PDF Extension Host suite passed locally in 20.72s using the installed VS
 Code 1.141.2 and the same Chromium cache. It combines VS Code, Chromium, native

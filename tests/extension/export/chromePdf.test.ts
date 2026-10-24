@@ -147,6 +147,7 @@ describe("Chrome CDP PDF backend", () => {
     const pdf = await renderPdfWithChrome("<html></html>", {
       executablePath: "/usr/bin/google-chrome",
       timeoutMs: 100,
+      browserLaunchArgs: ["--no-sandbox"],
     });
     expect(Array.from(pdf)).toEqual([37, 80, 68, 70, 45]);
     expect(chromeMocks.spawn).toHaveBeenCalledWith(
@@ -156,6 +157,7 @@ describe("Chrome CDP PDF backend", () => {
         "--remote-debugging-port=0",
         "--no-first-run",
         "--no-default-browser-check",
+        "--no-sandbox",
         "about:blank",
       ]),
       { stdio: ["ignore", "pipe", "pipe"] },
