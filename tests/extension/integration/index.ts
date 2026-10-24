@@ -1,7 +1,15 @@
 import assert from "node:assert/strict";
+import { randomBytes } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import * as path from "node:path";
+import { deflateSync } from "node:zlib";
 import * as vscode from "vscode";
+import { saveImageImport } from "../../../src/extension/imageImport";
+import {
+  MAX_IMAGE_IMPORT_BYTES,
+  PROTOCOL_VERSION,
+  parseWebviewMessage,
+} from "../../../src/shared/protocol";
 import { classifyLinkNavigation } from "../../../src/extension/linkNavigation";
 import {
   scanWorkspaceDirectories,
@@ -22,6 +30,56 @@ const REQUIRED_MARKDOWN_FIXTURES = [
   ["gitlab-test.md", "GitLab Markdown Test"],
   ["gitlab-test-class-B.md", "GitLab Markdown Torture Test"],
 ] as const;
+
+const PNG_CRC_TABLE = Uint32Array.from({ length: 256 }, (_, value) => {
+  let checksum = value;
+  for (let bit = 0; bit < 8; bit += 1)
+    checksum =
+      (checksum & 1) === 1 ? 0xedb88320 ^ (checksum >>> 1) : checksum >>> 1;
+  return checksum >>> 0;
+});
+
+function pngChunk(type: string, data: Buffer): Buffer {
+  const body = Buffer.concat([Buffer.from(type, "ascii"), data]);
+  const length = Buffer.alloc(4);
+  length.writeUInt32BE(data.length);
+  let checksum = 0xffffffff;
+  for (const byte of body)
+    checksum =
+      (PNG_CRC_TABLE[(checksum ^ byte) & 0xff] ?? 0) ^ (checksum >>> 8);
+  const crc = Buffer.alloc(4);
+  crc.writeUInt32BE((checksum ^ 0xffffffff) >>> 0);
+  return Buffer.concat([length, body, crc]);
+}
+
+function createLargePng(width: number, height: number): Buffer {
+  const rowBytes = width * 3;
+  const pixels = randomBytes(rowBytes * height);
+  const scanlines = Buffer.alloc((rowBytes + 1) * height);
+  for (let row = 0; row < height; row += 1) {
+    const targetStart = row * (rowBytes + 1);
+    scanlines[targetStart] = 0;
+    pixels.copy(
+      scanlines,
+      targetStart + 1,
+      row * rowBytes,
+      (row + 1) * rowBytes,
+    );
+  }
+
+  const header = Buffer.alloc(13);
+  header.writeUInt32BE(width, 0);
+  header.writeUInt32BE(height, 4);
+  header[8] = 8;
+  header[9] = 2;
+  const signature = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
+  return Buffer.concat([
+    signature,
+    pngChunk("IHDR", header),
+    pngChunk("IDAT", deflateSync(scanlines, { level: 1 })),
+    pngChunk("IEND", Buffer.alloc(0)),
+  ]);
+}
 
 /**
  * Small Extension Development Host acceptance suite. It intentionally uses
@@ -49,6 +107,7 @@ export async function run(): Promise<void> {
   if (process.env.MM_FILE_SEARCH_HOST_BENCHMARK === "1")
     await runWorkspaceFileSearchHostBenchmark(filePath);
   await runRequiredMarkdownFixtureAcceptance(api);
+  await runLargeImageImportAcceptance(fileUri);
   const aiUri = vscode.Uri.file(
     path.join(path.dirname(filePath), "ai-suggestions.md"),
   );
@@ -421,6 +480,49 @@ export async function run(): Promise<void> {
     vscode.ConfigurationTarget.Workspace,
   );
   await vscode.commands.executeCommand("workbench.action.closeAllEditors");
+}
+
+async function runLargeImageImportAcceptance(
+  documentUri: vscode.Uri,
+): Promise<void> {
+  const image = createLargePng(1400, 1300);
+  assert.ok(image.byteLength > 5 * 1024 * 1024);
+  assert.ok(image.byteLength <= MAX_IMAGE_IMPORT_BYTES);
+  const base64 = image.toString("base64");
+  const request = parseWebviewMessage({
+    protocolVersion: PROTOCOL_VERSION,
+    type: "image-import",
+    requestId: "image:large-extension-host-test",
+    fileName: "large-image.png",
+    mimeType: "image/png",
+    base64,
+  });
+  assert.ok(request && request.type === "image-import");
+
+  const result = await saveImageImport(documentUri, request, {
+    fs: vscode.workspace.fs,
+    joinPath: (base, ...parts) => vscode.Uri.joinPath(base, ...parts),
+  });
+  assert.deepEqual(result, {
+    success: true,
+    relativePath: "./images/large-image.png",
+  });
+
+  const imageDirectory = vscode.Uri.joinPath(documentUri, "..", "images");
+  const saved = await vscode.workspace.fs.readFile(
+    vscode.Uri.joinPath(imageDirectory, "large-image.png"),
+  );
+  assert.deepEqual(Buffer.from(saved), image);
+  await vscode.workspace.fs.delete(imageDirectory, {
+    recursive: true,
+    useTrash: false,
+  });
+
+  console.log(
+    `Large PNG image import: ${image.byteLength} bytes; Node ${process.version}; ` +
+      `Electron ${process.versions.electron ?? "not exposed to Extension Host"}; ` +
+      `VS Code ${vscode.version}`,
+  );
 }
 
 async function runLinkUriAcceptance(filePath: string): Promise<void> {

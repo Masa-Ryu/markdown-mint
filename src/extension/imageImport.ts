@@ -5,6 +5,7 @@ import {
   MAX_RESOURCE_URL_LENGTH,
   type ImageImportMessage,
 } from "../shared/protocol";
+import { imageImportBase64ByteLength } from "../shared/base64";
 
 /** The small URI surface needed by the image importer. */
 export interface ImageImportUriLike {
@@ -80,15 +81,10 @@ export function decodeImageImportBase64(base64: string): Uint8Array {
   if (base64.length > MAX_IMAGE_IMPORT_BASE64_LENGTH)
     throw new Error("The dropped image exceeds the 10 MB size limit.");
   if (base64.length === 0) return new Uint8Array(0);
-  if (
-    !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(
-      base64,
-    )
-  )
+  const byteLength = imageImportBase64ByteLength(base64);
+  if (byteLength === undefined)
     throw new Error("The dropped image data was not valid base64.");
 
-  const padding = base64.endsWith("==") ? 2 : base64.endsWith("=") ? 1 : 0;
-  const byteLength = (base64.length / 4) * 3 - padding;
   if (byteLength > MAX_IMAGE_IMPORT_BYTES)
     throw new Error("The dropped image exceeds the 10 MB size limit.");
 

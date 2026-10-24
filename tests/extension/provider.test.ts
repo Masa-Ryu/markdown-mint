@@ -1516,6 +1516,127 @@ function documentQueueDepth(provider: object): number {
 }
 
 describe("MarkdownMintEditorProvider", () => {
+  it("returns a correlated terminal result for an invalid image import", async () => {
+    vscode.__state.reset();
+    const { panel, document } = vscode.__state;
+    const provider = new MarkdownMintEditorProvider(context() as never);
+    await provider.resolveCustomTextEditor(
+      document as never,
+      panel as never,
+      {} as never,
+    );
+    panel.webview.receive({ protocolVersion: 1, type: "ready" });
+    panel.webview.receive({
+      protocolVersion: 1,
+      type: "image-import",
+      requestId: "image:invalid-base64",
+      fileName: "sample.png",
+      mimeType: "image/png",
+      base64: "not base64?",
+    });
+    await flush();
+
+    expect(panel.webview.messages).toContainEqual(
+      expect.objectContaining({
+        type: "image-import-result",
+        requestId: "image:invalid-base64",
+        success: false,
+      }),
+    );
+    expect(document.getText()).toBe("# Original");
+    expect(vscode.__state.exportWrites).toHaveLength(0);
+    provider.dispose();
+  });
+
+  it("returns a correlated terminal result for an invalid URI image import", async () => {
+    vscode.__state.reset();
+    const { panel, document } = vscode.__state;
+    const provider = new MarkdownMintEditorProvider(context() as never);
+    await provider.resolveCustomTextEditor(
+      document as never,
+      panel as never,
+      {} as never,
+    );
+    panel.webview.receive({ protocolVersion: 1, type: "ready" });
+    panel.webview.receive({
+      protocolVersion: 1,
+      type: "image-import-uri",
+      requestId: "image:invalid-uri",
+      resourceUri: `file:///workspace/images/${String.fromCharCode(1)}.png`,
+    });
+    await flush();
+
+    expect(panel.webview.messages).toContainEqual(
+      expect.objectContaining({
+        type: "image-import-result",
+        requestId: "image:invalid-uri",
+        success: false,
+      }),
+    );
+    expect(document.getText()).toBe("# Original");
+    expect(vscode.__state.exportWrites).toHaveLength(0);
+    provider.dispose();
+  });
+
+  it.each([
+    [
+      "image-import",
+      "handleImageImport",
+      {
+        fileName: "sample.png",
+        mimeType: "image/png",
+        base64: "AA==",
+      },
+    ],
+    [
+      "image-import-uri",
+      "handleImageImportUri",
+      { resourceUri: "file:///workspace/images/sample.png" },
+    ],
+  ] as const)(
+    "returns a bounded terminal result when %s processing throws",
+    async (type, handler, payload) => {
+      vscode.__state.reset();
+      const { panel, document } = vscode.__state;
+      const provider = new MarkdownMintEditorProvider(context() as never);
+      const failure = "x".repeat(1_500);
+      Object.defineProperty(provider, handler, {
+        value: async () => {
+          throw new Error(failure);
+        },
+      });
+      await provider.resolveCustomTextEditor(
+        document as never,
+        panel as never,
+        {} as never,
+      );
+      panel.webview.receive({ protocolVersion: 1, type: "ready" });
+      const requestId = `image:unexpected:${type}`;
+      panel.webview.receive({
+        protocolVersion: 1,
+        type,
+        requestId,
+        ...payload,
+      });
+      await flush();
+
+      const response = panel.webview.messages.find(
+        (candidate) =>
+          isHostMessage(candidate) &&
+          candidate.type === "image-import-result" &&
+          candidate.requestId === requestId,
+      );
+      if (!isHostMessage(response) || response.type !== "image-import-result")
+        throw new Error("The image import failure response was not sent.");
+      expect(response.success).toBe(false);
+      expect(response.message).toBe(failure.slice(0, 1_024));
+      expect(response.message).toHaveLength(1_024);
+      expect(document.getText()).toBe("# Original");
+      expect(vscode.__state.exportWrites).toHaveLength(0);
+      provider.dispose();
+    },
+  );
+
   it("does not create a Mint suggestions StatusBarItem", () => {
     vscode.__state.reset();
     const provider = new MarkdownMintEditorProvider(context() as never);

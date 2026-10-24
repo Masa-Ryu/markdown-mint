@@ -9,6 +9,12 @@ import {
   type AiHostMessage,
   type AiWebviewMessage,
 } from "./aiSuggestions";
+import { isImageImportBase64 } from "./base64";
+
+export {
+  MAX_IMAGE_IMPORT_BASE64_LENGTH,
+  MAX_IMAGE_IMPORT_BYTES,
+} from "./base64";
 
 export const PROTOCOL_VERSION = 1 as const;
 export const MAX_MARKDOWN_LENGTH = 2_000_000;
@@ -20,9 +26,6 @@ export const MAX_FILE_SEARCH_QUERY_LENGTH = 256;
 export const MAX_FILE_SEARCH_CANDIDATES = 10;
 export const MAX_FILE_SEARCH_PATH_LENGTH = MAX_RESOURCE_URL_LENGTH;
 export const MAX_FILE_SEARCH_NAME_LENGTH = 1_024;
-export const MAX_IMAGE_IMPORT_BYTES = 10 * 1024 * 1024;
-export const MAX_IMAGE_IMPORT_BASE64_LENGTH =
-  Math.ceil(MAX_IMAGE_IMPORT_BYTES / 3) * 4;
 export const MAX_IMAGE_IMPORT_FILE_NAME_LENGTH = 512;
 export const MAX_IMAGE_IMPORT_MIME_TYPE_LENGTH = 128;
 
@@ -388,6 +391,18 @@ export function isOperationId(value: unknown): value is string {
   );
 }
 
+/** Return an image request ID that can receive a terminal validation reply. */
+export function correlatableImageImportRequestId(
+  value: unknown,
+): string | undefined {
+  if (
+    !isRecord(value) ||
+    (value.type !== "image-import" && value.type !== "image-import-uri")
+  )
+    return undefined;
+  return isOperationId(value.requestId) ? value.requestId : undefined;
+}
+
 export function isDocumentMessage(value: unknown): value is DocumentMessage {
   if (!isRecord(value)) return false;
   return (
@@ -693,7 +708,7 @@ export function parseWebviewMessage(
       return isOperationId(value.requestId) &&
         isImageImportFileName(value.fileName) &&
         isImageImportMimeType(value.mimeType) &&
-        isBase64Payload(value.base64)
+        isImageImportBase64(value.base64)
         ? {
             protocolVersion: PROTOCOL_VERSION,
             type: "image-import",
@@ -792,16 +807,6 @@ function isImageImportMimeType(value: unknown): value is string {
   return (
     typeof value === "string" &&
     value.length <= MAX_IMAGE_IMPORT_MIME_TYPE_LENGTH
-  );
-}
-
-function isBase64Payload(value: unknown): value is string {
-  return (
-    typeof value === "string" &&
-    value.length <= MAX_IMAGE_IMPORT_BASE64_LENGTH &&
-    /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(
-      value,
-    )
   );
 }
 

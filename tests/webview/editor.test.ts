@@ -54,6 +54,16 @@ function isEditMessage(
   );
 }
 
+function isImageImportRequest(
+  message: unknown,
+): message is { type: "image-import"; requestId: string } {
+  if (typeof message !== "object" || message === null) return false;
+  const candidate = message as { type?: unknown; requestId?: unknown };
+  return (
+    candidate.type === "image-import" && typeof candidate.requestId === "string"
+  );
+}
+
 function lastEditMarkdown(messages: unknown[]): string {
   return messages.filter(isEditMessage).at(-1)?.markdown ?? "";
 }
@@ -2900,6 +2910,49 @@ describe("rich editor rendering", () => {
     );
     expect(messages.some((candidate: any) => candidate.type === "edit")).toBe(
       false,
+    );
+    app.destroy();
+  });
+
+  it("releases a failed image placeholder so a later import can succeed", async () => {
+    const { app, root, messages } = makeApp("before after");
+    dispatchImageDrop(app, [imageFile("rejected.png")], 7);
+    await flush();
+    const rejected = messages.find(isImageImportRequest);
+    if (!rejected) throw new Error("The rejected image request was not sent.");
+
+    receiveHostMessage({
+      protocolVersion: PROTOCOL_VERSION,
+      type: "image-import-result",
+      requestId: rejected.requestId,
+      success: false,
+      message: "The image import request was rejected.",
+    });
+
+    expect(root.querySelector(".mm-image-importing")).toBeNull();
+    expect(imageImportPluginKey.getState(app.view.state)?.pending).toHaveLength(
+      0,
+    );
+    expect(lastEditMarkdown(messages)).toBe("");
+
+    dispatchImageDrop(app, [imageFile("valid.png")], 7);
+    await flush();
+    const accepted = messages.filter(isImageImportRequest).at(-1);
+    if (!accepted) throw new Error("The later image request was not sent.");
+    receiveHostMessage({
+      protocolVersion: PROTOCOL_VERSION,
+      type: "image-import-result",
+      requestId: accepted.requestId,
+      success: true,
+      relativePath: "./images/valid.png",
+    });
+
+    expect(root.querySelector(".mm-image-importing")).toBeNull();
+    expect(imageImportPluginKey.getState(app.view.state)?.pending).toHaveLength(
+      0,
+    );
+    expect(lastEditMarkdown(messages)).toBe(
+      "before![valid](./images/valid.png) after",
     );
     app.destroy();
   });
