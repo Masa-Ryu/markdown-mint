@@ -8,8 +8,10 @@ describe("GitHub Release workflow", () => {
   const workflow = readFileSync(workflowPath, "utf8");
   const eventBlock = workflow.match(/^on:\n([\s\S]*?)(?=^permissions:)/m)?.[1];
   const jobsBlock = workflow.match(/^jobs:\n([\s\S]*)$/m)?.[1] ?? "";
+  const validateJobOffset = jobsBlock.indexOf("  validate:");
   const releaseJobOffset = jobsBlock.indexOf("  publish_github_release:");
-  const validateJob = jobsBlock.slice(0, releaseJobOffset);
+  const preflightJob = jobsBlock.slice(0, validateJobOffset);
+  const validateJob = jobsBlock.slice(validateJobOffset, releaseJobOffset);
   const releaseJob = jobsBlock.slice(releaseJobOffset);
 
   it("starts only through workflow_dispatch", () => {
@@ -21,13 +23,29 @@ describe("GitHub Release workflow", () => {
     expect(events).toEqual(["workflow_dispatch"]);
   });
 
-  it("contains only validation and GitHub Release jobs", () => {
+  it("runs preflight, validation, and GitHub Release jobs in order", () => {
     const jobNames = Array.from(
       jobsBlock.matchAll(/^ {2}([a-z0-9_-]+):$/gm),
       (match) => match[1],
     );
 
-    expect(jobNames).toEqual(["validate", "publish_github_release"]);
+    expect(jobNames).toEqual([
+      "preflight",
+      "validate",
+      "publish_github_release",
+    ]);
+    expect(preflightJob).toMatch(/^ {4}runs-on: ubuntu-latest$/m);
+    expect(preflightJob).toMatch(/^ {4}permissions: \{\}$/m);
+    expect(preflightJob).not.toContain("actions/checkout");
+    expect(preflightJob).toContain('"$GITHUB_REF" != "refs/heads/main"');
+    expect(preflightJob).toContain(
+      "::error::Releases can only be started from main",
+    );
+    expect(validateJob).toMatch(/^ {4}needs: preflight$/m);
+    expect(validateJob).toMatch(/^ {4}runs-on: \[self-hosted, n100\]$/m);
+    expect(validateJob).toContain(
+      'if [[ "$GITHUB_REF" != "refs/heads/main" ]]',
+    );
     expect(releaseJob).toMatch(/^ {4}needs: validate$/m);
     expect(validateJob).toMatch(/^ {4}permissions:\n {6}contents: read$/m);
     expect(releaseJob).toMatch(/^ {4}permissions:\n {6}contents: write$/m);
