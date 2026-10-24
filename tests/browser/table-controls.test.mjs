@@ -56,6 +56,7 @@ const emptyHeaderSource = [
 
 async function waitForServer(url, server, onOutput = () => {}) {
   let output = "";
+  const startupDeadline = Date.now() + 180_000;
   server.stdout.on("data", (chunk) => {
     output += chunk.toString();
     onOutput(chunk.toString());
@@ -64,15 +65,20 @@ async function waitForServer(url, server, onOutput = () => {}) {
     output += chunk.toString();
     onOutput(chunk.toString());
   });
-  for (let attempt = 0; attempt < 120; attempt += 1) {
+  for (;;) {
     try {
       if ((await fetch(url)).ok) return;
     } catch {
       // The server is still binding.
     }
+    if (server.exitCode !== null || server.signalCode !== null)
+      throw new Error(`Browser server exited before responding: ${output}`);
+    if (Date.now() >= startupDeadline)
+      throw new Error(
+        `Browser server did not start within 180 seconds: ${output}`,
+      );
     await new Promise((done) => setTimeout(done, 50));
   }
-  throw new Error(`Browser server failed to start: ${output}`);
 }
 
 async function settle(page) {

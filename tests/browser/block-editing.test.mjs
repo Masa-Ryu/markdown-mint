@@ -4768,14 +4768,19 @@ async function main() {
   try {
     await mkdir(output, { recursive: true });
     await rm(resolve(output, "failure.png"), { force: true });
-    for (let attempt = 0; ; attempt += 1) {
+    const serverStartupDeadline = Date.now() + 180_000;
+    for (;;) {
       try {
         if ((await fetch(baseUrl)).ok) break;
       } catch {
         /* server is still binding */
       }
-      if (attempt >= 120)
+      if (server.exitCode !== null || server.signalCode !== null)
         throw new Error(`Browser server failed: ${serverOutput}`);
+      if (Date.now() >= serverStartupDeadline)
+        throw new Error(
+          `Browser server did not start within 180 seconds: ${serverOutput}`,
+        );
       await new Promise((done) => setTimeout(done, 50));
     }
     const executablePath =
