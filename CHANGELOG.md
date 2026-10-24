@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.9.3
+
+- Add independent GitHub-hosted PR quality, browser, Extension Host, and VSIX
+  package checks; retain the manual release workflow for main-only publication.
+- Resolve temporary test workspaces through the operating system, select and
+  report the VS Code test version, and load the matching native Markdown CSS
+  with actionable diagnostics.
+
 ## 0.9.2
 
 - Add workspace directories to Link dialog and selected-text Link picker

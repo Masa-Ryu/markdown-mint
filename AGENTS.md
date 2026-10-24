@@ -22,10 +22,15 @@ Run `npm run compile`, `npm test`, `npm run lint`, and `npm run format:check`
 before review. `npm run test:extension` launches the installed VS Code
 Extension Development Host with an isolated temporary workspace and runs the
 native acceptance suite. `npm run package` builds and verifies the local VSIX.
+Every pull request to `main` must pass the `quality`, `browser-smoke`,
+`extension-smoke`, and `package-check` jobs in
+`.github/workflows/ci.yml`. See [docs/development.md](docs/development.md)
+for the CI scope, local environment overrides, and required status check setup.
 If a behavior requires visual or IME inspection, record the manual check in
 the requirements documentation.
 
 テスト時には以下のファイルで正しく表示されていることを確認すること。
+
 - ./tests/md/common-test.md
 - ./tests/md/github-test.md
 - ./tests/md/github-test-class-B.md
@@ -45,6 +50,11 @@ description without reconstructing intent from the diff alone.
 - Pull requests continue to update versions according to the SemVer rules
   below. Create a GitHub Release only when a version is intentionally published
   to users.
+- Pull request CI runs the compile, unit, lint, format, and package checks as
+  separate jobs, and adds browser and Extension Host smoke suites. The release
+  workflow repeats the shared validation against `main` before retaining and
+  publishing its exact VSIX; it does not rerun the browser or Extension Host
+  suites.
 - Run `.github/workflows/release.yml` manually from `main` to validate and
   package one VSIX, verify its SHA-256, and retain it as a workflow artifact.
 - The GitHub Release job downloads that exact VSIX, creates or recovers a draft

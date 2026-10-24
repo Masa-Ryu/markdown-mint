@@ -4853,6 +4853,7 @@ async function main() {
     await page
       ?.screenshot({ path: resolve(output, "failure.png"), fullPage: true })
       .catch(() => {});
+    if (serverOutput) console.error("Browser harness output:\n" + serverOutput);
     throw error;
   } finally {
     await browser?.close();

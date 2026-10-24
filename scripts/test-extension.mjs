@@ -1,8 +1,9 @@
 import { runTests } from "@vscode/test-electron";
 import { cp, mkdir, mkdtemp, rm } from "node:fs/promises";
-import { existsSync as pathExists } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { resolveVSCodeExecutable } from "./test-vscode.mjs";
 
 const extensionDevelopmentPath = resolve(
   dirname(fileURLToPath(import.meta.url)),
@@ -13,19 +14,9 @@ const extensionTestsPath = resolve(
   "dist",
   "test-extension.js",
 );
-const installedCodeCandidates = [
-  "/Applications/Visual Studio Code.app/Contents/MacOS/Code",
-  "/Applications/Visual Studio Code.app/Contents/MacOS/Electron",
-];
-const vscodeExecutablePath =
-  process.env.MARKDOWN_MINT_CODE ??
-  installedCodeCandidates.find((candidate) => pathExists(candidate));
-
-// Keep the profile path short: Electron uses a Unix-domain IPC socket below
-// user-data and macOS rejects paths longer than roughly 103 characters.
-const temporaryRoot = await mkdtemp(
-  join(process.env.MARKDOWN_MINT_TEST_TMP ?? "/private/tmp", "mm-ext-"),
-);
+const testTemporaryParent = process.env.MARKDOWN_MINT_TEST_TMP ?? tmpdir();
+await mkdir(testTemporaryParent, { recursive: true });
+const temporaryRoot = await mkdtemp(join(testTemporaryParent, "mm-ext-"));
 const userDataDirectory = join(temporaryRoot, "user-data");
 const extensionsDirectory = join(temporaryRoot, "extensions");
 const workspaceDirectory = join(temporaryRoot, "workspace");
@@ -40,10 +31,11 @@ await cp(
 const testFile = join(workspaceDirectory, "acceptance.md");
 
 try {
+  const vscodeExecutablePath = await resolveVSCodeExecutable();
   const exitCode = await runTests({
     extensionDevelopmentPath,
     extensionTestsPath,
-    ...(vscodeExecutablePath ? { vscodeExecutablePath } : {}),
+    vscodeExecutablePath,
     extensionTestsEnv: {
       MARKDOWN_MINT_TEST_FILE: testFile,
       MARKDOWN_MINT_FIXTURE_DIR: resolve(
