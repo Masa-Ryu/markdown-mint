@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.9.4
+
+- Preserve explicitly quoted empty final rows when parsing spreadsheet TSV,
+  including inputs without a trailing newline, while keeping cell limits and
+  ordinary trailing newline handling intact.
+
 ## 0.9.3
 
 - Add independent GitHub-hosted PR quality, browser, Extension Host, and VSIX
