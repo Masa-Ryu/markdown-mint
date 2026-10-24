@@ -4,11 +4,10 @@ import { extname, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import katex from "katex";
 import { build } from "esbuild";
+import { resolveVSCodeMarkdownCss } from "../../scripts/test-vscode.mjs";
 
 const repository = resolve(fileURLToPath(new URL("../..", import.meta.url)));
-const vscodeMarkdownCss =
-  process.env.VSCODE_MARKDOWN_CSS ??
-  "/Applications/Visual Studio Code.app/Contents/Resources/app/extensions/markdown-language-features/media/markdown.css";
+const vscodeMarkdownCss = await resolveVSCodeMarkdownCss();
 const port = Number(process.env.MM_BROWSER_PORT ?? "4173");
 const contentTypes = {
   ".css": "text/css; charset=utf-8",
@@ -324,9 +323,10 @@ function fileFor(pathname) {
 }
 
 const server = http.createServer(async (request, response) => {
+  let pathname = request.url ?? "/";
   try {
     const requestUrl = new URL(request.url ?? "/", "http://localhost");
-    const pathname = decodeURIComponent(requestUrl.pathname);
+    pathname = decodeURIComponent(requestUrl.pathname);
     if (pathname === "/__ai-protocol__.js") {
       aiProtocol ??= build({
         entryPoints: [
@@ -410,9 +410,20 @@ const server = http.createServer(async (request, response) => {
         : {}),
     });
     response.end(body);
-  } catch {
-    response.writeHead(404);
-    response.end("Not found");
+  } catch (error) {
+    console.error(
+      "Browser harness request failed for " +
+        pathname +
+        ": " +
+        (error instanceof Error
+          ? (error.stack ?? error.message)
+          : String(error)),
+    );
+    response.writeHead(500);
+    response.end(
+      "Browser harness request failed: " +
+        (error instanceof Error ? error.message : String(error)),
+    );
   }
 });
 

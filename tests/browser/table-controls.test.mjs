@@ -54,23 +54,31 @@ const emptyHeaderSource = [
   "| k | l | m | n | o |",
 ].join("\n");
 
-async function waitForServer(url, server) {
+async function waitForServer(url, server, onOutput = () => {}) {
   let output = "";
+  const startupDeadline = Date.now() + 180_000;
   server.stdout.on("data", (chunk) => {
     output += chunk.toString();
+    onOutput(chunk.toString());
   });
   server.stderr.on("data", (chunk) => {
     output += chunk.toString();
+    onOutput(chunk.toString());
   });
-  for (let attempt = 0; attempt < 120; attempt += 1) {
+  for (;;) {
     try {
       if ((await fetch(url)).ok) return;
     } catch {
       // The server is still binding.
     }
+    if (server.exitCode !== null || server.signalCode !== null)
+      throw new Error(`Browser server exited before responding: ${output}`);
+    if (Date.now() >= startupDeadline)
+      throw new Error(
+        `Browser server did not start within 180 seconds: ${output}`,
+      );
     await new Promise((done) => setTimeout(done, 50));
   }
-  throw new Error(`Browser server failed to start: ${output}`);
 }
 
 async function settle(page) {
@@ -1555,12 +1563,15 @@ async function main() {
     env: { ...process.env, MM_BROWSER_PORT: String(port) },
     stdio: ["ignore", "pipe", "pipe"],
   });
+  let serverOutput = "";
   let browser;
   let page;
   try {
     await mkdir(output, { recursive: true });
     await rm(resolve(output, "failure.png"), { force: true });
-    await waitForServer(`${baseUrl}/`, server);
+    await waitForServer(`${baseUrl}/`, server, (chunk) => {
+      serverOutput += chunk;
+    });
     const executablePath =
       process.env.MM_BROWSER_EXECUTABLE_PATH ?? chromium.executablePath();
     assert.ok(
@@ -1589,6 +1600,7 @@ async function main() {
     await page
       ?.screenshot({ path: resolve(output, "failure.png"), fullPage: true })
       .catch(() => {});
+    if (serverOutput) console.error("Browser harness output:\n" + serverOutput);
     throw error;
   } finally {
     await browser?.close();

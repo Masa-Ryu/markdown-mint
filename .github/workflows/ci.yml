@@ -1,0 +1,329 @@
+name: CI
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: markdown-mint-ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  quality:
+    name: quality
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Start job timer
+        id: timer
+        run: echo "started_at=$(date +%s)" >> "$GITHUB_OUTPUT"
+
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p output/ci
+          npm ci 2>&1 | tee output/ci/npm-ci.log
+
+      - name: Compile
+        shell: bash
+        run: |
+          set -o pipefail
+          npm run compile 2>&1 | tee output/ci/compile.log
+
+      - name: Run unit tests
+        shell: bash
+        run: |
+          set -o pipefail
+          npm test 2>&1 | tee output/ci/unit-tests.log
+
+      - name: Lint
+        shell: bash
+        run: |
+          set -o pipefail
+          npm run lint 2>&1 | tee output/ci/lint.log
+
+      - name: Check formatting
+        shell: bash
+        run: |
+          set -o pipefail
+          npm run format:check 2>&1 | tee output/ci/format.log
+
+      - name: Record job duration
+        if: always()
+        env:
+          STARTED_AT: ${{ steps.timer.outputs.started_at }}
+          JOB_NAME: ${{ github.job }}
+        run: |
+          ended_at=$(date +%s)
+          if [[ -z "$STARTED_AT" ]]; then
+            message="$JOB_NAME duration unavailable (timer did not start)"
+          else
+            duration=$((ended_at - STARTED_AT))
+            printf -v message '%s duration: %ss' "$JOB_NAME" "$duration"
+          fi
+          echo "$message" | tee -a "$GITHUB_STEP_SUMMARY"
+          if [[ -d output/ci ]]; then
+            echo "$message" | tee -a output/ci/runtime.log
+          fi
+
+      - name: Upload diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: markdown-mint-${{ github.job }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            output/ci/
+            output/playwright/
+          if-no-files-found: ignore
+          retention-days: 14
+
+  browser-smoke:
+    name: browser-smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      MARKDOWN_MINT_VSCODE_VERSION: stable
+    steps:
+      - name: Start job timer
+        id: timer
+        run: echo "started_at=$(date +%s)" >> "$GITHUB_OUTPUT"
+
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p output/ci
+          npm ci 2>&1 | tee output/ci/npm-ci.log
+
+      - name: Install Playwright Chromium and Linux dependencies
+        shell: bash
+        run: |
+          set -o pipefail
+          npx playwright install --with-deps chromium 2>&1 | tee output/ci/playwright-install.log
+
+      - name: Run block editing browser suite
+        shell: bash
+        run: |
+          set -o pipefail
+          npm run test:browser:blocks 2>&1 | tee output/ci/browser-blocks.log
+
+      - name: Run table controls browser suite
+        shell: bash
+        run: |
+          set -o pipefail
+          npm run test:browser:tables 2>&1 | tee output/ci/browser-tables.log
+
+      - name: Run HTML export browser smoke
+        shell: bash
+        run: |
+          set -o pipefail
+          npm run test:browser:html-export 2>&1 | tee output/ci/browser-html-export.log
+
+      - name: Run PDF export browser smoke
+        shell: bash
+        run: |
+          set -o pipefail
+          npm run test:browser:pdf-export 2>&1 | tee output/ci/browser-pdf-export.log
+
+      - name: Record job duration
+        if: always()
+        env:
+          STARTED_AT: ${{ steps.timer.outputs.started_at }}
+          JOB_NAME: ${{ github.job }}
+        run: |
+          ended_at=$(date +%s)
+          if [[ -z "$STARTED_AT" ]]; then
+            message="$JOB_NAME duration unavailable (timer did not start)"
+          else
+            duration=$((ended_at - STARTED_AT))
+            printf -v message '%s duration: %ss' "$JOB_NAME" "$duration"
+          fi
+          echo "$message" | tee -a "$GITHUB_STEP_SUMMARY"
+          if [[ -d output/ci ]]; then
+            echo "$message" | tee -a output/ci/runtime.log
+          fi
+
+      - name: Upload diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: markdown-mint-${{ github.job }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            output/ci/
+            output/playwright/
+          if-no-files-found: ignore
+          retention-days: 14
+
+  extension-smoke:
+    name: extension-smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    env:
+      MARKDOWN_MINT_VSCODE_VERSION: stable
+    steps:
+      - name: Start job timer
+        id: timer
+        run: echo "started_at=$(date +%s)" >> "$GITHUB_OUTPUT"
+
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install Xvfb
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p output/ci
+          sudo apt-get update 2>&1 | tee output/ci/xvfb-apt-update.log
+          sudo apt-get install --yes xvfb 2>&1 | tee output/ci/xvfb-install.log
+          command -v xvfb-run
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p output/ci
+          npm ci 2>&1 | tee output/ci/npm-ci.log
+
+      - name: Run Extension Host acceptance suite
+        shell: bash
+        run: |
+          set -o pipefail
+          xvfb-run -a npm run test:extension 2>&1 | tee output/ci/extension-smoke.log
+
+      - name: Record job duration
+        if: always()
+        env:
+          STARTED_AT: ${{ steps.timer.outputs.started_at }}
+          JOB_NAME: ${{ github.job }}
+        run: |
+          ended_at=$(date +%s)
+          if [[ -z "$STARTED_AT" ]]; then
+            message="$JOB_NAME duration unavailable (timer did not start)"
+          else
+            duration=$((ended_at - STARTED_AT))
+            printf -v message '%s duration: %ss' "$JOB_NAME" "$duration"
+          fi
+          echo "$message" | tee -a "$GITHUB_STEP_SUMMARY"
+          if [[ -d output/ci ]]; then
+            echo "$message" | tee -a output/ci/runtime.log
+          fi
+
+      - name: Upload diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: markdown-mint-${{ github.job }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            output/ci/
+            output/playwright/
+          if-no-files-found: ignore
+          retention-days: 14
+
+  package-check:
+    name: package-check
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Start job timer
+        id: timer
+        run: echo "started_at=$(date +%s)" >> "$GITHUB_OUTPUT"
+
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p output/ci
+          npm ci 2>&1 | tee output/ci/npm-ci.log
+
+      - name: Build and verify the VSIX
+        shell: bash
+        run: |
+          set -o pipefail
+          npm run package 2>&1 | tee output/ci/package-check.log
+
+      - name: Record job duration
+        if: always()
+        env:
+          STARTED_AT: ${{ steps.timer.outputs.started_at }}
+          JOB_NAME: ${{ github.job }}
+        run: |
+          ended_at=$(date +%s)
+          if [[ -z "$STARTED_AT" ]]; then
+            message="$JOB_NAME duration unavailable (timer did not start)"
+          else
+            duration=$((ended_at - STARTED_AT))
+            printf -v message '%s duration: %ss' "$JOB_NAME" "$duration"
+          fi
+          echo "$message" | tee -a "$GITHUB_STEP_SUMMARY"
+          if [[ -d output/ci ]]; then
+            echo "$message" | tee -a output/ci/runtime.log
+          fi
+
+      - name: Upload diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: markdown-mint-${{ github.job }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            output/ci/
+            output/playwright/
+          if-no-files-found: ignore
+          retention-days: 14

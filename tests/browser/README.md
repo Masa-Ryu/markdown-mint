@@ -184,11 +184,15 @@ replacements, and Markdown-output change state as JSON under
 repeatable performance signal for ordinary cell edits; it does not impose a
 wall-clock CI budget.
 
-The server maps `/__vscode__/markdown.css` to the installed VS Code Markdown
-stylesheet before `media/document.css` is loaded. Set `VSCODE_MARKDOWN_CSS` on
-another machine to the matching installed stylesheet. This makes the rich and
-dedicated preview layout checks exercise the same native cascade used by VS
-Code.
+The server maps `/__vscode__/markdown.css` to the selected VS Code Markdown
+stylesheet before `media/document.css` is loaded. It uses
+`VSCODE_MARKDOWN_CSS` when provided, otherwise derives the stylesheet from
+`MARKDOWN_MINT_CODE` or an installed VS Code executable. If it cannot find one,
+it downloads `MARKDOWN_MINT_VSCODE_VERSION` (or latest stable). A missing or
+unreadable stylesheet fails before the server starts and reports the path to
+check; it does not silently serve substitute HTML or CSS. See
+[`docs/development.md`](../../docs/development.md) for the environment
+variables and CI checks.
 
 ## Block-spacing regression suite
 

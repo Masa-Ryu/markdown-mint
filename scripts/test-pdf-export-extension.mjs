@@ -4,21 +4,17 @@ import { getDocument } from "pdfjs-dist/legacy/build/pdf.mjs";
 import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { execFileSync } from "node:child_process";
+import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { resolveVSCodeExecutable } from "./test-vscode.mjs";
 
 const repository = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const useVsix = process.argv.includes("--vsix");
 const extensionTestsPath = resolve(repository, "dist", "test-pdf-export.js");
-const vscodeExecutablePath =
-  process.env.MARKDOWN_MINT_CODE ??
-  [
-    "/Applications/Visual Studio Code.app/Contents/MacOS/Code",
-    "/Applications/Visual Studio Code.app/Contents/MacOS/Electron",
-  ].find((candidate) => existsSync(candidate));
-const temporaryRoot = await mkdtemp(
-  join(process.env.MARKDOWN_MINT_TEST_TMP ?? "/private/tmp", "mm-pdf-ext-"),
-);
+const testTemporaryParent = process.env.MARKDOWN_MINT_TEST_TMP ?? tmpdir();
+await mkdir(testTemporaryParent, { recursive: true });
+const temporaryRoot = await mkdtemp(join(testTemporaryParent, "mm-pdf-ext-"));
 const userDataDirectory = join(temporaryRoot, "user-data");
 const extensionsDirectory = join(temporaryRoot, "extensions");
 const workspaceDirectory = join(temporaryRoot, "workspace");
@@ -95,10 +91,11 @@ async function verifyProductionDetailsPdf() {
 }
 
 try {
+  const vscodeExecutablePath = await resolveVSCodeExecutable();
   const exitCode = await runTests({
     extensionDevelopmentPath,
     extensionTestsPath,
-    ...(vscodeExecutablePath ? { vscodeExecutablePath } : {}),
+    vscodeExecutablePath,
     extensionTestsEnv: {
       MARKDOWN_MINT_PDF_CHROMIUM: chromium.executablePath(),
       MARKDOWN_MINT_PDF_OUTPUT_DIR: outputDirectory,

@@ -20,6 +20,9 @@ void (async () => {
   const pdf = await renderPdf(html, {
     executablePath,
     timeoutMs: 90_000,
+    ...(process.platform === "linux"
+      ? { browserLaunchArgs: ["--no-sandbox"] }
+      : {}),
   });
   await writeFile(outputPath, pdf);
 })();

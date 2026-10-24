@@ -1,5 +1,8 @@
 name: Release
 
+# PR CI repeats the quality and package checks as separate jobs and adds browser
+# and Extension Host smoke coverage. Release keeps its main-only VSIX and publish flow.
+
 on:
   workflow_dispatch:
 
@@ -11,8 +14,23 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  preflight:
+    name: Validate release target before self-hosted runner
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Require main branch
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF" != "refs/heads/main" ]]; then
+            echo "::error::Releases can only be started from main (selected ref: $GITHUB_REF)."
+            exit 1
+          fi
+          echo "Release target is main."
+
   validate:
     name: Validate and package release
+    needs: preflight
     runs-on: [self-hosted, n100]
     permissions:
       contents: read

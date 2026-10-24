@@ -196,6 +196,13 @@ export async function run(): Promise<void> {
     () => sourceHistoryDocument.getText() === sourceChanged,
     "the source document edit",
   );
+  await vscode.commands.executeCommand(
+    "workbench.action.focusActiveEditorGroup",
+  );
+  await waitFor(
+    () => vscode.window.activeTextEditor?.document === sourceHistoryDocument,
+    "the native source editor to be active",
+  );
   await vscode.commands.executeCommand("undo");
   await waitFor(
     () => sourceHistoryDocument.getText() === sourceOriginal,
