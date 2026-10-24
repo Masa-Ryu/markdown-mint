@@ -719,6 +719,25 @@ describe("Extension Host image import", () => {
     );
   });
 
+  it("rejects an over-limit decoded payload before creating a directory", async () => {
+    const { deps, fileSystem } = dependencies();
+    const base64 = Buffer.alloc(MAX_IMAGE_IMPORT_BYTES + 1, 0xaa).toString(
+      "base64",
+    );
+    const result = await saveImageImport(
+      new TestUri("file", "/workspace/docs/README.md"),
+      request({ base64 }),
+      deps,
+    );
+
+    expect(result).toMatchObject({
+      success: false,
+      message: expect.stringContaining("10 MB"),
+    });
+    expect(fileSystem.directories.size).toBe(0);
+    expect(fileSystem.files.size).toBe(0);
+  });
+
   it.each([
     ["zero-byte image", { base64: "" }, "empty"],
     [

@@ -1516,6 +1516,38 @@ function documentQueueDepth(provider: object): number {
 }
 
 describe("MarkdownMintEditorProvider", () => {
+  it("returns a correlated terminal result for an invalid image import", async () => {
+    vscode.__state.reset();
+    const { panel, document } = vscode.__state;
+    const provider = new MarkdownMintEditorProvider(context() as never);
+    await provider.resolveCustomTextEditor(
+      document as never,
+      panel as never,
+      {} as never,
+    );
+    panel.webview.receive({ protocolVersion: 1, type: "ready" });
+    panel.webview.receive({
+      protocolVersion: 1,
+      type: "image-import",
+      requestId: "image:invalid-base64",
+      fileName: "sample.png",
+      mimeType: "image/png",
+      base64: "not base64?",
+    });
+    await flush();
+
+    expect(panel.webview.messages).toContainEqual(
+      expect.objectContaining({
+        type: "image-import-result",
+        requestId: "image:invalid-base64",
+        success: false,
+      }),
+    );
+    expect(document.getText()).toBe("# Original");
+    expect(vscode.__state.exportWrites).toHaveLength(0);
+    provider.dispose();
+  });
+
   it("does not create a Mint suggestions StatusBarItem", () => {
     vscode.__state.reset();
     const provider = new MarkdownMintEditorProvider(context() as never);

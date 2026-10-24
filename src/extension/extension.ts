@@ -41,6 +41,7 @@ import {
   type UserNotificationMessage,
   type WorkspaceFileSearchMessage,
   type WorkspaceFileSearchResultMessage,
+  correlatableImageImportRequestId,
   isMarkdownProfile,
   isSafeLinkHref,
   parseWebviewMessage,
@@ -926,6 +927,17 @@ export class MarkdownMintEditorProvider
   ): Promise<void> {
     const message = parseWebviewMessage(value);
     if (!message) {
+      const requestId = correlatableImageImportRequestId(value);
+      if (requestId) {
+        this.post(session, {
+          protocolVersion: PROTOCOL_VERSION,
+          type: "image-import-result",
+          requestId,
+          success: false,
+          message: "The image import request was rejected.",
+        });
+        return;
+      }
       this.post(
         session,
         this.errorMessage("Malformed or unsupported webview message."),
