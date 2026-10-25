@@ -1252,7 +1252,13 @@ async function runCodeLensAcceptance(
     () => vscode.window.activeTextEditor?.document === markdownDocument,
     "the source editor to regain focus after the diff",
   );
-  await vscode.commands.executeCommand("undo");
+  // Restore the isolated fixture explicitly. Native source/custom-editor
+  // Undo/Redo is asserted separately; cleanup must not target the diff
+  // widget's own undo context after it has been closed.
+  await vscode.commands.executeCommand(
+    "workbench.action.files.revert",
+    fileUri,
+  );
   await waitFor(
     () => markdownDocument.getText() === original && !markdownDocument.isDirty,
     "the Markdown source buffer cleanup",
