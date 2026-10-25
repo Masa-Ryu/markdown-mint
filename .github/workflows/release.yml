@@ -15,8 +15,8 @@ concurrency:
 
 jobs:
   preflight:
-    name: Validate release target before self-hosted runner
-    runs-on: ubuntu-latest
+    name: Validate release target
+    runs-on: ubuntu-24.04
     permissions: {}
     steps:
       - name: Require main branch
@@ -31,7 +31,7 @@ jobs:
   validate:
     name: Validate and package release
     needs: preflight
-    runs-on: [self-hosted, n100]
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
     outputs:
@@ -39,6 +39,17 @@ jobs:
       artifact_name: ${{ steps.metadata.outputs.artifact_name }}
       sha256: ${{ steps.artifact.outputs.sha256 }}
     steps:
+      - name: Check required release tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          for tool in gh jq curl sha256sum; do
+            if ! command -v "$tool"; then
+              echo "::error::Required command '$tool' is missing from the ubuntu-24.04 runner image."
+              exit 1
+            fi
+          done
+
       - name: Check out the selected main commit
         uses: actions/checkout@v4
         with:
@@ -163,10 +174,21 @@ jobs:
   publish_github_release:
     name: Publish GitHub Release
     needs: validate
-    runs-on: [self-hosted, n100]
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
     steps:
+      - name: Check required release tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          for tool in gh jq curl sha256sum; do
+            if ! command -v "$tool"; then
+              echo "::error::Required command '$tool' is missing from the ubuntu-24.04 runner image."
+              exit 1
+            fi
+          done
+
       - name: Check out the release commit for recovery planning
         uses: actions/checkout@v4
         with:

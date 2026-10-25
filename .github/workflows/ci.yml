@@ -19,7 +19,7 @@ concurrency:
 jobs:
   quality:
     name: quality
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
       contents: read
@@ -101,7 +101,7 @@ jobs:
 
   browser-smoke:
     name: browser-smoke
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
       contents: read
@@ -189,12 +189,19 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
-  extension-smoke:
-    name: extension-smoke
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
+  extension-host-matrix:
+    name: extension-host (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2025, macos-15]
     permissions:
       contents: read
+    defaults:
+      run:
+        shell: bash
     env:
       MARKDOWN_MINT_VSCODE_VERSION: stable
     steps:
@@ -213,14 +220,14 @@ jobs:
           node-version: 22
           cache: npm
 
-      - name: Install Xvfb
+      - name: Check preinstalled Xvfb on Linux
+        if: runner.os == 'Linux'
         shell: bash
         run: |
-          set -o pipefail
-          mkdir -p output/ci
-          sudo apt-get update 2>&1 | tee output/ci/xvfb-apt-update.log
-          sudo apt-get install --yes xvfb 2>&1 | tee output/ci/xvfb-install.log
-          command -v xvfb-run
+          if ! command -v xvfb-run; then
+            echo "::error::xvfb-run is missing from the ubuntu-24.04 runner image."
+            exit 1
+          fi
 
       - name: Install dependencies
         shell: bash
@@ -229,17 +236,29 @@ jobs:
           mkdir -p output/ci
           npm ci 2>&1 | tee output/ci/npm-ci.log
 
-      - name: Run Extension Host acceptance suite
+      - name: Run Extension Host acceptance suite on Linux
+        if: runner.os == 'Linux'
+        env:
+          MARKDOWN_MINT_TEST_TMP: ${{ runner.temp }}/markdown-mint-extension
         shell: bash
         run: |
           set -o pipefail
           xvfb-run -a npm run test:extension 2>&1 | tee output/ci/extension-smoke.log
 
+      - name: Run Extension Host acceptance suite on Windows and macOS
+        if: runner.os != 'Linux'
+        env:
+          MARKDOWN_MINT_TEST_TMP: ${{ runner.temp }}/markdown-mint-extension
+        shell: bash
+        run: |
+          set -o pipefail
+          npm run test:extension 2>&1 | tee output/ci/extension-smoke.log
+
       - name: Record job duration
         if: always()
         env:
           STARTED_AT: ${{ steps.timer.outputs.started_at }}
-          JOB_NAME: ${{ github.job }}
+          JOB_NAME: ${{ github.job }} (${{ matrix.os }})
         run: |
           ended_at=$(date +%s)
           if [[ -z "$STARTED_AT" ]]; then
@@ -257,16 +276,37 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: markdown-mint-${{ github.job }}-${{ github.run_id }}-${{ github.run_attempt }}
+          name: markdown-mint-${{ github.job }}-${{ matrix.os }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             output/ci/
-            output/playwright/
+            output/extension-host/
+            ${{ runner.temp }}/markdown-mint-extension/mm-ext-*/user-data/logs/
           if-no-files-found: ignore
           retention-days: 14
 
+  extension-smoke:
+    name: extension-smoke
+    needs: extension-host-matrix
+    if: ${{ always() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Require all Extension Host matrix jobs to succeed
+        env:
+          MATRIX_RESULT: ${{ needs.extension-host-matrix.result }}
+        shell: bash
+        run: |
+          if [[ "$MATRIX_RESULT" != "success" ]]; then
+            echo "::error::Extension Host matrix did not succeed on all three OSes (result: $MATRIX_RESULT)."
+            exit 1
+          fi
+          echo "Extension Host tests passed on Ubuntu, Windows, and macOS." >> "$GITHUB_STEP_SUMMARY"
+
   package-check:
     name: package-check
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
       contents: read

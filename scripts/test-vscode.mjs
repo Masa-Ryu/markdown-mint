@@ -2,7 +2,7 @@ import { downloadAndUnzipVSCode } from "@vscode/test-electron";
 import { existsSync } from "node:fs";
 import { access, constants, readFile, realpath } from "node:fs/promises";
 import { execFileSync } from "node:child_process";
-import { delimiter, dirname, join, resolve } from "node:path";
+import { basename, delimiter, dirname, join, resolve } from "node:path";
 
 const markdownCssRelativePath = [
   "extensions",
@@ -88,6 +88,23 @@ async function executableVersion(executablePath) {
   return output.trim().split(/\r?\n/u)[0] || "unknown";
 }
 
+async function downloadedVSCodeExecutable(version) {
+  const executablePath = await downloadAndUnzipVSCode(version);
+  // Older test-electron versions return Electron for macOS bundles. Recent
+  // VS Code releases name that executable Code (or Code - Insiders).
+  if (
+    !existsSync(executablePath) &&
+    basename(executablePath) === "Electron" &&
+    basename(dirname(executablePath)) === "MacOS"
+  ) {
+    for (const name of ["Code", "Code - Insiders"]) {
+      const candidate = join(dirname(executablePath), name);
+      if (existsSync(candidate)) return candidate;
+    }
+  }
+  return executablePath;
+}
+
 export async function resolveVSCodeExecutable(options = {}) {
   const explicitExecutable = process.env.MARKDOWN_MINT_CODE;
   const requestedVersion = process.env.MARKDOWN_MINT_VSCODE_VERSION;
@@ -99,7 +116,7 @@ export async function resolveVSCodeExecutable(options = {}) {
     selection = "MARKDOWN_MINT_CODE";
   } else if (requestedVersion || options.forceDownload) {
     const version = requestedVersion ?? "stable";
-    executablePath = await downloadAndUnzipVSCode(version);
+    executablePath = await downloadedVSCodeExecutable(version);
     selection = "downloaded " + version;
   } else {
     executablePath = installedCodeCandidates().find((candidate) => {
@@ -107,7 +124,7 @@ export async function resolveVSCodeExecutable(options = {}) {
     });
     if (executablePath) selection = "installed VS Code";
     else {
-      executablePath = await downloadAndUnzipVSCode("stable");
+      executablePath = await downloadedVSCodeExecutable("stable");
       selection = "downloaded stable";
     }
   }

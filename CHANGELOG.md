@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.9.6
+
+- Move release validation and publication to standard GitHub-hosted Ubuntu
+  runners while retaining the exact VSIX, SHA-256 verification, and draft
+  recovery flow.
+- Require stable VS Code Extension Host acceptance on Ubuntu, Windows, and
+  macOS through the existing `extension-smoke` check, with separate OS logs
+  and explicit line-ending and native-path expectations.
+
 ## 0.9.5
 
 - Validate image-import and workspace-URI payloads without an unbounded Base64

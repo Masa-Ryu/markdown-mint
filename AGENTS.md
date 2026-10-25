@@ -26,6 +26,15 @@ Every pull request to `main` must pass the `quality`, `browser-smoke`,
 `extension-smoke`, and `package-check` jobs in
 `.github/workflows/ci.yml`. See [docs/development.md](docs/development.md)
 for the CI scope, local environment overrides, and required status check setup.
+CI and Release use only standard GitHub-hosted runners; self-hosted runner
+setup and Larger runners are unnecessary. Quality, browser, and package jobs
+use `ubuntu-24.04`. `extension-host-matrix` tests stable VS Code with Node 22
+and `npm ci` on `ubuntu-24.04`, `windows-2025`, and `macos-15`, with
+`fail-fast: false`. Linux checks the preinstalled Xvfb and runs
+`xvfb-run -a npm run test:extension`; Windows and macOS run
+`npm run test:extension` directly. The required `extension-smoke` aggregate
+uses `needs` and `always()` and succeeds only when the entire matrix succeeds.
+Preserve all four required names and retain OS-specific diagnostics on failure.
 If a behavior requires visual or IME inspection, record the manual check in
 the requirements documentation.
 
@@ -57,6 +66,10 @@ description without reconstructing intent from the diff alone.
   suites.
 - Run `.github/workflows/release.yml` manually from `main` to validate and
   package one VSIX, verify its SHA-256, and retain it as a workflow artifact.
+- All three Release jobs use GitHub-hosted `ubuntu-24.04`. Verify the
+  preinstalled `gh`, `jq`, `curl`, and `sha256sum` before use. Validation has
+  `contents: read`; only the publication job has `contents: write`. PR CI uses
+  read-only tokens and no secrets. Do not publish a release to test CI changes.
 - The GitHub Release job downloads that exact VSIX, creates or recovers a draft
   release, verifies the attached asset, and publishes the release. Release tags
   use `v<version>`.

@@ -200,7 +200,11 @@ export async function run(): Promise<void> {
     );
   }, "the Markdown Mint custom editor to become active again");
 
-  const customChanged = `${original}\n<!-- custom resource edit -->\n`;
+  const customChanged =
+    original +
+    documentLineEnding(document) +
+    "<!-- custom resource edit -->" +
+    documentLineEnding(document);
   const customWorkspaceEdit = new vscode.WorkspaceEdit();
   customWorkspaceEdit.replace(
     fileUri,
@@ -246,7 +250,11 @@ export async function run(): Promise<void> {
     },
   );
   const sourceOriginal = sourceHistoryDocument.getText();
-  const sourceChanged = `${sourceOriginal}\n<!-- native acceptance edit -->\n`;
+  const sourceChanged =
+    sourceOriginal +
+    documentLineEnding(sourceHistoryDocument) +
+    "<!-- native acceptance edit -->" +
+    documentLineEnding(sourceHistoryDocument);
   const applied = await sourceEditor.edit((builder) => {
     builder.replace(fullDocumentRange(sourceHistoryDocument), sourceChanged);
   });
@@ -275,7 +283,8 @@ export async function run(): Promise<void> {
 
   // The extension format command applies a minimal WorkspaceEdit. The
   // fixture intentionally has no final newline so disk output proves the
-  // formatter and save path ran.
+  // formatter and save path ran. tests/fixtures/.editorconfig requires CRLF
+  // on every OS; start from LF to verify that the project setting wins.
   await vscode.commands.executeCommand("markdownMint.openSource", fileUri);
   document = await vscode.workspace.openTextDocument(fileUri);
   const sourceDocumentEditor = await vscode.window.showTextDocument(document, {
@@ -283,6 +292,7 @@ export async function run(): Promise<void> {
   });
   const unformatted = "# Native format check";
   await sourceDocumentEditor.edit((builder) => {
+    builder.setEndOfLine(vscode.EndOfLine.LF);
     builder.replace(fullDocumentRange(document), unformatted);
   });
   await vscode.commands.executeCommand("markdownMint.formatDocument", fileUri);
@@ -292,7 +302,21 @@ export async function run(): Promise<void> {
     "the native format command to add the final newline",
   );
   await document.save();
+  assert.equal(document.eol, vscode.EndOfLine.CRLF);
   assert.equal(await readFile(filePath, "utf8"), `${unformatted}\r\n`);
+
+  // This fixture overrides the project CRLF setting with LF. Start with
+  // explicit CRLF bytes so neither direction relies on the OS default EOL.
+  const lfUri = vscode.Uri.file(
+    path.join(path.dirname(filePath), "format-lf.md"),
+  );
+  await writeFile(lfUri.fsPath, "# LF format check\r\n", "utf8");
+  const lfDocument = await vscode.workspace.openTextDocument(lfUri);
+  assert.equal(lfDocument.eol, vscode.EndOfLine.CRLF);
+  await vscode.commands.executeCommand("markdownMint.formatDocument", lfUri);
+  await lfDocument.save();
+  assert.equal(lfDocument.eol, vscode.EndOfLine.LF);
+  assert.equal(await readFile(lfUri.fsPath, "utf8"), "# LF format check\n");
 
   const configuration = vscode.workspace.getConfiguration(
     "markdownMint",
@@ -538,6 +562,7 @@ async function runLinkUriAcceptance(filePath: string): Promise<void> {
     ["./hoge%20manual.pdf", "hoge manual.pdf"],
     ["../docs/design%20spec.pdf", "design spec.pdf"],
     ["./c%23-guide.md", "c#-guide.md"],
+    ["./日本語%20guide.md", "日本語 guide.md"],
   ] as const;
   for (const [href, filename] of localCases) {
     const expectedPath = path.join(path.dirname(documentPath), filename);
@@ -547,7 +572,7 @@ async function runLinkUriAcceptance(filePath: string): Promise<void> {
     if (target.kind !== "internal") continue;
     assert.equal(target.uri.scheme, documentUri.scheme, href);
     assert.equal(target.uri.authority, documentUri.authority, href);
-    assert.equal(target.uri.fsPath, expectedPath, href);
+    assert.equal(target.uri.fsPath, vscode.Uri.file(expectedPath).fsPath, href);
     await vscode.workspace.fs.stat(target.uri);
   }
 
@@ -754,7 +779,7 @@ async function runWorkspaceFileSearchAcceptance(
     if (resolved.kind === "internal") {
       assert.equal(
         resolved.uri.fsPath,
-        path.join(documentDirectory, "hoge manual.pdf"),
+        vscode.Uri.file(path.join(documentDirectory, "hoge manual.pdf")).fsPath,
       );
       await vscode.workspace.fs.stat(resolved.uri);
     }
@@ -773,7 +798,8 @@ async function runWorkspaceFileSearchAcceptance(
     if (resolvedPercent.kind === "internal") {
       assert.equal(
         resolvedPercent.uri.fsPath,
-        path.join(documentDirectory, "percent%guide.md"),
+        vscode.Uri.file(path.join(documentDirectory, "percent%guide.md"))
+          .fsPath,
       );
       await vscode.workspace.fs.stat(resolvedPercent.uri);
     }
@@ -1053,7 +1079,11 @@ async function runCodeLensAcceptance(
   const siblingTabCountBefore = siblingGroupBefore.tabs.length;
   const diskBefore = await readFile(filePath, "utf8");
   const original = markdownDocument.getText();
-  const dirtyText = original + "\n<!-- CodeLens dirty buffer -->\n";
+  const dirtyText =
+    original +
+    documentLineEnding(markdownDocument) +
+    "<!-- CodeLens dirty buffer -->" +
+    documentLineEnding(markdownDocument);
 
   assert.equal(
     await sourceEditor.edit((builder) => {
@@ -1173,6 +1203,10 @@ async function runCodeLensAcceptance(
     "the Markdown source buffer cleanup",
   );
   await vscode.commands.executeCommand("workbench.action.closeAllEditors");
+}
+
+function documentLineEnding(document: vscode.TextDocument): string {
+  return document.eol === vscode.EndOfLine.CRLF ? "\r\n" : "\n";
 }
 
 async function codeLensesFor(uri: vscode.Uri): Promise<vscode.CodeLens[]> {
