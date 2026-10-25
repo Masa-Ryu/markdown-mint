@@ -81,48 +81,71 @@ describe("GitHub Release workflow", () => {
     }
   });
 
-  it("validates and retains one VSIX for publication without rebuilding", () => {
+  it("packages once in the publication job after read-only validation", () => {
     for (const command of [
       "npm ci",
       "npm run compile",
       "npm test",
       "npm run lint",
       "npm run format:check",
-      "npm run package",
     ])
       expect(validate.steps.some((step) => step.run === command)).toBe(true);
-    expect(validateCommands).toContain("packages=(markdown-mint-*.vsix)");
-    expect(validateCommands).toContain("${#packages[@]} -ne 1");
-    expect(validateCommands).toContain('sha256sum "$expected"');
-    expect(validate.outputs?.sha256).toBe(
-      "${{ steps.artifact.outputs.sha256 }}",
+    expect(validateCommands).not.toContain("npm run package");
+    const packageSteps = Object.values(workflow.jobs).flatMap((job) =>
+      job.steps.filter((step) => step.run === "npm run package"),
     );
-    const upload = validate.steps.find(
-      (step) => step.uses === "actions/upload-artifact@v4",
+    expect(packageSteps).toHaveLength(1);
+    const packageIndex = publish.steps.indexOf(packageSteps[0]!);
+    const checksumIndex = publish.steps.findIndex(
+      (step) => step.id === "payload",
     );
-    expect(upload?.with).toMatchObject({
-      name: "${{ steps.metadata.outputs.artifact_name }}",
-      "if-no-files-found": "error",
-      "retention-days": 90,
+    const releaseIndex = publish.steps.findIndex((step) =>
+      step.run?.includes("gh release upload"),
+    );
+    expect(packageIndex).toBeGreaterThan(
+      publish.steps.findIndex((step) => step.run === "npm ci"),
+    );
+    expect(checksumIndex).toBeGreaterThan(packageIndex);
+    expect(releaseIndex).toBeGreaterThan(checksumIndex);
+    expect(publishCommands).toContain("packages=(markdown-mint-*.vsix)");
+    expect(publishCommands).toContain("${#packages[@]} -ne 1");
+    expect(publishCommands).toContain('sha256sum "$expected"');
+    expect(publish.steps[releaseIndex]?.env).toMatchObject({
+      EXPECTED_SHA256: "${{ steps.payload.outputs.sha256 }}",
+      VSIX_PATH: "${{ steps.payload.outputs.vsix_path }}",
     });
-    expect(upload?.with?.path).toBe(
-      "markdown-mint-${{ steps.metadata.outputs.version }}.vsix\nrelease-notes.md\n",
-    );
-    expect(
-      publish.steps.find((step) => step.uses === "actions/download-artifact@v4")
-        ?.with,
-    ).toEqual({
-      name: "${{ needs.validate.outputs.artifact_name }}",
-      path: "release-payload",
-    });
-    expect(publishCommands).not.toMatch(/npm (?:ci|run)|vsce package/);
-    expect(publishCommands).toContain('sha256sum "$vsix"');
-    expect(publishCommands).toContain('"$actual_sha256" != "$EXPECTED_SHA256"');
     expect(publishCommands).toMatch(
       /create_args=\([^\n]*"\$VSIX_PATH" --draft/,
     );
     expect(publishCommands).toContain('gh release upload "$tag" "$VSIX_PATH"');
     expect(publishCommands).toContain('sha256sum "$asset_dir/$asset_name"');
+  });
+
+  it("fixes package timestamps to the selected commit for checksum-safe retries", () => {
+    const metadata = publish.steps.find((step) => step.id === "build_metadata");
+    expect(metadata?.run).toContain('"$GITHUB_REF" != "refs/heads/main"');
+    expect(metadata?.run).toContain('"$(git rev-parse HEAD)" != "$GITHUB_SHA"');
+    expect(metadata?.run).toContain('"$actual_version" != "$VERSION"');
+    expect(metadata?.run).toContain("git show -s --format=%ct HEAD");
+    const packaging = publish.steps.find(
+      (step) => step.run === "npm run package",
+    );
+    expect(packaging?.env?.SOURCE_DATE_EPOCH).toBe(
+      "${{ steps.build_metadata.outputs.epoch }}",
+    );
+    expect(publishCommands).not.toContain("--clobber");
+    expect(publishCommands).toContain("existing assets must match its SHA-256");
+  });
+
+  it("uses no Actions artifact or dependency-cache storage", () => {
+    expect(source).not.toMatch(
+      /actions\/(?:upload-artifact|download-artifact|cache)@/,
+    );
+    for (const job of Object.values(workflow.jobs))
+      for (const step of job.steps) expect(step.with?.cache).toBeUndefined();
+    expect(validate.outputs).toEqual({
+      version: "${{ steps.metadata.outputs.version }}",
+    });
   });
 
   it("preserves draft recovery and contains no Marketplace publishing setup", () => {

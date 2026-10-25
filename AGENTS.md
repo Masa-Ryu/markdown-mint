@@ -34,7 +34,8 @@ and `npm ci` on `ubuntu-24.04`, `windows-2025`, and `macos-15`, with
 `xvfb-run -a npm run test:extension`; Windows and macOS run
 `npm run test:extension` directly. The required `extension-smoke` aggregate
 uses `needs` and `always()` and succeeds only when the entire matrix succeeds.
-Preserve all four required names and retain OS-specific diagnostics on failure.
+Preserve all four required names and print OS-specific diagnostics in job logs
+on failure. Do not upload Actions artifacts or enable dependency caches.
 If a behavior requires visual or IME inspection, record the manual check in
 the requirements documentation.
 
@@ -61,20 +62,23 @@ description without reconstructing intent from the diff alone.
   to users.
 - Pull request CI runs the compile, unit, lint, format, and package checks as
   separate jobs, and adds browser and Extension Host smoke suites. The release
-  workflow repeats the shared validation against `main` before retaining and
-  publishing its exact VSIX; it does not rerun the browser or Extension Host
+  workflow repeats the shared validation against `main` before packaging and
+  publishing its VSIX; it does not rerun the browser or Extension Host
   suites.
-- Run `.github/workflows/release.yml` manually from `main` to validate and
-  package one VSIX, verify its SHA-256, and retain it as a workflow artifact.
+- Run `.github/workflows/release.yml` manually from `main`. Read-only validation
+  gates the publication job, which packages and verifies one VSIX before any
+  release mutation. Keep packaging and publication in the same job; do not
+  transfer the VSIX through Actions artifact or cache storage.
 - All three Release jobs use GitHub-hosted `ubuntu-24.04`. Verify the
   preinstalled `gh`, `jq`, `curl`, and `sha256sum` before use. Validation has
   `contents: read`; only the publication job has `contents: write`. PR CI uses
   read-only tokens and no secrets. Do not publish a release to test CI changes.
-- The GitHub Release job downloads that exact VSIX, creates or recovers a draft
-  release, verifies the attached asset, and publishes the release. Release tags
-  use `v<version>`.
+- The GitHub Release job fixes `SOURCE_DATE_EPOCH` to the selected commit's
+  timestamp, creates or recovers a draft, downloads and verifies the attached
+  VSIX against the local SHA-256, and publishes. Release tags use `v<version>`.
 - If GitHub Release publication fails, rerun **failed jobs** for that workflow
-  run. The release job reuses the retained VSIX and checksum.
+  run. The release job repackages that same commit with the fixed timestamp.
+  Stop on a checksum mismatch; never overwrite an existing uploaded VSIX.
 
 作業が完了したらPushしてPullrequestの内容を書き上げること。
 issueが見つからない時はissue番号はないです。

@@ -3,11 +3,13 @@
 ## 0.9.6
 
 - Move release validation and publication to standard GitHub-hosted Ubuntu
-  runners while retaining the exact VSIX, SHA-256 verification, and draft
-  recovery flow.
+  runners. Package and publish one VSIX in the same job with fixed timestamps,
+  SHA-256 verification, and draft recovery, without Actions artifact storage.
 - Require stable VS Code Extension Host acceptance on Ubuntu, Windows, and
   macOS through the existing `extension-smoke` check, with separate OS logs
   and explicit line-ending and native-path expectations.
+- Keep diagnostics in job logs and disable Actions artifact uploads and
+  dependency caches.
 
 ## 0.9.5
 

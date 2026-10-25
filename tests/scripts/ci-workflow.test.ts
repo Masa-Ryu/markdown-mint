@@ -51,7 +51,7 @@ describe("Pull request CI workflow", () => {
     });
     expect(
       matrix.steps.find((step) => step.uses === "actions/setup-node@v4")?.with,
-    ).toMatchObject({ "node-version": 22, cache: "npm" });
+    ).toMatchObject({ "node-version": 22 });
     expect(
       matrix.steps.find((step) => step.run?.includes("npm ci"))?.if,
     ).toBeUndefined();
@@ -120,22 +120,24 @@ describe("Pull request CI workflow", () => {
     },
   );
 
-  it("retains separate OS diagnostics and timings even after test failures", () => {
-    const upload = matrix.steps.find(
-      (step) => step.uses === "actions/upload-artifact@v4",
+  it("prints OS diagnostics and timings in job logs without storage uploads", () => {
+    expect(matrix.name).toContain("${{ matrix.os }}");
+    const diagnostics = matrix.steps.find(
+      (step) => step.name === "Print native diagnostics",
     );
-    expect(upload?.if).toBe("always()");
-    expect(upload?.with?.name).toBe(
-      "markdown-mint-${{ github.job }}-${{ matrix.os }}-${{ github.run_id }}-${{ github.run_attempt }}",
-    );
-    expect(upload?.with?.path).toContain("output/ci/");
-    expect(upload?.with?.path).toContain("output/extension-host/");
-    expect(upload?.with?.path).toContain("mm-ext-*/user-data/logs/");
+    expect(diagnostics?.if).toBe("always()");
+    expect(diagnostics?.run).toContain("output/extension-host");
+    expect(diagnostics?.run).toContain('tail -n 100 "$log"');
     const duration = matrix.steps.find(
       (step) => step.name === "Record job duration",
     );
     expect(duration?.if).toBe("always()");
     expect(duration?.env?.JOB_NAME).toContain("${{ matrix.os }}");
+    expect(source).not.toMatch(
+      /actions\/(?:upload-artifact|download-artifact|cache)@/,
+    );
+    for (const job of Object.values(workflow.jobs))
+      for (const step of job.steps) expect(step.with?.cache).toBeUndefined();
   });
 
   it("uses read-only PR tokens with no secrets or release publication", () => {

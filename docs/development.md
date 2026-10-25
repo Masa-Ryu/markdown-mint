@@ -86,11 +86,12 @@ without changing its check names.
 
 Each CI job has read-only `contents` permission. The workflow uses
 `pull_request`, with no secrets or `pull_request_target`. Job duration is
-written to the job summary and CI log. Browser screenshots/reports, captured
-command logs, and native Extension Host logs are uploaded as artifacts even
-when a test fails. Matrix artifact names include the runner OS, run ID, and
-attempt to avoid collisions. Missing artifact paths are ignored because an
-early setup failure may leave no files.
+written to the job summary and CI log. Commands stream their output to the
+OS-specific job log, including failures. Native diagnostic log tails are
+printed in collapsible log groups even after failure. Actions artifact uploads
+and dependency caches are disabled. Browser screenshots/reports and complete
+native log files are available locally under `output/`; CI does not retain
+those files for download after the runner exits.
 
 The block browser suite exercises all five Markdown profile fixtures listed
 above. HTML/PDF browser checks are included in the Phase 1 PR smoke gate after
@@ -115,9 +116,9 @@ Extension Host smoke suites.
 Each CI job runs on its own GitHub-hosted runner. Browser suites execute in
 sequence on their distinct ports 4175 and 4176, and the Extension Host uses
 `runner.temp/markdown-mint-extension` for isolated profile and workspace
-directories. Test failures retain their command logs and native logs before
-cleanup; any logs left by an interrupted process are also included in the
-matrix diagnostic upload.
+directories. Console diagnostics remain in each OS job log; temporary native
+log files are copied locally before cleanup and their tails are printed by
+the matrix diagnostic step.
 
 ## Required checks on main
 
@@ -139,29 +140,44 @@ separately from CI results.
 ## Release validation
 
 `.github/workflows/release.yml` remains a manual, `main`-only release
-workflow. It repeats compile, unit, lint, format, and package validation, then
-retains and publishes the exact verified VSIX. Those five checks overlap with
-PR CI. The release workflow does not run the browser or Extension Host smoke
-suites; PR CI does not create or publish a GitHub Release.
+workflow. It uses no Actions artifact or dependency-cache storage. PR CI
+never creates or publishes a GitHub Release, and the release workflow does
+not run the browser or Extension Host smoke suites.
 
 All three Release jobs (`preflight`, `validate`, and `publish_github_release`)
 run on `ubuntu-24.04`. The validation and publication jobs check the
 preinstalled `gh`, `jq`, `curl`, and `sha256sum` commands before use and fail
 with the missing command's name; no extra installation is required. See the
 [Ubuntu 24.04 runner image inventory](https://github.com/actions/runner-images/blob/main/images/ubuntu/Ubuntu2404-Readme.md).
-No persistent runner or runner-specific credentials need setup.
+No persistent runner or runner-specific credentials need setup. The only
+external Actions are `actions/checkout@v4` and `actions/setup-node@v4`.
 
 Preflight rejects refs other than `refs/heads/main` before checkout. Validation
-checks out the selected commit with read-only `contents` permission, uses
-Node 22 and `npm ci`, and packages exactly one VSIX. It retains that VSIX and
-the release notes in an Actions artifact for 90 days and exposes the VSIX
-SHA-256. Only `publish_github_release` has `contents: write`: it downloads
-the retained payload, verifies its SHA-256, creates or recovers a draft,
-downloads and verifies its attached VSIX, and then publishes. The workflow
-does not publish to the Marketplace.
+checks out the selected commit with read-only `contents` permission and uses
+Node 22 and `npm ci` for compile, unit tests, lint, and formatting. It also
+rejects an existing release/tag and validates release notes. Only
+`publish_github_release` has `contents: write`. After validation succeeds,
+that job checks out the exact same commit, rechecks its version/ref, installs
+the locked dependencies, and runs `npm run package` exactly once, including
+bundled formatter and VSIX validation. Packaging fixes `SOURCE_DATE_EPOCH`
+to that commit's timestamp for reproducible ZIP ordering and entry dates.
 
-If publication fails, rerun **failed jobs** for that workflow run. Recovery
-reuses the exact retained VSIX and checksum; it does not rebuild the package.
-Do not dispatch Release merely to validate CI changes. YAML/Bash validation
-and the workflow/recovery regression suites cover the publication definition
-without creating a tag or release.
+The publication job requires exactly one expected VSIX, computes its SHA-256,
+and creates or recovers a draft using that same local file. It downloads the
+attached VSIX and checks its SHA-256 before publishing. There is no
+cross-job binary transfer, and the workflow does not publish to the
+Marketplace.
+
+If publication fails, rerun **failed jobs** for that workflow run. The
+publication job repackages the same pinned commit with the same timestamp
+and checks the existing draft/published asset against that package. It never
+replaces an uploaded VSIX to hide a checksum mismatch. An empty interrupted
+starter upload can still be removed and retried by the recovery planner.
+Unlike retained artifact recovery, this requires the locked dependencies
+and build environment to reproduce the same bytes; if they do not, recovery
+stops for inspection instead of publishing different bytes. No unpublished
+VSIX is retained after the runner exits.
+
+Do not dispatch Release merely to validate CI changes. YAML/Bash validation,
+the workflow/recovery regression suites, and repeated local package checksum
+verification cover this definition without creating a tag or release.

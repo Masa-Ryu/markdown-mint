@@ -37,7 +37,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: npm
 
       - name: Install dependencies
         shell: bash
@@ -88,17 +87,6 @@ jobs:
             echo "$message" | tee -a output/ci/runtime.log
           fi
 
-      - name: Upload diagnostics
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: markdown-mint-${{ github.job }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: |
-            output/ci/
-            output/playwright/
-          if-no-files-found: ignore
-          retention-days: 14
-
   browser-smoke:
     name: browser-smoke
     runs-on: ubuntu-24.04
@@ -121,7 +109,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: npm
 
       - name: Install dependencies
         shell: bash
@@ -178,17 +165,6 @@ jobs:
             echo "$message" | tee -a output/ci/runtime.log
           fi
 
-      - name: Upload diagnostics
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: markdown-mint-${{ github.job }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: |
-            output/ci/
-            output/playwright/
-          if-no-files-found: ignore
-          retention-days: 14
-
   extension-host-matrix:
     name: extension-host (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
@@ -218,7 +194,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: npm
 
       - name: Check preinstalled Xvfb on Linux
         if: runner.os == 'Linux'
@@ -272,17 +247,17 @@ jobs:
             echo "$message" | tee -a output/ci/runtime.log
           fi
 
-      - name: Upload diagnostics
+      - name: Print native diagnostics
         if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: markdown-mint-${{ github.job }}-${{ matrix.os }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: |
-            output/ci/
-            output/extension-host/
-            ${{ runner.temp }}/markdown-mint-extension/mm-ext-*/user-data/logs/
-          if-no-files-found: ignore
-          retention-days: 14
+        shell: bash
+        run: |
+          if [[ -d output/extension-host ]]; then
+            while IFS= read -r log; do
+              echo "::group::$log"
+              tail -n 100 "$log"
+              echo "::endgroup::"
+            done < <(find output/extension-host -type f -name '*.log' | sort)
+          fi
 
   extension-smoke:
     name: extension-smoke
@@ -324,7 +299,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: npm
 
       - name: Install dependencies
         shell: bash
@@ -356,14 +330,3 @@ jobs:
           if [[ -d output/ci ]]; then
             echo "$message" | tee -a output/ci/runtime.log
           fi
-
-      - name: Upload diagnostics
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: markdown-mint-${{ github.job }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: |
-            output/ci/
-            output/playwright/
-          if-no-files-found: ignore
-          retention-days: 14
