@@ -34,6 +34,8 @@ and `npm ci` on `ubuntu-24.04`, `windows-2025`, and `macos-15`, with
 `xvfb-run -a npm run test:extension`; Windows and macOS run
 `npm run test:extension` directly. The required `extension-smoke` aggregate
 uses `needs` and `always()` and succeeds only when the entire matrix succeeds.
+The compatibility job `test` strictly aggregates the four current checks for
+older rulesets that still require that name; do not weaken either aggregate.
 Preserve all four required names and print OS-specific diagnostics in job logs
 on failure. Do not upload Actions artifacts or enable dependency caches.
 If a behavior requires visual or IME inspection, record the manual check in

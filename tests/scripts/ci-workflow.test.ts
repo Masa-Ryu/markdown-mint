@@ -6,6 +6,7 @@ import { jobCommands, readWorkflow } from "./workflow-helpers";
 const { source, workflow } = readWorkflow("ci.yml");
 const matrix = workflow.jobs["extension-host-matrix"]!;
 const aggregate = workflow.jobs["extension-smoke"]!;
+const legacy = workflow.jobs.test!;
 const runners = ["ubuntu-24.04", "windows-2025", "macos-15"];
 
 describe("Pull request CI workflow", () => {
@@ -139,6 +140,48 @@ describe("Pull request CI workflow", () => {
     for (const job of Object.values(workflow.jobs))
       for (const step of job.steps) expect(step.with?.cache).toBeUndefined();
   });
+
+  it("keeps legacy test rulesets gated on all four current required checks", () => {
+    expect(legacy.name).toBe("test");
+    expect(legacy.needs).toEqual([
+      "quality",
+      "browser-smoke",
+      "extension-smoke",
+      "package-check",
+    ]);
+    expect(legacy.if).toBe("${{ always() }}");
+    expect(legacy["runs-on"]).toBe("ubuntu-24.04");
+    expect(legacy.steps[0]?.env?.REQUIRED_RESULTS).toBe(
+      "${{ join(needs.*.result, ',') }}",
+    );
+  });
+
+  it.each([
+    "success,success,success,success",
+    ...["failure", "cancelled", "skipped"].flatMap((status) =>
+      Array.from({ length: 4 }, (_, index) =>
+        Array.from({ length: 4 }, (_, current) =>
+          current === index ? status : "success",
+        ).join(","),
+      ),
+    ),
+  ])(
+    "does not pass the legacy gate unless every check succeeded (%s)",
+    (results) => {
+      const execution = spawnSync("bash", ["-e", "-c", jobCommands(legacy)], {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          REQUIRED_RESULTS: results,
+          GITHUB_STEP_SUMMARY: devNull,
+        },
+      });
+      expect(execution.error).toBeUndefined();
+      expect(execution.status).toBe(
+        results === "success,success,success,success" ? 0 : 1,
+      );
+    },
+  );
 
   it("uses read-only PR tokens with no secrets or release publication", () => {
     expect(Object.keys(workflow.on)).toEqual([

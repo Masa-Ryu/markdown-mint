@@ -78,7 +78,12 @@ and `MARKDOWN_MINT_VSCODE_VERSION=stable` on each OS:
 
 Linux checks for the runner image's preinstalled `xvfb-run` and fails clearly
 if it is missing; no Xvfb installation is needed. Windows and macOS launch
-VS Code directly. All matrix commands use Bash (Git Bash on Windows), and each
+VS Code directly. On macOS CI, the acceptance runner activates its own running
+VS Code application through LaunchServices before asserting native editor
+focus; the hosted agent initially starts it in the background. Fixture setup
+also waits for the native filesystem provider to observe the test directories
+before exercising bounded directory discovery. All matrix commands use Bash
+(Git Bash on Windows), and each
 OS job has a 30-minute timeout. `fail-fast: false` lets every OS finish after a
 failure. No job or step ignores test failures. The aggregate uses
 `needs: extension-host-matrix` and `always()` and fails for a failed, cancelled,
@@ -132,6 +137,11 @@ ruleset:
 - `browser-smoke`
 - `extension-smoke`
 - `package-check`
+
+The compatibility job `test` depends on all four checks and uses `always()`
+to reject any failed, cancelled, or skipped dependency. Existing rulesets that
+still require only `test` therefore enforce the same complete gate without a
+repository settings change. Keep the four current names when updating rulesets.
 
 In GitHub, open **Settings → Branches** (or **Rules → Rulesets**), edit the
 rule targeting `main`, enable **Require status checks to pass before merging**,

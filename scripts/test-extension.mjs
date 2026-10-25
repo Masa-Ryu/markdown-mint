@@ -30,6 +30,10 @@ try {
     { recursive: true },
   );
   const vscodeExecutablePath = await resolveVSCodeExecutable();
+  const testApplication =
+    process.platform === "darwin"
+      ? vscodeExecutablePath.match(/^(.*\.app)\/Contents\/MacOS\/[^/]+$/u)?.[1]
+      : undefined;
   console.log(`Extension Host platform: ${process.platform} ${process.arch}`);
   console.log(`Extension Host temporary workspace: ${temporaryRoot}`);
   const exitCode = await runTests({
@@ -38,6 +42,11 @@ try {
     vscodeExecutablePath,
     extensionTestsEnv: {
       MARKDOWN_MINT_TEST_FILE: testFile,
+      ...(testApplication && process.env.CI === "true"
+        ? {
+            MARKDOWN_MINT_TEST_APP: testApplication,
+          }
+        : {}),
       MARKDOWN_MINT_FIXTURE_DIR: resolve(
         extensionDevelopmentPath,
         "tests",

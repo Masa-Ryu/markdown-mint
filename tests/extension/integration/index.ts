@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import * as path from "node:path";
@@ -88,6 +89,20 @@ function createLargePng(width: number, height: number): Buffer {
  */
 export async function run(): Promise<void> {
   assert.ok(TEST_FILE, "MARKDOWN_MINT_TEST_FILE must point at a fixture");
+  const testApp = process.env.MARKDOWN_MINT_TEST_APP;
+  if (process.platform === "darwin" && testApp) {
+    // The hosted macOS agent launches executables in the background. Ask
+    // LaunchServices to activate this already-running test application so
+    // activeTextEditor and the selected tab describe the same native window.
+    execFileSync("/usr/bin/open", ["-a", testApp], {
+      stdio: "inherit",
+      timeout: 10_000,
+    });
+    await waitFor(
+      () => vscode.window.state.focused,
+      "the native test window to gain OS focus",
+    );
+  }
   const filePath = path.resolve(TEST_FILE);
   const fileUri = vscode.Uri.file(filePath);
   const extension = vscode.extensions.getExtension("masa-ryu.markdown-mint");
@@ -1071,16 +1086,12 @@ async function runCodeLensAcceptance(
     "the sibling source editor to be active",
   );
 
-  await vscode.commands.executeCommand(
-    "workbench.action.focusFirstEditorGroup",
-  );
   const sourceEditor = await vscode.window.showTextDocument(markdownDocument, {
     viewColumn: sourceViewColumn,
     preview: false,
     preserveFocus: false,
   });
-  // On a fresh macOS host, showing a tab can finish before its text widget
-  // receives focus. Establish the test's editor focus before asserting it.
+  // Give the text widget editor focus before testing CodeLens behavior.
   await vscode.commands.executeCommand(
     "workbench.action.focusActiveEditorGroup",
   );
@@ -1234,6 +1245,13 @@ async function runCodeLensAcceptance(
     viewColumn: sourceViewColumn,
     preview: false,
   });
+  await vscode.commands.executeCommand(
+    "workbench.action.focusActiveEditorGroup",
+  );
+  await waitFor(
+    () => vscode.window.activeTextEditor?.document === markdownDocument,
+    "the source editor to regain focus after the diff",
+  );
   await vscode.commands.executeCommand("undo");
   await waitFor(
     () => markdownDocument.getText() === original && !markdownDocument.isDirty,
@@ -1285,6 +1303,9 @@ async function waitFor(
           JSON.stringify({
             activeDocument:
               vscode.window.activeTextEditor?.document.uri.toString(),
+            activeDocumentDirty:
+              vscode.window.activeTextEditor?.document.isDirty,
+            activeDocumentEol: vscode.window.activeTextEditor?.document.eol,
             activeGroup: group.viewColumn,
             activeTab: group.activeTab?.label,
             activeInput: group.activeTab?.input?.constructor.name,

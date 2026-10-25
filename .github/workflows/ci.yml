@@ -87,6 +87,28 @@ jobs:
             echo "$message" | tee -a output/ci/runtime.log
           fi
 
+  # Older main rulesets require this name. Keep all four current checks
+  # mandatory through it without changing repository protection settings.
+  test:
+    name: test
+    needs: [quality, browser-smoke, extension-smoke, package-check]
+    if: ${{ always() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Require all four CI checks to succeed
+        env:
+          REQUIRED_RESULTS: ${{ join(needs.*.result, ',') }}
+        shell: bash
+        run: |
+          if [[ "$REQUIRED_RESULTS" != "success,success,success,success" ]]; then
+            echo "::error::Required CI checks did not all succeed (results: $REQUIRED_RESULTS)."
+            exit 1
+          fi
+          echo "All four required CI checks passed." >> "$GITHUB_STEP_SUMMARY"
+
   browser-smoke:
     name: browser-smoke
     runs-on: ubuntu-24.04
