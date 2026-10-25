@@ -1046,7 +1046,13 @@ async function runCodeLensAcceptance(
   const sourceEditor = await vscode.window.showTextDocument(markdownDocument, {
     viewColumn: sourceViewColumn,
     preview: false,
+    preserveFocus: false,
   });
+  // On a fresh macOS host, showing a tab can finish before its text widget
+  // receives focus. Establish the test's editor focus before asserting it.
+  await vscode.commands.executeCommand(
+    "workbench.action.focusActiveEditorGroup",
+  );
   await waitFor(() => {
     const activeGroup = vscode.window.tabGroups.activeTabGroup;
     const activeInput = activeGroup.activeTab?.input;
@@ -1241,8 +1247,19 @@ async function waitFor(
 ): Promise<void> {
   const started = Date.now();
   while (!predicate()) {
-    if (Date.now() - started >= timeoutMs)
-      throw new Error(`Timed out waiting for ${description}.`);
+    if (Date.now() - started >= timeoutMs) {
+      const group = vscode.window.tabGroups.activeTabGroup;
+      throw new Error(
+        `Timed out waiting for ${description}. ` +
+          JSON.stringify({
+            activeDocument:
+              vscode.window.activeTextEditor?.document.uri.toString(),
+            activeGroup: group.viewColumn,
+            activeTab: group.activeTab?.label,
+            activeInput: group.activeTab?.input?.constructor.name,
+          }),
+      );
+    }
     await new Promise<void>((resolve) => setTimeout(resolve, 50));
   }
 }

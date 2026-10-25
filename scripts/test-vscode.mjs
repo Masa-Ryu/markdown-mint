@@ -52,17 +52,23 @@ async function executableVersion(executablePath) {
     directory = parent;
   }
   for (const root of roots) {
-    const productPaths = [
-      join(root, "resources", "app", "product.json"),
-      join(root, "Resources", "app", "product.json"),
-      join(root, "Contents", "Resources", "app", "product.json"),
+    const appRoots = [
+      join(root, "resources", "app"),
+      join(root, "Resources", "app"),
+      join(root, "Contents", "Resources", "app"),
     ];
-    for (const productPath of productPaths) {
-      try {
-        const product = JSON.parse(await readFile(productPath, "utf8"));
-        if (typeof product.version === "string") return product.version;
-      } catch {
-        // Continue until the executable's VS Code product metadata is found.
+    for (const appRoot of appRoots) {
+      for (const filename of ["package.json", "product.json"]) {
+        try {
+          const metadata = JSON.parse(
+            await readFile(join(appRoot, filename), "utf8"),
+          );
+          if (typeof metadata.version === "string") return metadata.version;
+        } catch {
+          // Some distributions omit version from product.json. Read package
+          // metadata before falling back to a CLI invocation, which can open
+          // a GUI process when the executable is Code.exe on Windows.
+        }
       }
     }
   }

@@ -70,6 +70,16 @@ describe("VS Code test executable selection", () => {
     expect(download).not.toHaveBeenCalled();
   });
 
+  it("reads Windows package metadata without launching Code.exe for its version", async () => {
+    const expected = await executable("Code.exe");
+    const resources = join(root, "resources", "app");
+    await writeFile(join(resources, "product.json"), "{}");
+    await writeFile(join(resources, "package.json"), '{"version":"1.143.1"}');
+    download.mockResolvedValue(expected);
+    // The fixture executable is an empty file and cannot report a version.
+    await expect(resolveVSCodeExecutable()).resolves.toBe(expected);
+  });
+
   it("rejects an invalid explicit path even when a renamed sibling exists", async () => {
     const directory = "Visual Studio Code.app/Contents/MacOS";
     await executable(join(directory, "Code"));
