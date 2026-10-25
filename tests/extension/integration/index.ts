@@ -674,6 +674,24 @@ async function runWorkspaceFileSearchAcceptance(
     { "**/excluded/**": true },
     vscode.ConfigurationTarget.Workspace,
   );
+  // Node created the fixtures outside the VS Code filesystem API. Wait for
+  // the native provider to observe them before testing the bounded 150 ms
+  // directory scan; cold provider activation is not the scan under test.
+  const readinessStarted = performance.now();
+  await vscode.workspace.fs.readDirectory(workspaceFolder.uri);
+  const fixtureEntries = await vscode.workspace.fs.readDirectory(
+    vscode.Uri.file(documentDirectory),
+  );
+  assert.ok(
+    fixtureEntries.some(
+      ([name, type]) =>
+        name === "empty" && (type & vscode.FileType.Directory) !== 0,
+    ),
+    "the native filesystem provider observes the empty fixture directory",
+  );
+  console.log(
+    `Native filesystem fixture readiness: ${(performance.now() - readinessStarted).toFixed(1)} ms`,
+  );
   const search = new WorkspaceFileSearchHost();
   try {
     const linkCandidates = await search.searchFiles(
@@ -1053,6 +1071,9 @@ async function runCodeLensAcceptance(
     "the sibling source editor to be active",
   );
 
+  await vscode.commands.executeCommand(
+    "workbench.action.focusFirstEditorGroup",
+  );
   const sourceEditor = await vscode.window.showTextDocument(markdownDocument, {
     viewColumn: sourceViewColumn,
     preview: false,
@@ -1267,6 +1288,11 @@ async function waitFor(
             activeGroup: group.viewColumn,
             activeTab: group.activeTab?.label,
             activeInput: group.activeTab?.input?.constructor.name,
+            windowFocused: vscode.window.state.focused,
+            visibleEditors: vscode.window.visibleTextEditors.map((editor) => ({
+              uri: editor.document.uri.toString(),
+              column: editor.viewColumn,
+            })),
           }),
       );
     }
