@@ -1042,6 +1042,16 @@ async function runCodeLensAcceptance(
     sourceViewColumn,
     "the sibling source is in another editor group",
   );
+  // showTextDocument can resolve before the Extension Host receives the
+  // active-editor notification. Finish the sibling transition before
+  // requesting the transition back to the original source editor.
+  await waitFor(
+    () =>
+      vscode.window.tabGroups.activeTabGroup.viewColumn === siblingViewColumn &&
+      vscode.window.activeTextEditor?.document.uri.toString() ===
+        siblingUri.toString(),
+    "the sibling source editor to be active",
+  );
 
   const sourceEditor = await vscode.window.showTextDocument(markdownDocument, {
     viewColumn: sourceViewColumn,

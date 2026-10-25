@@ -1,8 +1,18 @@
-import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  realpath,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { resolveVSCodeExecutable } from "../../scripts/test-vscode.mjs";
+import {
+  resolveVSCodeExecutable,
+  resolveVSCodeMarkdownCss,
+} from "../../scripts/test-vscode.mjs";
 
 const { download } = vi.hoisted(() => ({ download: vi.fn() }));
 vi.mock("@vscode/test-electron", () => ({ downloadAndUnzipVSCode: download }));
@@ -11,9 +21,10 @@ describe("VS Code test executable selection", () => {
   let root: string;
 
   beforeEach(async () => {
-    root = await mkdtemp(join(tmpdir(), "mm-vscode-resolver-"));
+    root = await realpath(await mkdtemp(join(tmpdir(), "mm-vscode-resolver-")));
     vi.stubEnv("MARKDOWN_MINT_VSCODE_VERSION", "stable");
     vi.stubEnv("MARKDOWN_MINT_CODE", "");
+    vi.stubEnv("VSCODE_MARKDOWN_CSS", "");
     download.mockReset();
   });
 
@@ -79,6 +90,34 @@ describe("VS Code test executable selection", () => {
     // The fixture executable is an empty file and cannot report a version.
     await expect(resolveVSCodeExecutable()).resolves.toBe(expected);
   });
+
+  it.each(["code.cmd", "code-insiders.cmd"])(
+    "uses the active Windows version folder named in %s",
+    async (launcher) => {
+      const expected = await executable("Code.exe");
+      await rm(join(root, "resources"), { recursive: true, force: true });
+      const versionFolder = "e646868227";
+      const app = join(root, versionFolder, "resources", "app");
+      const css = join(
+        app,
+        "extensions",
+        "markdown-language-features",
+        "media",
+        "markdown.css",
+      );
+      await mkdir(dirname(css), { recursive: true });
+      await writeFile(css, "body {}");
+      await writeFile(join(app, "package.json"), '{"version":"1.143.1"}');
+      await mkdir(join(root, "bin"), { recursive: true });
+      await writeFile(
+        join(root, "bin", launcher),
+        `"%~dp0..\\Code.exe" "%~dp0..\\${versionFolder}\\resources\\app\\out\\cli.js" %*\r\n`,
+      );
+      download.mockResolvedValue(expected);
+      await expect(resolveVSCodeExecutable()).resolves.toBe(expected);
+      await expect(resolveVSCodeMarkdownCss()).resolves.toBe(css);
+    },
+  );
 
   it("rejects an invalid explicit path even when a renamed sibling exists", async () => {
     const directory = "Visual Studio Code.app/Contents/MacOS";

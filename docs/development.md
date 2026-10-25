@@ -46,7 +46,9 @@ Windows drive normalization; Markdown links retain encoded POSIX separators.
 `@vscode/test-electron` selects the VS Code download for the current OS and
 architecture and handles native process shutdown. The resolver accepts both
 legacy `Electron` and current `Code` executable names inside downloaded macOS
-bundles, including Insiders. After each run, any native log files are copied to
+bundles, including Insiders. On Windows, it reads the CLI launcher's active
+version-folder reference to find application metadata and native Markdown CSS
+without launching the GUI to query its version. After each run, any native log files are copied to
 `output/extension-host/` before temporary workspace deletion;
 deletion retries transient file locks on Windows.
 
