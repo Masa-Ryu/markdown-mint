@@ -92,7 +92,7 @@ export async function runAiSuggestionAcceptance(
     canSuggest: () => true,
     synced: () => !sync.hasPending,
     version: () => version,
-    documentId: () => documentUri.toString(),
+    documentId: () => document.uri.toString(true),
     markdown: () => source,
     profile: () => "github",
     sourceOffset: (current, position) =>

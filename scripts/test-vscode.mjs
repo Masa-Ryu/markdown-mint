@@ -2,7 +2,7 @@ import { downloadAndUnzipVSCode } from "@vscode/test-electron";
 import { existsSync } from "node:fs";
 import { access, constants, readFile, realpath } from "node:fs/promises";
 import { execFileSync } from "node:child_process";
-import { delimiter, dirname, join, resolve } from "node:path";
+import { basename, delimiter, dirname, join, resolve } from "node:path";
 
 const markdownCssRelativePath = [
   "extensions",
@@ -42,30 +42,59 @@ function installedCodeCandidates() {
     ]);
 }
 
-async function executableVersion(executablePath) {
-  const roots = new Set();
+async function appRootsForExecutable(executablePath) {
+  const appRoots = [];
+  const executableDirectory = dirname(executablePath);
+  // Recent Windows distributions keep resources under a commit-named folder.
+  // The CLI launcher identifies the active folder even after an update leaves
+  // older versions beside it. Read the launcher; never execute it here.
+  for (const launcher of ["code.cmd", "code-insiders.cmd"]) {
+    try {
+      const script = await readFile(
+        join(executableDirectory, "bin", launcher),
+        "utf8",
+      );
+      const match = script.match(
+        /%~dp0\.\.\\([0-9a-f]{10,40})\\resources\\app\\out\\cli\.js/iu,
+      );
+      if (match)
+        appRoots.push(join(executableDirectory, match[1], "resources", "app"));
+    } catch {
+      // Legacy Windows, macOS, and Linux distributions use the roots below.
+    }
+  }
   let directory = dirname(executablePath);
   for (let depth = 0; depth < 8; depth += 1) {
-    roots.add(directory);
+    appRoots.push(
+      join(directory, "resources", "app"),
+      join(directory, "Resources", "app"),
+      join(directory, "Contents", "Resources", "app"),
+    );
     const parent = dirname(directory);
     if (parent === directory) break;
     directory = parent;
   }
-  for (const root of roots) {
-    const productPaths = [
-      join(root, "resources", "app", "product.json"),
-      join(root, "Resources", "app", "product.json"),
-      join(root, "Contents", "Resources", "app", "product.json"),
-    ];
-    for (const productPath of productPaths) {
+  return [...new Set(appRoots)];
+}
+
+async function executableVersion(executablePath) {
+  for (const appRoot of await appRootsForExecutable(executablePath)) {
+    for (const filename of ["package.json", "product.json"]) {
       try {
-        const product = JSON.parse(await readFile(productPath, "utf8"));
-        if (typeof product.version === "string") return product.version;
+        const metadata = JSON.parse(
+          await readFile(join(appRoot, filename), "utf8"),
+        );
+        if (typeof metadata.version === "string") return metadata.version;
       } catch {
-        // Continue until the executable's VS Code product metadata is found.
+        // Continue through the selected VS Code distribution's metadata.
       }
     }
   }
+
+  if (process.platform === "win32")
+    throw new Error(
+      "Could not find VS Code version metadata for " + executablePath,
+    );
 
   let output;
   try {
@@ -88,6 +117,23 @@ async function executableVersion(executablePath) {
   return output.trim().split(/\r?\n/u)[0] || "unknown";
 }
 
+async function downloadedVSCodeExecutable(version) {
+  const executablePath = await downloadAndUnzipVSCode(version);
+  // Older test-electron versions return Electron for macOS bundles. Recent
+  // VS Code releases name that executable Code (or Code - Insiders).
+  if (
+    !existsSync(executablePath) &&
+    basename(executablePath) === "Electron" &&
+    basename(dirname(executablePath)) === "MacOS"
+  ) {
+    for (const name of ["Code", "Code - Insiders"]) {
+      const candidate = join(dirname(executablePath), name);
+      if (existsSync(candidate)) return candidate;
+    }
+  }
+  return executablePath;
+}
+
 export async function resolveVSCodeExecutable(options = {}) {
   const explicitExecutable = process.env.MARKDOWN_MINT_CODE;
   const requestedVersion = process.env.MARKDOWN_MINT_VSCODE_VERSION;
@@ -99,7 +145,7 @@ export async function resolveVSCodeExecutable(options = {}) {
     selection = "MARKDOWN_MINT_CODE";
   } else if (requestedVersion || options.forceDownload) {
     const version = requestedVersion ?? "stable";
-    executablePath = await downloadAndUnzipVSCode(version);
+    executablePath = await downloadedVSCodeExecutable(version);
     selection = "downloaded " + version;
   } else {
     executablePath = installedCodeCandidates().find((candidate) => {
@@ -107,7 +153,7 @@ export async function resolveVSCodeExecutable(options = {}) {
     });
     if (executablePath) selection = "installed VS Code";
     else {
-      executablePath = await downloadAndUnzipVSCode("stable");
+      executablePath = await downloadedVSCodeExecutable("stable");
       selection = "downloaded stable";
     }
   }
@@ -145,28 +191,13 @@ async function markdownCssForExecutable(executablePath) {
     // The executable itself is validated by resolveVSCodeExecutable().
   }
 
-  const roots = new Set();
-  let directory = dirname(resolvedExecutable);
-  for (let depth = 0; depth < 8; depth += 1) {
-    roots.add(directory);
-    const parent = dirname(directory);
-    if (parent === directory) break;
-    directory = parent;
-  }
-
-  for (const root of roots) {
-    const candidates = [
-      join(root, "resources", "app", ...markdownCssRelativePath),
-      join(root, "Resources", "app", ...markdownCssRelativePath),
-      join(root, "Contents", "Resources", "app", ...markdownCssRelativePath),
-    ];
-    for (const candidate of candidates) {
-      try {
-        await access(candidate, constants.R_OK);
-        return candidate;
-      } catch {
-        // Continue through the executable's containing application directories.
-      }
+  for (const appRoot of await appRootsForExecutable(resolvedExecutable)) {
+    const candidate = join(appRoot, ...markdownCssRelativePath);
+    try {
+      await access(candidate, constants.R_OK);
+      return candidate;
+    } catch {
+      // Continue through the executable's containing application directories.
     }
   }
   return undefined;

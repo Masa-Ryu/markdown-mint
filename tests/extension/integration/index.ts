@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import * as path from "node:path";
@@ -88,6 +89,20 @@ function createLargePng(width: number, height: number): Buffer {
  */
 export async function run(): Promise<void> {
   assert.ok(TEST_FILE, "MARKDOWN_MINT_TEST_FILE must point at a fixture");
+  const testApp = process.env.MARKDOWN_MINT_TEST_APP;
+  if (process.platform === "darwin" && testApp) {
+    // The hosted macOS agent launches executables in the background. Ask
+    // LaunchServices to activate this already-running test application so
+    // activeTextEditor and the selected tab describe the same native window.
+    execFileSync("/usr/bin/open", ["-a", testApp], {
+      stdio: "inherit",
+      timeout: 10_000,
+    });
+    await waitFor(
+      () => vscode.window.state.focused,
+      "the native test window to gain OS focus",
+    );
+  }
   const filePath = path.resolve(TEST_FILE);
   const fileUri = vscode.Uri.file(filePath);
   const extension = vscode.extensions.getExtension("masa-ryu.markdown-mint");
@@ -200,7 +215,11 @@ export async function run(): Promise<void> {
     );
   }, "the Markdown Mint custom editor to become active again");
 
-  const customChanged = `${original}\n<!-- custom resource edit -->\n`;
+  const customChanged =
+    original +
+    documentLineEnding(document) +
+    "<!-- custom resource edit -->" +
+    documentLineEnding(document);
   const customWorkspaceEdit = new vscode.WorkspaceEdit();
   customWorkspaceEdit.replace(
     fileUri,
@@ -246,7 +265,11 @@ export async function run(): Promise<void> {
     },
   );
   const sourceOriginal = sourceHistoryDocument.getText();
-  const sourceChanged = `${sourceOriginal}\n<!-- native acceptance edit -->\n`;
+  const sourceChanged =
+    sourceOriginal +
+    documentLineEnding(sourceHistoryDocument) +
+    "<!-- native acceptance edit -->" +
+    documentLineEnding(sourceHistoryDocument);
   const applied = await sourceEditor.edit((builder) => {
     builder.replace(fullDocumentRange(sourceHistoryDocument), sourceChanged);
   });
@@ -275,7 +298,8 @@ export async function run(): Promise<void> {
 
   // The extension format command applies a minimal WorkspaceEdit. The
   // fixture intentionally has no final newline so disk output proves the
-  // formatter and save path ran.
+  // formatter and save path ran. tests/fixtures/.editorconfig requires CRLF
+  // on every OS; start from LF to verify that the project setting wins.
   await vscode.commands.executeCommand("markdownMint.openSource", fileUri);
   document = await vscode.workspace.openTextDocument(fileUri);
   const sourceDocumentEditor = await vscode.window.showTextDocument(document, {
@@ -283,6 +307,7 @@ export async function run(): Promise<void> {
   });
   const unformatted = "# Native format check";
   await sourceDocumentEditor.edit((builder) => {
+    builder.setEndOfLine(vscode.EndOfLine.LF);
     builder.replace(fullDocumentRange(document), unformatted);
   });
   await vscode.commands.executeCommand("markdownMint.formatDocument", fileUri);
@@ -292,7 +317,21 @@ export async function run(): Promise<void> {
     "the native format command to add the final newline",
   );
   await document.save();
+  assert.equal(document.eol, vscode.EndOfLine.CRLF);
   assert.equal(await readFile(filePath, "utf8"), `${unformatted}\r\n`);
+
+  // This fixture overrides the project CRLF setting with LF. Start with
+  // explicit CRLF bytes so neither direction relies on the OS default EOL.
+  const lfUri = vscode.Uri.file(
+    path.join(path.dirname(filePath), "format-lf.md"),
+  );
+  await writeFile(lfUri.fsPath, "# LF format check\r\n", "utf8");
+  const lfDocument = await vscode.workspace.openTextDocument(lfUri);
+  assert.equal(lfDocument.eol, vscode.EndOfLine.CRLF);
+  await vscode.commands.executeCommand("markdownMint.formatDocument", lfUri);
+  await lfDocument.save();
+  assert.equal(lfDocument.eol, vscode.EndOfLine.LF);
+  assert.equal(await readFile(lfUri.fsPath, "utf8"), "# LF format check\n");
 
   const configuration = vscode.workspace.getConfiguration(
     "markdownMint",
@@ -538,6 +577,7 @@ async function runLinkUriAcceptance(filePath: string): Promise<void> {
     ["./hoge%20manual.pdf", "hoge manual.pdf"],
     ["../docs/design%20spec.pdf", "design spec.pdf"],
     ["./c%23-guide.md", "c#-guide.md"],
+    ["./日本語%20guide.md", "日本語 guide.md"],
   ] as const;
   for (const [href, filename] of localCases) {
     const expectedPath = path.join(path.dirname(documentPath), filename);
@@ -547,7 +587,7 @@ async function runLinkUriAcceptance(filePath: string): Promise<void> {
     if (target.kind !== "internal") continue;
     assert.equal(target.uri.scheme, documentUri.scheme, href);
     assert.equal(target.uri.authority, documentUri.authority, href);
-    assert.equal(target.uri.fsPath, expectedPath, href);
+    assert.equal(target.uri.fsPath, vscode.Uri.file(expectedPath).fsPath, href);
     await vscode.workspace.fs.stat(target.uri);
   }
 
@@ -648,6 +688,24 @@ async function runWorkspaceFileSearchAcceptance(
     "exclude",
     { "**/excluded/**": true },
     vscode.ConfigurationTarget.Workspace,
+  );
+  // Node created the fixtures outside the VS Code filesystem API. Wait for
+  // the native provider to observe them before testing the bounded 150 ms
+  // directory scan; cold provider activation is not the scan under test.
+  const readinessStarted = performance.now();
+  await vscode.workspace.fs.readDirectory(workspaceFolder.uri);
+  const fixtureEntries = await vscode.workspace.fs.readDirectory(
+    vscode.Uri.file(documentDirectory),
+  );
+  assert.ok(
+    fixtureEntries.some(
+      ([name, type]) =>
+        name === "empty" && (type & vscode.FileType.Directory) !== 0,
+    ),
+    "the native filesystem provider observes the empty fixture directory",
+  );
+  console.log(
+    `Native filesystem fixture readiness: ${(performance.now() - readinessStarted).toFixed(1)} ms`,
   );
   const search = new WorkspaceFileSearchHost();
   try {
@@ -754,7 +812,7 @@ async function runWorkspaceFileSearchAcceptance(
     if (resolved.kind === "internal") {
       assert.equal(
         resolved.uri.fsPath,
-        path.join(documentDirectory, "hoge manual.pdf"),
+        vscode.Uri.file(path.join(documentDirectory, "hoge manual.pdf")).fsPath,
       );
       await vscode.workspace.fs.stat(resolved.uri);
     }
@@ -773,7 +831,8 @@ async function runWorkspaceFileSearchAcceptance(
     if (resolvedPercent.kind === "internal") {
       assert.equal(
         resolvedPercent.uri.fsPath,
-        path.join(documentDirectory, "percent%guide.md"),
+        vscode.Uri.file(path.join(documentDirectory, "percent%guide.md"))
+          .fsPath,
       );
       await vscode.workspace.fs.stat(resolvedPercent.uri);
     }
@@ -1016,11 +1075,26 @@ async function runCodeLensAcceptance(
     sourceViewColumn,
     "the sibling source is in another editor group",
   );
+  // showTextDocument can resolve before the Extension Host receives the
+  // active-editor notification. Finish the sibling transition before
+  // requesting the transition back to the original source editor.
+  await waitFor(
+    () =>
+      vscode.window.tabGroups.activeTabGroup.viewColumn === siblingViewColumn &&
+      vscode.window.activeTextEditor?.document.uri.toString() ===
+        siblingUri.toString(),
+    "the sibling source editor to be active",
+  );
 
   const sourceEditor = await vscode.window.showTextDocument(markdownDocument, {
     viewColumn: sourceViewColumn,
     preview: false,
+    preserveFocus: false,
   });
+  // Give the text widget editor focus before testing CodeLens behavior.
+  await vscode.commands.executeCommand(
+    "workbench.action.focusActiveEditorGroup",
+  );
   await waitFor(() => {
     const activeGroup = vscode.window.tabGroups.activeTabGroup;
     const activeInput = activeGroup.activeTab?.input;
@@ -1053,7 +1127,11 @@ async function runCodeLensAcceptance(
   const siblingTabCountBefore = siblingGroupBefore.tabs.length;
   const diskBefore = await readFile(filePath, "utf8");
   const original = markdownDocument.getText();
-  const dirtyText = original + "\n<!-- CodeLens dirty buffer -->\n";
+  const dirtyText =
+    original +
+    documentLineEnding(markdownDocument) +
+    "<!-- CodeLens dirty buffer -->" +
+    documentLineEnding(markdownDocument);
 
   assert.equal(
     await sourceEditor.edit((builder) => {
@@ -1167,12 +1245,29 @@ async function runCodeLensAcceptance(
     viewColumn: sourceViewColumn,
     preview: false,
   });
-  await vscode.commands.executeCommand("undo");
+  await vscode.commands.executeCommand(
+    "workbench.action.focusActiveEditorGroup",
+  );
+  await waitFor(
+    () => vscode.window.activeTextEditor?.document === markdownDocument,
+    "the source editor to regain focus after the diff",
+  );
+  // Restore the isolated fixture explicitly. Native source/custom-editor
+  // Undo/Redo is asserted separately; cleanup must not target the diff
+  // widget's own undo context after it has been closed.
+  await vscode.commands.executeCommand(
+    "workbench.action.files.revert",
+    fileUri,
+  );
   await waitFor(
     () => markdownDocument.getText() === original && !markdownDocument.isDirty,
     "the Markdown source buffer cleanup",
   );
   await vscode.commands.executeCommand("workbench.action.closeAllEditors");
+}
+
+function documentLineEnding(document: vscode.TextDocument): string {
+  return document.eol === vscode.EndOfLine.CRLF ? "\r\n" : "\n";
 }
 
 async function codeLensesFor(uri: vscode.Uri): Promise<vscode.CodeLens[]> {
@@ -1207,8 +1302,27 @@ async function waitFor(
 ): Promise<void> {
   const started = Date.now();
   while (!predicate()) {
-    if (Date.now() - started >= timeoutMs)
-      throw new Error(`Timed out waiting for ${description}.`);
+    if (Date.now() - started >= timeoutMs) {
+      const group = vscode.window.tabGroups.activeTabGroup;
+      throw new Error(
+        `Timed out waiting for ${description}. ` +
+          JSON.stringify({
+            activeDocument:
+              vscode.window.activeTextEditor?.document.uri.toString(),
+            activeDocumentDirty:
+              vscode.window.activeTextEditor?.document.isDirty,
+            activeDocumentEol: vscode.window.activeTextEditor?.document.eol,
+            activeGroup: group.viewColumn,
+            activeTab: group.activeTab?.label,
+            activeInput: group.activeTab?.input?.constructor.name,
+            windowFocused: vscode.window.state.focused,
+            visibleEditors: vscode.window.visibleTextEditors.map((editor) => ({
+              uri: editor.document.uri.toString(),
+              column: editor.viewColumn,
+            })),
+          }),
+      );
+    }
     await new Promise<void>((resolve) => setTimeout(resolve, 50));
   }
 }

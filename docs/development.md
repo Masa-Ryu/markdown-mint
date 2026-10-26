@@ -37,25 +37,68 @@ suite: `common-test.md`, `github-test.md`,
 `github-test-class-B.md`, `gitlab-test.md`, and
 `gitlab-test-class-B.md`.
 
+The native acceptance suite also renders all five fixtures. Its editing checks
+use each document's line ending, and its formatter checks explicitly convert
+LF to the project's EditorConfig CRLF setting and CRLF to a file-specific LF
+override. These expectations do not depend on the operating system default.
+Local file paths are compared through `vscode.Uri.file(...).fsPath`, including
+Windows drive normalization; Markdown links retain encoded POSIX separators.
+`@vscode/test-electron` selects the VS Code download for the current OS and
+architecture and handles native process shutdown. The resolver accepts both
+legacy `Electron` and current `Code` executable names inside downloaded macOS
+bundles, including Insiders. On Windows, it reads the CLI launcher's active
+version-folder reference to find application metadata and native Markdown CSS
+without launching the GUI to query its version. After each run, any native log files are copied to
+`output/extension-host/` before temporary workspace deletion;
+deletion retries transient file locks on Windows.
+
 ## Pull request CI
 
 Every pull request targeting `main`, every push to `main`, and manual
-`workflow_dispatch` runs `.github/workflows/ci.yml`. Its four independent
-GitHub-hosted `ubuntu-latest` jobs are:
+`workflow_dispatch` runs `.github/workflows/ci.yml`. CI and Release use only
+standard GitHub-hosted runners for this public repository. Self-hosted runner
+setup and Larger runners are unnecessary. The four required check names remain:
 
 | Required check    | Validation                                                                              |
 | ----------------- | --------------------------------------------------------------------------------------- |
 | `quality`         | Node 22, `npm ci`, compile, unit tests, lint, and formatting.                           |
 | `browser-smoke`   | Playwright Chromium, block/table interaction suites, and HTML/PDF export browser smoke. |
-| `extension-smoke` | Xvfb, a selected/downloaded VS Code build, and `npm run test:extension`.                |
+| `extension-smoke` | Aggregates the Extension Host matrix; all three OS jobs must succeed.                   |
 | `package-check`   | `npm run package` and local VSIX verification.                                          |
 
-Each job has read-only `contents` permission and runs on GitHub-hosted runners.
-The workflow does not use secrets or `pull_request_target`, and PR code never
-runs on the persistent self-hosted release runners. Job duration is written to
-the job summary and CI log. Browser screenshots/reports and captured job logs
-are uploaded as artifacts even when a job fails; missing artifact paths are
-ignored because an early setup failure may leave no files.
+`quality`, `browser-smoke`, `package-check`, and the aggregate run on
+`ubuntu-24.04`. The actual `extension-host-matrix` jobs use Node 22, `npm ci`,
+and `MARKDOWN_MINT_VSCODE_VERSION=stable` on each OS:
+
+| OS      | Runner         | Acceptance command                   |
+| ------- | -------------- | ------------------------------------ |
+| Linux   | `ubuntu-24.04` | `xvfb-run -a npm run test:extension` |
+| Windows | `windows-2025` | `npm run test:extension`             |
+| macOS   | `macos-15`     | `npm run test:extension`             |
+
+Linux checks for the runner image's preinstalled `xvfb-run` and fails clearly
+if it is missing; no Xvfb installation is needed. Windows and macOS launch
+VS Code directly. On macOS CI, the acceptance runner activates its own running
+VS Code application through LaunchServices before asserting native editor
+focus; the hosted agent initially starts it in the background. Fixture setup
+also waits for the native filesystem provider to observe the test directories
+before exercising bounded directory discovery. All matrix commands use Bash
+(Git Bash on Windows), and each
+OS job has a 30-minute timeout. `fail-fast: false` lets every OS finish after a
+failure. No job or step ignores test failures. The aggregate uses
+`needs: extension-host-matrix` and `always()` and fails for a failed, cancelled,
+or skipped matrix result. Cancelling the workflow cannot produce a successful
+required check. Existing branch protection therefore requires all three OSes
+without changing its check names.
+
+Each CI job has read-only `contents` permission. The workflow uses
+`pull_request`, with no secrets or `pull_request_target`. Job duration is
+written to the job summary and CI log. Commands stream their output to the
+OS-specific job log, including failures. Native diagnostic log tails are
+printed in collapsible log groups even after failure. Actions artifact uploads
+and dependency caches are disabled. Browser screenshots/reports and complete
+native log files are available locally under `output/`; CI does not retain
+those files for download after the runner exits.
 
 The block browser suite exercises all five Markdown profile fixtures listed
 above. HTML/PDF browser checks are included in the Phase 1 PR smoke gate after
@@ -79,11 +122,14 @@ Extension Host smoke suites.
 
 Each CI job runs on its own GitHub-hosted runner. Browser suites execute in
 sequence on their distinct ports 4175 and 4176, and the Extension Host uses
-`runner.temp` for isolated profile and workspace directories.
+`runner.temp/markdown-mint-extension` for isolated profile and workspace
+directories. Console diagnostics remain in each OS job log; temporary native
+log files are copied locally before cleanup and their tails are printed by
+the matrix diagnostic step.
 
 ## Required checks on main
 
-After the four CI jobs have completed successfully at least once, require these
+After the CI jobs have completed successfully at least once, require these
 status checks for the `main` branch in repository branch protection or a
 ruleset:
 
@@ -91,6 +137,11 @@ ruleset:
 - `browser-smoke`
 - `extension-smoke`
 - `package-check`
+
+The compatibility job `test` depends on all four checks and uses `always()`
+to reject any failed, cancelled, or skipped dependency. Existing rulesets that
+still require only `test` therefore enforce the same complete gate without a
+repository settings change. Keep the four current names when updating rulesets.
 
 In GitHub, open **Settings → Branches** (or **Rules → Rulesets**), edit the
 rule targeting `main`, enable **Require status checks to pass before merging**,
@@ -101,7 +152,44 @@ separately from CI results.
 ## Release validation
 
 `.github/workflows/release.yml` remains a manual, `main`-only release
-workflow. It repeats compile, unit, lint, format, and package validation, then
-retains and publishes the exact verified VSIX. Those five checks overlap with
-PR CI. The release workflow does not run the browser or Extension Host smoke
-suites; PR CI does not create or publish a GitHub Release.
+workflow. It uses no Actions artifact or dependency-cache storage. PR CI
+never creates or publishes a GitHub Release, and the release workflow does
+not run the browser or Extension Host smoke suites.
+
+All three Release jobs (`preflight`, `validate`, and `publish_github_release`)
+run on `ubuntu-24.04`. The validation and publication jobs check the
+preinstalled `gh`, `jq`, `curl`, and `sha256sum` commands before use and fail
+with the missing command's name; no extra installation is required. See the
+[Ubuntu 24.04 runner image inventory](https://github.com/actions/runner-images/blob/main/images/ubuntu/Ubuntu2404-Readme.md).
+No persistent runner or runner-specific credentials need setup. The only
+external Actions are `actions/checkout@v4` and `actions/setup-node@v4`.
+
+Preflight rejects refs other than `refs/heads/main` before checkout. Validation
+checks out the selected commit with read-only `contents` permission and uses
+Node 22 and `npm ci` for compile, unit tests, lint, and formatting. It also
+rejects an existing release/tag and validates release notes. Only
+`publish_github_release` has `contents: write`. After validation succeeds,
+that job checks out the exact same commit, rechecks its version/ref, installs
+the locked dependencies, and runs `npm run package` exactly once, including
+bundled formatter and VSIX validation. Packaging fixes `SOURCE_DATE_EPOCH`
+to that commit's timestamp for reproducible ZIP ordering and entry dates.
+
+The publication job requires exactly one expected VSIX, computes its SHA-256,
+and creates or recovers a draft using that same local file. It downloads the
+attached VSIX and checks its SHA-256 before publishing. There is no
+cross-job binary transfer, and the workflow does not publish to the
+Marketplace.
+
+If publication fails, rerun **failed jobs** for that workflow run. The
+publication job repackages the same pinned commit with the same timestamp
+and checks the existing draft/published asset against that package. It never
+replaces an uploaded VSIX to hide a checksum mismatch. An empty interrupted
+starter upload can still be removed and retried by the recovery planner.
+Unlike retained artifact recovery, this requires the locked dependencies
+and build environment to reproduce the same bytes; if they do not, recovery
+stops for inspection instead of publishing different bytes. No unpublished
+VSIX is retained after the runner exits.
+
+Do not dispatch Release merely to validate CI changes. YAML/Bash validation,
+the workflow/recovery regression suites, and repeated local package checksum
+verification cover this definition without creating a tag or release.
